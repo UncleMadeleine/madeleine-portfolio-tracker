@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Data & secrets
+data/
+*.sqlite
+*.db
+.env
+.streamlit/secrets.toml
+
+# OpenBB
+.openbb_platform/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store

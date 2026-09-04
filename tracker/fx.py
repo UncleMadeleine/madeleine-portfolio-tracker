@@ -1,0 +1,117 @@
+"""汇率获取: CFETS(akshare) 优先, OpenBB(yfinance) 货币对兜底."""
+from __future__ import annotations
+
+import time
+from datetime import date, timedelta
+
+_PAIR_TTL = 600
+_pair_cache: dict[str, tuple[float, float]] = {}
+
+_CFETS_TTL = 120
+_cfets_cache: tuple[float, dict[str, float]] = (0.0, {})
+
+
+def _obb():
+    from openbb import obb
+
+    return obb
+
+
+def _yahoo_pair(pair: str) -> float | None:
+    now = time.time()
+    hit = _pair_cache.get(pair)
+    if hit and now - hit[1] < _PAIR_TTL:
+        return hit[0]
+    try:
+        start = (date.today() - timedelta(days=30)).isoformat()
+        res = _obb().currency.price.historical(
+            symbol=pair, provider="yfinance", start_date=start
+        )
+        df = res.to_dataframe()
+        if "close" not in df.columns or df.empty:
+            return None
+        s = df["close"].dropna()
+        if s.empty:
+            return None
+        rate = float(s.iloc[-1])
+    except Exception:
+        return None
+    _pair_cache[pair] = (rate, now)
+    return rate
+
+
+def _pair_rate(a: str, b: str) -> float | None:
+    rate = _yahoo_pair(f"{a}{b}=X")
+    if rate:
+        return rate
+    rate = _yahoo_pair(f"{b}{a}=X")
+    if rate:
+        return 1.0 / rate
+    return None
+
+
+def _cfets_table() -> dict[str, float]:
+    global _cfets_cache
+    now = time.time()
+    if _cfets_cache[1] and now - _cfets_cache[0] < _CFETS_TTL:
+        return _cfets_cache[1]
+    import akshare as ak
+
+    df = ak.fx_spot_quote()
+    out: dict[str, float] = {"CNY": 1.0}
+    for _, row in df.iterrows():
+        parts = str(row["货币对"]).split("/")
+        if len(parts) != 2:
+            continue
+        mid = (float(row["买报价"]) + float(row["卖报价"])) / 2
+        base, quote = parts
+        if base == "100JPY":
+            out["JPY"] = mid / 100
+        elif quote == "CNY":
+            out[base] = mid
+    _cfets_cache = (now, out)
+    return out
+
+
+def _cfets_rate(src: str, dst: str) -> float | None:
+    try:
+        table = _cfets_table()
+    except Exception:
+        return None
+    if src not in table or dst not in table:
+        return None
+    return table[src] / table[dst]
+
+
+def get_rate(src: str, dst: str) -> float | None:
+    src, dst = src.upper(), dst.upper()
+    if src == dst:
+        return 1.0
+    cf = _cfets_rate(src, dst)
+    if cf:
+        return cf
+    direct = _pair_rate(src, dst)
+    if direct:
+        return direct
+    if src != "USD" and dst != "USD":
+        r1 = _pair_rate(src, "USD")
+        r2 = _pair_rate("USD", dst)
+        if r1 and r2:
+            return r1 * r2
+    return None
+
+
+def get_fx_rates(base: str, currencies) -> tuple[dict[str, float], list[str]]:
+    base = base.upper()
+    rates: dict[str, float] = {}
+    missing: list[str] = []
+    for ccy in dict.fromkeys(str(c).upper() for c in currencies):
+        if ccy == base:
+            rates[ccy] = 1.0
+            continue
+        rate = get_rate(ccy, base)
+        if rate:
+            rates[ccy] = rate
+        else:
+            missing.append(ccy)
+    return rates, missing

@@ -1,4 +1,4 @@
-"""自选股观察与价格阈值提醒."""
+"""自选股观察与价格阈值提醒 (支持两级阈值)."""
 from __future__ import annotations
 
 import json
@@ -12,8 +12,10 @@ from .symbols import parse
 
 DEFAULT_WATCHLIST = Path(__file__).resolve().parent.parent / "watchlist.json"
 
-STATUS_UPPER = "🔴 高于上限"
-STATUS_LOWER = "🟢 低于下限"
+STATUS_UPPER_1 = "🟠 突破上限 I"
+STATUS_UPPER_2 = "🔴 突破上限 II"
+STATUS_LOWER_1 = "🟡 跌破下限 I"
+STATUS_LOWER_2 = "🟢 跌破下限 II"
 STATUS_WITHIN = "⚪ 区间内"
 
 
@@ -41,12 +43,21 @@ def _num(v) -> float | None:
         return None
 
 
+def _normalize_entry(e: dict) -> dict:
+    out = dict(e)
+    for old, new in (("upper", "upper_1"), ("lower", "lower_1")):
+        if old in out and new not in out:
+            out[new] = out.pop(old)
+    return out
+
+
 def build_watchlist_view(
     entries, quotes: dict[str, Quote]
 ) -> tuple[pd.DataFrame, list[str]]:
     rows: list[dict] = []
     issues: list[str] = []
     for e in entries:
+        e = _normalize_entry(e)
         raw = str(e.get("symbol", "")).strip()
         if not raw:
             continue
@@ -60,20 +71,29 @@ def build_watchlist_view(
             issues.append(f"{p.yahoo}: 行情缺失")
             continue
         price = q.price
-        upper = _num(e.get("upper"))
-        lower = _num(e.get("lower"))
-        if upper is not None and price >= upper:
-            status = STATUS_UPPER
-        elif lower is not None and price <= lower:
-            status = STATUS_LOWER
+        upper_1 = _num(e.get("upper_1"))
+        upper_2 = _num(e.get("upper_2"))
+        lower_1 = _num(e.get("lower_1"))
+        lower_2 = _num(e.get("lower_2"))
+        if upper_2 is not None and price >= upper_2:
+            status = STATUS_UPPER_2
+        elif upper_1 is not None and price >= upper_1:
+            status = STATUS_UPPER_1
+        elif lower_2 is not None and price <= lower_2:
+            status = STATUS_LOWER_2
+        elif lower_1 is not None and price <= lower_1:
+            status = STATUS_LOWER_1
         else:
             status = STATUS_WITHIN
-        dist_upper = (
-            (upper / price - 1) * 100 if (upper is not None and price > 0) else None
-        )
-        dist_lower = (
-            (price / lower - 1) * 100 if (lower is not None and lower > 0) else None
-        )
+        dist: dict[str, float | None] = {}
+        if upper_1 is not None and price > 0:
+            dist["dist_upper_1_pct"] = (upper_1 / price - 1) * 100
+        if upper_2 is not None and price > 0:
+            dist["dist_upper_2_pct"] = (upper_2 / price - 1) * 100
+        if lower_1 is not None and lower_1 > 0:
+            dist["dist_lower_1_pct"] = (price / lower_1 - 1) * 100
+        if lower_2 is not None and lower_2 > 0:
+            dist["dist_lower_2_pct"] = (price / lower_2 - 1) * 100
         rows.append(
             {
                 "symbol": p.yahoo,
@@ -82,12 +102,13 @@ def build_watchlist_view(
                 "currency": q.currency,
                 "price": price,
                 "change_pct": q.change_pct,
-                "upper": upper,
-                "lower": lower,
+                "upper_1": upper_1,
+                "upper_2": upper_2,
+                "lower_1": lower_1,
+                "lower_2": lower_2,
                 "status": status,
-                "dist_upper_pct": dist_upper,
-                "dist_lower_pct": dist_lower,
                 "note": str(e.get("note") or ""),
+                **dist,
             }
         )
     df = pd.DataFrame(rows)

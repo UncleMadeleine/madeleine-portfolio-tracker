@@ -14,6 +14,7 @@ from tracker.analytics import build_view, summarize
 from tracker.fx import get_fx_rates
 from tracker.symbols import parse
 from tracker.watchlist import (
+    _normalize_entry,
     build_watchlist_view,
     load_watchlist,
     save_watchlist,
@@ -116,9 +117,14 @@ with st.sidebar:
     st.subheader("🎯 自选提醒")
     watch = load_watchlist(WATCHLIST_PATH)
     with st.expander("编辑自选 / 价格阈值", expanded=False):
-        st.caption("阈值按当地货币 (与现价同币种)，可只设一侧；到达或越过即提醒。")
+        st.caption(
+            "阈值按当地货币 (与现价同币种)。支持两级: "
+            "upper_1 / upper_2（上限 I / II，II 更严格）、lower_1 / lower_2（下限 I / II，II 更严格）；"
+            "可只设一侧。旧格式 upper / lower 会自动迁至 upper_1 / lower_1。"
+        )
         df_w = pd.DataFrame(
-            watch.get("watchlist", []), columns=["symbol", "upper", "lower", "note"]
+            watch.get("watchlist", []),
+            columns=["symbol", "upper_1", "upper_2", "lower_1", "lower_2", "note"],
         )
         edited_w = st.data_editor(
             df_w,
@@ -127,14 +133,16 @@ with st.sidebar:
             width="stretch",
             column_config={
                 "symbol": st.column_config.TextColumn("代码"),
-                "upper": st.column_config.NumberColumn("上限", help="当地货币"),
-                "lower": st.column_config.NumberColumn("下限", help="当地货币"),
+                "upper_1": st.column_config.NumberColumn("上限 I", help="当地货币"),
+                "upper_2": st.column_config.NumberColumn("上限 II", help="更严格的触发线"),
+                "lower_1": st.column_config.NumberColumn("下限 I", help="当地货币"),
+                "lower_2": st.column_config.NumberColumn("下限 II", help="更严格的触发线"),
                 "note": st.column_config.TextColumn("备注"),
             },
         )
         c3, c4 = st.columns(2)
         if c3.button("💾 保存自选", width="stretch"):
-            rows = edited_w.dropna(subset=["symbol"]).to_dict("records")
+            rows = [_normalize_entry(r) for r in edited_w.dropna(subset=["symbol"]).to_dict("records")]
             bad = []
             for r in rows:
                 try:
@@ -335,7 +343,7 @@ with tab4:
         else:
             st.success("自选中暂无阈值触发。")
         st.caption(
-            "阈值按当地货币; 距上限/下限 = 还需变动百分之几才会触发 (负值表示已越过)。"
+            "阈值按当地货币; 两级触发: I 为预警线 / II 为强提醒线; 距离 = 还需变动百分之几才触发 (负值=已越过)。"
         )
         st.dataframe(
             wview,
@@ -348,11 +356,15 @@ with tab4:
                 "currency": st.column_config.TextColumn("币种"),
                 "price": st.column_config.NumberColumn("现价", format="%.3f"),
                 "change_pct": st.column_config.NumberColumn("涨跌%", format="%.2f"),
-                "upper": st.column_config.NumberColumn("上限", format="%.2f"),
-                "lower": st.column_config.NumberColumn("下限", format="%.2f"),
+                "upper_1": st.column_config.NumberColumn("上限 I", format="%.2f"),
+                "upper_2": st.column_config.NumberColumn("上限 II", format="%.2f"),
+                "lower_1": st.column_config.NumberColumn("下限 I", format="%.2f"),
+                "lower_2": st.column_config.NumberColumn("下限 II", format="%.2f"),
                 "status": st.column_config.TextColumn("状态"),
-                "dist_upper_pct": st.column_config.NumberColumn("距上限%", format="%.1f"),
-                "dist_lower_pct": st.column_config.NumberColumn("距下限%", format="%.1f"),
+                "dist_upper_1_pct": st.column_config.NumberColumn("距上限 I %", format="%.1f"),
+                "dist_upper_2_pct": st.column_config.NumberColumn("距上限 II %", format="%.1f"),
+                "dist_lower_1_pct": st.column_config.NumberColumn("距下限 I %", format="%.1f"),
+                "dist_lower_2_pct": st.column_config.NumberColumn("距下限 II %", format="%.1f"),
                 "note": st.column_config.TextColumn("备注"),
                 "triggered": None,
             },

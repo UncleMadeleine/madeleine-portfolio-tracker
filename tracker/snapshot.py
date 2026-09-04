@@ -21,7 +21,8 @@ DEFAULT_PORTFOLIO = Path(__file__).resolve().parent.parent / "portfolio.json"
 
 WATCH_COLS = [
     "symbol", "name", "market", "currency", "price", "change_pct",
-    "upper", "lower", "status", "dist_upper_pct", "dist_lower_pct", "note",
+    "upper_1", "upper_2", "lower_1", "lower_2", "status",
+    "dist_upper_1_pct", "dist_upper_2_pct", "dist_lower_1_pct", "dist_lower_2_pct", "note",
 ]
 
 

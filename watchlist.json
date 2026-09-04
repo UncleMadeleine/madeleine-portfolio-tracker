@@ -1,40 +1,10 @@
 {
   "watchlist": [
-    {
-      "symbol": "TSLA",
-      "upper": 450.0,
-      "lower": 250.0,
-      "note": "突破追 / 回调买"
-    },
-    {
-      "symbol": "600036.SS",
-      "upper": 55.0,
-      "lower": 38.0,
-      "note": "招商银行"
-    },
-    {
-      "symbol": "DBK.DE",
-      "upper": NaN,
-      "lower": 18.0,
-      "note": "德银 回调关注"
-    },
-    {
-      "symbol": "0005.HK",
-      "upper": 180.0,
-      "lower": NaN,
-      "note": ""
-    },
-    {
-      "symbol": "CSL.AX",
-      "upper": NaN,
-      "lower": 240.0,
-      "note": ""
-    },
-    {
-      "symbol": "BRK-B",
-      "upper": NaN,
-      "lower": NaN,
-      "note": "无阈值纯观察"
-    }
+    { "symbol": "TSLA", "upper_1": 420, "upper_2": 450, "lower_1": 280, "lower_2": 250, "note": "两级提醒: 420/450 向上, 280/250 向下" },
+    { "symbol": "600036.SS", "upper_1": 55, "upper_2": 60, "lower_1": 38, "lower_2": 35, "note": "招商银行" },
+    { "symbol": "DBK.DE", "lower_1": 22, "lower_2": 18, "note": "德银 回调关注" },
+    { "symbol": "0005.HK", "upper_1": 170, "upper_2": 180, "note": "汇丰 减仓位" },
+    { "symbol": "CSL.AX", "lower_1": 240, "lower_2": 220, "note": "" },
+    { "symbol": "BRK-B", "note": "无阈值纯观察" }
   ]
 }

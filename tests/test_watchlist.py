@@ -2,8 +2,10 @@ import pandas as pd
 
 from tracker.prices import Quote
 from tracker.watchlist import (
-    STATUS_LOWER,
-    STATUS_UPPER,
+    STATUS_LOWER_1,
+    STATUS_LOWER_2,
+    STATUS_UPPER_1,
+    STATUS_UPPER_2,
     STATUS_WITHIN,
     build_watchlist_view,
     triggered_entries,
@@ -17,7 +19,7 @@ def q(sym, price, ccy="USD"):
     )
 
 
-def test_statuses_and_distances():
+def test_statuses_and_distances_backward_compat():
     entries = [
         {"symbol": "AAA", "upper": 100.0, "lower": 50.0},
         {"symbol": "BBB", "upper": 200.0, "lower": 100.0},
@@ -27,26 +29,83 @@ def test_statuses_and_distances():
     view, issues = build_watchlist_view(entries, quotes)
     assert issues == []
     m = view.set_index("symbol")["status"]
-    assert m["AAA"] == STATUS_UPPER
+    assert m["AAA"] == STATUS_UPPER_1
     assert m["BBB"] == STATUS_WITHIN
-    assert m["CCC"] == STATUS_LOWER
+    assert m["CCC"] == STATUS_LOWER_1
     row = view.set_index("symbol").loc["BBB"]
-    assert abs(row["dist_upper_pct"] - (200 / 150 - 1) * 100) < 1e-9
-    assert abs(row["dist_lower_pct"] - (150 / 100 - 1) * 100) < 1e-9
+    assert abs(row["dist_upper_1_pct"] - (200 / 150 - 1) * 100) < 1e-9
+    assert abs(row["dist_lower_1_pct"] - (150 / 100 - 1) * 100) < 1e-9
     assert view.iloc[-1]["symbol"] == "BBB"
     trig = triggered_entries(view)
     assert set(trig["symbol"]) == {"AAA", "CCC"}
 
 
+def test_two_level_thresholds():
+    entries = [
+        {"symbol": "AAA", "upper_1": 100.0, "upper_2": 120.0},
+        {"symbol": "BBB", "upper_1": 100.0, "upper_2": 120.0},
+        {"symbol": "CCC", "lower_1": 100.0, "lower_2": 80.0},
+        {"symbol": "DDD", "lower_1": 100.0, "lower_2": 80.0},
+    ]
+    quotes = {
+        "AAA": q("AAA", 125.0),
+        "BBB": q("BBB", 110.0),
+        "CCC": q("CCC", 90.0),
+        "DDD": q("DDD", 75.0),
+    }
+    view, _ = build_watchlist_view(entries, quotes)
+    m = view.set_index("symbol")["status"]
+    assert m["AAA"] == STATUS_UPPER_2
+    assert m["BBB"] == STATUS_UPPER_1
+    assert m["CCC"] == STATUS_LOWER_1
+    assert m["DDD"] == STATUS_LOWER_2
+    row = view.set_index("symbol").loc["BBB"]
+    assert abs(row["dist_upper_1_pct"] - (100 / 110 - 1) * 100) < 1e-9
+    assert abs(row["dist_upper_2_pct"] - (120 / 110 - 1) * 100) < 1e-9
+
+
+def test_two_level_one_side_only():
+    entries = [
+        {"symbol": "AAA", "upper_2": 100.0},
+        {"symbol": "BBB", "lower_1": 100.0},
+        {"symbol": "CCC", "lower_2": 80.0},
+    ]
+    quotes = {"AAA": q("AAA", 105.0), "BBB": q("BBB", 90.0), "CCC": q("CCC", 70.0)}
+    view, _ = build_watchlist_view(entries, quotes)
+    m = view.set_index("symbol")["status"]
+    assert m["AAA"] == STATUS_UPPER_2
+    assert m["BBB"] == STATUS_LOWER_1
+    assert m["CCC"] == STATUS_LOWER_2
+
+
+def test_backward_compat_old_keys():
+    view, _ = build_watchlist_view(
+        [{"symbol": "AAA", "upper": 100.0, "lower": 50.0}], {"AAA": q("AAA", 110.0)}
+    )
+    assert view.iloc[0]["upper_1"] == 100.0
+    assert view.iloc[0]["lower_1"] == 50.0
+    assert view.iloc[0]["status"] == STATUS_UPPER_1
+    assert pd.isna(view.iloc[0]["upper_2"])
+    assert pd.isna(view.iloc[0]["lower_2"])
+
+
 def test_boundary_equality_inclusive():
     view, _ = build_watchlist_view(
-        [{"symbol": "AAA", "upper": 100.0}], {"AAA": q("AAA", 100.0)}
+        [{"symbol": "AAA", "upper_1": 100.0}], {"AAA": q("AAA", 100.0)}
     )
-    assert view.iloc[0]["status"] == STATUS_UPPER
+    assert view.iloc[0]["status"] == STATUS_UPPER_1
     view2, _ = build_watchlist_view(
-        [{"symbol": "AAA", "lower": 100.0}], {"AAA": q("AAA", 100.0)}
+        [{"symbol": "AAA", "lower_1": 100.0}], {"AAA": q("AAA", 100.0)}
     )
-    assert view2.iloc[0]["status"] == STATUS_LOWER
+    assert view2.iloc[0]["status"] == STATUS_LOWER_1
+    view3, _ = build_watchlist_view(
+        [{"symbol": "AAA", "upper_2": 100.0}], {"AAA": q("AAA", 100.0)}
+    )
+    assert view3.iloc[0]["status"] == STATUS_UPPER_2
+    view4, _ = build_watchlist_view(
+        [{"symbol": "AAA", "lower_2": 100.0}], {"AAA": q("AAA", 100.0)}
+    )
+    assert view4.iloc[0]["status"] == STATUS_LOWER_2
 
 
 def test_no_thresholds():
@@ -56,16 +115,16 @@ def test_no_thresholds():
     assert issues == []
     row = view.iloc[0]
     assert row["status"] == STATUS_WITHIN
-    assert pd.isna(row["upper"])
-    assert pd.isna(row["lower"])
+    assert pd.isna(row["upper_1"])
+    assert pd.isna(row["lower_1"])
     assert not row["triggered"]
 
 
 def test_missing_quote_and_bad_symbol():
     entries = [
-        {"symbol": "NOPE.HK", "lower": 1.0},
-        {"symbol": "BAD.ZZ", "upper": 1.0},
-        {"symbol": "AAPL", "upper": 999.0},
+        {"symbol": "NOPE.HK", "lower_1": 1.0},
+        {"symbol": "BAD.ZZ", "upper_1": 1.0},
+        {"symbol": "AAPL", "upper_1": 999.0},
     ]
     view, issues = build_watchlist_view(entries, {"AAPL": q("AAPL", 100.0)})
     assert len(view) == 1
@@ -76,9 +135,9 @@ def test_missing_quote_and_bad_symbol():
 
 def test_numeric_string_thresholds():
     view, _ = build_watchlist_view(
-        [{"symbol": "AAA", "upper": "120", "lower": "80"}], {"AAA": q("AAA", 100.0)}
+        [{"symbol": "AAA", "upper_1": "120", "lower_1": "80"}], {"AAA": q("AAA", 100.0)}
     )
     row = view.iloc[0]
-    assert row["upper"] == 120.0
-    assert row["lower"] == 80.0
+    assert row["upper_1"] == 120.0
+    assert row["lower_1"] == 80.0
     assert row["status"] == STATUS_WITHIN

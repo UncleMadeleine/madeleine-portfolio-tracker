@@ -1,0 +1,286 @@
+"""IBKR (TWS/IB Gateway) 行情接入: ib_async/ib_insync 可选依赖, 失败自动回退."""
+from __future__ import annotations
+
+import json
+import math
+import time
+from dataclasses import dataclass
+from pathlib import Path
+
+from .prices import Quote
+from .symbols import Market, ParsedSymbol
+
+DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "ibkr.json"
+
+DEFAULTS: dict = {
+    "host": "127.0.0.1",
+    "port": 7497,
+    "client_id": 17,
+    "market_data_type": 3,
+    "connect_timeout": 4,
+    "exchanges": {
+        "US": "SMART",
+        "CN": "SEHK",
+        "HK": "SEHK",
+        "DE": "IBIS",
+        "GB": "LSE",
+        "CA": "TSE",
+        "CA_V": "TSXV",
+        "AU": "ASX",
+    },
+}
+
+_UNAVAILABLE_TTL = 60.0
+_client = None
+_unavailable: tuple[str, float] | None = None
+
+
+def load_config(path: str | Path = DEFAULT_CONFIG) -> dict:
+    cfg = {k: (dict(v) if isinstance(v, dict) else v) for k, v in DEFAULTS.items()}
+    p = Path(path)
+    if p.exists():
+        with open(p, encoding="utf-8") as f:
+            user = json.load(f)
+        for k, v in user.items():
+            if k == "exchanges" and isinstance(v, dict):
+                cfg["exchanges"].update(v)
+            else:
+                cfg[k] = v
+    return cfg
+
+
+def reset() -> None:
+    global _client, _unavailable
+    _client = None
+    _unavailable = None
+
+
+def _ib_module():
+    try:
+        import ib_async as m
+
+        return m
+    except ImportError:
+        pass
+    try:
+        import ib_insync as m
+
+        return m
+    except ImportError as e:
+        raise RuntimeError("未安装 ib_async (pip install ib_async)") from e
+
+
+def _get_client(cfg: dict):
+    global _client, _unavailable
+    if _client is not None and _client.isConnected():
+        return _client
+    if _unavailable is not None:
+        if time.time() - _unavailable[1] < _UNAVAILABLE_TTL:
+            return None
+        _unavailable = None
+    try:
+        m = _ib_module()
+        ib = m.IB()
+        ib.connect(
+            cfg["host"],
+            int(cfg["port"]),
+            clientId=int(cfg["client_id"]),
+            timeout=float(cfg["connect_timeout"]),
+        )
+        ib.reqMarketDataType(int(cfg["market_data_type"]))
+        _client = ib
+        return ib
+    except Exception as e:
+        _unavailable = (f"{type(e).__name__}: {e}"[:200], time.time())
+        return None
+
+
+@dataclass(frozen=True)
+class ContractSpec:
+    symbol: str
+    exchange: str
+    currency: str
+    trading_class: str = ""
+
+
+def contract_spec(p: ParsedSymbol, exchanges: dict | None = None) -> ContractSpec:
+    ex = dict(DEFAULTS["exchanges"])
+    if exchanges:
+        ex.update(exchanges)
+    if p.market is Market.US:
+        return ContractSpec(p.yahoo, ex["US"], "USD")
+    code, _, suffix = p.yahoo.rpartition(".")
+    if p.market is Market.CN:
+        return ContractSpec(code, ex["CN"], "CNY", trading_class=code)
+    if p.market is Market.HK:
+        return ContractSpec(code.lstrip("0") or code, ex["HK"], "HKD")
+    if p.market is Market.DE:
+        return ContractSpec(code, ex["DE"], "EUR")
+    if p.market is Market.GB:
+        return ContractSpec(code, ex["GB"], "GBP")
+    if p.market is Market.CA:
+        if suffix == "V":
+            return ContractSpec(code, ex["CA_V"], "CAD")
+        return ContractSpec(code, ex["CA"], "CAD")
+    if p.market is Market.AU:
+        return ContractSpec(code, ex["AU"], "AUD")
+    raise ValueError(f"不支持的市场: {p.market}")
+
+
+def _f(v) -> float | None:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
+def quote_from_ticker(yahoo_symbol: str, ticker) -> Quote | None:
+    price = None
+    try:
+        price = _f(ticker.marketPrice())
+    except Exception:
+        price = None
+    if price is None or price <= 0:
+        price = _f(getattr(ticker, "last", None))
+    if price is None or price <= 0:
+        price = _f(getattr(ticker, "close", None))
+    if price is None or price <= 0:
+        return None
+    close = _f(getattr(ticker, "close", None))
+    contract = getattr(ticker, "contract", None)
+    raw_ccy = str(getattr(contract, "currency", "") or "")
+    if not raw_ccy:
+        return None
+    chg = None
+    if close and close > 0:
+        chg = (price / close - 1) * 100
+    if raw_ccy in ("GBp", "GBX", "GBx"):
+        currency = "GBP"
+        price = price / 100
+        if close:
+            close = close / 100
+    else:
+        currency = raw_ccy.upper()
+    return Quote(
+        symbol=yahoo_symbol,
+        name="",
+        price=price,
+        prev_close=close,
+        change_pct=chg,
+        currency=currency,
+    )
+
+
+def get_quotes_ibkr(
+    parsed: list[ParsedSymbol], cfg: dict | None = None
+) -> tuple[dict[str, Quote], str | None]:
+    cfg = cfg or load_config()
+    ib = _get_client(cfg)
+    if ib is None:
+        reason = _unavailable[0] if _unavailable else "不可用"
+        return {}, reason
+    m = _ib_module()
+    pairs = []
+    for p in parsed:
+        spec = contract_spec(p, cfg.get("exchanges"))
+        c = m.Contract()
+        c.symbol = spec.symbol
+        c.secType = "STK"
+        c.exchange = spec.exchange
+        c.currency = spec.currency
+        if spec.trading_class:
+            c.tradingClass = spec.trading_class
+        pairs.append((p.yahoo, c))
+    try:
+        qualified = ib.qualifyContracts(*[c for _, c in pairs])
+    except Exception as e:
+        return {}, f"qualifyContracts 失败: {e}"[:200]
+    quotes: dict[str, Quote] = {}
+    if not qualified:
+        return quotes, None
+    by_id = {id(c): y for y, c in pairs}
+    try:
+        tickers = ib.reqTickers(*qualified)
+    except Exception as e:
+        return quotes, f"reqTickers 失败: {e}"[:200]
+    for t in tickers:
+        y = by_id.get(id(t.contract))
+        if not y:
+            continue
+        q = quote_from_ticker(y, t)
+        if q:
+            quotes[y] = q
+    return quotes, None
+
+
+_A_SHARE_SH_PREFIX = ("5", "6", "9")
+
+
+def ibkr_to_yahoo(
+    symbol: str, exchange: str, primary_exchange: str, currency: str
+) -> str | None:
+    raw = str(symbol).strip()
+    sym = raw.replace(" ", "-")
+    ex = (exchange or "").upper()
+    prim = (primary_exchange or "").upper()
+    ccy = (currency or "").upper()
+    exkey = ex or prim
+    if ccy == "CNY":
+        return f"{raw}.SS" if raw[:1] in _A_SHARE_SH_PREFIX else f"{raw}.SZ"
+    if ccy == "HKD" or exkey in ("SEHK", "HKEX"):
+        code = raw.lstrip("0") or "0"
+        return f"{code.zfill(4)}.HK"
+    if ccy == "EUR" or exkey in ("IBIS", "IBISX", "FWB", "GETX", "SWB"):
+        return f"{sym}.DE"
+    if ccy in ("GBP", "GBX") or exkey in ("LSE", "LSEETF"):
+        return f"{sym}.L"
+    if ccy == "CAD" or exkey in ("TSE", "TSXV", "TSX", "CDGX", "NEOEX", "CSE", "CNQ"):
+        return f"{sym}.V" if exkey == "TSXV" else f"{sym}.TO"
+    if ccy == "AUD" or exkey == "ASX":
+        return f"{sym}.AX"
+    if ccy == "USD" or exkey in (
+        "SMART", "NYSE", "NASDAQ", "AMEX", "ARCA", "BATS", "ISLAND", "PSX", "DRCTEDGE",
+    ):
+        return sym
+    return None
+
+
+def fetch_positions(cfg: dict | None = None) -> list:
+    cfg = cfg or load_config()
+    ib = _get_client(cfg)
+    if ib is None:
+        reason = _unavailable[0] if _unavailable else "不可用"
+        raise RuntimeError(f"IBKR 不可用: {reason}")
+    return [pos for pos in ib.positions() if getattr(pos.contract, "secType", "") == "STK"]
+
+
+def positions_to_rows(positions) -> tuple[list[dict], list[str]]:
+    rows: list[dict] = []
+    skipped: list[str] = []
+    for pos in positions:
+        c = getattr(pos, "contract", None)
+        qty = float(getattr(pos, "position", 0) or 0)
+        if qty == 0:
+            continue
+        raw = str(getattr(c, "symbol", "")).strip()
+        y = ibkr_to_yahoo(
+            raw,
+            getattr(c, "exchange", ""),
+            getattr(c, "primaryExchange", ""),
+            getattr(c, "currency", ""),
+        )
+        if not y:
+            skipped.append(
+                f"{raw} ({getattr(c, 'exchange', '')}/{getattr(c, 'currency', '')})"
+                " 无法映射为 Yahoo 代码"
+            )
+            continue
+        rows.append(
+            {
+                "symbol": y,
+                "quantity": qty,
+                "avg_cost": round(float(getattr(pos, "avgCost", 0) or 0), 6),
+            }
+        )
+    return rows, skipped

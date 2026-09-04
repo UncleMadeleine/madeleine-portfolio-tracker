@@ -69,6 +69,11 @@ with st.sidebar:
         index=BASE_CURRENCIES.index(saved_base) if saved_base in BASE_CURRENCIES else 0,
     )
     prefer_akshare = st.checkbox("A股/港股优先 akshare (国内网络)", value=False)
+    use_ibkr = st.checkbox(
+        "🔗 IBKR 行情 (需本机 TWS/IB Gateway)",
+        value=False,
+        help="启用后优先从 IBKR 获取行情 (有订阅则为实时), 失败自动回退 Yahoo/akshare。连接参数见 ibkr.json",
+    )
 
     st.divider()
     st.subheader("💼 持仓")
@@ -164,7 +169,7 @@ watch_symbols = [str(s) for s in watch_rows["symbol"].tolist()] if not watch_row
 all_symbols = tuple(dict.fromkeys(holding_symbols + watch_symbols))
 
 with st.spinner("拉取行情 (首次加载需初始化数据引擎)..."):
-    quotes, errors = cached_quotes(all_symbols, prefer_akshare)
+    quotes, errors, notes = cached_quotes(all_symbols, prefer_akshare, use_ibkr)
 if not quotes:
     st.error(
         "未能获取任何行情。请检查网络: Yahoo 需可访问 finance.yahoo.com; "
@@ -202,6 +207,10 @@ issues += wissues
 trig = triggered_entries(wview)
 
 st.caption(f"数据时间: {datetime.now():%Y-%m-%d %H:%M} · 免费数据源有延迟, 仅供参考")
+
+if notes:
+    for n in notes:
+        st.info(n)
 
 if errors or issues:
     with st.expander(f"⚠ 数据问题 ({len(errors) + len(issues)})"):

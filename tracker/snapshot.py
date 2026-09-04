@@ -31,7 +31,10 @@ def load_portfolio(path: str | Path) -> dict:
 
 
 def take_snapshot(
-    portfolio: dict, watchlist: dict | None = None, prefer_akshare: bool = False
+    portfolio: dict,
+    watchlist: dict | None = None,
+    prefer_akshare: bool = False,
+    use_ibkr: bool = False,
 ) -> tuple[str, pd.DataFrame, dict, pd.DataFrame, list[str]]:
     holdings = [h for h in portfolio.get("holdings", []) if h.get("symbol")]
     wentries = [
@@ -39,7 +42,9 @@ def take_snapshot(
     ]
     base = str(portfolio.get("base_currency") or "CNY").upper()
     symbols = [h["symbol"] for h in holdings] + [w["symbol"] for w in wentries]
-    quotes, errors = prices.get_quotes(symbols, prefer_akshare=prefer_akshare)
+    quotes, errors, notes = prices.get_quotes(
+        symbols, prefer_akshare=prefer_akshare, use_ibkr=use_ibkr
+    )
     if holdings:
         currencies = sorted({q.currency for q in quotes.values()})
         fx, fx_missing = get_fx_rates(base, currencies)
@@ -53,7 +58,7 @@ def take_snapshot(
         + wissues
         + [f"汇率缺失: {c}" for c in fx_missing]
     )
-    return base, view, summarize(view), wview, all_issues
+    return base, view, summarize(view), wview, all_issues + notes
 
 
 def main(argv=None) -> None:
@@ -62,6 +67,7 @@ def main(argv=None) -> None:
     ap.add_argument("--watchlist", default=str(DEFAULT_WATCHLIST))
     ap.add_argument("--base", default=None, help="覆盖基础货币, 如 USD")
     ap.add_argument("--akshare", action="store_true", help="A股/港股优先走 akshare")
+    ap.add_argument("--ibkr", action="store_true", help="优先使用 IBKR 行情 (需 TWS/IB Gateway)")
     args = ap.parse_args(argv)
 
     portfolio = load_portfolio(args.portfolio)
@@ -69,7 +75,7 @@ def main(argv=None) -> None:
         portfolio["base_currency"] = args.base.upper()
     watchlist = load_watchlist(args.watchlist)
     base, view, summary, wview, issues = take_snapshot(
-        portfolio, watchlist, prefer_akshare=args.akshare
+        portfolio, watchlist, prefer_akshare=args.akshare, use_ibkr=args.ibkr
     )
 
     print(f"\n=== 投资组合快照 ({base}) ===")

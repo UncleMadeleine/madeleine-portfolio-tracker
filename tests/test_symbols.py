@@ -44,7 +44,7 @@ def test_parse_all_markets():
     assert parse("BP.L").market is Market.GB
     assert parse("BP.IL").market is Market.GB
     assert parse("RY.TO").market is Market.CA
-    assert parse("X.TO.V").market is Market.CA
+    assert parse("X.V").market is Market.CA
     assert parse("BHP.AX").market is Market.AU
 
 

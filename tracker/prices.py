@@ -155,9 +155,34 @@ def get_quote(symbol: str, prefer_akshare: bool = False) -> Quote:
     return _fetch_quote(parse(symbol), prefer_akshare)
 
 
-def get_quotes(symbols, prefer_akshare: bool = False) -> tuple[dict[str, Quote], dict[str, str]]:
+def _yahoo_batch(parsed: list[ParsedSymbol]) -> dict[str, Quote]:
+    out: dict[str, Quote] = {}
+    if not parsed:
+        return out
+    by_yahoo = {p.yahoo: p for p in parsed}
+    try:
+        res = _obb().equity.price.quote(
+            symbol=[p.yahoo for p in parsed], provider="yfinance"
+        )
+        for item in res.results:
+            d = item.model_dump()
+            p = by_yahoo.get(str(d.get("symbol")))
+            if p is None:
+                continue
+            q = _quote_from_dump(p, d)
+            if q is not None:
+                out[p.yahoo] = q
+    except Exception:
+        pass
+    return out
+
+
+def get_quotes(
+    symbols, prefer_akshare: bool = False, use_ibkr: bool = False
+) -> tuple[dict[str, Quote], dict[str, str], list[str]]:
     quotes: dict[str, Quote] = {}
     errors: dict[str, str] = {}
+    notes: list[str] = []
     by_yahoo: dict[str, ParsedSymbol] = {}
     for s in symbols:
         try:
@@ -166,10 +191,21 @@ def get_quotes(symbols, prefer_akshare: bool = False) -> tuple[dict[str, Quote],
         except ValueError as e:
             errors[str(s)] = str(e)
     if not by_yahoo:
-        return quotes, errors
+        return quotes, errors, notes
+
+    if use_ibkr:
+        try:
+            from . import ibkr as ibkr_mod
+
+            ib_quotes, reason = ibkr_mod.get_quotes_ibkr(list(by_yahoo.values()))
+            quotes.update(ib_quotes)
+            if reason:
+                notes.append(f"IBKR 不可用: {reason} (已回退默认数据源)")
+        except Exception as e:
+            notes.append(f"IBKR 接入异常: {e}")
 
     for p in list(by_yahoo.values()):
-        if prefer_akshare and p.market in (Market.CN, Market.HK):
+        if prefer_akshare and p.market in (Market.CN, Market.HK) and p.yahoo not in quotes:
             try:
                 quotes[p.yahoo] = _akshare_quote(p)
             except Exception:
@@ -177,22 +213,7 @@ def get_quotes(symbols, prefer_akshare: bool = False) -> tuple[dict[str, Quote],
 
     rest = [p for y, p in by_yahoo.items() if y not in quotes]
     if rest:
-        try:
-            res = _obb().equity.price.quote(
-                symbol=[p.yahoo for p in rest], provider="yfinance"
-            )
-            for item in res.results:
-                d = item.model_dump()
-                sym = d.get("symbol")
-                p = by_yahoo.get(str(sym))
-                if p is None:
-                    continue
-                q = _quote_from_dump(p, d)
-                if q is not None:
-                    quotes[p.yahoo] = q
-        except Exception:
-            pass
-
+        quotes.update(_yahoo_batch(rest))
         missing = [p for p in rest if p.yahoo not in quotes]
         if missing:
             time.sleep(2.0)
@@ -201,7 +222,7 @@ def get_quotes(symbols, prefer_akshare: bool = False) -> tuple[dict[str, Quote],
                     quotes[p.yahoo] = _fetch_quote(p, prefer_akshare=False)
                 except Exception as e:
                     errors[p.yahoo] = str(e)
-    return quotes, errors
+    return quotes, errors, notes
 
 
 def _yahoo_history(p: ParsedSymbol, months: int) -> pd.DataFrame:

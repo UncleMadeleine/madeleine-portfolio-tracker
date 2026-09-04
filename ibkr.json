@@ -1,0 +1,17 @@
+{
+  "host": "127.0.0.1",
+  "port": 7497,
+  "client_id": 17,
+  "market_data_type": 3,
+  "connect_timeout": 4,
+  "exchanges": {
+    "US": "SMART",
+    "CN": "SEHK",
+    "HK": "SEHK",
+    "DE": "IBIS",
+    "GB": "LSE",
+    "CA": "TSE",
+    "CA_V": "TSXV",
+    "AU": "ASX"
+  }
+}

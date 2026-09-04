@@ -2,6 +2,8 @@
 
 本地多市场投资组合追踪：**A股 / 港股 / 美股 / 德股 / 英股 / 加股 / 澳股**，基于 OpenBB (yfinance) + akshare 双数据源，Streamlit 页面展示，全部免费、无 API Key。
 
+功能：**多币种持仓追踪 + 自选股 (Watchlist) 价格阈值提醒**。
+
 ## 快速开始
 
 ```bash
@@ -12,7 +14,7 @@ python3 -m venv .venv
 # 启动页面 (http://localhost:8501)
 .venv/bin/streamlit run app.py
 
-# 或命令行快照
+# 或命令行快照 (持仓 + 自选 + 阈值提醒)
 .venv/bin/python -m tracker.snapshot
 .venv/bin/python -m tracker.snapshot --base USD   # 切换基础货币
 
@@ -34,18 +36,41 @@ python3 -m venv .venv
 
 `avg_cost`（成本）按**当地货币**填写；英股填**英镑**（如 4.30 = £4.30，不是便士）。
 
+## 自选股与价格阈值提醒
+
+`watchlist.json` 配置自选股，每条可设 `upper`（上限）/ `lower`（下限）与备注，均可只设一侧或全不设：
+
+```json
+{
+  "watchlist": [
+    { "symbol": "TSLA", "upper": 450, "lower": 250, "note": "突破追 / 回调买" },
+    { "symbol": "600036.SS", "upper": 55, "lower": 38, "note": "招商银行" },
+    { "symbol": "DBK.DE", "lower": 18, "note": "德银 回调关注" },
+    { "symbol": "BRK-B", "note": "无阈值纯观察" }
+  ]
+}
+```
+
+- **阈值按当地货币**（与显示的现价同币种），到达或越过（含等于）即触发
+- 状态：`🔴 高于上限` / `🟢 低于下限` / `⚪ 区间内`；触发项排在最前
+- `距上限%` / `距下限%` = 还需变动百分之几才触发（负值 = 已越过）
+- 页面「自选观察」tab 顶部汇总提醒，tab 标签带 🔔 徽标；CLI 快照同步输出 🔔 阈值提醒
+- 持仓与自选**共用一次批量行情请求**，多加自选不增加请求次数
+
 ## 架构
 
 ```
-app.py                  Streamlit 页面 (持仓编辑/指标/配置/走势)
+app.py                  Streamlit 页面 (持仓编辑/指标/配置/走势/自选提醒)
 tracker/
 ├── symbols.py          代码解析、市场识别、GBp/港股补零归一
 ├── prices.py           行情路由: 批量 yfinance 为主, A股/港股 akshare 降级
 ├── fx.py               汇率: CFETS(akshare) 优先, yfinance 货币对兜底(直对/逆对/USD桥)
 ├── analytics.py        组合视图与指标 (纯函数)
-└── snapshot.py         CLI 快照
+├── watchlist.py        自选股视图与价格阈值状态 (纯函数 + 配置读写)
+└── snapshot.py         CLI 快照 (持仓 + 自选)
 tests/                  纯逻辑单元测试 (mock 数据源, 不联网)
 portfolio.json          持仓配置 (页面可直接编辑保存)
+watchlist.json          自选股配置 (页面可直接编辑保存)
 ```
 
 ### 数据源与降级策略

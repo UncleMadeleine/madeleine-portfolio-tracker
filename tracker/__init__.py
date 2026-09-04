@@ -3,6 +3,7 @@ from .analytics import build_view, summarize
 from .fx import get_fx_rates, get_rate
 from .prices import Quote, get_history, get_quote, get_quotes
 from .symbols import MARKET_META, Market, normalize, parse
+from .watchlist import sort_watchlist
 
 __all__ = [
     "MARKET_META",
@@ -16,5 +17,6 @@ __all__ = [
     "get_rate",
     "normalize",
     "parse",
+    "sort_watchlist",
     "summarize",
 ]

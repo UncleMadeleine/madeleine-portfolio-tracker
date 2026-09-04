@@ -18,6 +18,14 @@ STATUS_LOWER_1 = "🟡 跌破下限 I"
 STATUS_LOWER_2 = "🟢 跌破下限 II"
 STATUS_WITHIN = "⚪ 区间内"
 
+_STATUS_RANK = {
+    STATUS_UPPER_2: 1,
+    STATUS_UPPER_1: 2,
+    STATUS_LOWER_1: 3,
+    STATUS_LOWER_2: 4,
+    STATUS_WITHIN: 5,
+}
+
 
 def load_watchlist(path: str | Path = DEFAULT_WATCHLIST) -> dict:
     p = Path(path)
@@ -124,3 +132,17 @@ def triggered_entries(view: pd.DataFrame) -> pd.DataFrame:
     if view.empty or "triggered" not in view.columns:
         return view.iloc[0:0]
     return view[view["triggered"]]
+
+
+def sort_watchlist(view: pd.DataFrame, mode: str = "default") -> pd.DataFrame:
+    if view.empty:
+        return view
+    if mode == "severity":
+        ranked = view.copy()
+        ranked["status_rank"] = ranked["status"].map(_STATUS_RANK)
+        return ranked.sort_values(["status_rank", "symbol"], ascending=[True, True]).drop(columns=["status_rank"])
+    if mode == "change_desc":
+        return view.sort_values(["change_pct", "symbol"], ascending=[False, True])
+    if mode == "change_asc":
+        return view.sort_values(["change_pct", "symbol"], ascending=[True, True])
+    return view.sort_values(["triggered", "symbol"], ascending=[False, True])

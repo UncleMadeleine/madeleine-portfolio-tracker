@@ -8,6 +8,7 @@ from tracker.watchlist import (
     STATUS_UPPER_2,
     STATUS_WITHIN,
     build_watchlist_view,
+    sort_watchlist,
     triggered_entries,
 )
 
@@ -141,3 +142,48 @@ def test_numeric_string_thresholds():
     assert row["upper_1"] == 120.0
     assert row["lower_1"] == 80.0
     assert row["status"] == STATUS_WITHIN
+
+
+def test_sort_default_triggered_first():
+    view = pd.DataFrame(
+        [
+            {"symbol": "BBB", "triggered": False, "change_pct": 1.0},
+            {"symbol": "AAA", "triggered": True, "change_pct": 2.0},
+        ]
+    )
+    out = sort_watchlist(view, "default")
+    assert list(out["symbol"]) == ["AAA", "BBB"]
+
+
+def test_sort_severity_order():
+    view = pd.DataFrame(
+        [
+            {"symbol": "A", "status": STATUS_WITHIN, "change_pct": 0.0},
+            {"symbol": "B", "status": STATUS_UPPER_2, "change_pct": 0.0},
+            {"symbol": "C", "status": STATUS_LOWER_1, "change_pct": 0.0},
+            {"symbol": "D", "status": STATUS_UPPER_1, "change_pct": 0.0},
+            {"symbol": "E", "status": STATUS_LOWER_2, "change_pct": 0.0},
+        ]
+    )
+    out = sort_watchlist(view, "severity")
+    assert list(out["symbol"]) == ["B", "D", "C", "E", "A"]
+    assert "status_rank" not in out.columns
+
+
+def test_sort_change_desc_and_asc():
+    view = pd.DataFrame(
+        [
+            {"symbol": "A", "change_pct": 2.0},
+            {"symbol": "B", "change_pct": -3.0},
+            {"symbol": "C", "change_pct": 1.0},
+        ]
+    )
+    desc = sort_watchlist(view, "change_desc")
+    assert list(desc["symbol"]) == ["A", "C", "B"]
+    asc = sort_watchlist(view, "change_asc")
+    assert list(asc["symbol"]) == ["B", "C", "A"]
+
+
+def test_sort_empty():
+    out = sort_watchlist(pd.DataFrame(), "severity")
+    assert out.empty

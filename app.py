@@ -18,6 +18,7 @@ from tracker.watchlist import (
     build_watchlist_view,
     load_watchlist,
     save_watchlist,
+    sort_watchlist,
     triggered_entries,
 )
 
@@ -41,8 +42,8 @@ def save_portfolio_file(data: dict) -> None:
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def cached_quotes(symbols: tuple[str, ...], prefer_akshare: bool):
-    return prices.get_quotes(list(symbols), prefer_akshare=prefer_akshare)
+def cached_quotes(symbols: tuple[str, ...], prefer_akshare: bool, use_ibkr: bool):
+    return prices.get_quotes(list(symbols), prefer_akshare=prefer_akshare, use_ibkr=use_ibkr)
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -345,6 +346,19 @@ with tab4:
         st.caption(
             "阈值按当地货币; 两级触发: I 为预警线 / II 为强提醒线; 距离 = 还需变动百分之几才触发 (负值=已越过)。"
         )
+        if not wview.empty:
+            sort_mode = st.selectbox(
+                "排序方式",
+                ["默认 (触发优先 + 代码)", "阈值等级 (严重→温和)", "当日涨跌幅 ↓", "当日涨跌幅 ↑"],
+                label_visibility="collapsed",
+            )
+            mode_map = {
+                "默认 (触发优先 + 代码)": "default",
+                "阈值等级 (严重→温和)": "severity",
+                "当日涨跌幅 ↓": "change_desc",
+                "当日涨跌幅 ↑": "change_asc",
+            }
+            wview = sort_watchlist(wview, mode_map.get(sort_mode, "default"))
         st.dataframe(
             wview,
             width="stretch",

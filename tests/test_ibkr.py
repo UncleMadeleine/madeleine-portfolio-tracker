@@ -159,6 +159,9 @@ def test_get_quotes_ibkr_first_then_fallback(monkeypatch):
 
     monkeypatch.setattr(ibkr_mod, "get_quotes_ibkr", fake_ibkr)
     monkeypatch.setattr(prices_mod, "_yahoo_batch", fake_batch)
+    # 清空缓存避免干扰
+    monkeypatch.setattr(prices_mod.cache_mod, "get_cached", lambda syms, ttl=300: {})
+    monkeypatch.setattr(prices_mod.cache_mod, "set_cached", lambda q: None)
 
     def no_retry(p, prefer_akshare=False):
         raise AssertionError("不应触发逐个重试")
@@ -182,6 +185,8 @@ def test_get_quotes_ibkr_unavailable_note(monkeypatch):
 
     monkeypatch.setattr(ibkr_mod, "get_quotes_ibkr", fake_ibkr)
     monkeypatch.setattr(prices_mod, "_yahoo_batch", fake_batch)
+    monkeypatch.setattr(prices_mod.cache_mod, "get_cached", lambda syms, ttl=300: {})
+    monkeypatch.setattr(prices_mod.cache_mod, "set_cached", lambda q: None)
     monkeypatch.setattr(
         prices_mod, "_fetch_quote", lambda p, prefer_akshare=False: _make_quote(p.yahoo, 2.0)
     )
@@ -199,6 +204,8 @@ def test_get_quotes_ibkr_not_used_by_default(monkeypatch):
     monkeypatch.setattr(
         prices_mod, "_yahoo_batch", lambda parsed: {p.yahoo: _make_quote(p.yahoo, 3.0) for p in parsed}
     )
+    monkeypatch.setattr(prices_mod.cache_mod, "get_cached", lambda syms, ttl=300: {})
+    monkeypatch.setattr(prices_mod.cache_mod, "set_cached", lambda q: None)
     monkeypatch.setattr(
         prices_mod, "_fetch_quote", lambda p, prefer_akshare=False: _make_quote(p.yahoo, 3.0)
     )

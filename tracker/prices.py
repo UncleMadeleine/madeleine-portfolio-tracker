@@ -8,6 +8,7 @@ from datetime import date, timedelta
 import pandas as pd
 
 from .symbols import PENCE_CURRENCIES, Market, ParsedSymbol, parse
+from . import cache as cache_mod
 
 
 @dataclass
@@ -80,7 +81,21 @@ def _yahoo_quote(p: ParsedSymbol) -> Quote:
 
 
 _AK_SPOT_TTL = 60
+_AK_TIMEOUT = 6.0
 _ak_spot_cache: tuple[float, dict[Market, pd.DataFrame]] = (0.0, {})
+
+
+def _with_timeout(fn, timeout: float, *args, **kwargs):
+    """在线程中执行 fn 并强制超时, 避免 akshare 等阻塞."""
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as _TimeoutError
+
+    with ThreadPoolExecutor(max_workers=1) as ex:
+        future = ex.submit(fn, *args, **kwargs)
+        try:
+            return future.result(timeout=timeout)
+        except _TimeoutError:
+            future.cancel()
+            raise RuntimeError(f"{getattr(fn, '__name__', fn)} 超时({timeout}s)")
 
 
 def _ak_spot(market: Market) -> pd.DataFrame:
@@ -91,11 +106,11 @@ def _ak_spot(market: Market) -> pd.DataFrame:
     ak = _ak()
     tables: dict[Market, pd.DataFrame] = {}
     try:
-        tables[Market.CN] = ak.stock_zh_a_spot_em()
+        tables[Market.CN] = _with_timeout(ak.stock_zh_a_spot_em, _AK_TIMEOUT)
     except Exception:
         pass
     try:
-        tables[Market.HK] = ak.stock_hk_spot_em()
+        tables[Market.HK] = _with_timeout(ak.stock_hk_spot_em, _AK_TIMEOUT)
     except Exception:
         pass
     _ak_spot_cache = (now, tables)
@@ -193,6 +208,13 @@ def get_quotes(
     if not by_yahoo:
         return quotes, errors, notes
 
+    # 优先读本地缓存
+    cached = cache_mod.get_cached(list(by_yahoo.keys()))
+    if cached:
+        quotes.update(cached)
+    if len(quotes) == len(by_yahoo):
+        return quotes, errors, notes
+
     if use_ibkr:
         try:
             from . import ibkr as ibkr_mod
@@ -205,7 +227,7 @@ def get_quotes(
             notes.append(f"IBKR 接入异常: {e}")
 
     for p in list(by_yahoo.values()):
-        if prefer_akshare and p.market in (Market.CN, Market.HK) and p.yahoo not in quotes:
+        if p.yahoo not in quotes and prefer_akshare and p.market in (Market.CN, Market.HK):
             try:
                 quotes[p.yahoo] = _akshare_quote(p)
             except Exception:
@@ -213,15 +235,22 @@ def get_quotes(
 
     rest = [p for y, p in by_yahoo.items() if y not in quotes]
     if rest:
-        quotes.update(_yahoo_batch(rest))
+        batch = _yahoo_batch(rest)
+        quotes.update(batch)
+        # 批量失败时不做逐个重试 (避免累积延迟)
         missing = [p for p in rest if p.yahoo not in quotes]
-        if missing:
-            time.sleep(2.0)
+        if missing and len(batch) == 0:
+            for p in missing:
+                errors[p.yahoo] = "批量行情获取失败, 请检查网络"
+        elif missing:
             for p in missing:
                 try:
                     quotes[p.yahoo] = _fetch_quote(p, prefer_akshare=False)
                 except Exception as e:
                     errors[p.yahoo] = str(e)
+
+    fresh = {sym: q for sym, q in quotes.items() if sym in by_yahoo}
+    cache_mod.set_cached(fresh)
     return quotes, errors, notes
 
 

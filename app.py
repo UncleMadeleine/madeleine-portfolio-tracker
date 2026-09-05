@@ -16,9 +16,11 @@ from tracker.symbols import parse
 from tracker.watchlist import (
     _normalize_entry,
     build_watchlist_view,
+    entries_for,
     list_names,
     load_watchlist,
     merge_entries,
+    parse_lists,
     save_watchlist,
     sort_watchlist,
     triggered_entries,
@@ -119,48 +121,32 @@ with st.sidebar:
     st.divider()
     st.subheader("🎯 自选提醒")
     watch = load_watchlist(WATCHLIST_PATH)
-    watch.setdefault("watchlists", {})
-    if not watch["watchlists"]:
-        watch["watchlists"]["默认"] = []
-    names = list_names(watch)
-    if "wl_sel" not in st.session_state or st.session_state["wl_sel"] not in names:
-        st.session_state["wl_sel"] = names[0]
+    if not watch.get("watchlist"):
+        watch["watchlist"] = []
     with st.expander("编辑自选 / 价格阈值", expanded=False):
         st.caption(
-            "支持多个子自选列表 (如「科技」「银行」), 顶部「全部」查看合并。"
+            "同一个代码可属于多个列表（「所属列表」列用逗号分隔，如: 科技,美股）。"
             "阈值按当地货币; 两级: upper_1/upper_2、lower_1/lower_2; 可只设一侧。"
-            "旧格式 upper/lower 自动迁移。"
+            "旧格式自动迁移。"
         )
-        options = names + ["➕ 新建..."]
-        cur = st.session_state["wl_sel"]
-        sel_idx = options.index(cur) if cur in options else 0
-        sel = st.selectbox("编辑自选列表", options, index=sel_idx)
-        if sel == "➕ 新建...":
-            new_name = st.text_input("新列表名")
-            if st.button("创建并切换", width="stretch") and new_name.strip():
-                wn = new_name.strip()
-                watch["watchlists"].setdefault(wn, [])
-                save_watchlist(watch, WATCHLIST_PATH)
-                st.session_state["wl_sel"] = wn
-                st.cache_data.clear()
-                st.rerun()
-            edit_name = cur
-        else:
-            edit_name = sel
-            st.session_state["wl_sel"] = sel
-        st.caption(f"正在编辑: {edit_name}")
-        entries = watch["watchlists"].get(edit_name, [])
+        st.caption("现有列表: " + "、".join(list_names(watch)))
+        entries = watch.get("watchlist", [])
         df_w = pd.DataFrame(
             entries,
-            columns=["symbol", "upper_1", "upper_2", "lower_1", "lower_2", "note"],
+            columns=["symbol", "lists", "upper_1", "upper_2", "lower_1", "lower_2", "note"],
         )
+        if not df_w.empty and "lists" in df_w:
+            df_w["lists"] = df_w["lists"].apply(
+                lambda v: ", ".join(v) if isinstance(v, list) else (str(v) if v else "")
+            )
         edited_w = st.data_editor(
             df_w,
             num_rows="dynamic",
-            key=f"wl_editor_{edit_name}",
+            key="watchlist_editor",
             width="stretch",
             column_config={
                 "symbol": st.column_config.TextColumn("代码"),
+                "lists": st.column_config.TextColumn("所属列表", help="逗号分隔, 如: 科技,美股"),
                 "upper_1": st.column_config.NumberColumn("上限 I", help="当地货币"),
                 "upper_2": st.column_config.NumberColumn("上限 II", help="更严格的触发线"),
                 "lower_1": st.column_config.NumberColumn("下限 I", help="当地货币"),
@@ -170,7 +156,11 @@ with st.sidebar:
         )
         c3, c4 = st.columns(2)
         if c3.button("💾 保存自选", width="stretch"):
-            rows = [_normalize_entry(r) for r in edited_w.dropna(subset=["symbol"]).to_dict("records")]
+            rows = []
+            for r in edited_w.dropna(subset=["symbol"]).to_dict("records"):
+                e = _normalize_entry(r)
+                e["lists"] = parse_lists(e.get("lists"))
+                rows.append(e)
             bad = []
             for r in rows:
                 try:
@@ -180,21 +170,13 @@ with st.sidebar:
             if bad:
                 st.error(f"无法识别: {', '.join(bad)}")
             else:
-                watch["watchlists"][edit_name] = rows
-                save_watchlist(watch, WATCHLIST_PATH)
+                save_watchlist({"watchlist": rows}, WATCHLIST_PATH)
                 st.cache_data.clear()
-                st.toast(f"已保存到「{edit_name}」")
+                st.toast("自选已保存")
         if c4.button("↩️ 重载自选", width="stretch"):
-            st.session_state.pop(f"wl_editor_{edit_name}", None)
+            st.session_state.pop("watchlist_editor", None)
             st.cache_data.clear()
             st.rerun()
-        if len(names) > 1:
-            if st.button(f"🗑 删除「{edit_name}」", width="stretch"):
-                watch["watchlists"].pop(edit_name, None)
-                st.session_state["wl_sel"] = names[0]
-                save_watchlist(watch, WATCHLIST_PATH)
-                st.cache_data.clear()
-                st.rerun()
 
     st.divider()
     st.caption(
@@ -366,12 +348,8 @@ with tab4:
     if not all_watch_entries:
         st.info("自选为空。在左侧「自选提醒」中添加代码与价格阈值。")
     else:
-        scope = st.selectbox("查看范围", ["全部"] + names)
-        display_entries = (
-            all_watch_entries
-            if scope == "全部"
-            else watch["watchlists"].get(scope, [])
-        )
+        scope = st.selectbox("查看范围", ["全部"] + list_names(watch))
+        display_entries = entries_for(watch, None if scope == "全部" else scope)
         wview, wissues_scope = build_watchlist_view(display_entries, quotes)
         trig = triggered_entries(wview)
         for i in wissues_scope:

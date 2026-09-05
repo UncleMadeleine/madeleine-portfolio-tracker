@@ -30,14 +30,35 @@ _STATUS_RANK = {
 def load_watchlist(path: str | Path = DEFAULT_WATCHLIST) -> dict:
     p = Path(path)
     if not p.exists():
-        return {"watchlists": {"默认": []}}
+        return {"watchlist": []}
     with open(p, encoding="utf-8") as f:
         raw = json.load(f)
-    if "watchlists" in raw:
-        return raw
     if "watchlist" in raw:
-        return {"watchlists": {"默认": raw.get("watchlist", [])}}
-    return {"watchlists": {"默认": []}}
+        entries = []
+        for e in raw["watchlist"]:
+            e = dict(e)
+            if not e.get("lists"):
+                e["lists"] = ["默认"]
+            entries.append(e)
+        return {"watchlist": entries}
+    if "watchlists" in raw:
+        merged: dict[str, dict] = {}
+        for name, lst in raw["watchlists"].items():
+            for e in lst:
+                sym = str(e.get("symbol", "")).strip()
+                if not sym:
+                    continue
+                if sym not in merged:
+                    merged[sym] = dict(e)
+                    merged[sym].setdefault("lists", [])
+                if name not in merged[sym]["lists"]:
+                    merged[sym]["lists"].append(name)
+        entries = list(merged.values())
+        for e in entries:
+            if not e["lists"]:
+                e["lists"] = ["默认"]
+        return {"watchlist": entries}
+    return {"watchlist": []}
 
 
 def save_watchlist(data: dict, path: str | Path = DEFAULT_WATCHLIST) -> None:
@@ -47,26 +68,41 @@ def save_watchlist(data: dict, path: str | Path = DEFAULT_WATCHLIST) -> None:
 
 
 def list_names(data: dict) -> list[str]:
-    return list((data or {}).get("watchlists", {}).keys())
+    names: list[str] = []
+    for e in (data or {}).get("watchlist", []):
+        for n in e.get("lists", []) or []:
+            if n and n not in names:
+                names.append(n)
+    return names or ["默认"]
 
 
 def merge_entries(data: dict) -> list[dict]:
-    """合并所有子列表条目 (按 symbol 去重, 保留首次出现)."""
-    seen: dict[str, dict] = {}
-    for name in list_names(data):
-        for e in (data.get("watchlists") or {}).get(name, []):
-            sym = str(e.get("symbol", "")).strip()
-            if sym and sym not in seen:
-                seen[sym] = e
-    return list(seen.values())
+    """全部条目 (扁平, 一个代码一条, 天然去重)."""
+    return [
+        e for e in (data or {}).get("watchlist", [])
+        if str(e.get("symbol", "")).strip()
+    ]
 
 
 def entries_for(data: dict, name: str | None = None) -> list[dict]:
-    """取某子列表条目; name 为空或不存在时返回合并的全量."""
-    wl = (data or {}).get("watchlists", {})
-    if name and name in wl:
-        return wl[name]
-    return merge_entries(data)
+    """按所属列表过滤条目; name 为空返回全部."""
+    if not name:
+        return merge_entries(data)
+    return [
+        e for e in (data or {}).get("watchlist", [])
+        if name in (e.get("lists", []) or [])
+    ]
+
+
+def parse_lists(v) -> list[str]:
+    """把逗号分隔字符串/列表解析为归属列表; 空则回退默认."""
+    if v is None or (isinstance(v, float) and math.isnan(v)):
+        return ["默认"]
+    if isinstance(v, list):
+        items = [str(x).strip() for x in v]
+    else:
+        items = [x.strip() for x in str(v).replace("，", ",").split(",")]
+    return [x for x in items if x] or ["默认"]
 
 
 def _num(v) -> float | None:

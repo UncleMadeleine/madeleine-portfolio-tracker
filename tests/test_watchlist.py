@@ -14,6 +14,7 @@ from tracker.watchlist import (
     list_names,
     load_watchlist,
     merge_entries,
+    parse_lists,
     sort_watchlist,
     triggered_entries,
 )
@@ -203,38 +204,85 @@ def test_load_migrates_old_flat_format(tmp_path):
     )
     data = load_watchlist(f)
     assert list_names(data) == ["默认"]
-    assert data["watchlists"]["默认"] == [{"symbol": "AAPL", "upper_1": 100}]
+    assert data["watchlist"] == [{"symbol": "AAPL", "upper_1": 100, "lists": ["默认"]}]
+
+
+def test_load_migrates_old_nested_format(tmp_path):
+    f = tmp_path / "w.json"
+    f.write_text(
+        json.dumps({"watchlists": {"科技": [{"symbol": "AAPL", "upper_1": 100}]}}),
+        encoding="utf-8",
+    )
+    data = load_watchlist(f)
+    assert list_names(data) == ["科技"]
+    assert data["watchlist"] == [{"symbol": "AAPL", "upper_1": 100, "lists": ["科技"]}]
 
 
 def test_load_new_format(tmp_path):
     f = tmp_path / "w.json"
     f.write_text(
-        json.dumps({"watchlists": {"科技": [{"symbol": "AAPL"}]}}), encoding="utf-8"
+        json.dumps(
+            {"watchlist": [{"symbol": "AAPL", "lists": ["科技", "美股"]}]}
+        ),
+        encoding="utf-8",
     )
     data = load_watchlist(f)
-    assert list_names(data) == ["科技"]
-    assert entries_for(data, "科技") == [{"symbol": "AAPL"}]
+    assert list_names(data) == ["科技", "美股"]
+    assert entries_for(data, "科技") == [{"symbol": "AAPL", "lists": ["科技", "美股"]}]
 
 
 def test_load_missing_file(tmp_path):
     data = load_watchlist(tmp_path / "nope.json")
+    assert data == {"watchlist": []}
     assert list_names(data) == ["默认"]
 
 
 def test_list_names_and_entries():
-    data = {"watchlists": {"默认": [{"symbol": "A"}], "科技": [{"symbol": "B"}]}}
-    assert list_names(data) == ["默认", "科技"]
-    assert entries_for(data, "科技") == [{"symbol": "B"}]
-    assert entries_for(data, "不存在") == [{"symbol": "A"}, {"symbol": "B"}]
-    assert entries_for(data) == [{"symbol": "A"}, {"symbol": "B"}]
-
-
-def test_merge_entries_dedup():
     data = {
-        "watchlists": {
-            "默认": [{"symbol": "A"}, {"symbol": "B"}],
-            "科技": [{"symbol": "B"}, {"symbol": "C"}],
-        }
+        "watchlist": [
+            {"symbol": "A", "lists": ["默认"]},
+            {"symbol": "B", "lists": ["科技", "美股"]},
+            {"symbol": "C", "lists": ["科技"]},
+        ]
+    }
+    assert list_names(data) == ["默认", "科技", "美股"]
+    assert entries_for(data, "科技") == [{"symbol": "B", "lists": ["科技", "美股"]}, {"symbol": "C", "lists": ["科技"]}]
+    assert entries_for(data, "美股") == [{"symbol": "B", "lists": ["科技", "美股"]}]
+    assert entries_for(data) == [
+        {"symbol": "A", "lists": ["默认"]},
+        {"symbol": "B", "lists": ["科技", "美股"]},
+        {"symbol": "C", "lists": ["科技"]},
+    ]
+
+
+def test_merge_entries_flat():
+    data = {
+        "watchlist": [
+            {"symbol": "A", "lists": ["默认"]},
+            {"symbol": "B", "lists": ["科技", "美股"]},
+        ]
     }
     merged = merge_entries(data)
-    assert [e["symbol"] for e in merged] == ["A", "B", "C"]
+    assert [e["symbol"] for e in merged] == ["A", "B"]
+
+
+def test_same_symbol_in_multiple_lists():
+    data = {
+        "watchlist": [
+            {"symbol": "TSLA", "lists": ["科技", "美股"], "upper_1": 420},
+            {"symbol": "NVDA", "lists": ["科技"], "upper_1": 260},
+        ]
+    }
+    assert entries_for(data, "科技") == [data["watchlist"][0], data["watchlist"][1]]
+    assert entries_for(data, "美股") == [data["watchlist"][0]]
+    # 全部视图一个代码只出现一次 (集中配置)
+    assert [e["symbol"] for e in merge_entries(data)] == ["TSLA", "NVDA"]
+
+
+def test_parse_lists():
+    assert parse_lists("科技,美股") == ["科技", "美股"]
+    assert parse_lists("科技，美股") == ["科技", "美股"]
+    assert parse_lists(["科技", "美股"]) == ["科技", "美股"]
+    assert parse_lists("") == ["默认"]
+    assert parse_lists(None) == ["默认"]
+    assert parse_lists(float("nan")) == ["默认"]

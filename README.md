@@ -17,6 +17,7 @@ python3 -m venv .venv
 # 或命令行快照 (持仓 + 自选 + 阈值提醒)
 .venv/bin/python -m tracker.snapshot
 .venv/bin/python -m tracker.snapshot --base USD   # 切换基础货币
+.venv/bin/python -m tracker.snapshot --watchlist 科技   # 只看某个自选列表
 .venv/bin/python -m tracker.snapshot --ibkr       # 优先走 IBKR
 
 # 从 IBKR 账户同步真实持仓 (需 TWS/IB Gateway 已登录)
@@ -43,22 +44,24 @@ python3 -m venv .venv
 
 ## 自选股与价格阈值提醒
 
-`watchlist.json` 配置自选股，支持**两级阈值**（`upper_1` / `upper_2` 为上限 I/II，`lower_1` / `lower_2` 为下限 I/II）与备注，均可只设一侧或全不设。旧格式 `upper` / `lower` 会自动迁移为 `upper_1` / `lower_1`：
+`watchlist.json` 为扁平条目列表，**一个代码可属于多个列表**（`lists` 数组，逗号分隔多归属），支持**两级阈值**（`upper_1`/`upper_2`、`lower_1`/`lower_2`）与备注。旧格式（扁平 `upper`/`lower`、嵌套 `{"watchlists": {...}}`）都会自动迁移：
 
 ```json
 {
   "watchlist": [
-    { "symbol": "TSLA", "upper_1": 420, "upper_2": 450, "lower_1": 280, "lower_2": 250, "note": "两级提醒" },
-    { "symbol": "600036.SS", "upper_1": 55, "lower_1": 38, "note": "招商银行" },
-    { "symbol": "BRK-B", "note": "无阈值纯观察" }
+    { "symbol": "TSLA", "lists": ["科技", "美股"], "upper_1": 420, "upper_2": 450, "lower_1": 280, "lower_2": 250, "note": "两级提醒" },
+    { "symbol": "600036.SS", "lists": ["银行", "A股"], "upper_1": 55, "lower_1": 38, "note": "招商银行" },
+    { "symbol": "BRK-B", "lists": ["默认"], "note": "无阈值纯观察" }
   ]
 }
 ```
 
+- **同一代码属于多个列表**：如 TSLA 同时在「科技」和「美股」，配置集中在一处，改一次全生效
 - **阈值按当地货币**（与显示的现价同币种），到达或越过（含等于）即触发
 - 触发等级（从高到低）：`🔴 突破上限 II` / `🟠 突破上限 I` / `🟡 跌破下限 I` / `🟢 跌破下限 II`；触发项排在最前
 - 距离列：`距上限 I%` / `距上限 II%` / `距下限 I%` / `距下限 II%` = 还需变动百分之几才触发（负值 = 已越过）
-- 页面「自选观察」tab 顶部汇总提醒，tab 标签带 🔔 徽标；CLI 快照同步输出 🔔 阈值提醒
+- 页面侧栏「所属列表」列用逗号分隔编辑多归属；「自选观察」tab 顶部「查看范围」选 `全部` 或单个列表
+- CLI：`--watchlist <列表名>` 只看某个列表（`全部` 合并去重）
 - 持仓与自选**共用一次批量行情请求**，多加自选不增加请求次数
 
 ## 架构

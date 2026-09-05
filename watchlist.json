@@ -1,10 +1,20 @@
 {
-  "watchlist": [
-    { "symbol": "TSLA", "upper_1": 420, "upper_2": 450, "lower_1": 280, "lower_2": 250, "note": "两级提醒: 420/450 向上, 280/250 向下" },
-    { "symbol": "600036.SS", "upper_1": 55, "upper_2": 60, "lower_1": 38, "lower_2": 35, "note": "招商银行" },
-    { "symbol": "DBK.DE", "lower_1": 22, "lower_2": 18, "note": "德银 回调关注" },
-    { "symbol": "0005.HK", "upper_1": 170, "upper_2": 180, "note": "汇丰 减仓位" },
-    { "symbol": "CSL.AX", "lower_1": 240, "lower_2": 220, "note": "" },
-    { "symbol": "BRK-B", "note": "无阈值纯观察" }
-  ]
+  "watchlists": {
+    "默认": [
+      { "symbol": "BRK-B", "note": "无阈值纯观察" }
+    ],
+    "科技": [
+      { "symbol": "TSLA", "upper_1": 420, "upper_2": 450, "lower_1": 280, "lower_2": 250, "note": "两级提醒" },
+      { "symbol": "NVDA", "upper_1": 260, "lower_1": 200, "note": "关注" }
+    ],
+    "银行": [
+      { "symbol": "600036.SS", "upper_1": 55, "upper_2": 60, "lower_1": 38, "lower_2": 35, "note": "招商银行" },
+      { "symbol": "0005.HK", "upper_1": 170, "upper_2": 180, "note": "汇丰 减仓位" },
+      { "symbol": "RY.TO", "lower_1": 260, "lower_2": 240, "note": "加拿大皇家银行" }
+    ],
+    "欧洲": [
+      { "symbol": "DBK.DE", "lower_1": 22, "lower_2": 18, "note": "德银 回调关注" },
+      { "symbol": "CSL.AX", "lower_1": 240, "lower_2": 220, "note": "" }
+    ]
+  }
 }

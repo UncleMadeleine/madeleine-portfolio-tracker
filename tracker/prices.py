@@ -9,6 +9,7 @@ import pandas as pd
 
 from .symbols import PENCE_CURRENCIES, Market, ParsedSymbol, parse
 from . import cache as cache_mod
+from .util import with_timeout
 
 
 @dataclass
@@ -85,19 +86,6 @@ _AK_TIMEOUT = 6.0
 _ak_spot_cache: tuple[float, dict[Market, pd.DataFrame]] = (0.0, {})
 
 
-def _with_timeout(fn, timeout: float, *args, **kwargs):
-    """在线程中执行 fn 并强制超时, 避免 akshare 等阻塞."""
-    from concurrent.futures import ThreadPoolExecutor, TimeoutError as _TimeoutError
-
-    with ThreadPoolExecutor(max_workers=1) as ex:
-        future = ex.submit(fn, *args, **kwargs)
-        try:
-            return future.result(timeout=timeout)
-        except _TimeoutError:
-            future.cancel()
-            raise RuntimeError(f"{getattr(fn, '__name__', fn)} 超时({timeout}s)")
-
-
 def _ak_spot(market: Market) -> pd.DataFrame:
     global _ak_spot_cache
     now = time.time()
@@ -106,11 +94,11 @@ def _ak_spot(market: Market) -> pd.DataFrame:
     ak = _ak()
     tables: dict[Market, pd.DataFrame] = {}
     try:
-        tables[Market.CN] = _with_timeout(ak.stock_zh_a_spot_em, _AK_TIMEOUT)
+        tables[Market.CN] = with_timeout(ak.stock_zh_a_spot_em, _AK_TIMEOUT)
     except Exception:
         pass
     try:
-        tables[Market.HK] = _with_timeout(ak.stock_hk_spot_em, _AK_TIMEOUT)
+        tables[Market.HK] = with_timeout(ak.stock_hk_spot_em, _AK_TIMEOUT)
     except Exception:
         pass
     _ak_spot_cache = (now, tables)

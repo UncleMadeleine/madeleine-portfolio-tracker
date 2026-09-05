@@ -30,15 +30,43 @@ _STATUS_RANK = {
 def load_watchlist(path: str | Path = DEFAULT_WATCHLIST) -> dict:
     p = Path(path)
     if not p.exists():
-        return {"watchlist": []}
+        return {"watchlists": {"默认": []}}
     with open(p, encoding="utf-8") as f:
-        return json.load(f)
+        raw = json.load(f)
+    if "watchlists" in raw:
+        return raw
+    if "watchlist" in raw:
+        return {"watchlists": {"默认": raw.get("watchlist", [])}}
+    return {"watchlists": {"默认": []}}
 
 
 def save_watchlist(data: dict, path: str | Path = DEFAULT_WATCHLIST) -> None:
     Path(path).write_text(
         json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+
+
+def list_names(data: dict) -> list[str]:
+    return list((data or {}).get("watchlists", {}).keys())
+
+
+def merge_entries(data: dict) -> list[dict]:
+    """合并所有子列表条目 (按 symbol 去重, 保留首次出现)."""
+    seen: dict[str, dict] = {}
+    for name in list_names(data):
+        for e in (data.get("watchlists") or {}).get(name, []):
+            sym = str(e.get("symbol", "")).strip()
+            if sym and sym not in seen:
+                seen[sym] = e
+    return list(seen.values())
+
+
+def entries_for(data: dict, name: str | None = None) -> list[dict]:
+    """取某子列表条目; name 为空或不存在时返回合并的全量."""
+    wl = (data or {}).get("watchlists", {})
+    if name and name in wl:
+        return wl[name]
+    return merge_entries(data)
 
 
 def _num(v) -> float | None:

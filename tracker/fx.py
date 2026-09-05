@@ -1,13 +1,17 @@
 """汇率获取: CFETS(akshare) 优先, OpenBB(yfinance) 货币对兜底."""
 from __future__ import annotations
 
+import math
 import time
 from datetime import date, timedelta
+
+from .util import with_timeout
 
 _PAIR_TTL = 600
 _pair_cache: dict[str, tuple[float, float]] = {}
 
 _CFETS_TTL = 120
+_CFETS_TIMEOUT = 8.0
 _cfets_cache: tuple[float, dict[str, float]] = (0.0, {})
 
 
@@ -57,13 +61,18 @@ def _cfets_table() -> dict[str, float]:
         return _cfets_cache[1]
     import akshare as ak
 
-    df = ak.fx_spot_quote()
+    df = with_timeout(ak.fx_spot_quote, _CFETS_TIMEOUT)
     out: dict[str, float] = {"CNY": 1.0}
     for _, row in df.iterrows():
         parts = str(row["货币对"]).split("/")
         if len(parts) != 2:
             continue
-        mid = (float(row["买报价"]) + float(row["卖报价"])) / 2
+        try:
+            mid = (float(row["买报价"]) + float(row["卖报价"])) / 2
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(mid):
+            continue
         base, quote = parts
         if base == "100JPY":
             out["JPY"] = mid / 100
@@ -80,23 +89,30 @@ def _cfets_rate(src: str, dst: str) -> float | None:
         return None
     if src not in table or dst not in table:
         return None
-    return table[src] / table[dst]
+    r = table[src] / table[dst]
+    return r if math.isfinite(r) else None
+
+
+def _finite(r: float | None) -> float | None:
+    if r is not None and math.isfinite(r):
+        return r
+    return None
 
 
 def get_rate(src: str, dst: str) -> float | None:
     src, dst = src.upper(), dst.upper()
     if src == dst:
         return 1.0
-    cf = _cfets_rate(src, dst)
-    if cf:
+    cf = _finite(_cfets_rate(src, dst))
+    if cf is not None:
         return cf
-    direct = _pair_rate(src, dst)
-    if direct:
+    direct = _finite(_pair_rate(src, dst))
+    if direct is not None:
         return direct
     if src != "USD" and dst != "USD":
-        r1 = _pair_rate(src, "USD")
-        r2 = _pair_rate("USD", dst)
-        if r1 and r2:
+        r1 = _finite(_pair_rate(src, "USD"))
+        r2 = _finite(_pair_rate("USD", dst))
+        if r1 is not None and r2 is not None:
             return r1 * r2
     return None
 

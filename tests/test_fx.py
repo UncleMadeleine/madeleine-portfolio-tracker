@@ -11,6 +11,30 @@ def test_get_rate_identity():
     assert fx.get_rate("USD", "USD") == 1.0
 
 
+def test_cfets_nan_rejected(monkeypatch):
+    monkeypatch.setattr(fx, "_cfets_rate", lambda s, d: float("nan"))
+    monkeypatch.setattr(fx, "_pair_rate", lambda a, b: 7.5)
+    assert fx.get_rate("USD", "CNY") == 7.5
+
+
+def test_cfets_table_skips_nan(monkeypatch):
+    monkeypatch.setattr(fx, "_cfets_cache", (0.0, {}))
+    df = pd.DataFrame(
+        {
+            "货币对": ["USD/CNY", "EUR/CNY", "HKD/CNY"],
+            "买报价": [6.70, float("nan"), 0.855],
+            "卖报价": [6.72, 7.79, 0.856],
+        }
+    )
+    import akshare as ak
+
+    monkeypatch.setattr(ak, "fx_spot_quote", lambda: df)
+    table = fx._cfets_table()
+    assert abs(table["USD"] - 6.71) < 1e-9
+    assert abs(table["HKD"] - 0.8555) < 1e-9
+    assert "EUR" not in table
+
+
 def test_cfets_first(monkeypatch):
     monkeypatch.setattr(fx, "_cfets_rate", lambda s, d: 7.1)
     monkeypatch.setattr(fx, "_yahoo_pair", lambda p: 7.2)

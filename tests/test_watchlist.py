@@ -1,3 +1,5 @@
+import json
+
 import pandas as pd
 
 from tracker.prices import Quote
@@ -8,6 +10,10 @@ from tracker.watchlist import (
     STATUS_UPPER_2,
     STATUS_WITHIN,
     build_watchlist_view,
+    entries_for,
+    list_names,
+    load_watchlist,
+    merge_entries,
     sort_watchlist,
     triggered_entries,
 )
@@ -187,3 +193,48 @@ def test_sort_change_desc_and_asc():
 def test_sort_empty():
     out = sort_watchlist(pd.DataFrame(), "severity")
     assert out.empty
+
+
+def test_load_migrates_old_flat_format(tmp_path):
+    f = tmp_path / "w.json"
+    f.write_text(
+        json.dumps({"watchlist": [{"symbol": "AAPL", "upper_1": 100}]}),
+        encoding="utf-8",
+    )
+    data = load_watchlist(f)
+    assert list_names(data) == ["默认"]
+    assert data["watchlists"]["默认"] == [{"symbol": "AAPL", "upper_1": 100}]
+
+
+def test_load_new_format(tmp_path):
+    f = tmp_path / "w.json"
+    f.write_text(
+        json.dumps({"watchlists": {"科技": [{"symbol": "AAPL"}]}}), encoding="utf-8"
+    )
+    data = load_watchlist(f)
+    assert list_names(data) == ["科技"]
+    assert entries_for(data, "科技") == [{"symbol": "AAPL"}]
+
+
+def test_load_missing_file(tmp_path):
+    data = load_watchlist(tmp_path / "nope.json")
+    assert list_names(data) == ["默认"]
+
+
+def test_list_names_and_entries():
+    data = {"watchlists": {"默认": [{"symbol": "A"}], "科技": [{"symbol": "B"}]}}
+    assert list_names(data) == ["默认", "科技"]
+    assert entries_for(data, "科技") == [{"symbol": "B"}]
+    assert entries_for(data, "不存在") == [{"symbol": "A"}, {"symbol": "B"}]
+    assert entries_for(data) == [{"symbol": "A"}, {"symbol": "B"}]
+
+
+def test_merge_entries_dedup():
+    data = {
+        "watchlists": {
+            "默认": [{"symbol": "A"}, {"symbol": "B"}],
+            "科技": [{"symbol": "B"}, {"symbol": "C"}],
+        }
+    }
+    merged = merge_entries(data)
+    assert [e["symbol"] for e in merged] == ["A", "B", "C"]

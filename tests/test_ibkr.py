@@ -1,8 +1,6 @@
 import json
 import types
 
-import pytest
-
 import tracker.ibkr as ibkr_mod
 import tracker.prices as prices_mod
 from tracker.ibkr import (
@@ -54,6 +52,36 @@ def test_load_config_merge(tmp_path):
     assert cfg["host"] == "127.0.0.1"
     assert cfg["exchanges"]["CN"] == "SHSE"
     assert cfg["exchanges"]["US"] == "SMART"
+
+
+def test_load_config_filters_comment_keys(tmp_path):
+    f = tmp_path / "ibkr.json"
+    f.write_text(json.dumps({"_comment": "note", "port": 1234}), encoding="utf-8")
+    cfg = load_config(f)
+    assert "_comment" not in cfg
+    assert cfg["port"] == 1234
+
+
+def test_load_config_env_override(tmp_path, monkeypatch):
+    f = tmp_path / "custom.json"
+    f.write_text(json.dumps({"port": 7777, "client_id": 99}), encoding="utf-8")
+    monkeypatch.setenv("IBKR_CONFIG", str(f))
+    cfg = load_config()
+    assert cfg["port"] == 7777
+    assert cfg["client_id"] == 99
+    # 模板/兜底值继承
+    assert cfg["host"] == "127.0.0.1"
+    assert cfg["exchanges"]["US"] == "SMART"
+
+
+def test_load_config_falls_back_to_example(tmp_path, monkeypatch):
+    # 无真实配置且无 env 时, 回退到仓库中的 ibkr.example.json 模板
+    monkeypatch.setattr(ibkr_mod, "DEFAULT_CONFIG", tmp_path / "nope.json")
+    monkeypatch.delenv("IBKR_CONFIG", raising=False)
+    cfg = load_config()
+    assert cfg["host"] == "127.0.0.1"
+    assert cfg["port"] == 7497
+    assert cfg["exchanges"]["CN"] == "SEHK"
 
 
 def test_contract_spec_all_markets():

@@ -12,12 +12,7 @@ from .ibkr import fetch_positions, load_config, positions_to_rows
 from .snapshot import DEFAULT_PORTFOLIO, load_portfolio
 
 
-def main(argv=None) -> None:
-    ap = argparse.ArgumentParser(description="IBKR 账户持仓同步")
-    ap.add_argument("--portfolio", default=str(DEFAULT_PORTFOLIO))
-    ap.add_argument("--dry-run", action="store_true", help="仅打印, 不写入")
-    args = ap.parse_args(argv)
-
+def run_sync(args) -> None:
     try:
         positions = fetch_positions(load_config())
     except Exception as e:
@@ -26,6 +21,21 @@ def main(argv=None) -> None:
         raise SystemExit(1)
 
     rows, skipped = positions_to_rows(positions)
+    if getattr(args, "json", False):
+        print(
+            json.dumps(
+                {
+                    "positions": rows,
+                    "skipped": skipped,
+                    "dry_run": bool(args.dry_run),
+                    "written": bool(rows and not args.dry_run),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return
+
     print(f"\n=== IBKR 账户持仓 ({len(rows)} 只) ===")
     if rows:
         with pd.option_context(
@@ -55,6 +65,15 @@ def main(argv=None) -> None:
     )
     print(f"✅ 已写入 {target} (基础货币保留: {base})")
     print("提示: avg_cost 为 IBKR 报告的合约货币每股均价 (含佣金), 仅供估算。")
+
+
+def main(argv=None) -> None:
+    ap = argparse.ArgumentParser(description="IBKR 账户持仓同步")
+    ap.add_argument("--portfolio", default=str(DEFAULT_PORTFOLIO))
+    ap.add_argument("--dry-run", action="store_true", help="仅打印, 不写入")
+    ap.add_argument("--json", action="store_true", help="输出 JSON 而非表格")
+    args = ap.parse_args(argv)
+    run_sync(args)
 
 
 if __name__ == "__main__":

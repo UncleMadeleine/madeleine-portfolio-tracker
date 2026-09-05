@@ -13,6 +13,9 @@ data/
 .env
 .streamlit/secrets.toml
 
+# IBKR 真实配置 (含敏感连接信息), 模板见 ibkr.example.json
+ibkr.json
+
 # OpenBB
 .openbb_platform/
 

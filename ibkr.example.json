@@ -1,4 +1,5 @@
 {
+  "_comment": "IBKR 配置模板。复制本文件为 ibkr.json 并按需修改 (ibkr.json 已被 .gitignore 忽略, 不会误提交敏感信息)。env IBKR_CONFIG 可指定其他配置文件路径。",
   "host": "127.0.0.1",
   "port": 7497,
   "client_id": 17,

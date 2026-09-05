@@ -1,8 +1,15 @@
-"""IBKR (TWS/IB Gateway) 行情接入: ib_async/ib_insync 可选依赖, 失败自动回退."""
+"""IBKR (TWS/IB Gateway) 行情接入: ib_async/ib_insync 可选依赖, 失败自动回退.
+
+配置从配置文件读取, 不在代码中写死:
+  优先 ibkr.json (真实配置, 已被 gitignore, 可含敏感信息)
+  其次 ibkr.example.json (随仓库提供的模板, 兜底保证开箱即用)
+  亦可环境变量 IBKR_CONFIG 显式指定路径。
+"""
 from __future__ import annotations
 
 import json
 import math
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,23 +18,16 @@ from .prices import Quote
 from .symbols import Market, ParsedSymbol
 
 DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "ibkr.json"
+EXAMPLE_CONFIG = Path(__file__).resolve().parent.parent / "ibkr.example.json"
 
-DEFAULTS: dict = {
+# 兜底: 无任何配置文件时的最小非敏感连接默认 (TWS/IB Gateway 本机默认, 非凭据)
+_FALLBACK: dict = {
     "host": "127.0.0.1",
     "port": 7497,
     "client_id": 17,
     "market_data_type": 3,
     "connect_timeout": 4,
-    "exchanges": {
-        "US": "SMART",
-        "CN": "SEHK",
-        "HK": "SEHK",
-        "DE": "IBIS",
-        "GB": "LSE",
-        "CA": "TSE",
-        "CA_V": "TSXV",
-        "AU": "ASX",
-    },
+    "exchanges": {},
 }
 
 _UNAVAILABLE_TTL = 60.0
@@ -35,17 +35,43 @@ _client = None
 _unavailable: tuple[str, float] | None = None
 
 
-def load_config(path: str | Path = DEFAULT_CONFIG) -> dict:
-    cfg = {k: (dict(v) if isinstance(v, dict) else v) for k, v in DEFAULTS.items()}
-    p = Path(path)
-    if p.exists():
-        with open(p, encoding="utf-8") as f:
-            user = json.load(f)
-        for k, v in user.items():
-            if k == "exchanges" and isinstance(v, dict):
-                cfg["exchanges"].update(v)
-            else:
-                cfg[k] = v
+def _resolve_config_path(path: str | Path | None = None) -> Path:
+    if path:
+        return Path(path)
+    env = os.environ.get("IBKR_CONFIG")
+    if env:
+        return Path(env)
+    if DEFAULT_CONFIG.exists():
+        return DEFAULT_CONFIG
+    return EXAMPLE_CONFIG
+
+
+def _load_file(p: Path) -> dict:
+    if not p.exists():
+        return {}
+    with open(p, encoding="utf-8") as f:
+        data = json.load(f)
+    return data if isinstance(data, dict) else {}
+
+
+def _merge(base: dict, extra: dict) -> dict:
+    out = {k: (dict(v) if isinstance(v, dict) else v) for k, v in base.items()}
+    for k, v in extra.items():
+        if k.startswith("_"):
+            continue
+        if k == "exchanges" and isinstance(v, dict):
+            out.setdefault("exchanges", {}).update(v)
+        else:
+            out[k] = v
+    return out
+
+
+def load_config(path: str | Path | None = None) -> dict:
+    """读取 IBKR 配置: 真实文件(或 env/显式 path) 覆盖模板 ibkr.example.json 覆盖兜底默认."""
+    cfg = _merge(_FALLBACK, _load_file(EXAMPLE_CONFIG))
+    target = _resolve_config_path(path)
+    if target != EXAMPLE_CONFIG:
+        cfg = _merge(cfg, _load_file(target))
     return cfg
 
 
@@ -104,26 +130,24 @@ class ContractSpec:
 
 
 def contract_spec(p: ParsedSymbol, exchanges: dict | None = None) -> ContractSpec:
-    ex = dict(DEFAULTS["exchanges"])
-    if exchanges:
-        ex.update(exchanges)
+    ex = exchanges if exchanges is not None else load_config().get("exchanges") or {}
     if p.market is Market.US:
-        return ContractSpec(p.yahoo, ex["US"], "USD")
+        return ContractSpec(p.yahoo, ex.get("US", "SMART"), "USD")
     code, _, suffix = p.yahoo.rpartition(".")
-    if p.market is Market.CN:
-        return ContractSpec(code, ex["CN"], "CNY", trading_class=code)
+    if p.market in (Market.CN, Market.BJ):
+        return ContractSpec(code, ex.get("CN", "SEHK"), "CNY", trading_class=code)
     if p.market is Market.HK:
-        return ContractSpec(code.lstrip("0") or code, ex["HK"], "HKD")
+        return ContractSpec(code.lstrip("0") or code, ex.get("HK", "SEHK"), "HKD")
     if p.market is Market.DE:
-        return ContractSpec(code, ex["DE"], "EUR")
+        return ContractSpec(code, ex.get("DE", "IBIS"), "EUR")
     if p.market is Market.GB:
-        return ContractSpec(code, ex["GB"], "GBP")
+        return ContractSpec(code, ex.get("GB", "LSE"), "GBP")
     if p.market is Market.CA:
         if suffix == "V":
-            return ContractSpec(code, ex["CA_V"], "CAD")
-        return ContractSpec(code, ex["CA"], "CAD")
+            return ContractSpec(code, ex.get("CA_V", "TSXV"), "CAD")
+        return ContractSpec(code, ex.get("CA", "TSE"), "CAD")
     if p.market is Market.AU:
-        return ContractSpec(code, ex["AU"], "AUD")
+        return ContractSpec(code, ex.get("AU", "ASX"), "AUD")
     raise ValueError(f"不支持的市场: {p.market}")
 
 
@@ -215,6 +239,7 @@ def get_quotes_ibkr(
 
 
 _A_SHARE_SH_PREFIX = ("5", "6", "9")
+_A_SHARE_BJ_PREFIX = ("4", "8")
 
 
 def ibkr_to_yahoo(
@@ -227,7 +252,11 @@ def ibkr_to_yahoo(
     ccy = (currency or "").upper()
     exkey = ex or prim
     if ccy == "CNY":
-        return f"{raw}.SS" if raw[:1] in _A_SHARE_SH_PREFIX else f"{raw}.SZ"
+        if raw[:1] in _A_SHARE_SH_PREFIX:
+            return f"{raw}.SS"
+        if raw[:1] in _A_SHARE_BJ_PREFIX or raw.startswith("920"):
+            return f"{raw}.BJ"
+        return f"{raw}.SZ"
     if ccy == "HKD" or exkey in ("SEHK", "HKEX"):
         code = raw.lstrip("0") or "0"
         return f"{code.zfill(4)}.HK"

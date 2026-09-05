@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from tracker.cache import CACHE_DB, get_cached, set_cached
+from tracker.cache import get_cached, set_cached
 from tracker.prices import Quote
 
 
@@ -54,12 +54,9 @@ class TestCache:
 
     def test_none_price_not_cached(self):
         """price <= 0 的 quote 不被写入."""
-        from tracker.cache import set_cached
         import tracker.cache as cm
-        # set_cached 会过滤掉 price <= 0? 当前实现没有过滤, 但 get_cached 过滤了.
-        # 测试 get_cached 对非法数据的处理
+        # set_cached 过滤 price<=0; get_cached 也过滤, 双重保险
         import sqlite3
-        from pathlib import Path
         db = cm.CACHE_DB
         with sqlite3.connect(db) as con:
             con.execute(
@@ -69,6 +66,12 @@ class TestCache:
             )
             con.commit()
         assert get_cached(["TEST"]) == {}
+
+    def test_set_cached_filters_bad_price(self):
+        """set_cached 应过滤 price<=0 的脏数据."""
+        bad = Quote(symbol="BAD", name="", price=-1.0, prev_close=None, change_pct=None, currency="USD")
+        set_cached({"BAD": bad})
+        assert get_cached(["BAD"]) == {}
 
     def test_invalid_symbol_in_get_cached(self):
         hits = get_cached(["AAPL", "NOT_FOUND"])

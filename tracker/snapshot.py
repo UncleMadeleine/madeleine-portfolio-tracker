@@ -32,6 +32,41 @@ def load_portfolio(path: str | Path) -> dict:
         return json.load(f)
 
 
+def _records(df: pd.DataFrame) -> list[dict]:
+    """DataFrame -> records, NaN/NaT 转 None 便于 JSON 序列化."""
+    if df is None or df.empty:
+        return []
+    return df.astype(object).where(pd.notnull(df), None).to_dict(orient="records")
+
+
+def _series_to_dict(s) -> dict[str, float]:
+    """Series/dict -> {key: float}, 空值返回 {}."""
+    if s is None:
+        return {}
+    return {str(k): float(v) for k, v in s.items()}
+
+
+def snapshot_json(
+    base: str, view: pd.DataFrame, summary: dict, wview: pd.DataFrame, issues: list[str]
+) -> dict:
+    return {
+        "base_currency": base,
+        "holdings": _records(view),
+        "summary": {
+            "total_value": summary.get("total_value"),
+            "total_cost": summary.get("total_cost"),
+            "total_pnl": summary.get("total_pnl"),
+            "total_pnl_pct": summary.get("total_pnl_pct"),
+            "today_pnl": summary.get("today_pnl"),
+            "by_market": _series_to_dict(summary.get("by_market")),
+            "by_currency": _series_to_dict(summary.get("by_currency")),
+        },
+        "watchlist": _records(wview),
+        "triggered": _records(triggered_entries(wview)),
+        "issues": issues,
+    }
+
+
 def take_snapshot(
     portfolio: dict,
     watchlist: dict | None = None,
@@ -64,16 +99,7 @@ def take_snapshot(
     return base, view, summarize(view), wview, all_issues + notes
 
 
-def main(argv=None) -> None:
-    ap = argparse.ArgumentParser(description="投资组合命令行快照 (持仓 + 自选)")
-    ap.add_argument("--portfolio", default=str(DEFAULT_PORTFOLIO))
-    ap.add_argument("--watchlist-file", default=str(DEFAULT_WATCHLIST), help="watchlist.json 路径")
-    ap.add_argument("--watchlist", default=None, help="只查看某个子自选列表 (默认全部)")
-    ap.add_argument("--base", default=None, help="覆盖基础货币, 如 USD")
-    ap.add_argument("--akshare", action="store_true", help="A股/港股优先走 akshare")
-    ap.add_argument("--ibkr", action="store_true", help="优先使用 IBKR 行情 (需 TWS/IB Gateway)")
-    args = ap.parse_args(argv)
-
+def run_snapshot(args) -> None:
     portfolio = load_portfolio(args.portfolio)
     if args.base:
         portfolio["base_currency"] = args.base.upper()
@@ -82,6 +108,11 @@ def main(argv=None) -> None:
         portfolio, watchlist, watch_name=args.watchlist,
         prefer_akshare=args.akshare, use_ibkr=args.ibkr,
     )
+
+    if getattr(args, "json", False):
+        print(json.dumps(snapshot_json(base, view, summary, wview, issues),
+                         ensure_ascii=False, indent=2))
+        return
 
     print(f"\n=== 投资组合快照 ({base}) ===")
     if view.empty:
@@ -101,11 +132,14 @@ def main(argv=None) -> None:
         if m["today_pnl"] is not None:
             print(f"今日估算: {m['today_pnl']:+,.2f} {base}")
         print("\n市场分布:")
+        total = m["total_value"] or 0
         for k, v in m["by_market"].items():
-            print(f"  {k}: {v:,.2f} ({v / m['total_value']:.1%})")
+            pct = v / total if total else 0
+            print(f"  {k}: {v:,.2f} ({pct:.1%})")
         print("\n币种分布:")
         for k, v in m["by_currency"].items():
-            print(f"  {k}: {v:,.2f} ({v / m['total_value']:.1%})")
+            pct = v / total if total else 0
+            print(f"  {k}: {v:,.2f} ({pct:.1%})")
 
     scope_label = f"自选列表: {args.watchlist}" if args.watchlist else "全部自选"
     print(f"\n=== 自选观察 ({scope_label}) ===")
@@ -117,7 +151,7 @@ def main(argv=None) -> None:
             "display.width", 240,
             "display.max_columns", None,
         ):
-            print(wview[WATCH_COLS].to_string(index=False))
+            print(wview.reindex(columns=WATCH_COLS).to_string(index=False))
         trig = triggered_entries(wview)
         if not trig.empty:
             print(f"\n🔔 阈值提醒 ({len(trig)}):")
@@ -130,6 +164,19 @@ def main(argv=None) -> None:
         print("\n⚠ 问题:")
         for i in issues:
             print(f"  - {i}")
+
+
+def main(argv=None) -> None:
+    ap = argparse.ArgumentParser(description="投资组合命令行快照 (持仓 + 自选)")
+    ap.add_argument("--portfolio", default=str(DEFAULT_PORTFOLIO))
+    ap.add_argument("--watchlist-file", default=str(DEFAULT_WATCHLIST), help="watchlist.json 路径")
+    ap.add_argument("--watchlist", default=None, help="只查看某个子自选列表 (默认全部)")
+    ap.add_argument("--base", default=None, help="覆盖基础货币, 如 USD")
+    ap.add_argument("--akshare", action="store_true", help="A股/港股优先走 akshare")
+    ap.add_argument("--ibkr", action="store_true", help="优先使用 IBKR 行情 (需 TWS/IB Gateway)")
+    ap.add_argument("--json", action="store_true", help="输出 JSON 而非表格")
+    args = ap.parse_args(argv)
+    run_snapshot(args)
 
 
 if __name__ == "__main__":

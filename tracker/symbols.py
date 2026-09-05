@@ -13,6 +13,7 @@ class Market(str, Enum):
     GB = "GB"
     CA = "CA"
     AU = "AU"
+    BJ = "BJ"
 
 
 MARKET_META: dict[Market, dict[str, str]] = {
@@ -23,12 +24,14 @@ MARKET_META: dict[Market, dict[str, str]] = {
     Market.GB: {"label": "英股", "currency": "GBP"},
     Market.CA: {"label": "加股", "currency": "CAD"},
     Market.AU: {"label": "澳股", "currency": "AUD"},
+    Market.BJ: {"label": "北交所", "currency": "CNY"},
 }
 
 _SUFFIX_MARKET: dict[str, Market] = {
     "SS": Market.CN,
     "SH": Market.CN,
     "SZ": Market.CN,
+    "BJ": Market.BJ,
     "HK": Market.HK,
     "DE": Market.DE,
     "F": Market.DE,
@@ -63,7 +66,7 @@ class ParsedSymbol:
 
     @property
     def ak_code(self) -> str | None:
-        if self.market is Market.CN:
+        if self.market in (Market.CN, Market.BJ):
             return self.yahoo.split(".")[0]
         if self.market is Market.HK:
             return self.yahoo.split(".")[0].lstrip("0").zfill(5)

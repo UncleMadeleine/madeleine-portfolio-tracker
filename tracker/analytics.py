@@ -40,7 +40,7 @@ def build_view(
         pnl = mv - cost_base if cost_base else None
         pnl_pct = pnl / cost_base if cost_base else None
         today = None
-        if q.change_pct is not None:
+        if q.change_pct is not None and q.change_pct > -100:
             today = mv - mv / (1 + q.change_pct / 100)
         rows.append(
             {

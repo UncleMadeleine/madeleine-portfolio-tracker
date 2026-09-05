@@ -63,7 +63,8 @@ def load_watchlist(path: str | Path = DEFAULT_WATCHLIST) -> dict:
 
 def save_watchlist(data: dict, path: str | Path = DEFAULT_WATCHLIST) -> None:
     Path(path).write_text(
-        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+        json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False),
+        encoding="utf-8",
     )
 
 
@@ -113,6 +114,12 @@ def _num(v) -> float | None:
         return f if math.isfinite(f) else None
     except (TypeError, ValueError):
         return None
+
+
+def _note_str(v) -> str:
+    if v is None or (isinstance(v, float) and math.isnan(v)):
+        return ""
+    return str(v)
 
 
 def _normalize_entry(e: dict) -> dict:
@@ -179,7 +186,7 @@ def build_watchlist_view(
                 "lower_1": lower_1,
                 "lower_2": lower_2,
                 "status": status,
-                "note": str(e.get("note") or ""),
+                "note": _note_str(e.get("note")),
                 **dist,
             }
         )

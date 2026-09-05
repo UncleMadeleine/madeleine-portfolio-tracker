@@ -5,6 +5,10 @@ import sqlite3
 import time
 from pathlib import Path
 from threading import Lock
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .prices import Quote
 
 
 CACHE_DB = Path(__file__).resolve().parent.parent / "data" / "quotes_cache.db"
@@ -57,15 +61,15 @@ def get_cached(symbols: list[str], ttl: int = CACHE_TTL) -> dict[str, "Quote"]:
 
 
 def set_cached(quotes: dict[str, "Quote"]) -> None:
-    """将 Quote 写入缓存, 更新 fetched_at."""
+    """将 Quote 写入缓存, 更新 fetched_at. 过滤掉 price<=0 的脏数据."""
     if not quotes:
         return
-    from .prices import Quote
-
     _ensure_db()
     now = time.time()
     rows: list[tuple] = []
     for q in quotes.values():
+        if q.price is None or q.price <= 0:
+            continue
         rows.append((q.symbol, q.name, q.price, q.prev_close, q.change_pct, q.currency, now))
     with sqlite3.connect(CACHE_DB) as con:
         con.executemany(
@@ -80,4 +84,38 @@ def set_cached(quotes: dict[str, "Quote"]) -> None:
             rows,
         )
         con.commit()
+
+
+def info() -> dict:
+    """缓存统计: 记录总数 / 有效条数 / 数据库大小."""
+    _ensure_db()
+    now = time.time()
+    with sqlite3.connect(CACHE_DB) as con:
+        total = con.execute("SELECT COUNT(*) FROM quotes").fetchone()[0]
+        fresh = con.execute(
+            "SELECT COUNT(*) FROM quotes WHERE fetched_at > ?", (now - CACHE_TTL,)
+        ).fetchone()[0]
+        oldest, newest = con.execute(
+            "SELECT MIN(fetched_at), MAX(fetched_at) FROM quotes"
+        ).fetchone()
+    size = CACHE_DB.stat().st_size if CACHE_DB.exists() else 0
+    return {
+        "db": str(CACHE_DB),
+        "ttl_seconds": CACHE_TTL,
+        "total": total,
+        "fresh": fresh,
+        "stale": total - fresh,
+        "oldest_at": oldest,
+        "newest_at": newest,
+        "size_bytes": size,
+    }
+
+
+def clear() -> int:
+    """清空全部缓存, 返回删除条数."""
+    _ensure_db()
+    with sqlite3.connect(CACHE_DB) as con:
+        cur = con.execute("DELETE FROM quotes")
+        con.commit()
+        return cur.rowcount
 

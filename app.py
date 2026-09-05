@@ -39,9 +39,27 @@ def load_portfolio_file() -> dict:
     return {"base_currency": "CNY", "holdings": []}
 
 
+def _clean_rows(rows: list[dict]) -> list[dict]:
+    """把编辑器返回的 NaN/None 单元格清洗为可安全序列化的值."""
+    out = []
+    for r in rows:
+        clean = {}
+        for k, v in r.items():
+            if isinstance(v, float) and pd.isna(v):
+                continue
+            if v is None:
+                continue
+            clean[k] = v
+        out.append(clean)
+    return out
+
+
 def save_portfolio_file(data: dict) -> None:
+    data = dict(data)
+    data["holdings"] = _clean_rows(data.get("holdings", []))
     PORTFOLIO_PATH.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+        json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False),
+        encoding="utf-8",
     )
 
 
@@ -160,6 +178,11 @@ with st.sidebar:
             for r in edited_w.dropna(subset=["symbol"]).to_dict("records"):
                 e = _normalize_entry(r)
                 e["lists"] = parse_lists(e.get("lists"))
+                # 清洗 NaN 阈值, 避免写出非法 JSON
+                for k in ("upper_1", "upper_2", "lower_1", "lower_2"):
+                    v = e.get(k)
+                    if isinstance(v, float) and pd.isna(v):
+                        e.pop(k, None)
                 rows.append(e)
             bad = []
             for r in rows:
@@ -208,7 +231,10 @@ if not quotes:
 
 issues: list[str] = []
 if not holdings.empty:
-    currencies = tuple(sorted({q.currency for q in quotes.values()}))
+    holding_currencies = {
+        quotes[s].currency for s in holding_symbols if s in quotes
+    }
+    currencies = tuple(sorted(holding_currencies))
     fx, fx_missing = cached_fx(base, currencies)
     view, view_issues = build_view(holdings.to_dict("records"), quotes, fx)
     issues += view_issues + [f"汇率缺失: {c}" for c in fx_missing]
@@ -313,7 +339,7 @@ with tab3:
     chart_symbols = list(
         dict.fromkeys(
             (view["symbol"].tolist() if not view.empty else [])
-            + (wview["symbol"].tolist() if not wview.empty else [])
+            + (wview_all["symbol"].tolist() if not wview_all.empty else [])
         )
     )
     if not chart_symbols:

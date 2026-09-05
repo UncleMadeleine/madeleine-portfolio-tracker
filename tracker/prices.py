@@ -48,7 +48,12 @@ def _quote_from_dump(p: ParsedSymbol, d: dict) -> Quote | None:
         return None
     prev = _pick(d, "prev_close", "previous_close")
     chg = _pick(d, "change_percent", "percent_change")
-    raw_ccy = str(_pick(d, "currency") or p.currency)
+    # yfinance 对 LSE 返回的价为便士且 currency=GBp; 若字段缺失, GB 市场按便士处理
+    # 避免回退到 p.currency(GBP) 导致价格放大 100 倍
+    raw_ccy = _pick(d, "currency")
+    if raw_ccy is None:
+        raw_ccy = "GBp" if p.market is Market.GB else p.currency
+    raw_ccy = str(raw_ccy)
     if raw_ccy in PENCE_CURRENCIES:
         currency = "GBP"
         price = float(price) / 100
@@ -137,7 +142,7 @@ def _akshare_quote(p: ParsedSymbol) -> Quote:
 
 
 def _quote_route(p: ParsedSymbol, prefer_akshare: bool) -> list:
-    if p.market in (Market.CN, Market.HK):
+    if p.market in (Market.CN, Market.BJ, Market.HK):
         if prefer_akshare:
             return [_akshare_quote, _yahoo_quote]
         return [_yahoo_quote, _akshare_quote]
@@ -215,7 +220,7 @@ def get_quotes(
             notes.append(f"IBKR 接入异常: {e}")
 
     for p in list(by_yahoo.values()):
-        if p.yahoo not in quotes and prefer_akshare and p.market in (Market.CN, Market.HK):
+        if p.yahoo not in quotes and prefer_akshare and p.market in (Market.CN, Market.BJ, Market.HK):
             try:
                 quotes[p.yahoo] = _akshare_quote(p)
             except Exception:
@@ -262,7 +267,7 @@ def _yahoo_history(p: ParsedSymbol, months: int) -> pd.DataFrame:
 def _akshare_history(p: ParsedSymbol, months: int) -> pd.DataFrame:
     ak = _ak()
     start = (date.today() - timedelta(days=months * 31)).strftime("%Y%m%d")
-    if p.market is Market.CN:
+    if p.market in (Market.CN, Market.BJ):
         df = ak.stock_zh_a_hist(
             symbol=p.yahoo.split(".")[0], period="daily", start_date=start, adjust="qfq"
         )
@@ -288,7 +293,7 @@ def _akshare_history(p: ParsedSymbol, months: int) -> pd.DataFrame:
 
 def get_history(symbol: str, months: int = 12, prefer_akshare: bool = False) -> pd.DataFrame:
     p = parse(symbol)
-    if p.market in (Market.CN, Market.HK):
+    if p.market in (Market.CN, Market.BJ, Market.HK):
         fns = (
             [_akshare_history, _yahoo_history]
             if prefer_akshare

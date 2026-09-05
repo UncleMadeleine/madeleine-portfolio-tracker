@@ -14,19 +14,34 @@ python3 -m venv .venv
 # 启动页面 (http://localhost:8501)
 .venv/bin/streamlit run app.py
 
-# 或命令行快照 (持仓 + 自选 + 阈值提醒)
-.venv/bin/python -m tracker.snapshot
-.venv/bin/python -m tracker.snapshot --base USD   # 切换基础货币
-.venv/bin/python -m tracker.snapshot --watchlist 科技   # 只看某个自选列表
-.venv/bin/python -m tracker.snapshot --ibkr       # 优先走 IBKR
+# 统一命令行入口 (等价 python -m tracker)
+.venv/bin/python -m tracker.cli snapshot        # 持仓 + 自选 + 阈值提醒
+.venv/bin/python -m tracker.cli snapshot --base USD   # 切换基础货币
+.venv/bin/python -m tracker.cli snapshot --watchlist 科技   # 只看某个自选列表
+.venv/bin/python -m tracker.cli snapshot --ibkr        # 优先走 IBKR
+.venv/bin/python -m tracker.cli snapshot --json        # 输出 JSON (机器可读)
+
+# 其他子命令 (全部支持 --json)
+.venv/bin/python -m tracker.cli quote AAPL 600519.SS        # 实时行情
+.venv/bin/python -m tracker.cli fx USD CNY EUR              # 汇率
+.venv/bin/python -m tracker.cli history AAPL --months 12    # 历史价格
+.venv/bin/python -m tracker.cli watchlist list              # 自选+阈值提醒
+.venv/bin/python -m tracker.cli watchlist add NVDA --list 科技,美股 --upper1 260  # 加自选
+.venv/bin/python -m tracker.cli watchlist remove NVDA       # 删自选
+.venv/bin/python -m tracker.cli report                      # 自选监控阈值报告 (md)
+.venv/bin/python -m tracker.cli report -f json -o report.json   # 报告导出到文件
+.venv/bin/python -m tracker.cli report -f csv -w 科技           # 只看某个列表, CSV 格式
+.venv/bin/python -m tracker.cli cache info|clear            # 行情磁盘缓存
 
 # 从 IBKR 账户同步真实持仓 (需 TWS/IB Gateway 已登录)
-.venv/bin/python -m tracker.ibkr_sync
-.venv/bin/python -m tracker.ibkr_sync --dry-run   # 仅预览不写入
+.venv/bin/python -m tracker.cli sync --dry-run   # 仅预览不写入
 
 # 单元测试 (不联网)
 .venv/bin/python -m pytest tests/ -q
 ```
+
+> 完整的 CLI 帮助: `.venv/bin/python -m tracker.cli --help` (或每个子命令 `--help`)。
+> 供 AI 使用的手册见 `.opencode/skills/portfolio-tracker/SKILL.md`。
 
 ## 代码规范 (Yahoo Finance 后缀)
 
@@ -69,18 +84,22 @@ python3 -m venv .venv
 ```
 app.py                  Streamlit 页面 (持仓编辑/指标/配置/走势/自选提醒)
 tracker/
+├── __main__.py         python -m tracker 入口 (转发到 cli)
+├── cli.py              CLI: snapshot / quote / watchlist / fx / history / sync / cache
 ├── symbols.py          代码解析、市场识别、GBp/港股补零归一
 ├── prices.py           行情路由: IBKR 优先 (批量快照) → yfinance 批量 → akshare 降级 → 逐个重试
 ├── fx.py               汇率: CFETS(akshare) 优先, yfinance 货币对兜底(直对/逆对/USD桥)
+├── cache.py            行情 SQLite 磁盘缓存 (info/clear)
 ├── analytics.py        组合视图与指标 (纯函数)
 ├── watchlist.py        自选股视图与价格阈值状态 (纯函数 + 配置读写)
 ├── ibkr.py             IBKR 行情接入 + 持仓同步 (可选依赖 ib_async, 失败静默回退)
 ├── ibkr_sync.py        CLI: 从 IBKR 账户持仓生成 portfolio.json
-└── snapshot.py         CLI 快照 (持仓 + 自选, 支持 --ibkr)
+└── snapshot.py         CLI 快照 (持仓 + 自选, 支持 --ibkr/--json)
 tests/                  纯逻辑单元测试 (mock 数据源, 不联网)
 portfolio.json          持仓配置 (页面可直接编辑保存)
 watchlist.json          自选股配置 (页面可直接编辑保存)
-ibkr.json               IBKR 连接配置 + 交易所映射 (已含默认值)
+ibkr.example.json       IBKR 配置模板 (随仓库提交)
+ibkr.json               IBKR 真实配置 (已 gitignore, 不随仓库提交, 复制模板修改)
 ```
 
 ### 数据源与降级策略
@@ -96,8 +115,19 @@ ibkr.json               IBKR 连接配置 + 交易所映射 (已含默认值)
 
 - 页面侧栏可勾选「A股/港股优先 akshare」「🔗 IBKR 行情」
 - 英股 GBp 便士报价自动换算为 GBP；汇率缓存 10 分钟，行情缓存 5 分钟
-- IBKR 连接参数见 `ibkr.json`（默认 `127.0.0.1:7497` 模拟盘）；**交易所映射也在同一文件**，可按需覆盖（A股默认 `SEHK`，因沪深港通合约挂在 HKEX 下，需配 `tradingClass`）
+- IBKR 连接参数**从配置文件读取**（不写死在代码里）：优先 `ibkr.json`，其次 `ibkr.example.json` 模板兜底，也可用环境变量 `IBKR_CONFIG=/path/to/xxx.json` 指定；交易所映射在同一文件（A股默认 `SEHK`，因沪深港通合约挂在 HKEX 下，需配 `tradingClass`）
 - IBKR 断开时自动静默回退下一级数据源，不影响页面运行；持仓同步见下方
+
+### 配置 IBKR 连接
+
+```bash
+# 复制模板为真实配置, 再按需修改 (真实配置已被 .gitignore 忽略, 不会误提交)
+cp ibkr.example.json ibkr.json
+```
+
+- `ibkr.json` 含连接参数（`host`/`port`/`client_id`/`market_data_type`/`connect_timeout`）与**交易所映射**（`exchanges`），默认 `127.0.0.1:7497` 模拟盘
+- 不想在项目目录放配置文件时，可用环境变量指向其他路径：`IBKR_CONFIG=/data/my-ibkr.json python -m tracker.cli snapshot --ibkr`
+- 配置文件缺字段时自动继承模板/兜底值；`_comment` 开头的字段会被忽略
 
 ### 从 IBKR 同步真实持仓
 

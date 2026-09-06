@@ -230,6 +230,8 @@ class TestParser:
             ["watchlist", "add", "AAPL", "--upper1", "200"],
             ["fx", "USD", "CNY"],
             ["history", "AAPL"],
+            ["kline", "AAPL"],
+            ["kline", "AAPL", "--period", "weekly", "--ma", "10,30", "--refresh"],
             ["report", "-f", "md"],
             ["report", "-f", "json", "-w", "科技", "-o", "x.md"],
             ["sync", "--dry-run"],

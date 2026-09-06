@@ -310,3 +310,26 @@ def get_history(symbol: str, months: int = 12, prefer_akshare: bool = False) -> 
         except Exception as e:
             last_err = e
     raise RuntimeError(f"{p.yahoo}: 历史数据获取失败 ({last_err})")
+
+
+def get_ohlc(
+    symbol: str,
+    months: int = 12,
+    prefer_akshare: bool = False,
+    refresh: bool = False,
+) -> pd.DataFrame:
+    """K线日线数据 (date/open/high/low/close/volume, 升序), 带磁盘缓存与清洗.
+
+    惰性导入 charting (plotly 较重), 避免拖慢其它子命令.
+    """
+    from .charting import clean_ohlc
+
+    p = parse(symbol)
+    if not refresh:
+        cached = cache_mod.get_ohlc_cached(p.yahoo, months)
+        if cached is not None:
+            return cached
+    df = clean_ohlc(get_history(symbol, months=months, prefer_akshare=prefer_akshare))
+    if not df.empty:
+        cache_mod.set_ohlc_cached(p.yahoo, months, df)
+    return df

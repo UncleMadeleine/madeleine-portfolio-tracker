@@ -25,6 +25,9 @@ python3 -m venv .venv
 .venv/bin/python -m tracker.cli quote AAPL 600519.SS        # 实时行情
 .venv/bin/python -m tracker.cli fx USD CNY EUR              # 汇率
 .venv/bin/python -m tracker.cli history AAPL --months 12    # 历史价格
+.venv/bin/python -m tracker.cli kline AAPL                  # K线图 → 生成 data/kline_AAPL.html
+.venv/bin/python -m tracker.cli kline 600519.SS --months 6 --ma 5,10,20,60 --open
+.venv/bin/python -m tracker.cli kline 0700.HK --period weekly --json   # 周K + JSON 数据
 .venv/bin/python -m tracker.cli watchlist list              # 自选+阈值提醒
 .venv/bin/python -m tracker.cli watchlist add NVDA --list 科技,美股 --upper1 260  # 加自选
 .venv/bin/python -m tracker.cli watchlist remove NVDA       # 删自选
@@ -82,14 +85,15 @@ python3 -m venv .venv
 ## 架构
 
 ```
-app.py                  Streamlit 页面 (持仓编辑/指标/配置/走势/自选提醒)
+app.py                  Streamlit 页面 (持仓编辑/指标/配置/走势/K线/自选提醒)
 tracker/
 ├── __main__.py         python -m tracker 入口 (转发到 cli)
-├── cli.py              CLI: snapshot / quote / watchlist / fx / history / sync / cache
+├── cli.py              CLI: snapshot / quote / watchlist / fx / history / kline / sync / cache
 ├── symbols.py          代码解析、市场识别、GBp/港股补零归一
 ├── prices.py           行情路由: IBKR 优先 (批量快照) → yfinance 批量 → akshare 降级 → 逐个重试
 ├── fx.py               汇率: CFETS(akshare) 优先, yfinance 货币对兜底(直对/逆对/USD桥)
-├── cache.py            行情 SQLite 磁盘缓存 (info/clear)
+├── cache.py            行情 SQLite 磁盘缓存 (实时 5 分钟 / K线 30 分钟)
+├── charting.py         K线蜡烛图 (plotly 开源渲染: 清洗/均线/周月K/成交量/断轴)
 ├── analytics.py        组合视图与指标 (纯函数)
 ├── watchlist.py        自选股视图与价格阈值状态 (纯函数 + 配置读写)
 ├── ibkr.py             IBKR 行情接入 + 持仓同步 (可选依赖 ib_async, 失败静默回退)
@@ -101,6 +105,25 @@ watchlist.json          自选股配置 (页面可直接编辑保存)
 ibkr.example.json       IBKR 配置模板 (随仓库提交)
 ibkr.json               IBKR 真实配置 (已 gitignore, 不随仓库提交, 复制模板修改)
 ```
+
+### K线图
+
+基于开源 **plotly** 渲染（无新增依赖），看盘软件风格：
+
+- **蜡烛图 + 成交量副图 + MA 均线**（默认 MA5/20/60，可自定义），默认红涨绿跌（可切国际配色）
+- **非交易日断轴**：周末/节假日不出空隙，图形连续
+- **日K / 周K / 月K** 一键切换（周K 按 W-FRI 对齐）
+- 顶部**区间快捷按钮**（1/3/6 个月、1 年、全部），滚轮缩放、拖拽平移
+- 数据经过**清洗校验**（去重/排序，丢弃 high<low 等自相矛盾的脏行），英股便士自动换算
+- **双层缓存**：SQLite 磁盘缓存 30 分钟（`cache info` 可查看），页面另有内存缓存；`--refresh` 强制刷新
+
+```bash
+.venv/bin/python -m tracker.cli kline AAPL --months 12            # 生成 data/kline_AAPL.html
+.venv/bin/python -m tracker.cli kline 600519.SS --ma 5,10,20,60   # 自定义均线
+.venv/bin/python -m tracker.cli kline 0700.HK --period weekly --open  # 周K + 自动打开浏览器
+```
+
+Streamlit 页面「🕯 K线」标签页提供同样的交互图（代码/范围/周期/均线/成交量/配色可调）。
 
 ### 数据源与降级策略
 

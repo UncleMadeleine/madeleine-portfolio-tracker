@@ -9,7 +9,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from tracker import prices
+from tracker import charting, prices
 from tracker.analytics import build_view, summarize
 from tracker.fx import get_fx_rates
 from tracker.symbols import parse
@@ -76,6 +76,12 @@ def cached_fx(base: str, currencies: tuple[str, ...]):
 @st.cache_data(ttl=1800, show_spinner=False)
 def cached_history(symbol: str, prefer_akshare: bool):
     return prices.get_history(symbol, months=12, prefer_akshare=prefer_akshare)
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def cached_kline(symbol: str, months: int, prefer_akshare: bool):
+    """K线日线 (磁盘缓存 + 内存缓存双层, TTL 内切换参数不重复请求网络)."""
+    return prices.get_ohlc(symbol, months=months, prefer_akshare=prefer_akshare)
 
 
 def fmt(v, digits: int = 2) -> str:
@@ -270,8 +276,8 @@ if errors or issues:
             st.write(f"- {i}")
 
 badge = f" 🔔{len(trig_all)}" if not trig_all.empty else ""
-tab1, tab2, tab3, tab4 = st.tabs(
-    ["💼 持仓明细", "🥧 资产配置", "📈 走势对比", f"🎯 自选观察{badge}"]
+tab1, tab2, tab3, tab_k, tab4 = st.tabs(
+    ["💼 持仓明细", "🥧 资产配置", "📈 走势对比", "🕯 K线", f"🎯 自选观察{badge}"]
 )
 
 with tab1:
@@ -369,6 +375,69 @@ with tab3:
             fig = px.line(px_df, labels={"value": y_label, "variable": "代码"})
             fig.update_layout(legend_title="代码")
             st.plotly_chart(fig, width="stretch")
+
+with tab_k:
+    if not chart_symbols:
+        st.info("暂无可展示的代码。")
+    else:
+        kc1, kc2, kc3 = st.columns([2, 1, 1])
+        ksym = kc1.selectbox("代码", chart_symbols, index=0, key="kline_symbol")
+        kmonths = kc2.selectbox(
+            "范围", [3, 6, 12, 24, 36], index=2,
+            format_func=lambda m: f"近 {m} 个月", key="kline_months",
+        )
+        kperiod = kc3.selectbox(
+            "周期", ["daily", "weekly", "monthly"], index=0,
+            format_func=lambda v: charting.PERIOD_LABELS[v], key="kline_period",
+        )
+        kc4, kc5 = st.columns(2)
+        kmas = kc4.multiselect(
+            "均线", [5, 10, 20, 30, 60, 120, 250], default=[5, 20, 60], key="kline_ma",
+        )
+        kvol = kc5.checkbox("成交量", value=True, key="kline_vol")
+        kgreen = kc5.checkbox("绿涨红跌 (国际配色)", value=False, key="kline_color")
+        try:
+            kdf = cached_kline(ksym, kmonths, prefer_akshare)
+        except Exception as e:
+            st.warning(f"{ksym}: {e}")
+        else:
+            if kdf.empty:
+                st.warning(f"{ksym}: 无有效K线数据。")
+            else:
+                try:
+                    kcur = parse(ksym).currency
+                except ValueError:
+                    kcur = None
+                if kperiod != "daily":
+                    kdf = charting.resample_ohlc(kdf, kperiod)
+                fig = charting.build_candlestick_fig(
+                    kdf, ksym, currency=kcur, mas=tuple(kmas),
+                    show_volume=kvol, green_up=kgreen, period=kperiod,
+                )
+                st.plotly_chart(fig, width="stretch")
+                s = charting.summarize_ohlc(kdf, tuple(kmas))
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric(
+                    "最新收盘" + (f" ({kcur})" if kcur else ""),
+                    fmt(s["last_close"], 3),
+                )
+                m2.metric(
+                    "区间涨跌",
+                    f"{s['change_pct']:+.2f}%" if s["change_pct"] is not None else "—",
+                )
+                m3.metric(
+                    f"区间最高 ({s['period_high_date']})",
+                    fmt(s["period_high"], 3),
+                )
+                m4.metric(
+                    f"区间最低 ({s['period_low_date']})",
+                    fmt(s["period_low"], 3),
+                )
+                ma_txt = "  ".join(
+                    f"MA{n[2:]} {fmt(v, 3)}" for n, v in s["ma"].items()
+                )
+                if ma_txt:
+                    st.caption(f"均线: {ma_txt} · 数据源与行情一致, 日K缓存 30 分钟")
 
 with tab4:
     if not all_watch_entries:

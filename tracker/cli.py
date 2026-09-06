@@ -7,6 +7,7 @@
   report    导出自选监控阈值报告 (md / csv / json)
   fx        汇率查询
   history   历史价格 (近 N 个月)
+  kline     K线蜡烛图 (交互式 HTML + 摘要, 含成交量/均线/周月K)
   sync      从 IBKR 账户同步持仓
   cache     行情磁盘缓存管理 (info / clear)
 
@@ -529,6 +530,97 @@ def cmd_history(args) -> None:
         print(tail.to_string(index=False))
 
 
+# ---------- kline ----------
+
+DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+
+
+def _fmt_vol(v) -> str:
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return "—"
+    for unit, div in (("亿", 1e8), ("万", 1e4)):
+        if v >= div:
+            return f"{v / div:.2f}{unit}"
+    return f"{v:,.0f}"
+
+
+def cmd_kline(args) -> None:
+    import webbrowser
+
+    from . import charting
+
+    try:
+        p = parse(args.symbol)
+    except ValueError as e:
+        _finish_with_error(str(e))
+    try:
+        df = prices.get_ohlc(
+            args.symbol, months=args.months,
+            prefer_akshare=args.akshare, refresh=args.refresh,
+        )
+    except Exception as e:
+        _finish_with_error(f"{args.symbol}: K线数据获取失败 ({e})")
+    if args.period != "daily":
+        df = charting.resample_ohlc(df, args.period)
+    if df.empty:
+        _finish_with_error(f"{p.yahoo}: 无有效K线数据")
+
+    mas = charting.parse_ma_periods(args.ma)
+    s = charting.summarize_ohlc(df, mas)
+    if args.json:
+        recs = df.copy()
+        recs["date"] = recs["date"].dt.strftime("%Y-%m-%d")
+        _print_json(
+            {
+                "symbol": p.yahoo,
+                "currency": p.currency,
+                "period": args.period,
+                "months": args.months,
+                "bars": len(df),
+                "summary": s,
+                "data": recs.round(6).to_dict(orient="records"),
+            }
+        )
+        return
+
+    period_label = charting.PERIOD_LABELS.get(args.period, args.period)
+    print(
+        f"\n=== K线 {p.yahoo} · {period_label} · 近 {args.months} 个月"
+        f" ({s['bars']} 根) ==="
+    )
+    chg = f" ({s['change_pct']:+.2f}%)" if s["change_pct"] is not None else ""
+    print(
+        f"区间: {s['first_date']} → {s['last_date']}"
+        f"  · 收 {s['first_close']:,.3f} → {s['last_close']:,.3f}{chg}"
+    )
+    print(
+        f"最新 {s['last_date']}: 开 {s['last_open']:,.3f}  高 {s['last_high']:,.3f}"
+        f"  低 {s['last_low']:,.3f}  收 {s['last_close']:,.3f}  量 {_fmt_vol(s['last_volume'])}"
+    )
+    if s["ma"]:
+        parts = [
+            f"MA{n[2:]} {v:,.3f}" if v is not None else f"MA{n[2:]} —"
+            for n, v in s["ma"].items()
+        ]
+        print("均线: " + "  ".join(parts))
+    print(
+        f"区间最高 {s['period_high']:,.3f} ({s['period_high_date']})"
+        f"  · 最低 {s['period_low']:,.3f} ({s['period_low_date']})"
+    )
+
+    fig = charting.build_candlestick_fig(
+        df, p.yahoo, currency=p.currency, mas=mas,
+        show_volume=not args.no_volume, period=args.period,
+    )
+    out = Path(args.output) if args.output else DATA_DIR / f"kline_{p.yahoo.replace('.', '_')}.html"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(charting.fig_to_html(fig), encoding="utf-8")
+    print(f"\n✅ K线图已生成: {out}")
+    if args.open_browser:
+        webbrowser.open(out.resolve().as_uri())
+        print("已在浏览器中打开。")
+
+
 # ---------- cache ----------
 
 
@@ -550,6 +642,10 @@ def cmd_cache(args) -> None:
     print(f"  数据库: {info['db']}")
     print(f"  TTL: {info['ttl_seconds']}s")
     print(f"  总条数: {info['total']} (有效 {info['fresh']} / 过期 {info['stale']})")
+    print(
+        f"  K线缓存: {info['ohlc_total']} 组 (有效 {info['ohlc_fresh']}"
+        f" / TTL {info['ohlc_ttl_seconds']}s)"
+    )
     print(f"  文件大小: {info['size_bytes']:,} bytes")
     if info["newest_at"]:
         print(
@@ -626,6 +722,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_h.add_argument("--akshare", action="store_true")
     p_h.add_argument("--json", action="store_true")
     p_h.set_defaults(func=cmd_history)
+
+    p_k = sub.add_parser("kline", help="K线蜡烛图 (生成交互式 HTML, 含成交量/均线)")
+    p_k.add_argument("symbol", help="Yahoo 代码, 如 AAPL 600519.SS")
+    p_k.add_argument("--months", type=int, default=12, help="拉取近 N 个月日线")
+    p_k.add_argument("--period", choices=["daily", "weekly", "monthly"], default="daily",
+                     help="K线周期 (默认日K)")
+    p_k.add_argument("--ma", default="5,20,60", help="均线周期, 逗号分隔 (如 5,10,20,60)")
+    p_k.add_argument("--no-volume", action="store_true", help="隐藏成交量副图")
+    p_k.add_argument("--refresh", action="store_true", help="忽略缓存强制刷新")
+    p_k.add_argument("--akshare", action="store_true")
+    p_k.add_argument("--output", "-o", default=None,
+                     help="HTML 输出路径 (默认 data/kline_<代码>.html)")
+    p_k.add_argument("--open", dest="open_browser", action="store_true",
+                     help="生成后自动在浏览器打开")
+    p_k.add_argument("--json", action="store_true", help="输出 JSON 数据 (不生成图表)")
+    p_k.set_defaults(func=cmd_kline)
 
     p_sync = sub.add_parser("sync", help="从 IBKR 账户同步持仓")
     p_sync.add_argument("--portfolio", default=str(DEFAULT_PORTFOLIO))

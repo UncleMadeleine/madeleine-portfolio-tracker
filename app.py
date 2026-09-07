@@ -414,7 +414,14 @@ with tab_k:
                     kdf, ksym, currency=kcur, mas=tuple(kmas),
                     show_volume=kvol, green_up=kgreen, period=kperiod,
                 )
-                st.plotly_chart(fig, width="stretch")
+                st.plotly_chart(
+                    fig, use_container_width=True,
+                    config={
+                        "displaylogo": False,
+                        "scrollZoom": True,
+                        "modeBarButtonsToRemove": ["select2d", "lasso2d", "autoscale"],
+                    },
+                )
                 s = charting.summarize_ohlc(kdf, tuple(kmas))
                 m1, m2, m3, m4 = st.columns(4)
                 m1.metric(

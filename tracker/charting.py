@@ -123,7 +123,7 @@ def build_candlestick_fig(
     green_up: bool = False,
     period: str = "daily",
     title: str | None = None,
-    height: int = 560,
+    height: int = 680,
 ) -> go.Figure:
     """构建蜡烛图: 价格主图 + 成交量副图 + MA 均线 + 非交易日断轴 + 区间快捷按钮."""
     df = clean_ohlc(df)
@@ -142,31 +142,37 @@ def build_candlestick_fig(
         fig = make_subplots(rows=1, cols=1)
         price_row, vol_row = 1, None
 
-    fig.add_trace(
-        go.Candlestick(
-            x=dates, open=df["open"], high=df["high"], low=df["low"], close=df["close"],
-            name=PERIOD_LABELS.get(period, "日K"),
-            increasing=dict(line=dict(color=up, width=1), fillcolor=up),
-            decreasing=dict(line=dict(color=down, width=1), fillcolor=down),
-            whiskerwidth=0.5,
+    candle = go.Candlestick(
+        x=dates, open=df["open"], high=df["high"], low=df["low"], close=df["close"],
+        name=PERIOD_LABELS.get(period, "日K"),
+        increasing=dict(line=dict(color=up, width=1.5), fillcolor=up),
+        decreasing=dict(line=dict(color=down, width=1.5), fillcolor=down),
+        whiskerwidth=0.2,
+        hovertemplate=(
+            "<b>%{x|%Y-%m-%d}</b><br>"
+            "开 %{open:.2f}  高 %{high:.2f}<br>"
+            "低 %{low:.2f}  收 %{close:.2f}<extra></extra>"
         ),
-        row=price_row, col=1,
     )
+    fig.add_trace(candle, row=price_row, col=1)
     for i, (n, srs) in enumerate(compute_ma(df, mas).items()):
         fig.add_trace(
             go.Scatter(
                 x=dates, y=srs, mode="lines", name=f"MA{n}",
-                line=dict(color=MA_PALETTE[i % len(MA_PALETTE)], width=1.3),
+                line=dict(color=MA_PALETTE[i % len(MA_PALETTE)], width=1.6, shape="spline"),
                 connectgaps=False,
+                hovertemplate=f"MA{n} %{{y:.2f}}<extra></extra>",
             ),
             row=price_row, col=1,
         )
     if vol_row is not None:
+        vol_colors = np.where(df["close"] >= df["open"], up, down)
         fig.add_trace(
             go.Bar(
                 x=dates, y=df["volume"], name="成交量",
-                marker_color=np.where(df["close"] >= df["open"], up, down),
-                opacity=VOLUME_OPACITY, showlegend=False,
+                marker_color=vol_colors,
+                opacity=0.5, showlegend=False,
+                hovertemplate="量 %{y:,.0f}<extra></extra>",
             ),
             row=vol_row, col=1,
         )
@@ -183,23 +189,60 @@ def build_candlestick_fig(
         title = f"{symbol} · {PERIOD_LABELS.get(period, '日K')}" + (
             f" · {currency}" if currency else ""
         )
+    last_close = float(df["close"].iloc[-1])
+    up_marker = "▲" if last_close >= float(df["open"].iloc[-1]) else "▼"
     fig.update_layout(
         template="plotly_dark",
-        title=dict(text=title, x=0.5, xanchor="center"),
+        paper_bgcolor="#0e1117",
+        plot_bgcolor="#0e1117",
+        title=dict(text=title, x=0.5, xanchor="center", font=dict(size=15)),
         height=height,
-        margin=dict(l=10, r=56, t=48, b=16),
+        margin=dict(l=8, r=64, t=48, b=12),
         hovermode="x unified",
         legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0, bgcolor="rgba(0,0,0,0)"),
+        font=dict(family="system-ui, -apple-system, sans-serif", size=12, color="#d1d5db"),
+        dragmode="zoom",
+        xaxis=dict(
+            showspikes=True, spikemode="across", spikethickness=1,
+            spikecolor="rgba(120,140,180,0.4)", spikesnap="cursor",
+        ),
+        yaxis=dict(
+            showspikes=True, spikemode="across", spikethickness=1,
+            spikecolor="rgba(120,140,180,0.4)", spikesnap="cursor",
+        ),
+        shapes=[
+            dict(
+                type="line", xref="paper", x0=0, x1=1,
+                yref="y", y0=last_close, y1=last_close,
+                line=dict(color="rgba(200,210,230,0.5)", width=1, dash="dot"),
+            ),
+        ],
+        annotations=[
+            dict(
+                x=1.0, y=last_close, xref="paper", yref="y",
+                xanchor="left", yanchor="middle",
+                text=f"{up_marker} {last_close:.2f}",
+                showarrow=False,
+                font=dict(size=11, color="#e8eaed"),
+                bgcolor="rgba(40,44,52,0.85)",
+                bordercolor="rgba(120,140,180,0.3)",
+                borderwidth=1, borderpad=3,
+            ),
+        ],
     )
-    # 蜡烛图默认带 rangeslider, 此处显式关闭 (用顶部快捷按钮代替, 更像看盘软件)
     fig.update_xaxes(
-        rangeslider_visible=False, showgrid=False, showspikes=True,
+        rangeslider_visible=False, showgrid=False,
         rangebreaks=breaks,
+        showline=True, linecolor="rgba(120,140,180,0.2)",
     )
-    fig.update_xaxes(rangeselector=dict(buttons=buttons), row=price_row, col=1)
-    fig.update_yaxes(side="right", showgrid=True, gridcolor="rgba(255,255,255,0.08)")
+    fig.update_xaxes(rangeselector=dict(buttons=buttons, bgcolor="rgba(30,34,40,0.8)"), row=price_row, col=1)
+    fig.update_yaxes(
+        side="right", showgrid=True, gridcolor="rgba(120,140,180,0.06)",
+        showline=True, linecolor="rgba(120,140,180,0.2)",
+        tickfont=dict(size=11),
+    )
     if vol_row is not None:
-        fig.update_yaxes(row=vol_row, col=1, tickformat="~s")
+        fig.update_yaxes(row=vol_row, col=1, tickformat="~s", showgrid=False)
     return fig
 
 

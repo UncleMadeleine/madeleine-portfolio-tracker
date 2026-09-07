@@ -276,8 +276,8 @@ if errors or issues:
             st.write(f"- {i}")
 
 badge = f" 🔔{len(trig_all)}" if not trig_all.empty else ""
-tab1, tab2, tab3, tab_k, tab4 = st.tabs(
-    ["💼 持仓明细", "🥧 资产配置", "📈 走势对比", "🕯 K线", f"🎯 自选观察{badge}"]
+tab1, tab_k, tab4, tab2, tab3 = st.tabs(
+    ["💼 持仓明细", "🕯 K线", f"🎯 自选观察{badge}", "🥧 资产配置", "📈 走势对比"]
 )
 
 with tab1:

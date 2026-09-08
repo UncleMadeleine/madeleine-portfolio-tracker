@@ -131,11 +131,21 @@ def _get_client(cfg: dict):
     try:
         m = _ib_module()
         ib = m.IB()
+        # 只读接入: readonly=True 让 Gateway 端也进入只读模式 (拒绝任何下单/改单),
+        # fetchFields 跳过启动时的订单/成交批量拉取 (本项目只读持仓/行情, 无交易意图)。
+        kwargs = dict(
+            clientId=int(cfg["client_id"]),
+            timeout=float(cfg["connect_timeout"]),
+            readonly=True,
+        )
+        try:
+            kwargs["fetchFields"] = m.StartupFetchNONE
+        except AttributeError:  # ib_insync 无 StartupFetch, 只用 readonly
+            pass
         ib.connect(
             cfg["host"],
             _mode_port(cfg),
-            clientId=int(cfg["client_id"]),
-            timeout=float(cfg["connect_timeout"]),
+            **kwargs,
         )
         ib.reqMarketDataType(int(cfg["market_data_type"]))
         _client = ib

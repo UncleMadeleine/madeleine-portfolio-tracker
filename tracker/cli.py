@@ -8,7 +8,7 @@
   fx        汇率查询
   history   历史价格 (近 N 个月)
   kline     K线蜡烛图 (交互式 HTML + 摘要, 含成交量/均线/周月K)
-  sync      从 IBKR 账户同步持仓
+  sync      从 IB Gateway 账户同步持仓 (--mode paper|live)
   cache     行情磁盘缓存管理 (info / clear)
 
 所有子命令均支持 --json 输出机器可读结果, 便于脚本与 AI 消费。
@@ -776,7 +776,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_snap.add_argument("--watchlist", default=None, help="只查看某个子自选列表 (默认全部)")
     p_snap.add_argument("--base", default=None, help="覆盖基础货币, 如 USD")
     p_snap.add_argument("--akshare", action="store_true", help="A股/港股优先走 akshare")
-    p_snap.add_argument("--ibkr", action="store_true", help="优先使用 IBKR 行情")
+    p_snap.add_argument("--ibkr", action="store_true", help="优先使用 IBKR 行情 (需 IB Gateway)")
     p_snap.add_argument("--json", action="store_true", help="输出 JSON")
     p_snap.set_defaults(func=cmd_snapshot)
 
@@ -838,7 +838,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_h.add_argument("--months", type=int, default=12)
     p_h.add_argument("--rows", type=int, default=10, help="表格模式打印最近 N 行")
     p_h.add_argument("--akshare", action="store_true")
-    p_h.add_argument("--ibkr", action="store_true", help="优先使用 IBKR 行情")
+    p_h.add_argument("--ibkr", action="store_true", help="优先使用 IBKR 行情 (需 IB Gateway)")
     p_h.add_argument("--json", action="store_true")
     p_h.set_defaults(func=cmd_history)
 
@@ -851,7 +851,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_k.add_argument("--no-volume", action="store_true", help="隐藏成交量副图")
     p_k.add_argument("--refresh", action="store_true", help="忽略缓存强制刷新")
     p_k.add_argument("--akshare", action="store_true")
-    p_k.add_argument("--ibkr", action="store_true", help="优先使用 IBKR 行情")
+    p_k.add_argument("--ibkr", action="store_true", help="优先使用 IBKR 行情 (需 IB Gateway)")
     p_k.add_argument("--output", "-o", default=None,
                      help="HTML 输出路径 (默认 data/kline_<代码>.html)")
     p_k.add_argument("--open", dest="open_browser", action="store_true",
@@ -859,9 +859,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_k.add_argument("--json", action="store_true", help="输出 JSON 数据 (不生成图表)")
     p_k.set_defaults(func=cmd_kline)
 
-    p_sync = sub.add_parser("sync", help="从 IBKR 账户同步持仓")
+    p_sync = sub.add_parser("sync", help="从 IB Gateway 账户同步持仓")
     p_sync.add_argument("--portfolio", default=str(DEFAULT_PORTFOLIO))
     p_sync.add_argument("--dry-run", action="store_true", help="仅预览, 不写入")
+    p_sync.add_argument("--mode", choices=["paper", "live"], default=None,
+                        help="Gateway API 模式: paper 模拟(4002) / live 实盘(4001); 缺省用配置")
     p_sync.add_argument("--json", action="store_true")
     p_sync.set_defaults(func=cmd_sync)
 

@@ -81,10 +81,44 @@ def test_load_config_falls_back_to_example(tmp_path, monkeypatch):
     # 无真实配置且无 env 时, 回退到仓库中的 ibkr.example.json 模板
     monkeypatch.setattr(ibkr_mod, "DEFAULT_CONFIG", tmp_path / "nope.json")
     monkeypatch.delenv("IBKR_CONFIG", raising=False)
+    monkeypatch.delenv("IBKR_MODE", raising=False)
     cfg = load_config()
     assert cfg["host"] == "127.0.0.1"
-    assert cfg["port"] == 7497
+    assert cfg["mode"] == "paper"
     assert cfg["exchanges"]["CN"] == "SEHK"
+
+
+def test_mode_port_resolution(tmp_path, monkeypatch):
+    # mode=paper -> 4002, mode=live -> 4001; 显式 port 优先于 mode
+    monkeypatch.delenv("IBKR_MODE", raising=False)
+    f = tmp_path / "ibkr.json"
+    f.write_text(json.dumps({"mode": "live"}), encoding="utf-8")
+    cfg = load_config(f)
+    assert ibkr_mod._mode_port(cfg) == 4001
+    f.write_text(json.dumps({"mode": "paper"}), encoding="utf-8")
+    assert ibkr_mod._mode_port(load_config(f)) == 4002
+    f.write_text(json.dumps({"mode": "live", "port": 7497}), encoding="utf-8")
+    assert ibkr_mod._mode_port(load_config(f)) == 7497
+
+
+def test_mode_env_overrides_file(tmp_path, monkeypatch):
+    f = tmp_path / "ibkr.json"
+    f.write_text(json.dumps({"mode": "paper"}), encoding="utf-8")
+    monkeypatch.setenv("IBKR_MODE", "LIVE")
+    cfg = load_config(f)
+    assert cfg["mode"] == "live"
+    assert ibkr_mod._mode_port(cfg) == 4001
+
+
+def test_unknown_mode_reports_error(monkeypatch):
+    # 非法 mode 不抛异常, 记录不可用原因供上层展示
+    monkeypatch.setattr(ibkr_mod, "_client", None)
+    monkeypatch.setattr(ibkr_mod, "_unavailable", None)
+    ib = ibkr_mod._get_client({"host": "127.0.0.1", "mode": "bogus", "client_id": 1,
+                               "connect_timeout": 1, "market_data_type": 3})
+    assert ib is None
+    assert ibkr_mod._unavailable is not None
+    assert "未知 mode" in ibkr_mod._unavailable[0]
 
 
 def test_contract_spec_all_markets():

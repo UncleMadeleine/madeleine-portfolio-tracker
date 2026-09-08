@@ -1,7 +1,7 @@
 {
-  "_comment": "IBKR 配置模板。复制本文件为 ibkr.json 并按需修改 (ibkr.json 已被 .gitignore 忽略, 不会误提交敏感信息)。env IBKR_CONFIG 可指定其他配置文件路径。",
+  "_comment": "IB Gateway 配置模板。复制本文件为 ibkr.json 并按需修改 (ibkr.json 已被 .gitignore 忽略, 不会误提交敏感信息)。env IBKR_CONFIG 可指定其他配置文件路径; env IBKR_MODE 可覆盖 mode。mode=paper 模拟盘(4002) / live 实盘(4001); 写 \"port\" 可显式指定任意端口(如 TWS 7496/7497)。",
   "host": "127.0.0.1",
-  "port": 7497,
+  "mode": "paper",
   "client_id": 17,
   "market_data_type": 3,
   "connect_timeout": 4,

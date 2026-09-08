@@ -1,9 +1,12 @@
-"""IBKR (TWS/IB Gateway) 行情接入: ib_async/ib_insync 可选依赖, 失败自动回退.
+"""IBKR Gateway 行情接入: ib_async/ib_insync 可选依赖, 失败自动回退.
 
 配置从配置文件读取, 不在代码中写死:
   优先 ibkr.json (真实配置, 已被 gitignore, 可含敏感信息)
   其次 ibkr.example.json (随仓库提供的模板, 兜底保证开箱即用)
   亦可环境变量 IBKR_CONFIG 显式指定路径。
+
+Gateway 模式: "mode" 字段 paper(模拟, 4002) / live(实盘, 4001),
+env IBKR_MODE > 文件 mode > 默认 paper; 文件里显式 "port" 优先于模式端口。
 """
 from __future__ import annotations
 
@@ -22,15 +25,28 @@ from .symbols import Market, ParsedSymbol
 DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "ibkr.json"
 EXAMPLE_CONFIG = Path(__file__).resolve().parent.parent / "ibkr.example.json"
 
-# 兜底: 无任何配置文件时的最小非敏感连接默认 (TWS/IB Gateway 本机默认, 非凭据)
+# 兜底: 无任何配置文件时的最小非敏感连接默认 (IB Gateway 本机默认, 非凭据)
 _FALLBACK: dict = {
     "host": "127.0.0.1",
-    "port": 7497,
+    "mode": "paper",
     "client_id": 17,
     "market_data_type": 3,
     "connect_timeout": 4,
     "exchanges": {},
 }
+
+# IB Gateway API 端口: 模拟盘 / 实盘
+_MODE_PORTS = {"paper": 4002, "live": 4001}
+
+
+def _mode_port(cfg: dict) -> int:
+    """按 mode 返回 Gateway API 端口; 显式 port 优先 (7496/7497 TWS 仍可用)."""
+    explicit = cfg.get("port")
+    if explicit is not None:
+        return int(explicit)
+    mode = str(cfg.get("mode") or "paper").strip().lower()
+    return _MODE_PORTS[mode]
+
 
 _UNAVAILABLE_TTL = 60.0
 _client = None
@@ -69,11 +85,17 @@ def _merge(base: dict, extra: dict) -> dict:
 
 
 def load_config(path: str | Path | None = None) -> dict:
-    """读取 IBKR 配置: 真实文件(或 env/显式 path) 覆盖模板 ibkr.example.json 覆盖兜底默认."""
+    """读取 IBKR 配置: 真实文件(或 env/显式 path) 覆盖模板 ibkr.example.json 覆盖兜底默认.
+
+    环境变量 IBKR_MODE (paper/live) 覆盖文件中的 mode; 显式 port 不受影响。
+    """
     cfg = _merge(_FALLBACK, _load_file(EXAMPLE_CONFIG))
     target = _resolve_config_path(path)
     if target != EXAMPLE_CONFIG:
         cfg = _merge(cfg, _load_file(target))
+    env_mode = os.environ.get("IBKR_MODE")
+    if env_mode:
+        cfg["mode"] = env_mode.strip().lower()
     return cfg
 
 
@@ -111,13 +133,17 @@ def _get_client(cfg: dict):
         ib = m.IB()
         ib.connect(
             cfg["host"],
-            int(cfg["port"]),
+            _mode_port(cfg),
             clientId=int(cfg["client_id"]),
             timeout=float(cfg["connect_timeout"]),
         )
         ib.reqMarketDataType(int(cfg["market_data_type"]))
         _client = ib
         return ib
+    except KeyError:
+        mode = str(cfg.get("mode") or "").strip().lower()
+        _unavailable = (f"未知 mode: {mode!r} (可选: paper/live)", time.time())
+        return None
     except Exception as e:
         _unavailable = (f"{type(e).__name__}: {e}"[:200], time.time())
         return None

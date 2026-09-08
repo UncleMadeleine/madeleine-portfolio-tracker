@@ -100,9 +100,9 @@ with st.sidebar:
     )
     prefer_akshare = st.checkbox("A股/港股优先 akshare (国内网络)", value=False)
     use_ibkr = st.checkbox(
-        "🔗 IBKR 行情 (需本机 TWS/IB Gateway)",
+        "🔗 IBKR 行情 (需本机 IB Gateway)",
         value=False,
-        help="启用后优先从 IBKR 获取行情 (有订阅则为实时), 失败自动回退 Yahoo/akshare。连接参数见 ibkr.json",
+        help="启用后优先从 IBKR 获取行情 (有订阅则为实时), 失败自动回退 Yahoo/akshare。连接参数见 ibkr.json (mode: paper=4002 / live=4001)",
     )
 
     st.divider()

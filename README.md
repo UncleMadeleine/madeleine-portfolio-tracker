@@ -36,8 +36,9 @@ python3 -m venv .venv
 .venv/bin/python -m tracker.cli report -f csv -w 科技           # 只看某个列表, CSV 格式
 .venv/bin/python -m tracker.cli cache info|clear            # 行情磁盘缓存
 
-# 从 IBKR 账户同步真实持仓 (需 TWS/IB Gateway 已登录)
-.venv/bin/python -m tracker.cli sync --dry-run   # 仅预览不写入
+# 从 IB Gateway 账户同步真实持仓 (需 Gateway 已登录, API 已启用)
+.venv/bin/python -m tracker.cli sync --dry-run          # 仅预览不写入
+.venv/bin/python -m tracker.cli sync --mode live --dry-run   # 实盘 API (默认 paper 模拟 4002)
 
 # 单元测试 (不联网)
 .venv/bin/python -m pytest tests/ -q
@@ -148,10 +149,9 @@ Streamlit 页面「🕯 K线」标签页提供同样的交互图（代码/范围
 # 复制模板为真实配置, 再按需修改 (真实配置已被 .gitignore 忽略, 不会误提交)
 cp ibkr.example.json ibkr.json
 ```
-
-- `ibkr.json` 含连接参数（`host`/`port`/`client_id`/`market_data_type`/`connect_timeout`）与**交易所映射**（`exchanges`），默认 `127.0.0.1:7497` 模拟盘
-- 不想在项目目录放配置文件时，可用环境变量指向其他路径：`IBKR_CONFIG=/data/my-ibkr.json python -m tracker.cli snapshot --ibkr`
+- `ibkr.json` 含连接参数与**交易所映射**（`exchanges`）。Gateway 模式: `"mode": "paper"` 模拟盘(4002) / `"live"` 实盘(4001)，默认 paper；写 `"port"` 可显式指定任意端口（如 TWS 7496/7497）。环境变量 `IBKR_MODE=live` 可临时覆盖
 - 配置文件缺字段时自动继承模板/兜底值；`_comment` 开头的字段会被忽略
+- 不想在项目目录放配置文件时，可用环境变量指向其他路径：`IBKR_CONFIG=/data/my-ibkr.json python -m tracker.cli snapshot --ibkr`
 
 ### 从 IBKR 同步真实持仓
 
@@ -171,7 +171,7 @@ cp ibkr.example.json ibkr.json
 - akshare 东财 spot 接口对部分数据中心 IP 不友好（本项目所在机器即如此），此时自动回落 Yahoo
 - CFETS 汇率为中间价，与离岸 CNH 有细微差异，组合展示场景可忽略
 - `今日估算` 按各持仓 `涨跌幅 × 当前市值` 近似，非精确日内盯市
-- IBKR 行情需本机运行 TWS/IB Gateway 且 API 已启用；A股/港股/B股数据若无市场数据订阅，`reqTickers` 可能返回空值，自动回退 Yahoo/akshare
+- IBKR 行情需本机运行 IB Gateway 且 API 已启用；A股/港股/B股数据若无市场数据订阅，`reqTickers` 可能返回空值，自动回退 Yahoo/akshare
 - IBKR A股合约默认映射为 `SEHK/CNY`，若你的账户显示不同交易所代码，在 `ibkr.json` 中修改 `exchanges.CN`；B股合约根据 IBKR 返回的 `SHSE/USD` 或 `SZSE/HKD` 自动识别
 
 ## Roadmap

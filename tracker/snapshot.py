@@ -184,7 +184,7 @@ def main(argv=None) -> None:
     ap.add_argument("--watchlist", default=None, help="只查看某个子自选列表 (默认全部)")
     ap.add_argument("--base", default=None, help="覆盖基础货币, 如 USD")
     ap.add_argument("--akshare", action="store_true", help="A股/港股优先走 akshare")
-    ap.add_argument("--ibkr", action="store_true", help="优先使用 IBKR 行情 (需 TWS/IB Gateway)")
+    ap.add_argument("--ibkr", action="store_true", help="优先使用 IBKR 行情 (需 IB Gateway)")
     ap.add_argument("--json", action="store_true", help="输出 JSON 而非表格")
     args = ap.parse_args(argv)
     run_snapshot(args)

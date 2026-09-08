@@ -1,4 +1,4 @@
-"""从 IBKR 账户同步真实持仓到 portfolio.json: python -m tracker.ibkr_sync"""
+"""从 IB Gateway 账户同步真实持仓到 portfolio.json: python -m tracker.ibkr_sync"""
 from __future__ import annotations
 
 import argparse
@@ -13,11 +13,15 @@ from .snapshot import DEFAULT_PORTFOLIO, load_portfolio, save_portfolio
 
 
 def run_sync(args) -> None:
+    cfg = load_config()
+    mode = getattr(args, "mode", None)
+    if mode:
+        cfg["mode"] = mode
     try:
-        positions = fetch_positions(load_config())
+        positions = fetch_positions(cfg)
     except Exception as e:
         print(f"❌ {e}")
-        print("请确认 TWS/IB Gateway 已登录运行, 且 API 连接已启用 (ibkr.json 配置端口)。")
+        print("请确认 IB Gateway 已登录运行, 且 API 连接已启用 (ibkr.json 配置的 mode/port)。")
         raise SystemExit(1)
 
     rows, skipped = positions_to_rows(positions)

@@ -92,6 +92,8 @@ def test_contract_spec_all_markets():
         ("AAPL", ContractSpec("AAPL", "SMART", "USD")),
         ("600519.SS", ContractSpec("600519", "SEHK", "CNY", "600519")),
         ("000001.SZ", ContractSpec("000001", "SEHK", "CNY", "000001")),
+        ("900902.SS", ContractSpec("900902", "SHSE", "USD", "900902")),
+        ("200012.SZ", ContractSpec("200012", "SZSE", "HKD", "200012")),
         ("0700.HK", ContractSpec("700", "SEHK", "HKD")),
         ("SAP.DE", ContractSpec("SAP", "IBIS", "EUR")),
         ("BP.L", ContractSpec("BP", "LSE", "GBP")),
@@ -142,6 +144,8 @@ def test_ibkr_to_yahoo_mappings():
         (("600519", "SEHK", "", "CNY"), "600519.SS"),
         (("000001", "SEHK", "", "CNY"), "000001.SZ"),
         (("688981", "SEHK", "", "CNY"), "688981.SS"),
+        (("900902", "SHSE", "", "USD"), "900902.SS"),
+        (("200012", "SZSE", "", "HKD"), "200012.SZ"),
         (("SAP", "IBIS", "", "EUR"), "SAP.DE"),
         (("SAP", "FWB", "", "EUR"), "SAP.DE"),
         (("BP", "LSE", "", "GBX"), "BP.L"),
@@ -162,6 +166,8 @@ def test_positions_to_rows():
         FakePosition(FakeContract("AAPL", "SMART", "USD"), 10.0, 150.0),
         FakePosition(FakeContract("700", "SEHK", "HKD"), 100.0, 330.0),
         FakePosition(FakeContract("600519", "SEHK", "CNY"), 5.0, 1400.0),
+        FakePosition(FakeContract("900902", "SHSE", "USD"), 200.0, 12.5),
+        FakePosition(FakeContract("200012", "SZSE", "HKD"), 300.0, 8.3),
         FakePosition(FakeContract("WEIRD", "XX", "YY"), 1.0, 1.0),
         FakePosition(FakeContract("GONE", "SMART", "USD"), 0.0, 10.0),
     ]
@@ -170,6 +176,8 @@ def test_positions_to_rows():
         {"symbol": "AAPL", "quantity": 10.0, "avg_cost": 150.0},
         {"symbol": "0700.HK", "quantity": 100.0, "avg_cost": 330.0},
         {"symbol": "600519.SS", "quantity": 5.0, "avg_cost": 1400.0},
+        {"symbol": "900902.SS", "quantity": 200.0, "avg_cost": 12.5},
+        {"symbol": "200012.SZ", "quantity": 300.0, "avg_cost": 8.3},
     ]
     assert len(skipped) == 1 and "WEIRD" in skipped[0]
 

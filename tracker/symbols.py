@@ -59,9 +59,12 @@ class ParsedSymbol:
     yahoo: str
     market: Market
     currency: str
+    is_b_share: bool = False
 
     @property
     def market_label(self) -> str:
+        if self.is_b_share and self.market is Market.CN:
+            return "B股"
         return MARKET_META[self.market]["label"]
 
     @property
@@ -95,4 +98,11 @@ def parse(symbol: str) -> ParsedSymbol:
         if market is None:
             raise ValueError(f"无法识别的交易所后缀: {symbol}")
     currency = MARKET_META[market]["currency"]
-    return ParsedSymbol(raw=symbol.strip(), yahoo=yahoo, market=market, currency=currency)
+    is_b_share = False
+    if market is Market.CN:
+        code = yahoo.split(".")[0]
+        if code.startswith("9") or code.startswith("2"):
+            is_b_share = True
+    return ParsedSymbol(
+        raw=symbol.strip(), yahoo=yahoo, market=market, currency=currency, is_b_share=is_b_share
+    )

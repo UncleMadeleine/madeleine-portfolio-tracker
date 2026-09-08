@@ -1,6 +1,6 @@
 # OpenBB Portfolio Tracker
 
-本地多市场投资组合追踪：**A股 / 港股 / 美股 / 德股 / 英股 / 加股 / 澳股**，基于 OpenBB (yfinance) + akshare 双数据源，Streamlit 页面展示，全部免费、无 API Key。
+本地多市场投资组合追踪：**A股 / B股 / 港股 / 美股 / 德股 / 英股 / 加股 / 澳股**，基于 OpenBB (yfinance) + akshare 双数据源，Streamlit 页面展示，全部免费、无 API Key。
 
 功能：**多币种持仓追踪 + 自选股 (Watchlist) 价格阈值提醒 + IBKR 行情接入**。
 
@@ -52,6 +52,7 @@ python3 -m venv .venv
 |---|---|---|---|---|
 | 美股 | 无 | `AAPL` | USD | |
 | A股 | `.SS` / `.SZ` | `600519.SS` `000001.SZ` | CNY | 也接受 `.SH` |
+| B股 | `.SS` / `.SZ` | `900902.SS` `200012.SZ` | CNY | 上海 B 股 `9` 开头，深圳 B 股 `2` 开头 |
 | 港股 | `.HK` | `0700.HK` `0941.HK` | HKD | **4 位补零**；`00700.HK` 会自动归一 |
 | 德股 | `.DE` 等 | `SAP.DE` | EUR | `.F/.BE/.DU/.HM/.SG/.MU` 均可 |
 | 英股 | `.L` | `BP.L` | GBP | Yahoo 报价单位是便士(GBp)，系统自动 ÷100 换算为英镑 |
@@ -138,7 +139,7 @@ Streamlit 页面「🕯 K线」标签页提供同样的交互图（代码/范围
 
 - 页面侧栏可勾选「A股/港股优先 akshare」「🔗 IBKR 行情」
 - 英股 GBp 便士报价自动换算为 GBP；汇率缓存 10 分钟，行情缓存 5 分钟
-- IBKR 连接参数**从配置文件读取**（不写死在代码里）：优先 `ibkr.json`，其次 `ibkr.example.json` 模板兜底，也可用环境变量 `IBKR_CONFIG=/path/to/xxx.json` 指定；交易所映射在同一文件（A股默认 `SEHK`，因沪深港通合约挂在 HKEX 下，需配 `tradingClass`）
+- IBKR 连接参数**从配置文件读取**（不写死在代码里）：优先 `ibkr.json`，其次 `ibkr.example.json` 模板兜底，也可用环境变量 `IBKR_CONFIG=/path/to/xxx.json` 指定；交易所映射在同一文件（A股默认 `SEHK`，B股可配置 `SHSE`/`SZSE`，因沪深港通合约挂在 HKEX 下，需配 `tradingClass`）
 - IBKR 断开时自动静默回退下一级数据源，不影响页面运行；持仓同步见下方
 
 ### 配置 IBKR 连接
@@ -162,7 +163,7 @@ cp ibkr.example.json ibkr.json
 - 自动将 IBKR 账户股票持仓转换为 Yahoo 代码并写入 `portfolio.json`
 - 保留原有 `base_currency`；`avg_cost` 取自 IBKR（合约货币每股均价，含佣金）
 - 无法映射为 Yahoo 代码的标的（权证/期权/基金等）会跳过并在控制台提示
-- 反向映射规则：`SEHK + CNY → .SS/.SZ`；`SEHK + HKD → .HK`；`IBIS/FWB + EUR → .DE`；`LSE + GBP → .L`；`TSE + CAD → .TO`；`ASX + AUD → .AX`；`SMART + USD → 原码`
+- 反向映射规则：`SEHK + CNY → .SS/.SZ`；`SHSE + USD → .SS (B股)`；`SZSE + HKD → .SZ (B股)`；`SEHK + HKD → .HK`；`IBIS/FWB + EUR → .DE`；`LSE + GBP → .L`；`TSE + CAD → .TO`；`ASX + AUD → .AX`；`SMART + USD → 原码`
 
 ## 已知限制
 
@@ -170,8 +171,8 @@ cp ibkr.example.json ibkr.json
 - akshare 东财 spot 接口对部分数据中心 IP 不友好（本项目所在机器即如此），此时自动回落 Yahoo
 - CFETS 汇率为中间价，与离岸 CNH 有细微差异，组合展示场景可忽略
 - `今日估算` 按各持仓 `涨跌幅 × 当前市值` 近似，非精确日内盯市
-- IBKR 行情需本机运行 TWS/IB Gateway 且 API 已启用；A股/港股数据若无市场数据订阅，`reqTickers` 可能返回空值，自动回退 Yahoo/akshare
-- IBKR A股合约默认映射为 `SEHK/CNY`，若你的账户显示不同交易所代码，在 `ibkr.json` 中修改 `exchanges.CN`
+- IBKR 行情需本机运行 TWS/IB Gateway 且 API 已启用；A股/港股/B股数据若无市场数据订阅，`reqTickers` 可能返回空值，自动回退 Yahoo/akshare
+- IBKR A股合约默认映射为 `SEHK/CNY`，若你的账户显示不同交易所代码，在 `ibkr.json` 中修改 `exchanges.CN`；B股合约根据 IBKR 返回的 `SHSE/USD` 或 `SZSE/HKD` 自动识别
 
 ## Roadmap
 

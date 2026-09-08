@@ -26,9 +26,26 @@ def test_parse_cn():
     assert p.market is Market.CN
     assert p.currency == "CNY"
     assert p.ak_code == "600519"
+    assert p.is_b_share is False
     p2 = parse("000001.SZ")
     assert p2.market is Market.CN
     assert p2.yahoo == "000001.SZ"
+    assert p2.is_b_share is False
+
+
+def test_parse_cn_b_shares():
+    sh_b = parse("900902.SS")
+    assert sh_b.market is Market.CN
+    assert sh_b.currency == "CNY"
+    assert sh_b.ak_code == "900902"
+    assert sh_b.is_b_share is True
+    assert sh_b.market_label == "B股"
+    sz_b = parse("200012.SZ")
+    assert sz_b.market is Market.CN
+    assert sz_b.currency == "CNY"
+    assert sz_b.ak_code == "200012"
+    assert sz_b.is_b_share is True
+    assert sz_b.market_label == "B股"
 
 
 def test_parse_hk_ak_code_5digit():

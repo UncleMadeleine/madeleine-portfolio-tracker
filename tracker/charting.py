@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+from pandas.tseries.frequencies import to_offset
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
@@ -86,7 +87,12 @@ def compute_ma(df: pd.DataFrame, periods) -> dict[int, pd.Series]:
 
 
 def _month_rule() -> str:
-    return "ME" if pd.__version__ >= "2.2" else "M"
+    """pandas 3.x 移除了 'M'; 用偏移解析探测而非版本字符串比较 (2.10+ 会误判)."""
+    try:
+        to_offset("ME")
+        return "ME"
+    except ValueError:
+        return "M"
 
 
 def resample_ohlc(df: pd.DataFrame, period: str) -> pd.DataFrame:

@@ -253,10 +253,16 @@ if not holdings.empty:
     m = summary
     col1, col2, col3, col4 = st.columns(4)
     col1.metric(f"总市值 ({base})", fmt(m["total_value"]))
+    cov = m.get("cost_coverage")
     col2.metric(
         f"浮动盈亏 ({base})",
         fmt(m["total_pnl"]),
-        f"{m['total_pnl_pct']:+.2%}" if m["total_pnl_pct"] is not None else None,
+        (
+            f"{m['total_pnl_pct']:+.2%} (覆盖 {cov:.0%})"
+            if m["total_pnl_pct"] is not None and cov is not None and cov < 1.0
+            else f"{m['total_pnl_pct']:+.2%}" if m["total_pnl_pct"] is not None
+            else None
+        ),
     )
     col3.metric(f"今日估算 ({base})", fmt(m["today_pnl"]))
     col4.metric("持仓", f"{len(view)} / {len(holding_symbols)}")

@@ -75,21 +75,25 @@ def summarize(view: pd.DataFrame) -> dict:
             "total_cost": None,
             "total_pnl": None,
             "total_pnl_pct": None,
+            "cost_coverage": None,
             "today_pnl": None,
             "by_market": empty,
             "by_currency": empty,
         }
     total_value = float(view["market_value"].sum())
-    total_cost = (
-        float(view["cost"].sum()) if view["cost"].notna().any() else None
-    )
-    total_pnl = float(view["pnl"].sum()) if view["pnl"].notna().any() else None
+    cost_mask = view["cost"].notna() & view["pnl"].notna()
+    covered_value = float(view.loc[cost_mask, "market_value"].sum())
+    total_cost = float(view["cost"].sum()) if cost_mask.any() else None
+    total_pnl = float(view["pnl"].sum()) if cost_mask.any() else None
     today = float(view["today_pnl"].sum()) if view["today_pnl"].notna().any() else None
+    # 盈亏口径仅覆盖有成本数据的部分; 覆盖率供展示层标注
+    cost_coverage = covered_value / total_value if total_value else None
     return {
         "total_value": total_value,
         "total_cost": total_cost,
         "total_pnl": total_pnl,
         "total_pnl_pct": (total_pnl / total_cost) if total_cost else None,
+        "cost_coverage": cost_coverage,
         "today_pnl": today,
         "by_market": view.groupby("market")["market_value"].sum().sort_values(ascending=False),
         "by_currency": view.groupby("currency")["market_value"].sum().sort_values(ascending=False),

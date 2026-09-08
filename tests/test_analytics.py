@@ -94,6 +94,35 @@ def test_build_view_missing_fx():
     assert any("HKD" in i for i in issues)
 
 
+def test_summarize_partial_cost_coverage():
+    # 部分持仓缺成本: total_pnl_pct 只反映有成本部分, cost_coverage 标注口径覆盖
+    holdings = [
+        {"symbol": "AAPL", "quantity": 10, "avg_cost": 100.0},
+        {"symbol": "NOHDR.HK", "quantity": 10},  # 无成本
+    ]
+    quotes = {
+        "AAPL": make_quote("AAPL", 150.0, ccy="USD"),
+        "NOHDR.HK": make_quote("NOHDR.HK", 100.0, ccy="HKD"),
+    }
+    view, _ = build_view(holdings, quotes, {"USD": 1.0, "HKD": 1.0})
+    m = summarize(view)
+    assert m["total_value"] == 1500.0 + 1000.0
+    assert m["total_cost"] == 1000.0
+    assert m["total_pnl"] == 500.0
+    assert m["total_pnl_pct"] == 0.5
+    assert m["cost_coverage"] == 1500.0 / 2500.0
+
+
+def test_summarize_no_cost_at_all():
+    holdings = [{"symbol": "AAPL", "quantity": 10}]
+    quotes = {"AAPL": make_quote("AAPL", 150.0)}
+    view, _ = build_view(holdings, quotes, {"USD": 1.0})
+    m = summarize(view)
+    assert m["total_cost"] is None
+    assert m["total_pnl"] is None
+    assert m["total_pnl_pct"] is None
+    assert m["cost_coverage"] == 0.0
+
 def test_summarize():
     holdings = [
         {"symbol": "AAPL", "quantity": 10, "avg_cost": 100.0},
@@ -110,6 +139,7 @@ def test_summarize():
     expected_cost = 100.0 * 10 * 7.0 + 150.0 * 5 * 7.8
     assert m["total_cost"] == expected_cost
     assert abs(m["total_pnl"] - (m["total_value"] - expected_cost)) < 1e-9
+    assert m["cost_coverage"] == 1.0
     assert set(m["by_market"].index) == {"美股", "德股"}
     assert set(m["by_currency"].index) == {"USD", "EUR"}
 
@@ -118,4 +148,5 @@ def test_summarize_empty():
     m = summarize(pd.DataFrame())
     assert m["total_value"] == 0.0
     assert m["total_pnl"] is None
+    assert m["cost_coverage"] is None
     assert m["by_market"].empty

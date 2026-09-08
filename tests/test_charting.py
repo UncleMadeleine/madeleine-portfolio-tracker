@@ -3,6 +3,7 @@ import json
 import sqlite3
 
 import pandas as pd
+from pandas.tseries.frequencies import to_offset
 import plotly.graph_objects as go
 import pytest
 
@@ -139,6 +140,13 @@ class TestResample:
     def test_daily_passthrough(self):
         df = _mk_df()
         assert charting.resample_ohlc(df, "daily").equals(df)
+
+    def test_month_rule_probe(self):
+        # 行为探测而非版本字符串比较; 当前 pandas 下应返回可用规则且月K可重采样
+        rule = charting._month_rule()
+        to_offset(rule)  # 不抛异常即有效
+        m = charting.resample_ohlc(_mk_df(), "monthly")
+        assert len(m) == 1
 
 
 class TestBuildFig:

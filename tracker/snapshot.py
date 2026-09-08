@@ -64,6 +64,7 @@ def snapshot_json(
             "total_cost": summary.get("total_cost"),
             "total_pnl": summary.get("total_pnl"),
             "total_pnl_pct": summary.get("total_pnl_pct"),
+            "cost_coverage": summary.get("cost_coverage"),
             "today_pnl": summary.get("today_pnl"),
             "by_market": _series_to_dict(summary.get("by_market")),
             "by_currency": _series_to_dict(summary.get("by_currency")),
@@ -132,10 +133,13 @@ def run_snapshot(args) -> None:
         ):
             print(view.to_string(index=False))
         m = summary
-        print(f"\n总市值: {m['total_value']:,.2f} {base}")
         if m["total_pnl"] is not None:
+            note = ""
+            cov = m.get("cost_coverage")
+            if cov is not None and cov < 1.0:
+                note = f"，口径覆盖 {cov:.0%} 市值"
             pct = f" ({m['total_pnl_pct']:+.2%})" if m["total_pnl_pct"] is not None else ""
-            print(f"浮动盈亏: {m['total_pnl']:+,.2f} {base}{pct}")
+            print(f"浮动盈亏: {m['total_pnl']:+,.2f} {base}{pct}{note}")
         if m["today_pnl"] is not None:
             print(f"今日估算: {m['today_pnl']:+,.2f} {base}")
         print("\n市场分布:")

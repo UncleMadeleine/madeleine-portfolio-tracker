@@ -339,7 +339,7 @@ class TestSnapshotJson:
         )
         summary = {
             "total_value": 1500.0, "total_cost": 1200.0, "total_pnl": 300.0,
-            "total_pnl_pct": 0.25, "today_pnl": None,
+            "total_pnl_pct": 0.25, "cost_coverage": 1.0, "today_pnl": None,
             "by_market": pd.Series({"美股": 1500.0}),
             "by_currency": pd.Series({"USD": 1500.0}),
         }
@@ -351,6 +351,7 @@ class TestSnapshotJson:
         assert data["triggered"][0]["status"] == "🟠 突破上限 I"
         assert data["summary"]["total_value"] == 1500.0
         assert data["issues"] == ["汇率缺失: HKD"]
+        assert data["summary"]["cost_coverage"] == 1.0
 
 
 class TestParser:

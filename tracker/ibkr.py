@@ -14,6 +14,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+import pandas as pd
+
 from .prices import Quote
 from .symbols import Market, ParsedSymbol
 
@@ -273,6 +275,101 @@ def ibkr_to_yahoo(
     ):
         return sym
     return None
+
+
+def get_history_ibkr(
+    parsed: list[ParsedSymbol], months: int, cfg: dict | None = None
+) -> tuple[dict[str, pd.DataFrame], str | None]:
+    import pandas as pd
+
+    cfg = cfg or load_config()
+    ib = _get_client(cfg)
+    if ib is None:
+        reason = _unavailable[0] if _unavailable else "不可用"
+        return {}, reason
+    m = _ib_module()
+    results: dict[str, pd.DataFrame] = {}
+    for p in parsed:
+        spec = contract_spec(p, cfg.get("exchanges"))
+        c = m.Contract()
+        c.symbol = spec.symbol
+        c.secType = "STK"
+        c.exchange = spec.exchange
+        c.currency = spec.currency
+        if spec.trading_class:
+            c.tradingClass = spec.trading_class
+        try:
+            qualified = ib.qualifyContracts(c)
+            if not qualified:
+                continue
+            bars = ib.reqHistoricalData(
+                qualified[0],
+                endDateTime="",
+                durationStr=f"{months} M",
+                barSizeSetting="1 day",
+                whatToShow="TRADES",
+                useRTH=True,
+            )
+            if not bars:
+                continue
+            rows = []
+            for b in bars:
+                rows.append(
+                    {
+                        "date": b.date,
+                        "open": b.open,
+                        "high": b.high,
+                        "low": b.low,
+                        "close": b.close,
+                        "volume": getattr(b, "volume", 0) or 0,
+                    }
+                )
+            df = pd.DataFrame(rows)
+            if not df.empty:
+                results[p.yahoo] = df
+        except Exception:
+            continue
+    return results, None
+
+
+def get_fx_rate_ibkr(
+    src: str, dst: str, cfg: dict | None = None
+) -> tuple[float | None, str | None]:
+    if src == dst:
+        return 1.0, None
+    cfg = cfg or load_config()
+    ib = _get_client(cfg)
+    if ib is None:
+        reason = _unavailable[0] if _unavailable else "不可用"
+        return None, reason
+    m = _ib_module()
+    c = m.Contract()
+    c.symbol = src.upper()
+    c.secType = "CASH"
+    c.exchange = "IDEALPRO"
+    c.currency = dst.upper()
+    try:
+        qualified = ib.qualifyContracts(c)
+        if not qualified:
+            return None, "无法 qualify FX contract"
+        tickers = ib.reqTickers(qualified[0])
+        if not tickers:
+            return None, "无 FX ticker 数据"
+        t = tickers[0]
+        price = None
+        try:
+            price = _f(t.marketPrice())
+        except Exception:
+            pass
+        if price is None or price <= 0:
+            price = _f(getattr(t, "last", None))
+        if price is None or price <= 0:
+            price = _f(getattr(t, "close", None))
+        if price is None or price <= 0:
+            return None, "FX 价格无效"
+        return price, None
+    except Exception as e:
+        return None, f"FX 获取失败: {e}"
 
 
 def fetch_positions(cfg: dict | None = None) -> list:

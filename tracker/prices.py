@@ -291,8 +291,20 @@ def _akshare_history(p: ParsedSymbol, months: int) -> pd.DataFrame:
     return df[keep]
 
 
-def get_history(symbol: str, months: int = 12, prefer_akshare: bool = False) -> pd.DataFrame:
+def get_history(symbol: str, months: int = 12, prefer_akshare: bool = False, use_ibkr: bool = False) -> pd.DataFrame:
     p = parse(symbol)
+    if use_ibkr:
+        try:
+            from . import ibkr as ibkr_mod
+            ib_hist, reason = ibkr_mod.get_history_ibkr([p], months)
+            if p.yahoo in ib_hist:
+                return ib_hist[p.yahoo]
+            if reason:
+                import warnings
+                warnings.warn(f"IBKR 历史数据不可用: {reason} (已回退)")
+        except Exception as e:
+            import warnings
+            warnings.warn(f"IBKR 历史数据异常: {e}")
     if p.market in (Market.CN, Market.BJ, Market.HK):
         fns = (
             [_akshare_history, _yahoo_history]
@@ -317,6 +329,7 @@ def get_ohlc(
     months: int = 12,
     prefer_akshare: bool = False,
     refresh: bool = False,
+    use_ibkr: bool = False,
 ) -> pd.DataFrame:
     """K线日线数据 (date/open/high/low/close/volume, 升序), 带磁盘缓存与清洗.
 
@@ -329,7 +342,7 @@ def get_ohlc(
         cached = cache_mod.get_ohlc_cached(p.yahoo, months)
         if cached is not None:
             return cached
-    df = clean_ohlc(get_history(symbol, months=months, prefer_akshare=prefer_akshare))
+    df = clean_ohlc(get_history(symbol, months=months, prefer_akshare=prefer_akshare, use_ibkr=use_ibkr))
     if not df.empty:
         cache_mod.set_ohlc_cached(p.yahoo, months, df)
     return df

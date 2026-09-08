@@ -99,10 +99,18 @@ def _finite(r: float | None) -> float | None:
     return None
 
 
-def get_rate(src: str, dst: str) -> float | None:
+def get_rate(src: str, dst: str, use_ibkr: bool = False) -> float | None:
     src, dst = src.upper(), dst.upper()
     if src == dst:
         return 1.0
+    if use_ibkr:
+        try:
+            from . import ibkr as ibkr_mod
+            rate, reason = ibkr_mod.get_fx_rate_ibkr(src, dst)
+            if rate is not None:
+                return rate
+        except Exception:
+            pass
     cf = _finite(_cfets_rate(src, dst))
     if cf is not None:
         return cf
@@ -117,7 +125,7 @@ def get_rate(src: str, dst: str) -> float | None:
     return None
 
 
-def get_fx_rates(base: str, currencies) -> tuple[dict[str, float], list[str]]:
+def get_fx_rates(base: str, currencies, use_ibkr: bool = False) -> tuple[dict[str, float], list[str]]:
     base = base.upper()
     rates: dict[str, float] = {}
     missing: list[str] = []
@@ -125,7 +133,7 @@ def get_fx_rates(base: str, currencies) -> tuple[dict[str, float], list[str]]:
         if ccy == base:
             rates[ccy] = 1.0
             continue
-        rate = get_rate(ccy, base)
+        rate = get_rate(ccy, base, use_ibkr=use_ibkr)
         if rate:
             rates[ccy] = rate
         else:

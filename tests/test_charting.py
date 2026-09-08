@@ -259,7 +259,7 @@ class TestGetOhlc:
         raw_broken = raw.copy()
         raw_broken.loc[0, "high"] = 1.0  # high < body → 应被清洗掉
 
-        def fake_history(symbol, months=12, prefer_akshare=False):
+        def fake_history(symbol, months=12, prefer_akshare=False, use_ibkr=False):
             calls["n"] += 1
             return raw_broken
 
@@ -276,7 +276,7 @@ class TestGetOhlc:
 
         calls = {"n": 0}
 
-        def fake_history(symbol, months=12, prefer_akshare=False):
+        def fake_history(symbol, months=12, prefer_akshare=False, use_ibkr=False):
             calls["n"] += 1
             return _mk_df(base=100.0 + calls["n"])
 

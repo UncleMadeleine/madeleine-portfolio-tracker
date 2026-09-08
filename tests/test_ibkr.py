@@ -1,8 +1,11 @@
 import json
 import types
 
+import pandas as pd
+
 import tracker.ibkr as ibkr_mod
 import tracker.prices as prices_mod
+import tracker.fx as fx
 from tracker.ibkr import (
     ContractSpec,
     contract_spec,
@@ -240,3 +243,62 @@ def test_get_quotes_ibkr_not_used_by_default(monkeypatch):
     quotes, errors, notes = prices_mod.get_quotes(["AAPL"])
     assert quotes["AAPL"].price == 3.0
     assert notes == []
+
+
+def test_get_history_ibkr(monkeypatch):
+    import pandas as pd
+
+    ibkr_df = pd.DataFrame({
+        "date": pd.to_datetime(["2024-01-02", "2024-01-03"]),
+        "open": [100.0, 101.0],
+        "high": [102.0, 103.0],
+        "low": [99.0, 100.0],
+        "close": [101.0, 102.0],
+        "volume": [1000.0, 1100.0],
+    })
+
+    def fake_ibkr(parsed, months, cfg=None):
+        return {p.yahoo: ibkr_df for p in parsed}, None
+
+    monkeypatch.setattr(ibkr_mod, "get_history_ibkr", fake_ibkr)
+    monkeypatch.setattr(
+        prices_mod, "_yahoo_history",
+        lambda p, months: (_ for _ in ()).throw(AssertionError("不应调用 yahoo"))
+    )
+
+    df = prices_mod.get_history("AAPL", months=3, use_ibkr=True)
+    assert len(df) == 2
+    assert float(df["close"].iloc[-1]) == 102.0
+
+
+def test_get_history_ibkr_fallback(monkeypatch):
+    def fake_ibkr(parsed, months, cfg=None):
+        return {}, "连接失败"
+
+    yahoo_df = pd.DataFrame({
+        "date": pd.to_datetime(["2024-01-02", "2024-01-03"]),
+        "open": [100.0, 101.0],
+        "high": [102.0, 103.0],
+        "low": [99.0, 100.0],
+        "close": [101.0, 102.0],
+        "volume": [1000.0, 1100.0],
+    })
+
+    monkeypatch.setattr(ibkr_mod, "get_history_ibkr", fake_ibkr)
+    monkeypatch.setattr(prices_mod, "_yahoo_history", lambda p, months: yahoo_df)
+
+    df = prices_mod.get_history("AAPL", months=3, use_ibkr=True)
+    assert len(df) == 2
+
+
+def test_get_fx_rate_ibkr(monkeypatch):
+    monkeypatch.setattr(ibkr_mod, "get_fx_rate_ibkr", lambda src, dst, cfg=None: (7.15, None))
+    rate = fx.get_rate("USD", "CNY", use_ibkr=True)
+    assert abs(rate - 7.15) < 1e-9
+
+
+def test_get_fx_rate_ibkr_fallback(monkeypatch):
+    monkeypatch.setattr(ibkr_mod, "get_fx_rate_ibkr", lambda src, dst, cfg=None: (None, "连接失败"))
+    monkeypatch.setattr(fx, "_cfets_rate", lambda s, d: 7.1)
+    rate = fx.get_rate("USD", "CNY", use_ibkr=True)
+    assert abs(rate - 7.1) < 1e-9

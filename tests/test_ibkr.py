@@ -92,6 +92,7 @@ def test_contract_spec_all_markets():
         ("AAPL", ContractSpec("AAPL", "SMART", "USD")),
         ("600519.SS", ContractSpec("600519", "SEHK", "CNY", "600519")),
         ("000001.SZ", ContractSpec("000001", "SEHK", "CNY", "000001")),
+        ("002594.SZ", ContractSpec("002594", "SEHK", "CNY", "002594")),
         ("900902.SS", ContractSpec("900902", "SHSE", "USD", "900902")),
         ("200012.SZ", ContractSpec("200012", "SZSE", "HKD", "200012")),
         ("0700.HK", ContractSpec("700", "SEHK", "HKD")),
@@ -145,6 +146,8 @@ def test_ibkr_to_yahoo_mappings():
         (("000001", "SEHK", "", "CNY"), "000001.SZ"),
         (("688981", "SEHK", "", "CNY"), "688981.SS"),
         (("900902", "SHSE", "", "USD"), "900902.SS"),
+        (("920100", "SEHK", "", "CNY"), "920100.BJ"),
+        (("430047", "SEHK", "", "CNY"), "430047.BJ"),
         (("200012", "SZSE", "", "HKD"), "200012.SZ"),
         (("SAP", "IBIS", "", "EUR"), "SAP.DE"),
         (("SAP", "FWB", "", "EUR"), "SAP.DE"),
@@ -310,3 +313,42 @@ def test_get_fx_rate_ibkr_fallback(monkeypatch):
     monkeypatch.setattr(fx, "_cfets_rate", lambda s, d: 7.1)
     rate = fx.get_rate("USD", "CNY", use_ibkr=True)
     assert abs(rate - 7.1) < 1e-9
+
+
+def test_run_sync_json_writes_portfolio(tmp_path, capsys, monkeypatch):
+    # --json 非 dry-run 模式必须实际写入 portfolio 文件
+    import tracker.ibkr_sync as sync_mod
+
+    positions = [
+        FakePosition(FakeContract("AAPL", "SMART", "USD"), 10.0, 150.0),
+    ]
+    monkeypatch.setattr(sync_mod, "fetch_positions", lambda cfg: positions)
+    monkeypatch.setattr(sync_mod, "load_config", lambda: {})
+    p = tmp_path / "p.json"
+    p.write_text(json.dumps({"base_currency": "USD", "holdings": []}), encoding="utf-8")
+    sync_mod.run_sync(
+        types.SimpleNamespace(dry_run=False, json=True, portfolio=str(p))
+    )
+    out = capsys.readouterr().out
+    payload = json.loads(out)
+    assert payload["written"] is True
+    data = json.loads(p.read_text(encoding="utf-8"))
+    assert data["base_currency"] == "USD"
+    assert data["holdings"][0]["symbol"] == "AAPL"
+
+
+def test_run_sync_json_dry_run_no_write(tmp_path, capsys, monkeypatch):
+    import tracker.ibkr_sync as sync_mod
+
+    positions = [
+        FakePosition(FakeContract("AAPL", "SMART", "USD"), 10.0, 150.0),
+    ]
+    monkeypatch.setattr(sync_mod, "fetch_positions", lambda cfg: positions)
+    monkeypatch.setattr(sync_mod, "load_config", lambda: {})
+    p = tmp_path / "p.json"
+    sync_mod.run_sync(
+        types.SimpleNamespace(dry_run=True, json=True, portfolio=str(p))
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["written"] is False
+    assert not p.exists()

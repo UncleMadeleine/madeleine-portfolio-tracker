@@ -237,9 +237,14 @@ if not quotes:
 
 issues: list[str] = []
 if not holdings.empty:
-    holding_currencies = {
-        quotes[s].currency for s in holding_symbols if s in quotes
-    }
+    holding_currencies = set()
+    for s in holding_symbols:
+        try:
+            key = parse(s).yahoo
+        except ValueError:
+            key = s
+        if key in quotes:
+            holding_currencies.add(quotes[key].currency)
     currencies = tuple(sorted(holding_currencies))
     fx, fx_missing = cached_fx(base, currencies)
     view, view_issues = build_view(holdings.to_dict("records"), quotes, fx)
@@ -370,7 +375,8 @@ with tab3:
             px_df = pd.DataFrame(frames)
             px_df = px_df.ffill().dropna(how="all")
             if norm and not px_df.empty:
-                px_df = px_df / px_df.iloc[0] * 100
+                firsts = px_df.apply(lambda col: col.dropna().iloc[0])
+                px_df = px_df / firsts * 100
             y_label = "归一化" if norm else "收盘价 (当地货币)"
             fig = px.line(px_df, labels={"value": y_label, "variable": "代码"})
             fig.update_layout(legend_title="代码")

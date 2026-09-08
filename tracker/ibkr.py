@@ -138,9 +138,9 @@ def contract_spec(p: ParsedSymbol, exchanges: dict | None = None) -> ContractSpe
     code, _, suffix = p.yahoo.rpartition(".")
     if p.market in (Market.CN, Market.BJ):
         if p.is_b_share:
-            if code.startswith("9"):
+            if code.startswith("900"):
                 return ContractSpec(code, ex.get("SHSE", "SHSE"), "USD", trading_class=code)
-            if code.startswith("2"):
+            if code.startswith("200"):
                 return ContractSpec(code, ex.get("SZSE", "SZSE"), "HKD", trading_class=code)
         return ContractSpec(code, ex.get("CN", "SEHK"), "CNY", trading_class=code)
     if p.market is Market.HK:
@@ -259,10 +259,10 @@ def ibkr_to_yahoo(
     ccy = (currency or "").upper()
     exkey = ex or prim
     if ccy == "CNY":
-        if raw[:1] in _A_SHARE_SH_PREFIX:
-            return f"{raw}.SS"
         if raw[:1] in _A_SHARE_BJ_PREFIX or raw.startswith("920"):
             return f"{raw}.BJ"
+        if raw[:1] in _A_SHARE_SH_PREFIX:
+            return f"{raw}.SS"
         return f"{raw}.SZ"
     if ccy == "HKD" or exkey in ("SEHK", "HKEX"):
         if exkey == "SZSE":

@@ -75,6 +75,39 @@ class TestWatchlistCli:
         assert "未找到" in out
         assert len(_load(f)["watchlist"]) == 1
 
+    def test_remove_from_one_list_keeps_entry(self, tmp_path, capsys):
+        f = tmp_path / "w.json"
+        f.write_text(
+            json.dumps({"watchlist": [{"symbol": "AAPL", "lists": ["科技", "美股"]}]}),
+            encoding="utf-8",
+        )
+        out = _run(
+            capsys, "watchlist", "remove", "AAPL", "--file", str(f), "--list", "科技"
+        )
+        assert "已删除" in out
+        assert _load(f)["watchlist"] == [{"symbol": "AAPL", "lists": ["美股"]}]
+
+    def test_remove_from_last_list_deletes_entry(self, tmp_path, capsys):
+        f = tmp_path / "w.json"
+        f.write_text(
+            json.dumps({"watchlist": [{"symbol": "AAPL", "lists": ["科技"]}]}),
+            encoding="utf-8",
+        )
+        _run(capsys, "watchlist", "remove", "AAPL", "--file", str(f), "--list", "科技")
+        assert _load(f)["watchlist"] == []
+
+    def test_remove_not_in_scope_list_keeps_entry(self, tmp_path, capsys):
+        f = tmp_path / "w.json"
+        f.write_text(
+            json.dumps({"watchlist": [{"symbol": "AAPL", "lists": ["默认"]}]}),
+            encoding="utf-8",
+        )
+        out = _run(
+            capsys, "watchlist", "remove", "AAPL", "--file", str(f), "--list", "科技"
+        )
+        assert "未找到" in out
+        assert _load(f)["watchlist"] == [{"symbol": "AAPL", "lists": ["默认"]}]
+
     def test_list_no_quotes(self, tmp_path, capsys):
         f = tmp_path / "w.json"
         f.write_text(

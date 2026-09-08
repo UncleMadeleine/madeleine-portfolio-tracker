@@ -101,7 +101,7 @@ def parse(symbol: str) -> ParsedSymbol:
     is_b_share = False
     if market is Market.CN:
         code = yahoo.split(".")[0]
-        if code.startswith("9") or code.startswith("2"):
+        if code.startswith(("900", "200")):
             is_b_share = True
     return ParsedSymbol(
         raw=symbol.strip(), yahoo=yahoo, market=market, currency=currency, is_b_share=is_b_share

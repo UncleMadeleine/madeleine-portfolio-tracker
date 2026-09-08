@@ -21,6 +21,20 @@ def run_sync(args) -> None:
         raise SystemExit(1)
 
     rows, skipped = positions_to_rows(positions)
+
+    written = False
+    base = "CNY"
+    if not args.dry_run and rows:
+        target = Path(args.portfolio)
+        if target.exists():
+            try:
+                base = load_portfolio(target).get("base_currency", "CNY")
+            except Exception:
+                pass
+            shutil.copy(target, Path(str(target) + ".bak"))
+        save_portfolio({"base_currency": base, "holdings": rows}, target)
+        written = True
+
     if getattr(args, "json", False):
         print(
             json.dumps(
@@ -28,7 +42,7 @@ def run_sync(args) -> None:
                     "positions": rows,
                     "skipped": skipped,
                     "dry_run": bool(args.dry_run),
-                    "written": bool(rows and not args.dry_run),
+                    "written": written,
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -50,17 +64,9 @@ def run_sync(args) -> None:
     if args.dry_run or not rows:
         return
 
-    target = Path(args.portfolio)
-    base = "CNY"
-    if target.exists():
-        try:
-            base = load_portfolio(target).get("base_currency", "CNY")
-        except Exception:
-            pass
-        shutil.copy(target, Path(str(target) + ".bak"))
-        print(f"\n已备份原文件: {target.name}.bak")
-    save_portfolio({"base_currency": base, "holdings": rows}, target)
-    print(f"✅ 已写入 {target} (基础货币保留: {base})")
+    if written:
+        print(f"\n已备份原文件: {Path(args.portfolio).name}.bak")
+        print(f"✅ 已写入 {args.portfolio} (基础货币保留: {base})")
     print("提示: avg_cost 为 IBKR 报告的合约货币每股均价 (含佣金), 仅供估算。")
 
 

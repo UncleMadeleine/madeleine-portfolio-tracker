@@ -48,6 +48,14 @@ def test_parse_cn_b_shares():
     assert sz_b.market_label == "B股"
 
 
+def test_parse_cn_sme_not_b_share():
+    # 深市中小板 002xxx 是 A 股, 不应误判为 B 股
+    p = parse("002594.SZ")
+    assert p.market is Market.CN
+    assert p.is_b_share is False
+    assert p.market_label != "B股"
+
+
 def test_parse_hk_ak_code_5digit():
     p = parse("0700.HK")
     assert p.market is Market.HK

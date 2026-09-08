@@ -37,7 +37,7 @@ def build_view(
         mv_local = qty * q.price
         mv = mv_local * rate
         cost_base = qty * cost * rate if cost is not None else None
-        pnl = mv - cost_base if cost_base else None
+        pnl = mv - cost_base if cost_base is not None else None
         pnl_pct = pnl / cost_base if cost_base else None
         today = None
         if q.change_pct is not None and q.change_pct > -100:

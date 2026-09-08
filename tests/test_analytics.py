@@ -49,6 +49,18 @@ def test_build_view_multi_market_weights():
     assert view.iloc[0]["symbol"] == "AAPL"
 
 
+def test_build_view_zero_cost_keeps_pnl():
+    # avg_cost=0 (如 IBKR avgCost=0) 时 pnl 应为全额市值而非缺失
+    holdings = [{"symbol": "AAPL", "quantity": 10, "avg_cost": 0.0}]
+    quotes = {"AAPL": make_quote("AAPL", 150.0)}
+    view, issues = build_view(holdings, quotes, {"USD": 1.0})
+    assert issues == []
+    row = view.iloc[0]
+    assert row["cost"] == 0.0
+    assert row["pnl"] == 1500.0
+    assert pd.isna(row["pnl_pct"])
+
+
 def test_build_view_missing_quote_and_bad_symbol():
     holdings = [
         {"symbol": "AAPL", "quantity": 10, "avg_cost": 100.0},

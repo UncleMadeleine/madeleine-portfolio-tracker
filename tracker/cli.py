@@ -205,11 +205,16 @@ def watchlist_remove(args) -> None:
                 cur = e.get("lists") or []
                 if scope in cur:
                     cur = [n for n in cur if n != scope]
+                    removed.append(sym)
                     if cur:
                         e["lists"] = cur
                         remaining.append(e)
                         continue
-                removed.append(sym)
+                    # 已不属于任何列表 → 整体删除
+                    continue
+                # 不在指定列表中 → 保留不动
+                remaining.append(e)
+                continue
             else:
                 removed.append(sym)
         else:
@@ -590,13 +595,13 @@ def cmd_fx(args) -> None:
     if args.json:
         _print_json({"base": base, "rates": rates, "missing": missing})
         return
-    print(f"\n=== 汇率 (1 {base}) ===")
+    print(f"\n=== 汇率 (以 1 外币兑 {base} 计) ===")
     for c in currencies:
         r = rates.get(c)
         if r is not None:
-            print(f"  {c}: {r:.6f}")
+            print(f"  1 {c} = {r:.6f} {base}")
         else:
-            print(f"  {c}: 缺失")
+            print(f"  1 {c} = 缺失")
     if missing:
         print(f"\n⚠ 缺失: {', '.join(missing)}")
 

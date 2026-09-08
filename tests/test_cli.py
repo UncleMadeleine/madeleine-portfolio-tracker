@@ -2,7 +2,7 @@
 import json
 
 import pandas as pd
-
+import pytest
 from tracker import cli
 from tracker.cache import set_cached
 from tracker.prices import Quote
@@ -88,6 +88,105 @@ class TestWatchlistCli:
         assert "科技" in out
         assert "upper_1=250" in out
 
+
+
+class TestPortfolioCli:
+    def test_add_new_holding(self, tmp_path, capsys):
+        f = tmp_path / "p.json"
+        f.write_text(json.dumps({"base_currency": "CNY", "holdings": []}), encoding="utf-8")
+        out = _run(
+            capsys, "portfolio", "add", "AAPL", "--portfolio", str(f),
+            "--quantity", "10", "--avg-cost", "180",
+        )
+        assert "新增 AAPL" in out
+        data = _load(f)
+        assert data["holdings"] == [
+            {"symbol": "AAPL", "quantity": 10.0, "avg_cost": 180.0}
+        ]
+
+    def test_add_updates_existing(self, tmp_path, capsys):
+        f = tmp_path / "p.json"
+        f.write_text(
+            json.dumps(
+                {"base_currency": "CNY", "holdings": [{"symbol": "AAPL", "quantity": 5, "avg_cost": 150}]}
+            ),
+            encoding="utf-8",
+        )
+        out = _run(
+            capsys, "portfolio", "add", "AAPL", "--portfolio", str(f),
+            "--quantity", "10", "--avg-cost", "180",
+        )
+        assert "更新 AAPL" in out
+        h = _load(f)["holdings"][0]
+        assert h["quantity"] == 10.0
+        assert h["avg_cost"] == 180.0
+
+    def test_add_without_quantity_errors(self, tmp_path, capsys):
+        f = tmp_path / "p.json"
+        f.write_text(json.dumps({"base_currency": "CNY", "holdings": []}), encoding="utf-8")
+        with pytest.raises(SystemExit):
+            _run(capsys, "portfolio", "add", "AAPL", "--portfolio", str(f))
+
+    def test_add_normalizes_hk(self, tmp_path, capsys):
+        f = tmp_path / "p.json"
+        f.write_text(json.dumps({"base_currency": "CNY", "holdings": []}), encoding="utf-8")
+        _run(capsys, "portfolio", "add", "00700.HK", "--portfolio", str(f),
+              "--quantity", "100", "--avg-cost", "330")
+        assert _load(f)["holdings"][0]["symbol"] == "0700.HK"
+
+    def test_remove(self, tmp_path, capsys):
+        f = tmp_path / "p.json"
+        f.write_text(
+            json.dumps(
+                {"base_currency": "CNY", "holdings": [
+                    {"symbol": "AAPL", "quantity": 10, "avg_cost": 180},
+                    {"symbol": "NVDA", "quantity": 5, "avg_cost": 90},
+                ]}
+            ),
+            encoding="utf-8",
+        )
+        out = _run(capsys, "portfolio", "remove", "AAPL", "--portfolio", str(f))
+        assert "AAPL" in out
+        data = _load(f)
+        assert len(data["holdings"]) == 1
+        assert data["holdings"][0]["symbol"] == "NVDA"
+
+    def test_remove_missing(self, tmp_path, capsys):
+        f = tmp_path / "p.json"
+        f.write_text(
+            json.dumps(
+                {"base_currency": "CNY", "holdings": [{"symbol": "AAPL", "quantity": 10}]}
+            ),
+            encoding="utf-8",
+        )
+        out = _run(capsys, "portfolio", "remove", "NVDA", "--portfolio", str(f))
+        assert "未找到" in out
+        assert len(_load(f)["holdings"]) == 1
+
+    def test_list_json(self, tmp_path, capsys):
+        f = tmp_path / "p.json"
+        f.write_text(
+            json.dumps(
+                {"base_currency": "USD", "holdings": [{"symbol": "AAPL", "quantity": 10, "avg_cost": 180}]}
+            ),
+            encoding="utf-8",
+        )
+        out = _run(capsys, "portfolio", "list", "--portfolio", str(f), "--json")
+        data = json.loads(out)
+        assert data["base_currency"] == "USD"
+        assert data["holdings"][0]["symbol"] == "AAPL"
+
+    def test_set_base(self, tmp_path, capsys):
+        f = tmp_path / "p.json"
+        f.write_text(
+            json.dumps(
+                {"base_currency": "CNY", "holdings": [{"symbol": "AAPL", "quantity": 10}]}
+            ),
+            encoding="utf-8",
+        )
+        out = _run(capsys, "portfolio", "set-base", "USD", "--portfolio", str(f))
+        assert "CNY" in out and "USD" in out
+        assert _load(f)["base_currency"] == "USD"
 
 class TestCacheCli:
     def test_cache_info_and_clear(self, tmp_path, capsys, monkeypatch):
@@ -228,6 +327,10 @@ class TestParser:
             ["quote", "AAPL"],
             ["watchlist", "list"],
             ["watchlist", "add", "AAPL", "--upper1", "200"],
+            ["portfolio", "list"],
+            ["portfolio", "add", "AAPL", "--quantity", "10", "--avg-cost", "180"],
+            ["portfolio", "remove", "AAPL"],
+            ["portfolio", "set-base", "USD"],
             ["fx", "USD", "CNY"],
             ["history", "AAPL"],
             ["kline", "AAPL"],

@@ -32,6 +32,13 @@ def load_portfolio(path: str | Path) -> dict:
         return json.load(f)
 
 
+def save_portfolio(data: dict, path: str | Path = DEFAULT_PORTFOLIO) -> None:
+    Path(path).write_text(
+        json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False),
+        encoding="utf-8",
+    )
+
+
 def _records(df: pd.DataFrame) -> list[dict]:
     """DataFrame -> records, NaN/NaT 转 None 便于 JSON 序列化."""
     if df is None or df.empty:
@@ -85,7 +92,7 @@ def take_snapshot(
     )
     if holdings:
         currencies = sorted({q.currency for q in quotes.values()})
-        fx, fx_missing = get_fx_rates(base, currencies)
+        fx, fx_missing = get_fx_rates(base, currencies, use_ibkr=use_ibkr)
     else:
         fx, fx_missing = {}, []
     view, issues = build_view(holdings, quotes, fx)

@@ -9,7 +9,7 @@ from pathlib import Path
 import pandas as pd
 
 from .ibkr import fetch_positions, load_config, positions_to_rows
-from .snapshot import DEFAULT_PORTFOLIO, load_portfolio
+from .snapshot import DEFAULT_PORTFOLIO, load_portfolio, save_portfolio
 
 
 def run_sync(args) -> None:
@@ -59,10 +59,7 @@ def run_sync(args) -> None:
             pass
         shutil.copy(target, Path(str(target) + ".bak"))
         print(f"\n已备份原文件: {target.name}.bak")
-    target.write_text(
-        json.dumps({"base_currency": base, "holdings": rows}, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    save_portfolio({"base_currency": base, "holdings": rows}, target)
     print(f"✅ 已写入 {target} (基础货币保留: {base})")
     print("提示: avg_cost 为 IBKR 报告的合约货币每股均价 (含佣金), 仅供估算。")
 

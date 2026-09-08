@@ -25,6 +25,7 @@ import pandas as pd
 
 from . import prices
 from .fx import get_fx_rates
+from .snapshot import DEFAULT_PORTFOLIO, load_portfolio, save_portfolio
 from .symbols import parse
 from .watchlist import (
     DEFAULT_WATCHLIST,
@@ -37,7 +38,6 @@ from .watchlist import (
     triggered_entries,
 )
 
-DEFAULT_PORTFOLIO = Path(__file__).resolve().parent.parent / "portfolio.json"
 
 VERSION = "1.0.0"
 
@@ -297,6 +297,106 @@ def cmd_watchlist(args) -> None:
         watchlist_list(args)
 
 
+
+# ---------- portfolio ----------
+
+
+def portfolio_add(args) -> None:
+    if not args.symbols:
+        _finish_with_error("请指定要添加的代码, 如: portfolio add AAPL --quantity 10 --avg-cost 180")
+    if args.quantity is None:
+        _finish_with_error("请指定持仓数量 --quantity")
+    data = load_portfolio(args.portfolio)
+    holdings = data.setdefault("holdings", [])
+    changed: list[str] = []
+    for s in args.symbols:
+        try:
+            p = parse(s)
+        except ValueError as e:
+            changed.append(f"跳过 {s}: {e}")
+            continue
+        found = next((h for h in holdings if _sym(h) == p.yahoo), None)
+        if found is None:
+            h: dict = {"symbol": p.yahoo, "quantity": args.quantity}
+            if args.avg_cost is not None:
+                h["avg_cost"] = args.avg_cost
+            holdings.append(h)
+            changed.append(f"新增 {p.yahoo} 数量 {args.quantity}")
+        else:
+            found["quantity"] = args.quantity
+            if args.avg_cost is not None:
+                found["avg_cost"] = args.avg_cost
+            changed.append(f"更新 {p.yahoo} 数量 {args.quantity}")
+    save_portfolio(data, args.portfolio)
+    print("✅ " + "; ".join(changed))
+
+
+def portfolio_remove(args) -> None:
+    if not args.symbols:
+        _finish_with_error("请指定要删除的代码, 如: portfolio remove AAPL")
+    data = load_portfolio(args.portfolio)
+    targets: set[str] = set()
+    for s in args.symbols:
+        try:
+            targets.add(parse(s).yahoo)
+        except ValueError:
+            targets.add(s.strip().upper())
+    original = data.get("holdings", [])
+    remaining = [h for h in original if _sym(h) not in targets]
+    removed = [_sym(h) for h in original if _sym(h) in targets]
+    data["holdings"] = remaining
+    save_portfolio(data, args.portfolio)
+    if removed:
+        print(f"✅ 已删除: {', '.join(removed)}")
+    else:
+        print("未找到可删除的持仓")
+    if args.json:
+        _print_json({"removed": removed})
+
+
+def portfolio_list(args) -> None:
+    data = load_portfolio(args.portfolio)
+    holdings = data.get("holdings", [])
+    if args.json:
+        _print_json({"base_currency": data.get("base_currency", "CNY"), "holdings": holdings})
+        return
+    base = data.get("base_currency", "CNY")
+    print(f"\n=== 持仓 ({base}) ===")
+    if not holdings:
+        print("(空)")
+        return
+    rows = []
+    for h in holdings:
+        rows.append({
+            "symbol": _sym(h),
+            "quantity": h.get("quantity"),
+            "avg_cost": h.get("avg_cost"),
+        })
+    with pd.option_context("display.float_format", "{:,.2f}".format, "display.width", 120):
+        print(pd.DataFrame(rows).to_string(index=False))
+
+
+def portfolio_set_base(args) -> None:
+    currency = args.currency or (args.symbols[0] if args.symbols else None)
+    if not currency:
+        _finish_with_error("请指定基础货币, 如: portfolio set-base USD")
+    data = load_portfolio(args.portfolio)
+    old = data.get("base_currency", "CNY")
+    data["base_currency"] = currency.upper()
+    save_portfolio(data, args.portfolio)
+    print(f"✅ 基础货币: {old} → {data['base_currency']}")
+
+
+def cmd_portfolio(args) -> None:
+    if args.action == "add":
+        portfolio_add(args)
+    elif args.action == "remove":
+        portfolio_remove(args)
+    elif args.action == "set-base":
+        portfolio_set_base(args)
+    else:
+        portfolio_list(args)
+
 # ---------- report ----------
 
 _MD_COLS = [
@@ -486,7 +586,7 @@ def cmd_report(args) -> None:
 def cmd_fx(args) -> None:
     base = args.base.upper()
     currencies = [c.upper() for c in (args.currencies or ["CNY", "USD", "EUR", "GBP", "HKD", "JPY", "CAD", "AUD"])]
-    rates, missing = get_fx_rates(base, currencies)
+    rates, missing = get_fx_rates(base, currencies, use_ibkr=args.ibkr)
     if args.json:
         _print_json({"base": base, "rates": rates, "missing": missing})
         return
@@ -505,7 +605,7 @@ def cmd_fx(args) -> None:
 
 
 def cmd_history(args) -> None:
-    df = prices.get_history(args.symbol, months=args.months, prefer_akshare=args.akshare)
+    df = prices.get_history(args.symbol, months=args.months, prefer_akshare=args.akshare, use_ibkr=args.ibkr)
     if args.json:
         recs = df.copy()
         recs["date"] = recs["date"].astype(str)
@@ -557,6 +657,7 @@ def cmd_kline(args) -> None:
         df = prices.get_ohlc(
             args.symbol, months=args.months,
             prefer_akshare=args.akshare, refresh=args.refresh,
+            use_ibkr=args.ibkr,
         )
     except Exception as e:
         _finish_with_error(f"{args.symbol}: K线数据获取失败 ({e})")
@@ -697,6 +798,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_w.add_argument("--no-quotes", action="store_true", help="list 时不拉行情, 仅展示配置")
     p_w.set_defaults(func=cmd_watchlist)
 
+    p_p = sub.add_parser("portfolio", help="持仓管理 (list/add/remove/set-base)")
+    p_p.add_argument("action", nargs="?", choices=["list", "add", "remove", "set-base"],
+                     default="list")
+    p_p.add_argument("symbols", nargs="*", help="add/remove 的目标代码")
+    p_p.add_argument("--portfolio", default=str(DEFAULT_PORTFOLIO), help="portfolio.json 路径")
+    p_p.add_argument("--quantity", type=float, help="持仓数量 (add 时必填)")
+    p_p.add_argument("--avg-cost", type=float, help="成本价 (当地货币, add 时可选)")
+    p_p.add_argument("--currency", help="基础货币 (set-base 时指定, 如 CNY/USD)")
+    p_p.add_argument("--json", action="store_true", help="输出 JSON")
+    p_p.set_defaults(func=cmd_portfolio)
+
     p_r = sub.add_parser("report", help="导出自选监控阈值报告 (md/csv/json)")
     p_r.add_argument("--format", "-f", choices=["md", "csv", "json"], default="md",
                      help="输出格式 (默认 md)")
@@ -712,6 +824,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_fx = sub.add_parser("fx", help="汇率查询")
     p_fx.add_argument("base", help="基础货币, 如 USD")
     p_fx.add_argument("currencies", nargs="*", help="目标货币, 缺省常用币种")
+    p_fx.add_argument("--ibkr", action="store_true", help="优先使用 IBKR 汇率")
     p_fx.add_argument("--json", action="store_true")
     p_fx.set_defaults(func=cmd_fx)
 
@@ -720,6 +833,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_h.add_argument("--months", type=int, default=12)
     p_h.add_argument("--rows", type=int, default=10, help="表格模式打印最近 N 行")
     p_h.add_argument("--akshare", action="store_true")
+    p_h.add_argument("--ibkr", action="store_true", help="优先使用 IBKR 行情")
     p_h.add_argument("--json", action="store_true")
     p_h.set_defaults(func=cmd_history)
 
@@ -732,6 +846,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_k.add_argument("--no-volume", action="store_true", help="隐藏成交量副图")
     p_k.add_argument("--refresh", action="store_true", help="忽略缓存强制刷新")
     p_k.add_argument("--akshare", action="store_true")
+    p_k.add_argument("--ibkr", action="store_true", help="优先使用 IBKR 行情")
     p_k.add_argument("--output", "-o", default=None,
                      help="HTML 输出路径 (默认 data/kline_<代码>.html)")
     p_k.add_argument("--open", dest="open_browser", action="store_true",

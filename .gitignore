@@ -26,4 +26,6 @@ ibkr.json
 
 # AI 编码工具生成的本地目录
 .codemap/
+.devin/
 .opencode/
+.ruff_cache/

@@ -87,8 +87,10 @@ python3 -m venv .venv
 ## 架构
 
 ```
-app.py                  Streamlit 页面 (持仓编辑/指标/配置/走势/K线/自选提醒)
-tracker/
+app.py                  Streamlit 组合页面 (持仓编辑/指标/配置/走势/自选提醒)
+kline_app.py            Streamlit K线独立页面入口 (任意代码实时查询)
+kline_page.py           K线页面逻辑 (输入驱动取数, 与组合页解耦)
+run_app.py              Streamlit 多页面入口 (组合 + K线)
 ├── __main__.py         python -m tracker 入口 (转发到 cli)
 ├── cli.py              CLI: snapshot / quote / watchlist / fx / history / kline / sync / cache
 ├── symbols.py          代码解析、市场识别、GBp/港股补零归一
@@ -125,7 +127,16 @@ ibkr.json               IBKR 真实配置 (已 gitignore, 不随仓库提交, �
 .venv/bin/python -m tracker.cli kline 0700.HK --period weekly --open  # 周K + 自动打开浏览器
 ```
 
-Streamlit 页面「🕯 K线」标签页提供同样的交互图（代码/范围/周期/均线/成交量/配色可调）。
+页面与 CLI 平级提供 K线: 启动 `run_app.py` 后侧边栏「🕯 K线」是**独立页面**，
+可查询**任意代码**（不限于持仓/自选）。数据**不预加载**——输入代码点「查询 K线」才实时拉取
+（30 分钟磁盘缓存 + 10 分钟会话内存缓存），页面启动零行情请求；持仓/自选代码以「常用」
+快捷按钮一键填入。老入口 `app.py` 仍可单独运行（仅组合功能）。
+
+```bash
+.venv/bin/streamlit run run_app.py   # 推荐: 投资组合 + K线 双页面
+.venv/bin/streamlit run app.py       # 仅投资组合页面
+.venv/bin/streamlit run kline_app.py # 仅 K线页面
+```
 
 ### 数据源与降级策略
 

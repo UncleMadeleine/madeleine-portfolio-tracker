@@ -31,3 +31,6 @@ ibkr.json
 .devin/
 .opencode/
 .ruff_cache/
+
+# git worktree 工作目录 (多分支并行开发)
+worktrees/

@@ -9,7 +9,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from tracker import charting, prices
+from tracker import charting, prices, search
 from tracker.symbols import parse
 
 # 顶部快捷代码 (来自当前持仓与自选, 不预取任何行情数据, 仅展示代码名)
@@ -38,6 +38,12 @@ def set_quick_symbols(symbols: list[str]) -> None:
 def cached_kline(symbol: str, months: int, prefer_akshare: bool):
     """K线日线 (磁盘缓存 + 内存缓存双层, TTL 内切换参数不重复请求网络)."""
     return prices.get_ohlc(symbol, months=months, prefer_akshare=prefer_akshare)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_symbol_entries() -> list[dict]:
+    """股票列表 (代码+名称+市场), 本地缓存 TTL 1 小时刷新一次, 避免每次输入请求网络."""
+    return [e.__dict__ for e in search.load_symbol_list()]
 
 
 def is_valid_symbol(s: str) -> bool:
@@ -112,10 +118,58 @@ def render_compare_chart(data: dict, *, height: int = 560) -> None:
     _KLINE_CHART(key="compare_chart", data=data, height=height)
 
 
+def _render_symbol_search() -> None:
+    """搜索框: 输入代码/名称片段 → 模糊匹配本地缓存 → 下拉选择自动填入代码.
+
+    本地缓存 TTL 1 小时 (cached_symbol_entries), 输入时不请求网络;
+    选中结果通过 session_state 同步到代码输入框 (kline_symbol)。
+    """
+    sq = st.text_input(
+        "搜索股票 (代码或名称)",
+        value="",
+        key="kline_search_query",
+        placeholder="如: 苹果 · 茅台 · AAPL · 0700",
+        help="输入代码或名称片段, 从下拉结果中选择即可自动填入代码框",
+    )
+    sq = (sq or "").strip()
+    if not sq:
+        return
+    # 本地缓存匹配 (不请求网络), 降级时仅做代码格式校验
+    entries = [search.SymbolEntry(**e) for e in cached_symbol_entries()]
+    results = search.search_symbols(sq, limit=15, entries=entries)
+    if not results:
+        st.caption("无匹配结果 —— 可直接在下方代码框输入完整代码")
+        return
+    # 下拉选择: 展示「代码 · 名称 (市场)」, 选中后回填代码输入框
+    options_list = [
+        f"{r['code']} · {r['name']} ({r['market']})" for r in results
+    ]
+
+    def _on_pick():
+        idx = st.session_state.get("kline_search_select")
+        if isinstance(idx, int) and 0 <= idx < len(results):
+            st.session_state["kline_symbol"] = results[idx]["code"]
+            # 触发查询 (与手动回车等价)
+            st.session_state["kline_last_symbol"] = None
+
+    st.selectbox(
+        f"匹配结果 ({len(results)} 条)",
+        options_list,
+        index=None,
+        key="kline_search_select",
+        on_change=_on_pick,
+        placeholder="选择以填入代码...",
+    )
+
+
 def render_kline_controls(prefer_akshare: bool) -> None:
     """查询控件 + 拉取/渲染 (输入驱动: 无提交不取数)."""
     qs = quick_symbols()
     st.markdown("### :material/candlestick_chart: K线查询")
+
+    # ---- 搜索框: 按代码或名称模糊匹配, 选中后自动填入代码输入框 ----
+    _render_symbol_search()
+
     c1, c2, c3, c4 = st.columns([3, 1, 1, 1], vertical_alignment="bottom")
     ksym = c1.text_input(
         "代码",

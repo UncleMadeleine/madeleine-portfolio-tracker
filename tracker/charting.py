@@ -25,6 +25,17 @@ INTL_UP_COLOR, INTL_DOWN_COLOR = "#089981", "#f23648"
 VOLUME_OPACITY = 0.75
 MA_PALETTE = ("#f7d774", "#4ea1f3", "#c883f0", "#ff9f43", "#e15b64", "#2ccbc3", "#8d9db6")
 
+# 技术指标配色 (与 MA 调色板区分, 便于辨识)
+BOLL_UPPER_COLOR = "#e15b64"   # 布林带上轨 - 红
+BOLL_MIDDLE_COLOR = "#f7d774"  # 布林带中轨 - 黄
+BOLL_LOWER_COLOR = "#2ccbc3"   # 布林带下轨 - 青
+MACD_DIF_COLOR = "#f7d774"     # MACD DIF 线 - 黄
+MACD_DEA_COLOR = "#4ea1f3"     # MACD DEA 线 - 蓝
+RSI_COLOR = "#c883f0"          # RSI 线 - 紫
+KDJ_K_COLOR = "#f7d774"        # KDJ K 线 - 黄
+KDJ_D_COLOR = "#4ea1f3"        # KDJ D 线 - 蓝
+KDJ_J_COLOR = "#e15b64"        # KDJ J 线 - 红
+
 PERIOD_LABELS = {"daily": "日K", "weekly": "周K", "monthly": "月K"}
 
 
@@ -89,6 +100,85 @@ def compute_ma(df: pd.DataFrame, periods) -> dict[int, pd.Series]:
         if n <= len(df):
             out[n] = close.rolling(window=n, min_periods=n).mean()
     return out
+
+
+# ---------- 技术指标计算 (纯函数, 便于测试) ----------
+
+def calc_macd(df: pd.DataFrame, fast: int = 12, slow: int = 26, signal: int = 9) -> pd.DataFrame:
+    """MACD 指标 (指数平滑异同移动平均线).
+
+    DIF = 快线EMA - 慢线EMA; DEA = DIF 的 signal 周期EMA; MACD柱 = 2×(DIF-DEA).
+    返回 DataFrame: 列 dif / dea / macd.
+    """
+    close = df["close"].astype(float)
+    ema_fast = close.ewm(span=fast, adjust=False).mean()
+    ema_slow = close.ewm(span=slow, adjust=False).mean()
+    dif = ema_fast - ema_slow
+    dea = dif.ewm(span=signal, adjust=False).mean()
+    macd_hist = 2 * (dif - dea)
+    return pd.DataFrame({"dif": dif, "dea": dea, "macd": macd_hist})
+
+
+def calc_rsi(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """RSI 相对强弱指标 (Wilder 平滑法).
+
+    周期内平均涨幅 / (平均涨幅 + 平均跌幅) × 100, 取值 0~100.
+    首值无前日数据 → NaN; 全涨 (avg_loss=0) → 100; 无波动 → 50.
+    """
+    close = df["close"].astype(float)
+    delta = close.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.ewm(alpha=1 / period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1 / period, adjust=False).mean()
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    rsi = 100 - 100 / (1 + rs)
+    rsi[avg_loss == 0] = 100.0  # avg_loss=0 (全涨) → RSI=100 (NaN 不受影响)
+    rsi[(avg_gain == 0) & (avg_loss == 0)] = 50.0  # 无波动 → 50
+    return rsi
+
+
+def calc_kdj(df: pd.DataFrame, n: int = 9, m1: int = 3, m2: int = 3) -> pd.DataFrame:
+    """KDJ 随机指标.
+
+    RSV = (close - 最低低) / (最高高 - 最低低) × 100;
+    K = RSV 的 m1 周期 EMA; D = K 的 m2 周期 EMA; J = 3K - 2D.
+    返回 DataFrame: 列 k / d / j.
+    """
+    high = df["high"].astype(float)
+    low = df["low"].astype(float)
+    close = df["close"].astype(float)
+    lowest = low.rolling(window=n, min_periods=1).min()
+    highest = high.rolling(window=n, min_periods=1).max()
+    rsv = (close - lowest) / (highest - lowest).replace(0, np.nan) * 100
+    rsv = rsv.fillna(50.0)  # 最高=最低 (无波动) → RSV=50
+    k = rsv.ewm(alpha=1 / m1, adjust=False).mean()
+    d = k.ewm(alpha=1 / m2, adjust=False).mean()
+    j = 3 * k - 2 * d
+    return pd.DataFrame({"k": k, "d": d, "j": j})
+
+
+def calc_boll(df: pd.DataFrame, period: int = 20, std: float = 2.0) -> pd.DataFrame:
+    """布林带 (Bollinger Bands).
+
+    中轨 = close 的 period 周期 SMA; 上下轨 = 中轨 ± std 倍标准差.
+    返回 DataFrame: 列 upper / middle / lower.
+    """
+    close = df["close"].astype(float)
+    middle = close.rolling(window=period, min_periods=period).mean()
+    sd = close.rolling(window=period, min_periods=period).std(ddof=0)
+    upper = middle + std * sd
+    lower = middle - std * sd
+    return pd.DataFrame({"upper": upper, "middle": middle, "lower": lower})
+
+
+def _to_line_data(dates: pd.Series, srs: pd.Series, precision: int = 6) -> list[dict]:
+    """将 pandas Series 转为 lightweight-charts line data [{time, value}, ...], 跳过 NaN."""
+    return [
+        {"time": t, "value": round(float(v), precision)}
+        for t, v in zip(dates, srs)
+        if pd.notna(v)
+    ]
 
 
 def _month_rule() -> str:
@@ -324,7 +414,7 @@ export default function (component) {
   var LC = window.LightweightCharts;
   var chart = LC.createChart(el, CFG.options);
   var isCompare = CFG.mode === 'compare';
-  var candle = null, volSeries = null, tracks = [];
+  var candle = null, volSeries = null, tracks = [], indSeries = [];
 
   function addLine(color, data) {
     var s = chart.addSeries(LC.LineSeries, {
@@ -357,6 +447,59 @@ export default function (component) {
         if (panes.length > 1) { panes[1].setStretchFactor(0.32); }
       } catch (e) {}
     }
+
+    // 技术指标: 布林带叠加主图, MACD/RSI/KDJ 各占独立副图
+    if (CFG.boll && CFG.boll.length) {
+      CFG.boll.forEach(function (b) {
+        tracks.push({ name: b.name, color: b.color, series: addLine(b.color, b.data), data: b.data });
+      });
+    }
+    var indPane = CFG.volume.length ? 2 : 1;
+    function addIndLine(color, data, paneIdx) {
+      var s = chart.addSeries(LC.LineSeries, {
+        color: color, lineWidth: 1,
+        priceLineVisible: false, lastValueVisible: false,
+        crosshairMarkerVisible: true, crosshairMarkerRadius: 2,
+        priceFormat: { type: 'price', precision: 2, minMove: 0.01 }
+      }, paneIdx);
+      s.setData(data);
+      return s;
+    }
+    if (CFG.macd) {
+      var mp = indPane++;
+      var difS = addIndLine(CFG.macd.difColor, CFG.macd.dif, mp);
+      var deaS = addIndLine(CFG.macd.deaColor, CFG.macd.dea, mp);
+      var histS = chart.addSeries(LC.HistogramSeries, {
+        priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+        priceLineVisible: false, lastValueVisible: false
+      }, mp);
+      histS.setData(CFG.macd.hist);
+      indSeries.push({ name: 'DIF', color: CFG.macd.difColor, series: difS, data: CFG.macd.dif });
+      indSeries.push({ name: 'DEA', color: CFG.macd.deaColor, series: deaS, data: CFG.macd.dea });
+    }
+    if (CFG.rsi) {
+      var rp = indPane++;
+      var rsiS = addIndLine(CFG.rsi.color, CFG.rsi.data, rp);
+      indSeries.push({ name: 'RSI', color: CFG.rsi.color, series: rsiS, data: CFG.rsi.data });
+    }
+    if (CFG.kdj) {
+      var kp = indPane++;
+      var kdjKeys = [['k', 'K', CFG.kdj.kColor], ['d', 'D', CFG.kdj.dColor], ['j', 'J', CFG.kdj.jColor]];
+      kdjKeys.forEach(function (kk) {
+        var s = addIndLine(kk[2], CFG.kdj[kk[0]], kp);
+        indSeries.push({ name: kk[1], color: kk[2], series: s, data: CFG.kdj[kk[0]] });
+      });
+    }
+    // 调整副图高度比例: 主图大, 指标副图小
+    try {
+      var allPanes = chart.panes();
+      if (allPanes.length > 1) {
+        allPanes[0].setStretchFactor(3);
+        for (var pi = 1; pi < allPanes.length; pi++) {
+          allPanes[pi].setStretchFactor(0.5);
+        }
+      }
+    } catch (e) {}
   }
 
   var timeIdx = {};
@@ -364,6 +507,7 @@ export default function (component) {
     CFG.candles.forEach(function (b, i) { timeIdx[b.time] = i; });
   }
   function fp(v) { return v == null ? '—' : Number(v).toFixed(CFG.precision); }
+  function fp2(v) { return v == null ? '—' : Number(v).toFixed(2); }
   function fv(v) {
     if (v == null) return '—';
     if (v >= 1e8) return (v / 1e8).toFixed(2) + '亿';
@@ -415,7 +559,7 @@ export default function (component) {
       legend.innerHTML = h;
       return;
     }
-    var bar = null, vol = null, maVals = null;
+    var bar = null, vol = null, maVals = null, indVals = null;
     i = CFG.candles.length - 1;
     if (param && param.seriesData) {
       var d = param.seriesData.get(candle);
@@ -425,12 +569,19 @@ export default function (component) {
         var mv = param.seriesData.get(m.series);
         return { name: m.name, color: m.color, value: mv ? mv.value : null };
       });
+      indVals = indSeries.map(function (t) {
+        var mv = param.seriesData.get(t.series);
+        return { name: t.name, color: t.color, value: mv ? mv.value : null };
+      });
     }
     if (!bar) {
       bar = CFG.candles[i];
       vol = CFG.volume.length ? CFG.volume[i].value : null;
       maVals = tracks.map(function (m) {
         return { name: m.name, color: m.color, value: m.data[m.data.length - 1].value };
+      });
+      indVals = indSeries.map(function (t) {
+        return { name: t.name, color: t.color, value: t.data.length ? t.data[t.data.length - 1].value : null };
       });
     }
     var prev = i > 0 ? CFG.candles[i - 1].close : bar.open;
@@ -443,6 +594,7 @@ export default function (component) {
       + ' ' + span((pct >= 0 ? '+' : '') + pct.toFixed(2) + '%', pctColor);
     if (vol != null) { h += ' 量' + span(fv(vol)); }
     maVals.forEach(function (m) { h += ' ' + span(m.name + ' ' + fp(m.value), m.color); });
+    if (indVals) { indVals.forEach(function (t) { h += ' ' + span(t.name + ' ' + fp2(t.value), t.color); }); }
     legend.innerHTML = h;
   }
   chart.subscribeCrosshairMove(show);
@@ -523,11 +675,15 @@ def kline_payload(
     period: str = "daily",
     height: int = 680,
     init_bars: int = 140,
+    indicators: dict | None = None,
 ) -> dict:
     """生成传给 K线组件 (st.components.v2) 的数据 payload.
 
     组件交互: 拖动平移 (带惯性) / 滚轮·捏合缩放时间轴 / 触控板双指横滑平移 /
     十字光标 OHLC 信息栏 / 价格轴随可见区间自适应 / 副图分隔线可拖拽 / 双击轴复位.
+
+    indicators: 可选, 键为指标名 (macd/rsi/kdj/boll), 值为参数 dict;
+                如 {"macd": {"fast": 12, "slow": 26, "signal": 9}, "rsi": {"period": 14}}.
     """
     df = clean_ohlc(df)
     if df.empty:
@@ -564,6 +720,60 @@ def kline_payload(
     title = f"{symbol} · {PERIOD_LABELS.get(period, '日K')}" + (
         f" · {currency}" if currency else ""
     )
+
+    # 技术指标计算
+    boll_series: list[dict] = []
+    macd_data: dict | None = None
+    rsi_data: dict | None = None
+    kdj_data: dict | None = None
+    if indicators:
+        if "boll" in indicators:
+            bp = indicators["boll"]
+            boll = calc_boll(df, period=bp.get("period", 20), std=bp.get("std", 2.0))
+            for col, name, color in [
+                ("upper", "BOLL上轨", BOLL_UPPER_COLOR),
+                ("middle", "BOLL中轨", BOLL_MIDDLE_COLOR),
+                ("lower", "BOLL下轨", BOLL_LOWER_COLOR),
+            ]:
+                data = _to_line_data(dates, boll[col])
+                if data:
+                    boll_series.append({"name": name, "color": color, "data": data})
+        if "macd" in indicators:
+            mp = indicators["macd"]
+            macd = calc_macd(
+                df, fast=mp.get("fast", 12), slow=mp.get("slow", 26), signal=mp.get("signal", 9),
+            )
+            macd_data = {
+                "dif": _to_line_data(dates, macd["dif"]),
+                "dea": _to_line_data(dates, macd["dea"]),
+                "hist": [
+                    {
+                        "time": t,
+                        "value": round(float(v), 6),
+                        "color": _rgba(up, 0.6) if v >= 0 else _rgba(down, 0.6),
+                    }
+                    for t, v in zip(dates, macd["macd"])
+                    if pd.notna(v)
+                ],
+                "difColor": MACD_DIF_COLOR,
+                "deaColor": MACD_DEA_COLOR,
+            }
+        if "rsi" in indicators:
+            rp = indicators["rsi"]
+            rsi = calc_rsi(df, period=rp.get("period", 14))
+            rsi_data = {"data": _to_line_data(dates, rsi), "color": RSI_COLOR}
+        if "kdj" in indicators:
+            kp = indicators["kdj"]
+            kdj = calc_kdj(df, n=kp.get("n", 9), m1=kp.get("m1", 3), m2=kp.get("m2", 3))
+            kdj_data = {
+                "k": _to_line_data(dates, kdj["k"]),
+                "d": _to_line_data(dates, kdj["d"]),
+                "j": _to_line_data(dates, kdj["j"]),
+                "kColor": KDJ_K_COLOR,
+                "dColor": KDJ_D_COLOR,
+                "jColor": KDJ_J_COLOR,
+            }
+
     return {
         "title": title,
         "up": up,
@@ -575,6 +785,10 @@ def kline_payload(
         "candles": candles,
         "volume": vols if show_volume else [],
         "mas": ma_series,
+        "boll": boll_series,
+        "macd": macd_data,
+        "rsi": rsi_data,
+        "kdj": kdj_data,
         "options": _lwc_options(),
         "candleOpts": {
             "upColor": up, "downColor": down,
@@ -642,6 +856,10 @@ def compare_payload(
         "candles": [],
         "volume": [],
         "mas": [],
+        "boll": [],
+        "macd": None,
+        "rsi": None,
+        "kdj": None,
         "options": _lwc_options(),
     }
 

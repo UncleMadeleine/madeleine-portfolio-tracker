@@ -195,6 +195,37 @@ class TestBuildFig:
         assert "plotly" in html and "AAPL" in html and "<html>" in html
 
 
+class TestKlineComponent:
+    """页面端 lightweight-charts 组件 (st.components.v2) 的 payload 与 JS 源."""
+
+    def test_payload_contents(self):
+        p = charting.kline_payload(_mk_df(), "AAPL", currency="USD", mas="5,20")
+        assert len(p["candles"]) == 12
+        assert p["candles"][0]["time"] == "2025-01-06"
+        # 测试数据仅 12 根: MA5 有值, MA20 窗口过大被跳过
+        assert [m["name"] for m in p["mas"]] == ["MA5"]
+        assert "AAPL" in p["title"] and "USD" in p["title"]
+        assert len(p["volume"]) == 12
+
+    def test_no_volume(self):
+        p = charting.kline_payload(_mk_df(), "AAPL", show_volume=False)
+        assert p["volume"] == []
+
+    def test_green_up_palette(self):
+        p = charting.kline_payload(_mk_df(), "AAPL", green_up=True)
+        assert p["up"] == charting.INTL_UP_COLOR
+        assert p["candleOpts"]["upColor"] == charting.INTL_UP_COLOR
+
+    def test_component_js_bundle(self):
+        js = charting.kline_component_js()
+        assert "window.LightweightCharts" in js
+        assert "export default function" in js
+
+    def test_empty_raises(self):
+        with pytest.raises(ValueError):
+            charting.kline_payload(pd.DataFrame(), "AAPL")
+
+
 class TestSummarize:
     def test_summary_values(self):
         df = _mk_df()

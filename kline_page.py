@@ -15,6 +15,15 @@ from tracker.symbols import parse
 # 顶部快捷代码 (来自当前持仓与自选, 不预取任何行情数据, 仅展示代码名)
 KLINE_SYMBOLS_KEY = "kline_quick_symbols"
 
+# TradingView lightweight-charts 组件 (st.components.v2, JS 不过 DOMPurify):
+# 拖动平移 / 滚轮·捏合缩放 / 触控板双指手势, 券商 App 通用交互.
+_KLINE_CHART = st.components.v2.component(
+    "lwc_kline",
+    html=charting.KLINE_COMPONENT_HTML,
+    css=charting.KLINE_COMPONENT_CSS,
+    js=charting.kline_component_js(),
+)
+
 
 def quick_symbols() -> list[str]:
     """持仓+自选代码 (页面启动时注入, K线页自身不发起任何网络请求)."""
@@ -61,17 +70,15 @@ def render_kline_view(
     """K线图 + 摘要指标 (供 K线页面与 CLI 内嵌使用, 纯渲染无取数)."""
     if period != "daily":
         kdf = charting.resample_ohlc(kdf, period)
-    fig = charting.build_candlestick_fig(
-        kdf, symbol, currency=currency, mas=tuple(mas),
-        show_volume=show_volume, green_up=green_up, period=period,
-    )
-    st.plotly_chart(
-        fig,
-        config={
-            "displaylogo": False,
-            "scrollZoom": True,
-            "modeBarButtonsToRemove": ["select2d", "lasso2d", "autoscale"],
-        },
+    # lightweight-charts (TradingView 内核): 拖动平移 / 滚轮·捏合缩放 /
+    # 触控板双指手势, 券商 App 通用交互; 内嵌 JS 引擎无外部依赖.
+    _KLINE_CHART(
+        key="kline_chart",
+        data=charting.kline_payload(
+            kdf, symbol, currency=currency, mas=tuple(mas),
+            show_volume=show_volume, green_up=green_up, period=period,
+        ),
+        height=680,
     )
     s = charting.summarize_ohlc(kdf, tuple(mas))
     m1, m2, m3, m4 = st.columns(4)

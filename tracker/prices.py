@@ -141,7 +141,76 @@ def _akshare_quote(p: ParsedSymbol) -> Quote:
     )
 
 
+# ---------- 加密货币行情 ----------
+
+
+def _yf():
+    """惰性导入 yfinance (OpenBB equity.quote 对 crypto 返回 last_price=None, 需直连)."""
+    import yfinance as yf
+
+    return yf
+
+
+def _yf_crypto_quote(p: ParsedSymbol) -> Quote:
+    """yfinance 直连获取加密货币实时行情 (fast_info 含 lastPrice)."""
+    info = _yf().Ticker(p.yahoo).fast_info
+    price = info.get("lastPrice")
+    if price is None or not pd.notna(price):
+        raise RuntimeError(f"{p.yahoo}: yfinance 无最新价")
+    prev = info.get("previousClose")
+    chg = info.get("yearChange")  # 年涨跌 (小数比例), 非日内涨跌
+    # 日内涨跌幅用 lastPrice / previousClose 计算
+    if prev and prev > 0:
+        chg = (float(price) / float(prev) - 1) * 100
+    else:
+        chg = None
+    return Quote(
+        symbol=p.yahoo,
+        name=None,
+        price=float(price),
+        prev_close=float(prev) if prev and pd.notna(prev) else None,
+        change_pct=float(chg) if chg is not None and pd.notna(chg) else None,
+        currency=str(info.get("currency") or p.currency).upper(),
+    )
+
+
+def _akshare_crypto_quote(p: ParsedSymbol) -> Quote:
+    """akshare 降级: crypto_js_spot 返回多交易所聚合行情 (数据可能延迟)."""
+    ak = _ak()
+    df = with_timeout(ak.crypto_js_spot, _AK_TIMEOUT)
+    if df.empty:
+        raise RuntimeError("akshare crypto spot 不可用")
+    # 交易品种列格式: BTCUSD / ETHUSD (无连字符)
+    pair = p.yahoo.replace("-", "")
+    col = "交易品种" if "交易品种" in df.columns else df.columns[1]
+    row = df[df[col].astype(str).str.upper() == pair]
+    if row.empty:
+        raise RuntimeError(f"akshare 未找到 {pair}")
+    r = row.iloc[0]
+    price = float(r["最近报价"])
+    chg = r.get("涨跌幅")
+
+    def _num(v):
+        try:
+            f = float(v)
+            return f if pd.notna(f) else None
+        except (TypeError, ValueError):
+            return None
+
+    return Quote(
+        symbol=p.yahoo,
+        name=None,
+        price=price,
+        prev_close=None,
+        change_pct=_num(chg),
+        currency=p.currency,
+    )
+
+
 def _quote_route(p: ParsedSymbol, prefer_akshare: bool) -> list:
+    # 加密货币: yfinance 直连 (OpenBB equity.quote 对 crypto 缺 last_price), akshare 降级
+    if p.market is Market.CRYPTO:
+        return [_yf_crypto_quote, _akshare_crypto_quote]
     if p.market in (Market.CN, Market.BJ, Market.HK):
         if prefer_akshare:
             return [_akshare_quote, _yahoo_quote]
@@ -228,19 +297,27 @@ def get_quotes(
 
     rest = [p for y, p in by_yahoo.items() if y not in quotes]
     if rest:
-        batch = _yahoo_batch(rest)
-        quotes.update(batch)
-        # 批量失败时不做逐个重试 (避免累积延迟)
-        missing = [p for p in rest if p.yahoo not in quotes]
-        if missing and len(batch) == 0:
-            for p in missing:
-                errors[p.yahoo] = "批量行情获取失败, 请检查网络"
-        elif missing:
-            for p in missing:
-                try:
-                    quotes[p.yahoo] = _fetch_quote(p, prefer_akshare=False)
-                except Exception as e:
-                    errors[p.yahoo] = str(e)
+        # 加密货币单独走 yfinance 直连 (OpenBB equity.batch.quote 对 crypto 缺 last_price)
+        crypto_rest = [p for p in rest if p.market is Market.CRYPTO]
+        stock_rest = [p for p in rest if p.market is not Market.CRYPTO]
+        for p in crypto_rest:
+            try:
+                quotes[p.yahoo] = _fetch_quote(p, prefer_akshare=False)
+            except Exception as e:
+                errors[p.yahoo] = str(e)
+        if stock_rest:
+            batch = _yahoo_batch(stock_rest)
+            quotes.update(batch)
+            missing = [p for p in stock_rest if p.yahoo not in quotes]
+            if missing and len(batch) == 0:
+                for p in missing:
+                    errors[p.yahoo] = "批量行情获取失败, 请检查网络"
+            elif missing:
+                for p in missing:
+                    try:
+                        quotes[p.yahoo] = _fetch_quote(p, prefer_akshare=False)
+                    except Exception as e:
+                        errors[p.yahoo] = str(e)
 
     fresh = {sym: q for sym, q in quotes.items() if sym in by_yahoo}
     cache_mod.set_cached(fresh)
@@ -291,6 +368,11 @@ def _akshare_history(p: ParsedSymbol, months: int) -> pd.DataFrame:
     return df[keep]
 
 
+def _akshare_crypto_history(p: ParsedSymbol, months: int) -> pd.DataFrame:
+    """akshare 降级: 用 crypto_js_spot 仅能取最新价, 历史数据暂不可用, 直接抛异常回退."""
+    raise RuntimeError("akshare 暂不支持加密货币历史数据")
+
+
 def get_history(symbol: str, months: int = 12, prefer_akshare: bool = False, use_ibkr: bool = False) -> pd.DataFrame:
     p = parse(symbol)
     if use_ibkr:
@@ -311,6 +393,9 @@ def get_history(symbol: str, months: int = 12, prefer_akshare: bool = False, use
             if prefer_akshare
             else [_yahoo_history, _akshare_history]
         )
+    elif p.market is Market.CRYPTO:
+        # 加密货币: yfinance 历史数据 (equity.price.historical 支持 crypto), akshare 暂无历史接口
+        fns = [_yahoo_history, _akshare_crypto_history]
     else:
         fns = [_yahoo_history]
     last_err: Exception | None = None

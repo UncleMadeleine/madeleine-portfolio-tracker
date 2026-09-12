@@ -781,7 +781,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_snap.set_defaults(func=cmd_snapshot)
 
     p_q = sub.add_parser("quote", help="查询实时行情")
-    p_q.add_argument("symbols", nargs="+", help="Yahoo 代码, 如 AAPL 600519.SS")
+    p_q.add_argument("symbols", nargs="+", help="Yahoo 代码, 如 AAPL 600519.SS BTC-USD")
     p_q.add_argument("--akshare", action="store_true")
     p_q.add_argument("--ibkr", action="store_true")
     p_q.add_argument("--json", action="store_true")
@@ -843,7 +843,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_h.set_defaults(func=cmd_history)
 
     p_k = sub.add_parser("kline", help="K线蜡烛图 (生成交互式 HTML, 含成交量/均线)")
-    p_k.add_argument("symbol", help="Yahoo 代码, 如 AAPL 600519.SS")
+    p_k.add_argument("symbol", help="Yahoo 代码, 如 AAPL 600519.SS BTC-USD")
     p_k.add_argument("--months", type=int, default=12, help="拉取近 N 个月日线")
     p_k.add_argument("--period", choices=["daily", "weekly", "monthly"], default="daily",
                      help="K线周期 (默认日K)")

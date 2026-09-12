@@ -119,7 +119,7 @@ def render_kline_controls(prefer_akshare: bool) -> None:
         "代码",
         value=qs[0] if qs else "AAPL",
         key="kline_symbol",
-        placeholder="如: AAPL · 600519.SS · 0700.HK · SAP.DE · BP.L",
+        placeholder="如: AAPL · 600519.SS · 0700.HK · SAP.DE · BP.L · BTC-USD",
     )
     ksym = (ksym or "").strip().upper()
     kmonths = c2.selectbox(
@@ -144,7 +144,7 @@ def render_kline_controls(prefer_akshare: bool) -> None:
 
     st.caption(
         "代码规范: 美股 AAPL · A股 600519.SS · 港股 0700.HK · 德股 SAP.DE · "
-        "英股 BP.L · 加股 RY.TO · 澳股 BHP.AX"
+        "英股 BP.L · 加股 RY.TO · 澳股 BHP.AX · 加密货币 BTC-USD"
     )
     def _pick_quick():
         v = st.session_state.get("kline_quick")

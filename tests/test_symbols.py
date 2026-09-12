@@ -76,3 +76,62 @@ def test_parse_all_markets():
 def test_parse_unknown_suffix():
     with pytest.raises(ValueError):
         parse("FOO.ZZ")
+
+
+# ---------- 加密货币 ----------
+
+
+def test_parse_crypto_btc_usd():
+    p = parse("BTC-USD")
+    assert p.market is Market.CRYPTO
+    assert p.yahoo == "BTC-USD"
+    assert p.currency == "USD"
+    assert p.ak_code is None
+    assert p.market_label == "加密货币"
+
+
+def test_parse_crypto_eth_usd():
+    p = parse("ETH-USD")
+    assert p.market is Market.CRYPTO
+    assert p.currency == "USD"
+
+
+def test_parse_crypto_btc_eur():
+    p = parse("BTC-EUR")
+    assert p.market is Market.CRYPTO
+    assert p.currency == "EUR"
+
+
+def test_parse_crypto_no_separator():
+    # BTCUSD → BTC-USD (自动补全连字符)
+    p = parse("BTCUSD")
+    assert p.market is Market.CRYPTO
+    assert p.yahoo == "BTC-USD"
+    assert p.currency == "USD"
+
+
+def test_parse_crypto_ethusd_no_separator():
+    p = parse("ETHUSD")
+    assert p.market is Market.CRYPTO
+    assert p.yahoo == "ETH-USD"
+    assert p.currency == "USD"
+
+
+def test_normalize_crypto_no_separator():
+    assert normalize("BTCUSD") == "BTC-USD"
+    assert normalize("btc-usd") == "BTC-USD"
+    assert normalize("ETH-EUR") == "ETH-EUR"
+
+
+def test_parse_crypto_us_stock_not_affected():
+    # 确保无分隔符的 4 字符美股代码不被误判为加密货币
+    p = parse("MSFT")
+    assert p.market is Market.US
+    assert p.currency == "USD"
+
+
+def test_parse_crypto_unknown_base_with_hyphen():
+    # 连字符格式: 只要后缀是法币就识别为 crypto (宽松匹配)
+    p = parse("FOO-USD")
+    assert p.market is Market.CRYPTO
+    assert p.currency == "USD"

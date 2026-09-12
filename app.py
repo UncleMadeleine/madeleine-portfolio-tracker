@@ -148,7 +148,7 @@ with st.sidebar:
 
     if st.session_state.app_page == "portfolio":
         with st.expander(":material/edit_note: 持仓管理", expanded=True):
-            st.caption("代码规范: AAPL · SAP.DE · BP.L · RY.TO · BHP.AX · 0700.HK · 600519.SS")
+            st.caption("代码规范: AAPL · SAP.DE · BP.L · RY.TO · BHP.AX · 0700.HK · 600519.SS · BTC-USD")
             df_h = pd.DataFrame(
                 portfolio.get("holdings", []), columns=["symbol", "quantity", "avg_cost"]
             )
@@ -273,7 +273,7 @@ if st.session_state.app_page == "portfolio":
     holdings = edited.dropna(subset=["symbol"]) if not edited.empty else edited
     all_watch_entries = merge_entries(watch)
     if holdings.empty and not all_watch_entries:
-        st.info("在左侧添加持仓或自选股并保存。支持 A股/港股/美股/德股/英股/加股/澳股。")
+        st.info("在左侧添加持仓或自选股并保存。支持 A股/港股/美股/德股/英股/加股/澳股/加密货币。")
         st.stop()
 
     holding_symbols = [str(s) for s in holdings["symbol"].tolist()] if not holdings.empty else []

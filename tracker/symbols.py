@@ -14,6 +14,7 @@ class Market(str, Enum):
     CA = "CA"
     AU = "AU"
     BJ = "BJ"
+    CRYPTO = "CRYPTO"
 
 
 MARKET_META: dict[Market, dict[str, str]] = {
@@ -25,6 +26,7 @@ MARKET_META: dict[Market, dict[str, str]] = {
     Market.CA: {"label": "加股", "currency": "CAD"},
     Market.AU: {"label": "澳股", "currency": "AUD"},
     Market.BJ: {"label": "北交所", "currency": "CNY"},
+    Market.CRYPTO: {"label": "加密货币", "currency": "USD"},
 }
 
 _SUFFIX_MARKET: dict[str, Market] = {
@@ -52,6 +54,23 @@ _SUFFIX_MARKET: dict[str, Market] = {
 
 PENCE_CURRENCIES = {"GBp", "GBX", "GBx"}
 
+# 加密货币常见基础代码 (用于 BTCUSD → BTC-USD 自动补全)
+_KNOWN_CRYPTO: set[str] = {
+    "BTC", "ETH", "BNB", "SOL", "XRP", "ADA", "DOGE", "DOT", "MATIC", "AVAX",
+    "LINK", "LTC", "BCH", "UNI", "ATOM", "XLM", "NEAR", "TRX", "ICP", "FIL",
+    "HBAR", "VET", "ALGO", "AAVE", "MKR", "SNX", "COMP", "GRT", "LDO", "OP",
+    "ARB", "APT", "INJ", "SUI", "SEI", "TIA", "STX", "RUNE", "PEPE", "WIF",
+    "BONK", "JUP", "PYTH", "DYDX", "ORDI", "TON", "SHIB", "ETC", "XMR", "ZEC",
+    "FTM", "SAND", "MANA", "AXS", "IMX", "GALA", "CRV", "SUSHI", "1INCH",
+}
+
+# 加密货币计价货币 (法币 + 主流稳定币; Yahoo Finance 用 BTC-USD 格式)
+_CRYPTO_QUOTES: set[str] = {
+    "USD", "EUR", "GBP", "JPY", "KRW", "AUD", "CAD", "CHF", "SGD", "HKD",
+    "INR", "BRL", "CNY", "RUB", "TRY", "MXN", "ZAR", "THB", "IDR",
+    "USDT", "USDC", "DAI", "BUSD",
+}
+
 
 @dataclass(frozen=True)
 class ParsedSymbol:
@@ -78,6 +97,12 @@ class ParsedSymbol:
 
 def normalize(symbol: str) -> str:
     s = symbol.strip().upper()
+    # 加密货币无分隔符格式: BTCUSD → BTC-USD (Yahoo Finance 格式)
+    if "-" not in s and "." not in s and len(s) > 3:
+        quote = s[-3:]
+        base = s[:-3]
+        if quote in _CRYPTO_QUOTES and base in _KNOWN_CRYPTO:
+            return f"{base}-{quote}"
     if "." not in s:
         return s
     head, _, suffix = s.rpartition(".")
@@ -90,6 +115,16 @@ def normalize(symbol: str) -> str:
 
 def parse(symbol: str) -> ParsedSymbol:
     yahoo = normalize(symbol)
+    # 加密货币: BTC-USD / ETH-EUR 等连字符格式 (Yahoo Finance crypto 行情)
+    if "-" in yahoo and "." not in yahoo:
+        base, _, quote = yahoo.rpartition("-")
+        if quote in _CRYPTO_QUOTES:
+            return ParsedSymbol(
+                raw=symbol.strip(),
+                yahoo=yahoo,
+                market=Market.CRYPTO,
+                currency=quote,
+            )
     if "." not in yahoo:
         market = Market.US
     else:

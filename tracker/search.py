@@ -50,7 +50,7 @@ def _cn_suffix(code: str) -> str:
     """
     if code.startswith(("60", "68", "90", "11", "50")):
         return "SS"
-    if code.startswith(("4", "8")):
+    if code.startswith(("4", "8", "920")):
         return "BJ"
     return "SZ"
 

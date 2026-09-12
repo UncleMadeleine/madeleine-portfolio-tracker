@@ -114,7 +114,7 @@ def get_cached(symbols: list[str], ttl: int = CACHE_TTL) -> dict[str, "Quote"]:
             if price is not None and price > 0:
                 hits[sym] = Quote(
                     symbol=sym, name=name, price=price,
-                    prev_close=float(prev) if prev else None,
+                    prev_close=float(prev) if prev is not None else None,
                     change_pct=float(chg) if chg else None,
                     currency=str(ccy),
                 )

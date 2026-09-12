@@ -128,11 +128,18 @@ def _get_client(cfg: dict):
         if time.time() - _unavailable[1] < _UNAVAILABLE_TTL:
             return None
         _unavailable = None
+    required_keys = ["host", "client_id", "connect_timeout", "market_data_type"]
+    for k in required_keys:
+        if k not in cfg:
+            _unavailable = (f"配置缺失: {k}", time.time())
+            return None
+    mode = str(cfg.get("mode") or "paper").strip().lower()
+    if mode not in _MODE_PORTS:
+        _unavailable = (f"未知 mode: {mode!r} (可选: paper/live)", time.time())
+        return None
     try:
         m = _ib_module()
         ib = m.IB()
-        # 只读接入: readonly=True 让 Gateway 端也进入只读模式 (拒绝任何下单/改单),
-        # fetchFields 跳过启动时的订单/成交批量拉取 (本项目只读持仓/行情, 无交易意图)。
         kwargs = dict(
             clientId=int(cfg["client_id"]),
             timeout=float(cfg["connect_timeout"]),
@@ -140,7 +147,7 @@ def _get_client(cfg: dict):
         )
         try:
             kwargs["fetchFields"] = m.StartupFetchNONE
-        except AttributeError:  # ib_insync 无 StartupFetch, 只用 readonly
+        except AttributeError:
             pass
         ib.connect(
             cfg["host"],
@@ -150,10 +157,6 @@ def _get_client(cfg: dict):
         ib.reqMarketDataType(int(cfg["market_data_type"]))
         _client = ib
         return ib
-    except KeyError:
-        mode = str(cfg.get("mode") or "").strip().lower()
-        _unavailable = (f"未知 mode: {mode!r} (可选: paper/live)", time.time())
-        return None
     except Exception as e:
         _unavailable = (f"{type(e).__name__}: {e}"[:200], time.time())
         return None
@@ -263,10 +266,11 @@ def get_quotes_ibkr(
         qualified = ib.qualifyContracts(*[c for _, c in pairs])
     except Exception as e:
         return {}, f"qualifyContracts 失败: {e}"[:200]
-    quotes: dict[str, Quote] = {}
     if not qualified:
-        return quotes, None
+        return {}, None
     by_id = {id(c): y for y, c in pairs}
+    quotes: dict[str, Quote] = {}
+    tickers = []
     try:
         tickers = ib.reqTickers(*qualified)
     except Exception as e:

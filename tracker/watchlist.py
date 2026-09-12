@@ -37,8 +37,7 @@ def load_watchlist(path: str | Path = DEFAULT_WATCHLIST) -> dict:
         entries = []
         for e in raw["watchlist"]:
             e = dict(e)
-            if not e.get("lists"):
-                e["lists"] = ["默认"]
+            e["lists"] = parse_lists(e.get("lists"))
             entries.append(e)
         return {"watchlist": entries}
     if "watchlists" in raw:

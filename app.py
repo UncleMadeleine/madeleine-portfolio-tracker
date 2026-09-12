@@ -220,6 +220,20 @@ with st.sidebar:
                 df_w["lists"] = df_w["lists"].apply(
                     lambda v: ", ".join(v) if isinstance(v, list) else (str(v) if v else "")
                 )
+            edited_w = st.data_editor(
+                df_w,
+                num_rows="dynamic",
+                key="watchlist_editor",
+                column_config={
+                    "symbol": st.column_config.TextColumn("代码", help="Yahoo 规范代码"),
+                    "lists": st.column_config.TextColumn("所属列表 (逗号分隔)"),
+                    "upper_1": st.column_config.NumberColumn("上限 I", format="%.2f"),
+                    "upper_2": st.column_config.NumberColumn("上限 II", format="%.2f"),
+                    "lower_1": st.column_config.NumberColumn("下限 I", format="%.2f"),
+                    "lower_2": st.column_config.NumberColumn("下限 II", format="%.2f"),
+                    "note": st.column_config.TextColumn("备注"),
+                },
+            )
             c3, c4 = st.columns(2)
             if c3.button("保存", icon=":material/save:", width="stretch", key="save_watchlist"):
                 rows = []

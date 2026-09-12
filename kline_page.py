@@ -1,4 +1,4 @@
-"""「K线」独立页面: 任意代码实时查询 (持仓/自选 + 自由输入).
+"""「K线」页面: 任意代码实时查询 (持仓/自选 + 自由输入).
 
 K线与投资组合、自选同级的独立功能 —— 不依赖持仓/自选配置,
 任何合法的 Yahoo 规范代码都能查。数据不预加载, 用户提交后实时拉取
@@ -17,7 +17,7 @@ KLINE_SYMBOLS_KEY = "kline_quick_symbols"
 
 
 def quick_symbols() -> list[str]:
-    """持仓+自选代码 (页面启动时由 app.py 注入, K线页自身不发起任何网络请求)."""
+    """持仓+自选代码 (页面启动时注入, K线页自身不发起任何网络请求)."""
     return list(st.session_state.get(KLINE_SYMBOLS_KEY, []))
 
 

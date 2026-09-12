@@ -40,17 +40,10 @@ pip install -r requirements.txt
 ### 启动 Streamlit 页面
 
 ```bash
-# 投资组合 + K线 双页面（推荐）
-streamlit run run_app.py
-
-# 仅投资组合页面
 streamlit run app.py
-
-# 仅 K线页面
-streamlit run kline_app.py
 ```
 
-页面默认运行在 `http://localhost:8501`。
+页面默认运行在 `http://localhost:8501`，侧边栏含「投资组合」和「🕯 K线」两个标签页。
 
 ### CLI 快速上手
 
@@ -165,10 +158,8 @@ tracker/
 ├── ibkr_sync.py        CLI：从 IBKR 账户持仓生成 portfolio.json
 └── snapshot.py         CLI 快照（持仓 + 自选，支持 --ibkr / --json）
 
-app.py                  Streamlit 组合页面（持仓编辑/指标/配置/走势/自选提醒）
-kline_app.py            Streamlit K线独立页面入口（任意代码实时查询）
-kline_page.py           K线页面逻辑（输入驱动取数，与组合页解耦）
-run_app.py              Streamlit 多页面入口（组合 + K线）
+app.py                  Streamlit 页面（持仓编辑/指标/配置/走势/自选提醒/K线查询）
+kline_page.py           K线页面逻辑（输入驱动取数）
 
 tests/                  纯逻辑单元测试（mock 数据源，不联网）
 portfolio.json          持仓配置（页面可直接编辑保存）
@@ -196,12 +187,10 @@ python -m tracker.cli kline 600519.SS --ma 5,10,20,60   # 自定义均线
 python -m tracker.cli kline 0700.HK --period weekly --open  # 周K + 自动打开浏览器
 ```
 
-页面与 CLI 平级提供 K线：启动 `run_app.py` 后侧边栏「🕯 K线」是**独立页面**，可查询**任意代码**（不限于持仓/自选）。数据**不预加载**——输入代码点「查询 K线」才实时拉取（30 分钟磁盘缓存 + 10 分钟会话内存缓存），页面启动零行情请求；持仓/自选代码以「常用」快捷按钮一键填入。老入口 `app.py` 仍可单独运行（仅组合功能）。
+页面启动后侧边栏「🕯 K线」标签页可查询**任意代码**（不限于持仓/自选）。数据**不预加载**——输入代码点「查询 K线」才实时拉取（30 分钟磁盘缓存 + 10 分钟会话内存缓存），页面启动零行情请求；持仓/自选代码以「常用」快捷按钮一键填入。
 
 ```bash
-streamlit run run_app.py   # 推荐：投资组合 + K线 双页面
-streamlit run app.py       # 仅投资组合页面
-streamlit run kline_app.py # 仅 K线页面
+streamlit run app.py   # 统一入口：投资组合 + K线 双页面
 ```
 
 ---
@@ -299,7 +288,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 # Start Streamlit dashboard
-streamlit run run_app.py
+streamlit run app.py
 
 # CLI examples
 python -m tracker.cli snapshot
@@ -324,10 +313,8 @@ IBKR disconnects silently fall back to the next source; the page continues runni
 
 ```
 tracker/           Core Python package (CLI, pricing, FX, analytics, watchlist, IBKR, caching, charting)
-app.py             Streamlit portfolio page
-kline_app.py       Streamlit K-line standalone page
+app.py             Streamlit dashboard (portfolio + K-line)
 kline_page.py      K-line page logic
-run_app.py         Streamlit multi-page entry point
 portfolio.json     Holdings config (editable via page)
 watchlist.json     Watchlist config (editable via page)
 ibkr.json          IBKR config (gitignored, copy from ibkr.example.json)

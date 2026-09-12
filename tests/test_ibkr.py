@@ -308,7 +308,7 @@ def test_get_history_ibkr(monkeypatch):
     monkeypatch.setattr(ibkr_mod, "get_history_ibkr", fake_ibkr)
     monkeypatch.setattr(
         prices_mod, "_yahoo_history",
-        lambda p, months: (_ for _ in ()).throw(AssertionError("不应调用 yahoo"))
+        lambda p, start_date=None, end_date=None: (_ for _ in ()).throw(AssertionError("不应调用 yahoo"))
     )
 
     df = prices_mod.get_history("AAPL", months=3, use_ibkr=True)
@@ -330,7 +330,7 @@ def test_get_history_ibkr_fallback(monkeypatch):
     })
 
     monkeypatch.setattr(ibkr_mod, "get_history_ibkr", fake_ibkr)
-    monkeypatch.setattr(prices_mod, "_yahoo_history", lambda p, months: yahoo_df)
+    monkeypatch.setattr(prices_mod, "_yahoo_history", lambda p, start_date=None, end_date=None: yahoo_df)
 
     df = prices_mod.get_history("AAPL", months=3, use_ibkr=True)
     assert len(df) == 2

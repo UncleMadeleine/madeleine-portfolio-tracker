@@ -6,6 +6,8 @@ K线与投资组合、自选同级的独立功能 —— 不依赖持仓/自选�
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 import pandas as pd
 import streamlit as st
 
@@ -73,18 +75,23 @@ def render_kline_view(
     green_up: bool,
     currency: str | None,
     indicators: dict | None = None,
-) -> None:
-    """K线图 + 摘要指标 (供 K线页面与 CLI 内嵌使用, 纯渲染无取数)."""
+    preserve_range: dict | None = None,
+) -> dict | None:
+    """K线图 + 摘要指标 (供 K线页面与 CLI 内嵌使用, 纯渲染无取数).
+
+    返回组件交互结果 (need_more / range), 供无限拖动扩展数据使用.
+    """
     if period != "daily":
         kdf = charting.resample_ohlc(kdf, period)
     # lightweight-charts (TradingView 内核): 拖动平移 / 滚轮·捏合缩放 /
     # 触控板双指手势, 券商 App 通用交互; 内嵌 JS 引擎无外部依赖.
-    _KLINE_CHART(
+    result = _KLINE_CHART(
         key="kline_chart",
         data=charting.kline_payload(
             kdf, symbol, currency=currency, mas=tuple(mas),
             show_volume=show_volume, green_up=green_up, period=period,
             indicators=indicators,
+            preserve_range=preserve_range,
         ),
         height=680,
     )
@@ -111,6 +118,7 @@ def render_kline_view(
     ma_txt = "  ".join(f"MA{n[2:]} {v:,.3f}" for n, v in s["ma"].items())
     if ma_txt:
         st.caption(f"均线: {ma_txt} · 数据源与行情一致, 日K缓存 30 分钟")
+    return result
 
 
 def render_compare_chart(data: dict, *, height: int = 560) -> None:
@@ -249,21 +257,85 @@ def render_kline_controls(prefer_akshare: bool) -> None:
     st.session_state["kline_last_symbol"] = ksym
 
     yahoo = normalize_or_none(ksym)
-    try:
-        with st.spinner(f"拉取 {yahoo} K线..."):
-            kdf = cached_kline(yahoo, kmonths, prefer_akshare)
-    except Exception as e:
-        st.warning(f"{yahoo}: {e}")
-        return
-    if kdf.empty:
-        st.warning(f"{yahoo}: 无有效K线数据。")
-        return
+
+    # ---- 无限拖动: 维护全量数据集 (session_state), 组件返回 need_more 时自动扩展 ----
+    if (
+        entered
+        or st.session_state.get("kline_current_symbol") != yahoo
+        or st.session_state.get("kline_last_months") != kmonths
+    ):
+        st.session_state["kline_full_df"] = None
+        st.session_state["kline_preserve_range"] = None
+        st.session_state["kline_last_range"] = None
+        st.session_state["kline_fetching"] = False
+
+    st.session_state["kline_current_symbol"] = yahoo
+    st.session_state["kline_last_months"] = kmonths
+
+    if st.session_state["kline_full_df"] is None:
+        try:
+            with st.spinner(f"拉取 {yahoo} K线..."):
+                kdf = cached_kline(yahoo, kmonths, prefer_akshare)
+        except Exception as e:
+            st.warning(f"{yahoo}: {e}")
+            return
+        if kdf.empty:
+            st.warning(f"{yahoo}: 无有效K线数据。")
+            return
+        st.session_state["kline_full_df"] = kdf
+
+    full_df = st.session_state["kline_full_df"]
+    preserve_range = st.session_state.get("kline_preserve_range")
+    st.session_state["kline_preserve_range"] = None
+
     try:
         kcur = parse(yahoo).currency
     except ValueError:
         kcur = None
-    render_kline_view(
-        kdf, yahoo, period=kperiod, mas=kmas,
+
+    result = render_kline_view(
+        full_df, yahoo, period=kperiod, mas=kmas,
         show_volume=kvol, green_up=kgreen, currency=kcur,
         indicators=indicators or None,
+        preserve_range=preserve_range,
     )
+
+    # 处理无限拖动扩展数据
+    if result and isinstance(result, dict) and result.get("need_more"):
+        old_range = result.get("range", {})
+        before_date = result.get("before")
+        if before_date and not st.session_state.get("kline_fetching"):
+            last_before = st.session_state.get("kline_last_before")
+            if last_before == before_date:
+                st.session_state["kline_preserve_range"] = None
+                return
+            st.session_state["kline_fetching"] = True
+            st.session_state["kline_last_range"] = old_range
+            st.session_state["kline_last_before"] = before_date
+            try:
+                before_dt = datetime.strptime(before_date, "%Y-%m-%d")
+                fetch_start = (before_dt - timedelta(days=365)).strftime("%Y-%m-%d")
+                with st.spinner(f"正在加载更早数据 ({fetch_start} -> {before_date})..."):
+                    older_df = prices.get_ohlc(
+                        yahoo,
+                        start_date=fetch_start,
+                        end_date=before_date,
+                        prefer_akshare=prefer_akshare,
+                    )
+                if not older_df.empty:
+                    combined = pd.concat([older_df, full_df])
+                    combined = combined.drop_duplicates(subset="date", keep="first")
+                    combined = combined.sort_values("date").reset_index(drop=True)
+                    st.session_state["kline_full_df"] = combined
+                    shift = len(older_df)
+                    total_bars = len(combined)
+                    old_from = old_range.get("from", 0)
+                    old_to = old_range.get("to", 0)
+                    preserve_from = max(old_from + shift, int(total_bars * 0.3))
+                    preserve_to = preserve_from + (old_to - old_from)
+                    st.session_state["kline_preserve_range"] = {"from": preserve_from, "to": preserve_to}
+            except Exception as e:
+                st.warning(f"扩展历史数据失败: {e}")
+            finally:
+                st.session_state["kline_fetching"] = False
+                st.rerun()

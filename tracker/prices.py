@@ -324,11 +324,11 @@ def get_quotes(
     return quotes, errors, notes
 
 
-def _yahoo_history(p: ParsedSymbol, months: int) -> pd.DataFrame:
-    start = (date.today() - timedelta(days=months * 31)).isoformat()
-    res = _obb().equity.price.historical(
-        symbol=p.yahoo, provider="yfinance", start_date=start
-    )
+def _yahoo_history(p: ParsedSymbol, start_date: str, end_date: str | None = None) -> pd.DataFrame:
+    kwargs = {"symbol": p.yahoo, "provider": "yfinance", "start_date": start_date}
+    if end_date:
+        kwargs["end_date"] = end_date
+    res = _obb().equity.price.historical(**kwargs)
     df = res.to_dataframe().reset_index()
     df = df.rename(columns={df.columns[0]: "date"})
     df = df.dropna(subset=["close"])
@@ -341,17 +341,20 @@ def _yahoo_history(p: ParsedSymbol, months: int) -> pd.DataFrame:
     return df
 
 
-def _akshare_history(p: ParsedSymbol, months: int) -> pd.DataFrame:
+def _akshare_history(p: ParsedSymbol, start_date: str, end_date: str | None = None) -> pd.DataFrame:
     ak = _ak()
-    start = (date.today() - timedelta(days=months * 31)).strftime("%Y%m%d")
+    start = start_date.replace("-", "")
+    end = end_date.replace("-", "") if end_date else None
     if p.market in (Market.CN, Market.BJ):
-        df = ak.stock_zh_a_hist(
-            symbol=p.yahoo.split(".")[0], period="daily", start_date=start, adjust="qfq"
-        )
+        kwargs = {"symbol": p.yahoo.split(".")[0], "period": "daily", "start_date": start, "adjust": "qfq"}
+        if end:
+            kwargs["end_date"] = end
+        df = ak.stock_zh_a_hist(**kwargs)
     else:
-        df = ak.stock_hk_hist(
-            symbol=p.ak_code, period="daily", start_date=start, adjust="qfq"
-        )
+        kwargs = {"symbol": p.ak_code, "period": "daily", "start_date": start, "adjust": "qfq"}
+        if end:
+            kwargs["end_date"] = end
+        df = ak.stock_hk_hist(**kwargs)
     df = df.rename(
         columns={
             "日期": "date",
@@ -373,8 +376,19 @@ def _akshare_crypto_history(p: ParsedSymbol, months: int) -> pd.DataFrame:
     raise RuntimeError("akshare 暂不支持加密货币历史数据")
 
 
-def get_history(symbol: str, months: int = 12, prefer_akshare: bool = False, use_ibkr: bool = False) -> pd.DataFrame:
+def get_history(
+    symbol: str,
+    months: int = 12,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    prefer_akshare: bool = False,
+    use_ibkr: bool = False,
+) -> pd.DataFrame:
     p = parse(symbol)
+    if start_date is None:
+        start_date = (date.today() - timedelta(days=months * 31)).isoformat()
+    if end_date is None:
+        end_date = date.today().isoformat()
     if use_ibkr:
         try:
             from . import ibkr as ibkr_mod
@@ -389,19 +403,19 @@ def get_history(symbol: str, months: int = 12, prefer_akshare: bool = False, use
             warnings.warn(f"IBKR 历史数据异常: {e}")
     if p.market in (Market.CN, Market.BJ, Market.HK):
         fns = (
-            [_akshare_history, _yahoo_history]
+            [lambda: _akshare_history(p, start_date, end_date), lambda: _yahoo_history(p, start_date, end_date)]
             if prefer_akshare
-            else [_yahoo_history, _akshare_history]
+            else [lambda: _yahoo_history(p, start_date, end_date), lambda: _akshare_history(p, start_date, end_date)]
         )
     elif p.market is Market.CRYPTO:
         # 加密货币: yfinance 历史数据 (equity.price.historical 支持 crypto), akshare 暂无历史接口
-        fns = [_yahoo_history, _akshare_crypto_history]
+        fns = [lambda: _yahoo_history(p, start_date, end_date), lambda: _akshare_crypto_history(p, months)]
     else:
-        fns = [_yahoo_history]
+        fns = [lambda: _yahoo_history(p, start_date, end_date)]
     last_err: Exception | None = None
     for fn in fns:
         try:
-            df = fn(p, months)
+            df = fn()
             if not df.empty:
                 return df
         except Exception as e:
@@ -415,6 +429,8 @@ def get_ohlc(
     prefer_akshare: bool = False,
     refresh: bool = False,
     use_ibkr: bool = False,
+    start_date: str | None = None,
+    end_date: str | None = None,
 ) -> pd.DataFrame:
     """K线日线数据 (date/open/high/low/close/volume, 升序), 带磁盘缓存与清洗.
 
@@ -423,11 +439,13 @@ def get_ohlc(
     from .charting import clean_ohlc
 
     p = parse(symbol)
-    if not refresh:
+    is_range = start_date is not None
+    cache_key = start_date or months
+    if not refresh and not is_range:
         cached = cache_mod.get_ohlc_cached(p.yahoo, months)
         if cached is not None:
             return cached
-    df = clean_ohlc(get_history(symbol, months=months, prefer_akshare=prefer_akshare, use_ibkr=use_ibkr))
-    if not df.empty:
+    df = clean_ohlc(get_history(symbol, months=months, start_date=start_date, end_date=end_date, prefer_akshare=prefer_akshare, use_ibkr=use_ibkr))
+    if not df.empty and not is_range:
         cache_mod.set_ohlc_cached(p.yahoo, months, df)
     return df

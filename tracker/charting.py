@@ -603,9 +603,37 @@ export default function (component) {
   var n = isCompare
     ? Math.max.apply(null, CFG.lines.map(function (l) { return l.data.length; }).concat([1]))
     : CFG.candles.length;
-  try {
-    chart.timeScale().setVisibleLogicalRange({ from: n - Math.min(n, CFG.initBars), to: n - 1 + 4 });
-  } catch (e) { chart.timeScale().fitContent(); }
+  if (CFG.preserveRange) {
+    try {
+      chart.timeScale().setVisibleLogicalRange(CFG.preserveRange);
+    } catch (e) {
+      try {
+        chart.timeScale().setVisibleLogicalRange({ from: n - Math.min(n, CFG.initBars), to: n - 1 + 4 });
+      } catch (e2) { chart.timeScale().fitContent(); }
+    }
+  } else {
+    try {
+      chart.timeScale().setVisibleLogicalRange({ from: n - Math.min(n, CFG.initBars), to: n - 1 + 4 });
+    } catch (e) { chart.timeScale().fitContent(); }
+  }
+
+  // 无限拖动: 监听可见区间变化, 当拖动到左侧边缘时通知 Python 拉取更早数据
+  var lastFetchTime = 0;
+  chart.timeScale().subscribeVisibleLogicalRangeChange(function(range) {
+    if (isCompare) return;
+    var now = Date.now();
+    if (now - lastFetchTime < 8000) return;
+    var totalBars = CFG.candles.length;
+    if (range && totalBars > 20 && range.from < totalBars * 0.2) {
+      lastFetchTime = now;
+      component.setValue({
+        need_more: true,
+        before: CFG.candles[0].time,
+        range: {from: range.from, to: range.to}
+      });
+    }
+  });
+
   return function () { try { chart.remove(); } catch (e) {} };
 }
 """
@@ -676,6 +704,7 @@ def kline_payload(
     height: int = 680,
     init_bars: int = 140,
     indicators: dict | None = None,
+    preserve_range: dict | None = None,
 ) -> dict:
     """生成传给 K线组件 (st.components.v2) 的数据 payload.
 
@@ -774,7 +803,7 @@ def kline_payload(
                 "jColor": KDJ_J_COLOR,
             }
 
-    return {
+    payload = {
         "title": title,
         "up": up,
         "down": down,
@@ -801,6 +830,9 @@ def kline_payload(
             },
         },
     }
+    if preserve_range:
+        payload["preserveRange"] = preserve_range
+    return payload
 
 
 # 多股对比折线配色 (与 MA 调色板区分, 首色取蓝便于与红绿涨跌色区分)

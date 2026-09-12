@@ -354,6 +354,124 @@ class TestSnapshotJson:
         assert data["summary"]["cost_coverage"] == 1.0
 
 
+class TestExportCli:
+    """export 子命令: 导出快照为 CSV / JSON / Markdown 报表."""
+
+    def _portfolio(self, tmp_path):
+        f = tmp_path / "p.json"
+        f.write_text(
+            json.dumps(
+                {
+                    "base_currency": "CNY",
+                    "holdings": [
+                        {"symbol": "AAPL", "quantity": 10, "avg_cost": 180},
+                        {"symbol": "600519.SS", "quantity": 100, "avg_cost": 1500},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return f
+
+    def _watchlist(self, tmp_path):
+        f = tmp_path / "w.json"
+        f.write_text(json.dumps({"watchlist": []}), encoding="utf-8")
+        return f
+
+    def _fake_quotes(self, symbols, prefer_akshare=False, use_ibkr=False):
+        data = {
+            "AAPL": Quote("AAPL", "Apple", 200.0, 195.0, 2.56, "USD"),
+            "600519.SS": Quote("600519.SS", "贵州茅台", 1600.0, 1580.0, 1.27, "CNY"),
+        }
+        return {s: data[s] for s in symbols if s in data}, {}, []
+
+    def _fake_fx(self, base, currencies, use_ibkr=False):
+        # 1 USD = 7.2 CNY, 1 CNY = 1 CNY
+        rates = {"CNY": 1.0, "USD": 7.2}
+        return {c: rates[c] for c in currencies if c in rates}, []
+
+    def _patch(self, monkeypatch):
+        monkeypatch.setattr(cli.prices, "get_quotes", self._fake_quotes)
+        monkeypatch.setattr("tracker.snapshot.get_fx_rates", self._fake_fx)
+
+    def test_export_json(self, tmp_path, capsys, monkeypatch):
+        self._patch(monkeypatch)
+        out = _run(
+            capsys, "export", "-f", "json",
+            "--portfolio", str(self._portfolio(tmp_path)),
+            "--watchlist-file", str(self._watchlist(tmp_path)),
+        )
+        data = json.loads(out)
+        assert data["base_currency"] == "CNY"
+        assert len(data["holdings"]) == 2
+        assert data["holdings"][0]["symbol"] in ("AAPL", "600519.SS")
+        assert data["summary"]["total_value"] is not None
+
+    def test_export_csv(self, tmp_path, capsys, monkeypatch):
+        self._patch(monkeypatch)
+        out = _run(
+            capsys, "export", "-f", "csv",
+            "--portfolio", str(self._portfolio(tmp_path)),
+            "--watchlist-file", str(self._watchlist(tmp_path)),
+        )
+        assert out.startswith("\ufeffsymbol,")
+        assert "AAPL" in out
+        assert "600519.SS" in out
+
+    def test_export_md(self, tmp_path, capsys, monkeypatch):
+        self._patch(monkeypatch)
+        out = _run(
+            capsys, "export", "-f", "md",
+            "--portfolio", str(self._portfolio(tmp_path)),
+            "--watchlist-file", str(self._watchlist(tmp_path)),
+        )
+        assert "# 投资组合快照" in out
+        assert "## 持仓明细" in out
+        assert "AAPL" in out
+        assert "## 市场分布" in out
+
+    def test_export_output_file(self, tmp_path, capsys, monkeypatch):
+        self._patch(monkeypatch)
+        out_f = tmp_path / "snapshot.json"
+        out = _run(
+            capsys, "export", "-f", "json", "-o", str(out_f),
+            "--portfolio", str(self._portfolio(tmp_path)),
+            "--watchlist-file", str(self._watchlist(tmp_path)),
+        )
+        assert "快照已导出" in out
+        data = json.loads(out_f.read_text(encoding="utf-8"))
+        assert len(data["holdings"]) == 2
+
+    def test_export_base_override(self, tmp_path, capsys, monkeypatch):
+        self._patch(monkeypatch)
+        out = _run(
+            capsys, "export", "-f", "json", "--base", "USD",
+            "--portfolio", str(self._portfolio(tmp_path)),
+            "--watchlist-file", str(self._watchlist(tmp_path)),
+        )
+        data = json.loads(out)
+        assert data["base_currency"] == "USD"
+
+
+class TestVersion:
+    """--version / -v 全局选项."""
+
+    def test_version_long(self, capsys):
+        with pytest.raises(SystemExit) as exc:
+            cli.main(["--version"])
+        assert exc.value.code == 0
+        out = capsys.readouterr().out
+        assert "tracker" in out
+        assert cli.VERSION in out
+
+    def test_version_short(self, capsys):
+        with pytest.raises(SystemExit) as exc:
+            cli.main(["-v"])
+        assert exc.value.code == 0
+        out = capsys.readouterr().out
+        assert cli.VERSION in out
+
+
 class TestParser:
     def test_subcommands_parse(self):
         for argv in (
@@ -365,6 +483,9 @@ class TestParser:
             ["portfolio", "add", "AAPL", "--quantity", "10", "--avg-cost", "180"],
             ["portfolio", "remove", "AAPL"],
             ["portfolio", "set-base", "USD"],
+            ["export", "-f", "json"],
+            ["export", "-f", "csv", "-o", "h.csv"],
+            ["export", "-f", "md", "--base", "USD"],
             ["fx", "USD", "CNY"],
             ["history", "AAPL"],
             ["kline", "AAPL"],

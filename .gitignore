@@ -25,6 +25,8 @@ ibkr.json
 .DS_Store
 
 # AI 编码工具生成的本地目录
+.agents/
+.claude/
 .codemap/
 .devin/
 .opencode/

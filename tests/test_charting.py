@@ -379,3 +379,203 @@ class TestKlineCli:
         out = self._run(capsys, "kline", "600519.SS")
         assert "K线图已生成" in out
         assert (tmp_path / "data" / "kline_600519_SS.html").exists()
+
+
+class TestMacd:
+    """MACD 指标计算测试."""
+
+    def test_columns_and_length(self):
+        df = _mk_df()
+        macd = charting.calc_macd(df)
+        assert list(macd.columns) == ["dif", "dea", "macd"]
+        assert len(macd) == len(df)
+
+    def test_dif_is_ema_difference(self):
+        # 单调上涨: DIF 应 >= 0 (首值为0, 后续为正)
+        df = pd.DataFrame({"close": [float(i) for i in range(100, 200)]})
+        macd = charting.calc_macd(df)
+        assert (macd["dif"].dropna() >= 0).all()
+        assert macd["dif"].iloc[-1] > 0  # 末值明确为正
+
+    def test_macd_hist_formula(self):
+        # MACD 柱 = 2 × (DIF - DEA)
+        df = _mk_df()
+        macd = charting.calc_macd(df)
+        expected = 2 * (macd["dif"] - macd["dea"])
+        pd.testing.assert_series_equal(macd["macd"], expected, check_names=False)
+
+    def test_golden_cross(self):
+        # 先跌后涨: DIF 从下方穿越 DEA (金叉), 至少存在 DIF > DEA 的点
+        prices = [100 - i for i in range(30)] + [70 + i * 2 for i in range(30)]
+        df = pd.DataFrame({"close": [float(p) for p in prices]})
+        macd = charting.calc_macd(df)
+        # 后半段 DIF 上穿 DEA
+        assert (macd["dif"].iloc[-1] > macd["dea"].iloc[-1])
+        # 前半段 DIF 在 DEA 下方 (死叉区间)
+        assert (macd["dif"].iloc[10] < macd["dea"].iloc[10])
+
+    def test_custom_params(self):
+        df = _mk_df()
+        m1 = charting.calc_macd(df, fast=5, slow=10, signal=3)
+        m2 = charting.calc_macd(df)  # 默认 12/26/9
+        # 不同参数应产生不同结果
+        assert not m1["dif"].equals(m2["dif"])
+
+
+class TestRsi:
+    """RSI 指标计算测试."""
+
+    def test_range_0_100(self):
+        df = _mk_df()
+        rsi = charting.calc_rsi(df)
+        valid = rsi.dropna()
+        assert (valid >= 0).all() and (valid <= 100).all()
+
+    def test_all_up_rsi_high(self):
+        # 持续上涨: RSI 应接近 100
+        df = pd.DataFrame({"close": [100.0 + i for i in range(50)]})
+        rsi = charting.calc_rsi(df)
+        assert rsi.iloc[-1] > 90
+
+    def test_all_down_rsi_low(self):
+        # 持续下跌: RSI 应接近 0
+        df = pd.DataFrame({"close": [200.0 - i for i in range(50)]})
+        rsi = charting.calc_rsi(df)
+        assert rsi.iloc[-1] < 10
+
+    def test_custom_period(self):
+        # 使用有涨有跌的数据, 不同周期应产生不同 RSI
+        prices = [100, 102, 99, 103, 98, 105, 97, 108, 95, 110, 96, 109]
+        df = pd.DataFrame({"close": [float(p) for p in prices]})
+        r7 = charting.calc_rsi(df, period=7)
+        r14 = charting.calc_rsi(df, period=14)
+        assert not r7.equals(r14)
+
+    def test_first_value_nan(self):
+        # 第一根无前值, diff 为 NaN → RSI 首值应为 NaN
+        df = _mk_df()
+        rsi = charting.calc_rsi(df)
+        assert pd.isna(rsi.iloc[0])
+
+
+class TestKdj:
+    """KDJ 指标计算测试."""
+
+    def test_columns_and_length(self):
+        df = _mk_df()
+        kdj = charting.calc_kdj(df)
+        assert list(kdj.columns) == ["k", "d", "j"]
+        assert len(kdj) == len(df)
+
+    def test_j_formula(self):
+        # J = 3K - 2D
+        df = _mk_df()
+        kdj = charting.calc_kdj(df)
+        expected = 3 * kdj["k"] - 2 * kdj["d"]
+        pd.testing.assert_series_equal(kdj["j"], expected, check_names=False)
+
+    def test_kd_range(self):
+        # K/D 由 RSV (0~100) EMA 而来, 应在合理范围内
+        df = _mk_df()
+        kdj = charting.calc_kdj(df)
+        valid_k = kdj["k"].dropna()
+        valid_d = kdj["d"].dropna()
+        assert (valid_k >= -20).all() and (valid_k <= 120).all()
+        assert (valid_d >= -20).all() and (valid_d <= 120).all()
+
+    def test_custom_params(self):
+        df = _mk_df()
+        k1 = charting.calc_kdj(df, n=5, m1=2, m2=2)
+        k2 = charting.calc_kdj(df)  # 默认 9/3/3
+        assert not k1["k"].equals(k2["k"])
+
+
+class TestBoll:
+    """布林带指标计算测试."""
+
+    def test_columns_and_length(self):
+        df = _mk_df()
+        boll = charting.calc_boll(df, period=5)
+        assert list(boll.columns) == ["upper", "middle", "lower"]
+        assert len(boll) == len(df)
+
+    def test_middle_is_ma(self):
+        # 中轨 = 收盘价 N 周期 SMA
+        df = _mk_df()
+        period = 5
+        boll = charting.calc_boll(df, period=period)
+        expected_ma = df["close"].rolling(window=period, min_periods=period).mean()
+        pd.testing.assert_series_equal(boll["middle"], expected_ma, check_names=False)
+
+    def test_upper_lower_symmetry(self):
+        # 上轨 - 中轨 = 中轨 - 下轨 = std × std_mult
+        df = _mk_df()
+        boll = charting.calc_boll(df, period=5, std=2.0)
+        diff_up = boll["upper"] - boll["middle"]
+        diff_lo = boll["middle"] - boll["lower"]
+        valid = diff_up.dropna()
+        pd.testing.assert_series_equal(
+            diff_up[valid.index], diff_lo[valid.index], check_names=False
+        )
+
+    def test_upper_above_middle_above_lower(self):
+        df = _mk_df()
+        boll = charting.calc_boll(df, period=5)
+        valid = boll.dropna()
+        assert (valid["upper"] >= valid["middle"]).all()
+        assert (valid["middle"] >= valid["lower"]).all()
+
+    def test_nan_before_period(self):
+        # 不足一个窗口的前段为 NaN
+        df = _mk_df()
+        boll = charting.calc_boll(df, period=5)
+        assert pd.isna(boll["middle"].iloc[0])
+        assert pd.isna(boll["middle"].iloc[3])
+        assert pd.notna(boll["middle"].iloc[4])
+
+
+class TestKlinePayloadIndicators:
+    """kline_payload 技术指标集成测试."""
+
+    def test_payload_with_all_indicators(self):
+        df = _mk_df()
+        indicators = {
+            "macd": {"fast": 5, "slow": 10, "signal": 3},
+            "rsi": {"period": 7},
+            "kdj": {"n": 5, "m1": 3, "m2": 3},
+            "boll": {"period": 5, "std": 2.0},
+        }
+        p = charting.kline_payload(df, "AAPL", indicators=indicators)
+        # 布林带: 3 条线 (上/中/下)
+        assert len(p["boll"]) == 3
+        assert p["boll"][0]["name"] == "BOLL上轨"
+        # MACD: dif/dea/hist 数据 + 颜色
+        assert p["macd"] is not None
+        assert len(p["macd"]["dif"]) > 0
+        assert len(p["macd"]["dea"]) > 0
+        assert len(p["macd"]["hist"]) > 0
+        assert "difColor" in p["macd"] and "deaColor" in p["macd"]
+        # RSI
+        assert p["rsi"] is not None
+        assert len(p["rsi"]["data"]) > 0
+        assert "color" in p["rsi"]
+        # KDJ
+        assert p["kdj"] is not None
+        assert len(p["kdj"]["k"]) > 0
+        assert len(p["kdj"]["d"]) > 0
+        assert len(p["kdj"]["j"]) > 0
+
+    def test_payload_no_indicators(self):
+        p = charting.kline_payload(_mk_df(), "AAPL")
+        assert p["boll"] == []
+        assert p["macd"] is None
+        assert p["rsi"] is None
+        assert p["kdj"] is None
+
+    def test_payload_partial_indicators(self):
+        df = _mk_df()
+        p = charting.kline_payload(df, "AAPL", indicators={"rsi": {"period": 7}})
+        assert p["boll"] == []
+        assert p["macd"] is None
+        assert p["rsi"] is not None
+        assert p["kdj"] is None

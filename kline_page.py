@@ -135,10 +135,10 @@ def render_kline_controls(prefer_akshare: bool) -> None:
             st.session_state["kline_symbol"] = str(v).strip().upper()
 
     if qs:
-        picked = st.pills("常用 (持仓/自选)", qs, key="kline_quick", on_change=_pick_quick)
-        if picked:
-            sel = picked[0] if isinstance(picked, (list, tuple)) else picked
-            ksym = str(sel).strip().upper()
+        # on_change 仅在 pill 真正被点击时触发 (状态保持的旧值不会重复触发),
+        # 回调负责把选中代码同步进输入框; 查询一律以输入框的值为准,
+        # 避免残留的 pill 选中项覆盖用户手动输入的代码。
+        st.pills("常用 (持仓/自选)", qs, key="kline_quick", on_change=_pick_quick)
 
     entered = st.button("🔍 查询 K线", type="primary", width="stretch")
     if not entered and not st.session_state.get("kline_submitted"):

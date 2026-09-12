@@ -105,6 +105,11 @@ def render_kline_view(
         st.caption(f"均线: {ma_txt} · 数据源与行情一致, 日K缓存 30 分钟")
 
 
+def render_compare_chart(data: dict, *, height: int = 560) -> None:
+    """多股对比图: 复用 K线组件 (拖动平移/滚轮缩放/十字光标), data 由 compare_payload 生成."""
+    _KLINE_CHART(key="compare_chart", data=data, height=height)
+
+
 def render_kline_controls(prefer_akshare: bool) -> None:
     """查询控件 + 拉取/渲染 (输入驱动: 无提交不取数)."""
     qs = quick_symbols()

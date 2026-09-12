@@ -310,7 +310,9 @@ KLINE_COMPONENT_CSS = """
 """
 
 # 组件 JS (ES module, 默认导出在挂载/数据变化时执行, 返回值作清理函数).
-# component.data 为 kline_payload() 生成的配置; parentElement 为 ShadowRoot.
+# component.data 为 kline_payload()/compare_payload() 生成的配置;
+# CFG.mode === 'compare' 时渲染多条折线 (多股对比), 否则为单只蜡烛图.
+# parentElement 为 ShadowRoot.
 _LWC_COMPONENT_MODULE = r"""
 export default function (component) {
   var CFG = typeof component.data === 'string'
@@ -321,33 +323,46 @@ export default function (component) {
   if (CFG.height) { el.parentElement.style.height = CFG.height + 'px'; }
   var LC = window.LightweightCharts;
   var chart = LC.createChart(el, CFG.options);
-  var candle = chart.addSeries(LC.CandlestickSeries, CFG.candleOpts);
-  candle.setData(CFG.candles);
-  var maSeries = CFG.mas.map(function (m) {
+  var isCompare = CFG.mode === 'compare';
+  var candle = null, volSeries = null, tracks = [];
+
+  function addLine(color, data) {
     var s = chart.addSeries(LC.LineSeries, {
-      color: m.color, lineWidth: 2,
+      color: color, lineWidth: 2,
       priceLineVisible: false, lastValueVisible: false,
       crosshairMarkerVisible: true, crosshairMarkerRadius: 3,
       priceFormat: { type: 'price', precision: CFG.precision, minMove: CFG.minMove }
     });
-    s.setData(m.data);
-    return { name: m.name, color: m.color, series: s, last: m.data[m.data.length - 1].value };
-  });
-  var volSeries = null;
-  if (CFG.volume.length) {
-    volSeries = chart.addSeries(LC.HistogramSeries, {
-      priceFormat: { type: 'volume' }, priceScaleId: '',
-      priceLineVisible: false, lastValueVisible: false
-    }, 1);
-    volSeries.setData(CFG.volume);
-    try {
-      var panes = chart.panes();
-      if (panes.length > 1) { panes[1].setStretchFactor(0.32); }
-    } catch (e) {}
+    s.setData(data);
+    return s;
+  }
+  if (isCompare) {
+    tracks = CFG.lines.map(function (ln) {
+      return { name: ln.name, color: ln.color, series: addLine(ln.color, ln.data), data: ln.data };
+    });
+  } else {
+    candle = chart.addSeries(LC.CandlestickSeries, CFG.candleOpts);
+    candle.setData(CFG.candles);
+    tracks = CFG.mas.map(function (m) {
+      return { name: m.name, color: m.color, series: addLine(m.color, m.data), data: m.data };
+    });
+    if (CFG.volume.length) {
+      volSeries = chart.addSeries(LC.HistogramSeries, {
+        priceFormat: { type: 'volume' }, priceScaleId: '',
+        priceLineVisible: false, lastValueVisible: false
+      }, 1);
+      volSeries.setData(CFG.volume);
+      try {
+        var panes = chart.panes();
+        if (panes.length > 1) { panes[1].setStretchFactor(0.32); }
+      } catch (e) {}
+    }
   }
 
   var timeIdx = {};
-  CFG.candles.forEach(function (b, i) { timeIdx[b.time] = i; });
+  if (!isCompare) {
+    CFG.candles.forEach(function (b, i) { timeIdx[b.time] = i; });
+  }
   function fp(v) { return v == null ? '—' : Number(v).toFixed(CFG.precision); }
   function fv(v) {
     if (v == null) return '—';
@@ -358,13 +373,55 @@ export default function (component) {
   function span(txt, color) {
     return '<span style="color:' + (color || '#c9d1d9') + '">' + txt + '</span>';
   }
+  function tstr(t) {
+    if (t == null) return '';
+    if (typeof t === 'string') return t;
+    if (typeof t === 'object' && t.year) {
+      return t.year + '-' + ('0' + t.month).slice(-2) + '-' + ('0' + t.day).slice(-2);
+    }
+    return String(t);
+  }
+  // 各市场交易日历不同: 按时间二分查找该系列 ≤ t 的最近取值
+  function valAt(tr, t) {
+    var lo = 0, hi = tr.data.length - 1, ans = null;
+    while (lo <= hi) {
+      var mid = (lo + hi) >> 1;
+      if (tr.data[mid].time <= t) { ans = tr.data[mid].value; lo = mid + 1; }
+      else { hi = mid - 1; }
+    }
+    return ans;
+  }
   function show(param) {
-    var bar = null, i = CFG.candles.length - 1, vol = null, maVals = null;
+    var h, i;
+    if (isCompare) {
+      var t = '';
+      tracks.forEach(function (tr) {
+        var lt = tr.data[tr.data.length - 1].time;
+        if (lt > t) { t = lt; }
+      });
+      if (param && param.time) { t = tstr(param.time); }
+      h = span(CFG.title + ' ', '#e8eaed') + ' ' + span(t, '#8b949e') + '&nbsp;&nbsp;';
+      tracks.forEach(function (tr) {
+        var v = valAt(tr, t);
+        var first = tr.data.length ? tr.data[0].value : null;
+        var pct = (v != null && first) ? (v / first - 1) * 100 : null;
+        h += ' ' + span(tr.name, tr.color) + ' ' + span(fp(v));
+        if (pct != null) {
+          h += ' ' + span('(' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%)',
+            pct >= 0 ? CFG.up : CFG.down);
+        }
+        h += '&nbsp;&nbsp;';
+      });
+      legend.innerHTML = h;
+      return;
+    }
+    var bar = null, vol = null, maVals = null;
+    i = CFG.candles.length - 1;
     if (param && param.seriesData) {
       var d = param.seriesData.get(candle);
       if (d && typeof d.open === 'number') { bar = d; i = timeIdx[d.time]; }
       if (volSeries) { var v = param.seriesData.get(volSeries); vol = v ? v.value : null; }
-      maVals = maSeries.map(function (m) {
+      maVals = tracks.map(function (m) {
         var mv = param.seriesData.get(m.series);
         return { name: m.name, color: m.color, value: mv ? mv.value : null };
       });
@@ -372,13 +429,15 @@ export default function (component) {
     if (!bar) {
       bar = CFG.candles[i];
       vol = CFG.volume.length ? CFG.volume[i].value : null;
-      maVals = maSeries.map(function (m) { return { name: m.name, color: m.color, value: m.last }; });
+      maVals = tracks.map(function (m) {
+        return { name: m.name, color: m.color, value: m.data[m.data.length - 1].value };
+      });
     }
     var prev = i > 0 ? CFG.candles[i - 1].close : bar.open;
     var pct = prev ? (bar.close / prev - 1) * 100 : 0;
     var dir = bar.close >= bar.open ? CFG.up : CFG.down;
     var pctColor = pct >= 0 ? CFG.up : CFG.down;
-    var h = span(CFG.title + ' ', '#e8eaed') + ' ' + span(bar.time, '#8b949e') + '&nbsp;&nbsp;'
+    h = span(CFG.title + ' ', '#e8eaed') + ' ' + span(bar.time, '#8b949e') + '&nbsp;&nbsp;'
       + '开' + span(fp(bar.open)) + ' 高' + span(fp(bar.high), dir)
       + ' 低' + span(fp(bar.low), dir) + ' 收' + span(fp(bar.close), dir)
       + ' ' + span((pct >= 0 ? '+' : '') + pct.toFixed(2) + '%', pctColor);
@@ -389,13 +448,64 @@ export default function (component) {
   chart.subscribeCrosshairMove(show);
   show(null);
 
-  var n = CFG.candles.length;
+  var n = isCompare
+    ? Math.max.apply(null, CFG.lines.map(function (l) { return l.data.length; }).concat([1]))
+    : CFG.candles.length;
   try {
     chart.timeScale().setVisibleLogicalRange({ from: n - Math.min(n, CFG.initBars), to: n - 1 + 4 });
   } catch (e) { chart.timeScale().fitContent(); }
   return function () { try { chart.remove(); } catch (e) {} };
 }
 """
+
+
+def _lwc_options() -> dict:
+    """lightweight-charts 通用图表选项 (K线与多股对比共用)."""
+    return {
+        "autoSize": True,
+        "layout": {
+            "background": {"type": "solid", "color": "#0e1117"},
+            "textColor": "#c9d1d9",
+            "fontSize": 12,
+            "fontFamily": "system-ui, -apple-system, sans-serif",
+            "panes": {
+                "separatorColor": "rgba(120,140,180,0.25)",
+                "separatorHoverColor": "rgba(120,140,180,0.6)",
+                "enableResize": True,
+            },
+        },
+        "grid": {
+            "vertLines": {"color": "rgba(120,140,180,0.07)"},
+            "horzLines": {"color": "rgba(120,140,180,0.07)"},
+        },
+        "crosshair": {
+            "mode": 0,
+            "vertLine": {
+                "color": "rgba(150,170,200,0.55)", "width": 1,
+                "style": 2, "labelBackgroundColor": "#2a2e39",
+            },
+            "horzLine": {
+                "color": "rgba(150,170,200,0.55)", "width": 1,
+                "style": 2, "labelBackgroundColor": "#2a2e39",
+            },
+        },
+        "rightPriceScale": {"borderColor": "rgba(120,140,180,0.25)"},
+        "timeScale": {
+            "borderColor": "rgba(120,140,180,0.25)",
+            "rightOffset": 4, "barSpacing": 9, "minBarSpacing": 1.2,
+            "timeVisible": False, "secondsVisible": False,
+        },
+        "handleScroll": {
+            "pressedMouseMove": True, "mouseWheel": True,
+            "horzTouchDrag": True, "vertTouchDrag": False,
+        },
+        "handleScale": {
+            "mouseWheel": True, "pinch": True,
+            "axisPressedMouseMove": True, "axisDoubleClickReset": True,
+        },
+        "kineticScroll": {"touch": True, "mouse": True},
+        "localization": {"locale": "zh-CN"},
+    }
 
 
 def kline_component_js() -> str:
@@ -465,51 +575,7 @@ def kline_payload(
         "candles": candles,
         "volume": vols if show_volume else [],
         "mas": ma_series,
-        "options": {
-            "autoSize": True,
-            "layout": {
-                "background": {"type": "solid", "color": "#0e1117"},
-                "textColor": "#c9d1d9",
-                "fontSize": 12,
-                "fontFamily": "system-ui, -apple-system, sans-serif",
-                "panes": {
-                    "separatorColor": "rgba(120,140,180,0.25)",
-                    "separatorHoverColor": "rgba(120,140,180,0.6)",
-                    "enableResize": True,
-                },
-            },
-            "grid": {
-                "vertLines": {"color": "rgba(120,140,180,0.07)"},
-                "horzLines": {"color": "rgba(120,140,180,0.07)"},
-            },
-            "crosshair": {
-                "mode": 0,
-                "vertLine": {
-                    "color": "rgba(150,170,200,0.55)", "width": 1,
-                    "style": 2, "labelBackgroundColor": "#2a2e39",
-                },
-                "horzLine": {
-                    "color": "rgba(150,170,200,0.55)", "width": 1,
-                    "style": 2, "labelBackgroundColor": "#2a2e39",
-                },
-            },
-            "rightPriceScale": {"borderColor": "rgba(120,140,180,0.25)"},
-            "timeScale": {
-                "borderColor": "rgba(120,140,180,0.25)",
-                "rightOffset": 4, "barSpacing": 9, "minBarSpacing": 1.2,
-                "timeVisible": False, "secondsVisible": False,
-            },
-            "handleScroll": {
-                "pressedMouseMove": True, "mouseWheel": True,
-                "horzTouchDrag": True, "vertTouchDrag": False,
-            },
-            "handleScale": {
-                "mouseWheel": True, "pinch": True,
-                "axisPressedMouseMove": True, "axisDoubleClickReset": True,
-            },
-            "kineticScroll": {"touch": True, "mouse": True},
-            "localization": {"locale": "zh-CN"},
-        },
+        "options": _lwc_options(),
         "candleOpts": {
             "upColor": up, "downColor": down,
             "wickUpColor": up, "wickDownColor": down,
@@ -520,6 +586,63 @@ def kline_payload(
                 "type": "price", "precision": precision, "minMove": 10 ** -precision,
             },
         },
+    }
+
+
+# 多股对比折线配色 (与 MA 调色板区分, 首色取蓝便于与红绿涨跌色区分)
+COMPARE_PALETTE = ("#4ea1f3", "#f7d774", "#c883f0", "#ff9f43", "#2ccbc3", "#e15b64", "#8d9db6")
+
+
+def compare_payload(
+    frames: dict[str, pd.DataFrame],
+    *,
+    normalize: bool = True,
+    period: str = "daily",
+    green_up: bool = False,
+    height: int = 560,
+    init_bars: int = 140,
+) -> dict:
+    """多股对比 payload (复用 K线组件): 每只代码一条收盘价折线.
+
+    normalize=True 时各代码按自身区间首个收盘归一化为 100 起点,
+    便于不同币种/量级的代码同图比较; 交易日历不同的市场按各自数据点绘制.
+    """
+    lines = []
+    for i, (sym, df) in enumerate(frames.items()):
+        d = resample_ohlc(df, period) if period != "daily" else clean_ohlc(df)
+        if d.empty:
+            continue
+        close = d["close"].astype(float)
+        base = float(close.iloc[0])
+        vals = close / base * 100 if normalize and base > 0 else close
+        data = [
+            {"time": t, "value": round(float(v), 4)}
+            for t, v in zip(d["date"].dt.strftime("%Y-%m-%d"), vals)
+            if pd.notna(v)
+        ]
+        if data:
+            lines.append(
+                {"name": sym, "color": COMPARE_PALETTE[i % len(COMPARE_PALETTE)], "data": data}
+            )
+    if not lines:
+        raise ValueError("无有效对比数据")
+    names = " vs ".join(l["name"] for l in lines[:4]) + (" …" if len(lines) > 4 else "")
+    up, down = (INTL_UP_COLOR, INTL_DOWN_COLOR) if green_up else (CN_UP_COLOR, CN_DOWN_COLOR)
+    return {
+        "mode": "compare",
+        "title": f"{names} · {PERIOD_LABELS.get(period, '日K')}"
+        + (" · 归一化" if normalize else ""),
+        "up": up,
+        "down": down,
+        "precision": 2,
+        "minMove": 0.01,
+        "initBars": init_bars,
+        "height": height,
+        "lines": lines,
+        "candles": [],
+        "volume": [],
+        "mas": [],
+        "options": _lwc_options(),
     }
 
 

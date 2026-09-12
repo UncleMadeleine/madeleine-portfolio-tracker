@@ -11,7 +11,7 @@ import streamlit as st
 
 import kline_page
 
-from tracker import prices
+from tracker import charting, prices
 from tracker.analytics import build_view, summarize
 from tracker.fx import get_fx_rates
 from tracker.symbols import parse
@@ -75,11 +75,6 @@ def cached_quotes(symbols: tuple[str, ...], prefer_akshare: bool, use_ibkr: bool
 @st.cache_data(ttl=600, show_spinner=False)
 def cached_fx(base: str, currencies: tuple[str, ...]):
     return get_fx_rates(base, list(currencies))
-
-
-@st.cache_data(ttl=1800, show_spinner=False)
-def cached_history(symbol: str, prefer_akshare: bool):
-    return prices.get_history(symbol, months=12, prefer_akshare=prefer_akshare)
 
 
 def fmt(v, digits: int = 2) -> str:
@@ -427,36 +422,68 @@ if st.session_state.app_page == "portfolio":
                 + (wview_all["symbol"].tolist() if not wview_all.empty else [])
             )
         )
-        if not chart_symbols:
-            st.info("暂无可展示的代码。")
+        c1, c2, c3, c4 = st.columns([4, 1, 1, 1], vertical_alignment="bottom")
+        sel_raw = c1.multiselect(
+            "对比代码",
+            chart_symbols,
+            default=chart_symbols[:2],
+            accept_new_options=True,
+            key="compare_sel",
+            placeholder="选择持仓/自选, 或直接输入任意代码 (如 NVDA)",
+        )
+        cmp_months = c2.selectbox(
+            "范围", [3, 6, 12, 24, 36], index=2,
+            format_func=lambda m: f"近 {m} 个月", key="compare_months",
+        )
+        cmp_period = c3.selectbox(
+            "周期", ["daily", "weekly", "monthly"], index=0,
+            format_func=lambda v: charting.PERIOD_LABELS[v], key="compare_period",
+        )
+        norm = c4.toggle("归一化 (起点=100)", value=True, key="compare_norm")
+
+        sel, bad = [], []
+        for s in sel_raw:
+            y = kline_page.normalize_or_none(s)
+            (sel if y is not None else bad).append(y if y is not None else s)
+        sel = list(dict.fromkeys(sel))
+        if bad:
+            st.error(f"无法识别: {', '.join(bad)}")
+        if not sel:
+            st.info("选择持仓/自选代码, 或直接输入任意代码 (如 NVDA · 600519.SS) 开始对比。")
         else:
-            default_sel = chart_symbols[:3]
-            sel = st.multiselect("选择代码 (近 12 个月收盘价)", chart_symbols, default=default_sel)
-            norm = st.toggle("归一化 (起点=100)", value=True)
             frames = {}
-            if sel:
-                with st.spinner(f"拉取 {len(sel)} 只代码的 12 个月历史..."):
-                    for s in sel:
-                        try:
-                            h = cached_history(s, prefer_akshare)
-                            srs = pd.Series(
-                                h["close"].astype(float).tolist(),
-                                index=pd.to_datetime(h["date"]),
-                                name=s,
-                            )
-                            frames[s] = srs
-                        except Exception as e:
-                            st.warning(f"{s}: {e}")
+            with st.spinner(f"拉取 {len(sel)} 只代码近 {cmp_months} 个月 K线..."):
+                for s in sel:
+                    try:
+                        d = kline_page.cached_kline(s, cmp_months, prefer_akshare)
+                        if d.empty:
+                            st.warning(f"{s}: 无有效K线数据")
+                        else:
+                            frames[s] = d
+                    except Exception as e:
+                        st.warning(f"{s}: {e}")
             if frames:
-                px_df = pd.DataFrame(frames)
-                px_df = px_df.ffill().dropna(how="all")
-                if norm and not px_df.empty:
-                    firsts = px_df.apply(lambda col: col.dropna().iloc[0])
-                    px_df = px_df / firsts * 100
-                y_label = "归一化" if norm else "收盘价 (当地货币)"
-                fig = px.line(px_df, labels={"value": y_label, "variable": "代码"})
-                fig.update_layout(legend_title="代码")
-                st.plotly_chart(fig, width="stretch")
+                kline_page.render_compare_chart(
+                    charting.compare_payload(
+                        frames, normalize=norm, period=cmp_period
+                    ),
+                    height=560,
+                )
+                chg = []
+                for sym, d in frames.items():
+                    dd = charting.resample_ohlc(d, cmp_period) if cmp_period != "daily" else d
+                    if len(dd) >= 2:
+                        pct = float(dd["close"].iloc[-1]) / float(dd["close"].iloc[0]) - 1
+                        chg.append(
+                            f"{sym} {':red' if pct >= 0 else ':green'}[{pct:+.2%}]"
+                        )
+                if chg:
+                    st.markdown("区间涨跌: " + " · ".join(chg))
+                if norm:
+                    st.caption(
+                        "各代码按自身区间首个收盘归一化 (=100); 不同市场按各自交易日绘制, "
+                        "拖动平移 / 滚轮缩放, 悬停查看当日各代码取值。"
+                    )
 
     with tab4:
         if not watch.get("watchlist"):

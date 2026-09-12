@@ -66,6 +66,7 @@ def render_kline_view(
     show_volume: bool,
     green_up: bool,
     currency: str | None,
+    indicators: dict | None = None,
 ) -> None:
     """K线图 + 摘要指标 (供 K线页面与 CLI 内嵌使用, 纯渲染无取数)."""
     if period != "daily":
@@ -77,6 +78,7 @@ def render_kline_view(
         data=charting.kline_payload(
             kdf, symbol, currency=currency, mas=tuple(mas),
             show_volume=show_volume, green_up=green_up, period=period,
+            indicators=indicators,
         ),
         height=680,
     )
@@ -142,6 +144,25 @@ def render_kline_controls(prefer_akshare: bool) -> None:
     kvol = opt2.toggle("成交量", value=True, key="kline_vol")
     kgreen = opt3.toggle("绿涨红跌 (国际配色)", value=False, key="kline_color")
 
+    # 技术指标选择 (多选 + 可调参数)
+    ind_sel = st.multiselect(
+        "技术指标", ["MACD", "RSI", "KDJ", "布林带"], default=[], key="kline_indicators",
+    )
+    indicators: dict = {}
+    if ind_sel:
+        ic1, ic2, ic3, ic4 = st.columns(4)
+        if "RSI" in ind_sel:
+            rsi_period = ic1.slider("RSI 周期", 2, 30, 14, key="kline_rsi_period")
+            indicators["rsi"] = {"period": rsi_period}
+        if "布林带" in ind_sel:
+            boll_period = ic2.slider("布林带周期", 5, 60, 20, key="kline_boll_period")
+            boll_std = ic3.slider("标准差倍数", 1.0, 4.0, 2.0, 0.5, key="kline_boll_std")
+            indicators["boll"] = {"period": boll_period, "std": boll_std}
+        if "MACD" in ind_sel:
+            indicators["macd"] = {}  # 使用默认参数 12/26/9
+        if "KDJ" in ind_sel:
+            indicators["kdj"] = {}  # 使用默认参数 9/3/3
+
     st.caption(
         "代码规范: 美股 AAPL · A股 600519.SS · 港股 0700.HK · 德股 SAP.DE · "
         "英股 BP.L · 加股 RY.TO · 澳股 BHP.AX · 加密货币 BTC-USD"
@@ -190,4 +211,5 @@ def render_kline_controls(prefer_akshare: bool) -> None:
     render_kline_view(
         kdf, yahoo, period=kperiod, mas=kmas,
         show_volume=kvol, green_up=kgreen, currency=kcur,
+        indicators=indicators or None,
     )

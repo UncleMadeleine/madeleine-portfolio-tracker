@@ -113,6 +113,7 @@ def render_compare_chart(data: dict, *, height: int = 560) -> None:
 def render_kline_controls(prefer_akshare: bool) -> None:
     """查询控件 + 拉取/渲染 (输入驱动: 无提交不取数)."""
     qs = quick_symbols()
+    st.markdown("### :material/candlestick_chart: K线查询")
     c1, c2, c3, c4 = st.columns([3, 1, 1, 1], vertical_alignment="bottom")
     ksym = c1.text_input(
         "代码",
@@ -131,15 +132,15 @@ def render_kline_controls(prefer_akshare: bool) -> None:
     )
     # 回车提交: text_input 回车 rerun 时 value 已变, 据此标记为已提交
     entered = st.session_state.get("kline_last_symbol") != ksym
-    if c4.button("🔍 查询", type="primary"):
+    if c4.button("查询", type="primary", icon=":material/search:"):
         entered = True
 
-    kc4, kc5 = st.columns(2)
-    kmas = kc4.multiselect(
+    opt1, opt2, opt3 = st.columns([1, 1, 2])
+    kmas = opt1.multiselect(
         "均线", [5, 10, 20, 30, 60, 120, 250], default=[5, 20, 60], key="kline_ma",
     )
-    kvol = kc5.checkbox("成交量", value=True, key="kline_vol")
-    kgreen = kc5.checkbox("绿涨红跌 (国际配色)", value=False, key="kline_color")
+    kvol = opt2.toggle("成交量", value=True, key="kline_vol")
+    kgreen = opt3.toggle("绿涨红跌 (国际配色)", value=False, key="kline_color")
 
     st.caption(
         "代码规范: 美股 AAPL · A股 600519.SS · 港股 0700.HK · 德股 SAP.DE · "

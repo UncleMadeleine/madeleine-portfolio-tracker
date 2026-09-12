@@ -117,47 +117,53 @@ if not watch.get("watchlist"):
     watch["watchlist"] = []
 
 with st.sidebar:
-    st.title("📈 组合追踪")
-    page = st.radio(
+    st.markdown(
+        ":material/candlestick_chart: **组合追踪**",
+        help="多市场持仓 + 自选提醒 · 数据源 Yahoo/akshare",
+    )
+    page = st.segmented_control(
         "页面",
-        ["📊 投资组合", "🕯 K线"],
-        index=0 if st.session_state.app_page == "portfolio" else 1,
+        [":material/pie_chart: 组合", ":material/candlestick_chart: K线"],
+        default=[":material/pie_chart: 组合"]
+        if st.session_state.app_page == "portfolio"
+        else [":material/candlestick_chart: K线"],
+        label_visibility="collapsed",
         key="app_page_radio",
     )
-    st.session_state.app_page = "portfolio" if page == "📊 投资组合" else "kline"
+    if page is None:  # segmented_control 允许取消选中: 保持原页面
+        page = ":material/pie_chart: 组合" if st.session_state.app_page == "portfolio" else ":material/candlestick_chart: K线"
+    st.session_state.app_page = "kline" if "K线" in str(page) else "portfolio"
     base = st.selectbox(
         "基础货币", BASE_CURRENCIES,
         index=BASE_CURRENCIES.index(saved_base) if saved_base in BASE_CURRENCIES else 0,
         key="base_currency",
         on_change=_on_base_change,
     )
-    prefer_akshare = st.checkbox("A股/港股优先 akshare (国内网络)", value=False)
-    use_ibkr = st.checkbox(
-        "🔗 IBKR 行情 (需本机 IB Gateway)",
+    prefer_akshare = st.toggle("A股/港股优先 akshare (国内网络)", value=False)
+    use_ibkr = st.toggle(
+        "IBKR 行情 (需本机 IB Gateway)",
         value=False,
         help="启用后优先从 IBKR 获取行情 (有订阅则为实时), 失败自动回退 Yahoo/akshare。连接参数见 ibkr.json (mode: paper=4002 / live=4001)",
     )
 
     if st.session_state.app_page == "portfolio":
-        with st.expander("💼 持仓管理", expanded=True):
-            with st.expander("📋 股票列表", expanded=True):
-                st.caption("代码规范: AAPL · SAP.DE · BP.L · RY.TO · BHP.AX · 0700.HK · 600519.SS")
-                df_h = pd.DataFrame(
-                    portfolio.get("holdings", []), columns=["symbol", "quantity", "avg_cost"]
-                )
-                edited = st.data_editor(
-                    df_h,
-                    num_rows="dynamic",
-                    key="holdings_editor",
-                    width="stretch",
-                    column_config={
-                        "symbol": st.column_config.TextColumn("代码", help="Yahoo 规范代码"),
-                        "quantity": st.column_config.NumberColumn("数量", min_value=0.0),
-                        "avg_cost": st.column_config.NumberColumn("成本(当地货币)", min_value=0.0),
-                    },
-                )
+        with st.expander(":material/edit_note: 持仓管理", expanded=True):
+            st.caption("代码规范: AAPL · SAP.DE · BP.L · RY.TO · BHP.AX · 0700.HK · 600519.SS")
+            df_h = pd.DataFrame(
+                portfolio.get("holdings", []), columns=["symbol", "quantity", "avg_cost"]
+            )
+            edited = st.data_editor(
+                df_h,
+                num_rows="dynamic",
+                key="holdings_editor",
+                column_config={
+                    "symbol": st.column_config.TextColumn("代码", help="Yahoo 规范代码"),
+                    "quantity": st.column_config.NumberColumn("数量", min_value=0.0),
+                    "avg_cost": st.column_config.NumberColumn("成本 (当地货币)", min_value=0.0),
+                },
+            )
             c1, c2 = st.columns(2)
-            if c1.button("💾 保存持仓", width="stretch"):
+            if c1.button("保存", icon=":material/save:", width="stretch", key="save_holdings"):
                 rows = edited.dropna(subset=["symbol"]).to_dict("records")
                 bad, dups = [], []
                 seen = set()
@@ -192,11 +198,11 @@ with st.sidebar:
                         st.toast("持仓已保存 (重复行已移除)")
                     else:
                         st.toast("持仓已保存")
-            if c2.button("↩️ 重载持仓", width="stretch"):
+            if c2.button("重载", icon=":material/refresh:", width="stretch", key="reload_holdings"):
                 st.session_state.pop("holdings_editor", None)
                 st.rerun()
 
-        with st.expander("🎯 自选提醒", expanded=False):
+        with st.expander(":material/notifications: 自选提醒", expanded=False):
             if not watch.get("watchlist"):
                 watch["watchlist"] = []
             st.caption(
@@ -215,7 +221,7 @@ with st.sidebar:
                     lambda v: ", ".join(v) if isinstance(v, list) else (str(v) if v else "")
                 )
             c3, c4 = st.columns(2)
-            if c3.button("💾 保存自选", width="stretch"):
+            if c3.button("保存", icon=":material/save:", width="stretch", key="save_watchlist"):
                 rows = []
                 bad, dups = [], []
                 seen = set()
@@ -253,7 +259,7 @@ with st.sidebar:
                         st.toast("自选已保存 (重复行已移除)")
                     else:
                         st.toast("自选已保存")
-            if c4.button("↩️ 重载自选", width="stretch"):
+            if c4.button("重载", icon=":material/refresh:", width="stretch", key="reload_watchlist"):
                 st.session_state.pop("watchlist_editor", None)
                 st.rerun()
 
@@ -304,27 +310,6 @@ if st.session_state.app_page == "portfolio":
         issues += view_issues + [f"汇率缺失: {c}" for c in fx_missing]
         summary = summarize(view)
         m = summary
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric(f"总市值 ({base})", fmt(m["total_value"]))
-        cov = m.get("cost_coverage")
-        col2.metric(
-            f"浮动盈亏 ({base})",
-            fmt(m["total_pnl"]),
-            (
-                f"{m['total_pnl_pct']:+.2%} (覆盖 {cov:.0%})"
-                if m["total_pnl_pct"] is not None and cov is not None and cov < 1.0
-                else f"{m['total_pnl_pct']:+.2%}" if m["total_pnl_pct"] is not None
-                else None
-            ),
-            delta_color="inverse",  # 红涨绿跌: 盈亏为正显示红色
-        )
-        col3.metric(
-            f"今日估算 ({base})",
-            fmt(m["today_pnl"]),
-            None if m["today_pnl"] is None else f"{m['today_pnl']:+,.0f}",
-            delta_color="inverse",
-        )
-        col4.metric("持仓", f"{len(view)} / {len(holding_symbols)}")
     else:
         view = pd.DataFrame()
 
@@ -332,14 +317,69 @@ if st.session_state.app_page == "portfolio":
     issues += wissues_all
     trig_all = triggered_entries(wview_all)
 
-    st.caption(f"数据时间: {datetime.now():%Y-%m-%d %H:%M} · 免费数据源有延迟, 仅供参考")
-
+    # ---- 顶部: 页头 + KPI 卡片 (券商 App 风格: 关键数字前置) ----
+    head_l, head_r = st.columns([3, 1])
+    head_l.markdown("### 组合总览")
+    head_r.caption(
+        f":material/schedule: {datetime.now():%m-%d %H:%M}",
+        help="免费数据源有延迟 (非美股 15-30 分钟), 仅供参考",
+    )
     if notes:
         for n in notes:
-            st.info(n)
+            st.caption(f":material/info: {n}")
+
+    if not view.empty:
+        cov = m.get("cost_coverage")
+        pnl_delta = (
+            f"{m['total_pnl_pct']:+.2%} (覆盖 {cov:.0%})"
+            if m["total_pnl_pct"] is not None and cov is not None and cov < 1.0
+            else f"{m['total_pnl_pct']:+.2%}" if m["total_pnl_pct"] is not None
+            else None
+        )
+        with st.container(horizontal=True):
+            st.metric(f"总市值 ({base})", fmt(m["total_value"]), border=True)
+            st.metric(
+                f"浮动盈亏 ({base})",
+                fmt(m["total_pnl"]),
+                pnl_delta,
+                delta_color="inverse",  # 红涨绿跌: 盈亏为正显示红色
+                border=True,
+            )
+            st.metric(
+                f"今日估算 ({base})",
+                fmt(m["today_pnl"]),
+                None if m["today_pnl"] is None else f"{m['today_pnl']:+,.0f}",
+                delta_color="inverse",
+                border=True,
+            )
+            st.metric(
+                "持仓 / 自选",
+                f"{len(view)} / {len(wview_all)}",
+                border=True,
+            )
+
+    # ---- 阈值告警前置 (最关键信息, 类似券商推送条) ----
+    if not trig_all.empty:
+        with st.container(border=True):
+            top, more = st.columns([5, 1], vertical_alignment="center")
+            top.markdown(
+                f":material/notifications_active: **{len(trig_all)} 只自选触及价格阈值** · "
+                + " · ".join(
+                    f"**:red[{r['symbol']}]** {r['status'].split(' ', 1)[1]}"
+                    for _, r in trig_all.iterrows()
+                )
+            )
+            with more.popover("详情", icon=":material/expand_more:", width="stretch"):
+                for _, r in trig_all.iterrows():
+                    st.markdown(
+                        f"**{r['symbol']}** {r['status']}  \n"
+                        f"现价 {r['price']:,.2f} {r['currency']}"
+                        + (f" · {r['note']}" if r["note"] else "")
+                    )
+
 
     if errors or issues:
-        with st.expander(f"⚠ 数据问题 ({len(errors) + len(issues)})"):
+        with st.expander(f":material/warning: 数据问题 ({len(errors) + len(issues)})", icon=":material/warning:"):
             for k, v in errors.items():
                 st.write(f"- {k}: {v}")
             for i in issues:
@@ -347,10 +387,10 @@ if st.session_state.app_page == "portfolio":
 
     tab1, tab4, tab2, tab3 = st.tabs(
         [
-            "💼 持仓明细",
-            f"🎯 自选观察{' 🔔' + str(len(trig_all)) if len(trig_all) else ''}",
-            "🥧 资产配置",
-            "📈 走势对比",
+            ":material/table_chart: 持仓明细",
+            f":material/visibility: 自选观察{' :red[🔔' + str(len(trig_all)) + ']' if len(trig_all) else ''}",
+            ":material/donut_large: 资产配置",
+            ":material/show_chart: 走势对比",
         ]
     )
     with tab1:
@@ -361,32 +401,41 @@ if st.session_state.app_page == "portfolio":
             st.dataframe(
                 styled,
                 width="stretch",
+                height=min(120 + 35 * len(view), 560),
                 hide_index=True,
                 column_config={
-                    "symbol": st.column_config.TextColumn("代码"),
-                    "name": st.column_config.TextColumn("名称"),
-                    "market": st.column_config.TextColumn("市场"),
-                    "currency": st.column_config.TextColumn("币种"),
-                    "price": st.column_config.NumberColumn("现价", format="%.3f"),
-                    "change_pct": st.column_config.NumberColumn("涨跌%", format="%.2f%%"),
-                    "quantity": st.column_config.NumberColumn("数量", format="%.6g"),
-                    "avg_cost": st.column_config.NumberColumn("成本(当地)", format="%.4f"),
-                    "market_value": st.column_config.NumberColumn(f"市值({base})", format="%.2f"),
-                    "cost": st.column_config.NumberColumn(f"成本({base})", format="%.2f"),
-                    "pnl": st.column_config.NumberColumn(f"盈亏({base})", format="%.2f"),
-                    "pnl_pct": st.column_config.NumberColumn("盈亏%", format="%.2f%%"),
+                    "symbol": st.column_config.TextColumn("代码", pinned=True, width="small"),
+                    "name": st.column_config.TextColumn("名称", width="medium"),
+                    "market": st.column_config.TextColumn("市场", width="small"),
+                    "currency": st.column_config.TextColumn("币种", width="small"),
+                    "price": st.column_config.NumberColumn("现价", format="%.3f", width="small"),
+                    "change_pct": st.column_config.NumberColumn(
+                        "涨跌%", format="%+.2f%%", width="small"
+                    ),
+                    "quantity": st.column_config.NumberColumn("数量", format="%,!.6f", width="small"),
+                    "avg_cost": st.column_config.NumberColumn("成本(当地)", format="%.4f", width="small"),
+                    "market_value": st.column_config.NumberColumn(
+                        f"市值({base})", format="%,.0f", width="small"
+                    ),
+                    "cost": st.column_config.NumberColumn(f"成本({base})", format="%,.0f", width="small"),
+                    "pnl": st.column_config.NumberColumn(f"盈亏({base})", format="%+,.0f", width="small"),
+                    "pnl_pct": st.column_config.NumberColumn("盈亏%", format="%+.2f%%", width="small"),
                     "weight": None,
                     "weight_pct": st.column_config.ProgressColumn(
-                        "权重", min_value=0, max_value=100, format="%.1f%%"
+                        "权重", min_value=0, max_value=100, format="%.1f%%", width="small"
                     ),
-                    "today_pnl": st.column_config.NumberColumn(f"今日({base})", format="%.2f"),
+                    "today_pnl": st.column_config.NumberColumn(
+                        f"今日({base})", format="%+,.0f", width="small"
+                    ),
                 },
             )
-            st.download_button(
+            dl_l, dl_r = st.columns([1, 3])
+            dl_l.download_button(
                 "导出 CSV",
                 view.to_csv(index=False).encode("utf-8-sig"),
                 file_name=f"portfolio_{datetime.now():%Y%m%d}.csv",
                 mime="text/csv",
+                icon=":material/download:",
             )
 
     with tab2:
@@ -489,35 +538,38 @@ if st.session_state.app_page == "portfolio":
         if not watch.get("watchlist"):
             st.info("自选为空。在左侧「自选提醒」中添加代码与价格阈值。")
         else:
-            scope = st.selectbox("查看范围", ["全部"] + list_names(watch))
+            names = list_names(watch)
+            fl1, fl2 = st.columns([3, 2])
+            scope = fl1.selectbox(
+                "查看范围", ["全部"] + names, help="按所属列表过滤 (在左侧自选提醒中维护)",
+            )
+            sort_mode = fl2.selectbox(
+                "排序",
+                ["默认 (触发优先)", "阈值等级", "当日涨跌幅 ↓", "当日涨跌幅 ↑"],
+                label_visibility="collapsed",
+            )
             display_entries = entries_for(watch, None if scope == "全部" else scope)
             wview, wissues_scope = build_watchlist_view(display_entries, quotes)
             trig = triggered_entries(wview)
             for i in wissues_scope:
-                st.caption(f"⚠ {i}")
+                st.caption(f":material/warning: {i}")
             if not trig.empty:
-                st.warning(f"🔔 {len(trig)} 只自选触及价格阈值:")
                 for _, r in trig.iterrows():
-                    st.write(
-                        f"- **{r['symbol']}** {r['status']}  现价 "
-                        f"{r['price']:,.2f} {r['currency']}"
-                        + (f"  · {r['note']}" if r["note"] else "")
+                    st.warning(
+                        f"**{r['symbol']}** {r['status']} · 现价 {r['price']:,.2f} {r['currency']}"
+                        + (f" · {r['note']}" if r["note"] else ""),
+                        icon=":material/notifications_active:",
                     )
             else:
-                st.success("自选中暂无阈值触发。")
+                st.caption(":material/check_circle: 自选中暂无阈值触发")
             st.caption(
-                f"当前查看: {scope} · 阈值按当地货币; 两级触发: I 为预警线 / II 为强提醒线; "
+                f"当前查看: {scope} · 阈值按当地货币; I 为预警线 / II 为强提醒线; "
                 "距离 = 还需变动百分之几才触发 (负值=已越过)。"
             )
             if not wview.empty:
-                sort_mode = st.selectbox(
-                    "排序方式",
-                    ["默认 (触发优先 + 代码)", "阈值等级 (严重→温和)", "当日涨跌幅 ↓", "当日涨跌幅 ↑"],
-                    label_visibility="collapsed",
-                )
                 mode_map = {
-                    "默认 (触发优先 + 代码)": "default",
-                    "阈值等级 (严重→温和)": "severity",
+                    "默认 (触发优先)": "default",
+                    "阈值等级": "severity",
                     "当日涨跌幅 ↓": "change_desc",
                     "当日涨跌幅 ↑": "change_asc",
                 }
@@ -525,9 +577,9 @@ if st.session_state.app_page == "portfolio":
             styled_w = wview.style.map(
                 _pnl_color, subset=["change_pct"]
             ).map(
-                lambda v: "color: #ef232a; font-weight: 600" if str(v).startswith(("🟠", "🔴")) else (
+                lambda v: f"color: {UP_COLOR}; font-weight: 600" if str(v).startswith(("🟠", "🔴")) else (
                     "color: #f0a30a; font-weight: 600" if str(v).startswith("🟡") else (
-                        "color: #14b143; font-weight: 600" if str(v).startswith("🟢") else ""
+                        f"color: {DOWN_COLOR}; font-weight: 600" if str(v).startswith("🟢") else ""
                     )
                 ),
                 subset=["status"],
@@ -535,24 +587,27 @@ if st.session_state.app_page == "portfolio":
             st.dataframe(
                 styled_w,
                 width="stretch",
+                height=min(120 + 35 * len(wview), 560) if not wview.empty else None,
                 hide_index=True,
                 column_config={
-                    "symbol": st.column_config.TextColumn("代码"),
-                    "name": st.column_config.TextColumn("名称"),
-                    "market": st.column_config.TextColumn("市场"),
-                    "currency": st.column_config.TextColumn("币种"),
-                    "price": st.column_config.NumberColumn("现价", format="%.3f"),
-                    "change_pct": st.column_config.NumberColumn("涨跌%", format="%.2f%%"),
-                    "upper_1": st.column_config.NumberColumn("上限 I", format="%.2f"),
-                    "upper_2": st.column_config.NumberColumn("上限 II", format="%.2f"),
-                    "lower_1": st.column_config.NumberColumn("下限 I", format="%.2f"),
-                    "lower_2": st.column_config.NumberColumn("下限 II", format="%.2f"),
-                    "status": st.column_config.TextColumn("状态"),
-                    "dist_upper_1_pct": st.column_config.NumberColumn("距上限 I %", format="%.1f"),
-                    "dist_upper_2_pct": st.column_config.NumberColumn("距上限 II %", format="%.1f"),
-                    "dist_lower_1_pct": st.column_config.NumberColumn("距下限 I %", format="%.1f"),
-                    "dist_lower_2_pct": st.column_config.NumberColumn("距下限 II %", format="%.1f"),
-                    "note": st.column_config.TextColumn("备注"),
+                    "symbol": st.column_config.TextColumn("代码", pinned=True, width="small"),
+                    "name": st.column_config.TextColumn("名称", width="medium"),
+                    "market": st.column_config.TextColumn("市场", width="small"),
+                    "currency": st.column_config.TextColumn("币种", width="small"),
+                    "price": st.column_config.NumberColumn("现价", format="%.3f", width="small"),
+                    "change_pct": st.column_config.NumberColumn(
+                        "涨跌%", format="%+.2f%%", width="small"
+                    ),
+                    "upper_1": st.column_config.NumberColumn("上限 I", format="%.2f", width="small"),
+                    "upper_2": st.column_config.NumberColumn("上限 II", format="%.2f", width="small"),
+                    "lower_1": st.column_config.NumberColumn("下限 I", format="%.2f", width="small"),
+                    "lower_2": st.column_config.NumberColumn("下限 II", format="%.2f", width="small"),
+                    "status": st.column_config.TextColumn("状态", width="small"),
+                    "dist_upper_1_pct": st.column_config.NumberColumn("距上限 I %", format="%.1f", width="small"),
+                    "dist_upper_2_pct": st.column_config.NumberColumn("距上限 II %", format="%.1f", width="small"),
+                    "dist_lower_1_pct": st.column_config.NumberColumn("距下限 I %", format="%.1f", width="small"),
+                    "dist_lower_2_pct": st.column_config.NumberColumn("距下限 II %", format="%.1f", width="small"),
+                    "note": st.column_config.TextColumn("备注", width="medium"),
                     "triggered": None,
                 },
             )

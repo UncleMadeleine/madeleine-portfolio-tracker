@@ -88,6 +88,32 @@ def fmt(v, digits: int = 2) -> str:
     return f"{v:,.{digits}f}"
 
 
+UP_COLOR, DOWN_COLOR = "#ef232a", "#14b143"  # 与 K线默认一致: 红涨绿跌
+
+
+def _norm_sym(s) -> str:
+    """规范化为 Yahoo 代码; 无法解析时返回大写原文。"""
+    try:
+        return parse(str(s)).yahoo
+    except ValueError:
+        return str(s).strip().upper()
+
+
+def _pnl_color(v) -> str:
+    """涨跌单元格字体色: 涨红跌绿 (0/缺失不着色)。"""
+    if v is None or (isinstance(v, float) and pd.isna(v)) or v == 0:
+        return ""
+    return f"color: {UP_COLOR}" if v > 0 else f"color: {DOWN_COLOR}"
+
+
+def _on_base_change() -> None:
+    """切换基础货币立即落盘, 不依赖「保存持仓」。"""
+    new_base = st.session_state.get("base_currency", "CNY")
+    data = load_portfolio_file()
+    save_portfolio_file({"base_currency": new_base, "holdings": data.get("holdings", [])})
+    st.toast(f"基础货币已保存为 {new_base}")
+
+
 portfolio = load_portfolio_file()
 saved_base = portfolio.get("base_currency", "CNY")
 
@@ -104,10 +130,11 @@ with st.sidebar:
         key="app_page_radio",
     )
     st.session_state.app_page = "portfolio" if page == "📊 投资组合" else "kline"
-
     base = st.selectbox(
         "基础货币", BASE_CURRENCIES,
         index=BASE_CURRENCIES.index(saved_base) if saved_base in BASE_CURRENCIES else 0,
+        key="base_currency",
+        on_change=_on_base_change,
     )
     prefer_akshare = st.checkbox("A股/港股优先 akshare (国内网络)", value=False)
     use_ibkr = st.checkbox(
@@ -137,21 +164,41 @@ with st.sidebar:
             c1, c2 = st.columns(2)
             if c1.button("💾 保存持仓", width="stretch"):
                 rows = edited.dropna(subset=["symbol"]).to_dict("records")
-                bad = []
+                bad, dups = [], []
+                seen = set()
+                clean = []
                 for r in rows:
+                    sym = str(r["symbol"]).strip()
+                    if not sym:  # 整行已填 symbol 后又清空的残留行
+                        continue
+                    key = _norm_sym(sym)
                     try:
-                        parse(str(r["symbol"]))
+                        parse(sym)
                     except ValueError:
-                        bad.append(str(r["symbol"]))
-                if bad:
-                    st.error(f"无法识别: {', '.join(bad)}")
-                else:
-                    save_portfolio_file({"base_currency": base, "holdings": rows})
-                    st.cache_data.clear()
-                    st.toast("持仓已保存")
+                        bad.append(sym)
+                        continue
+                    if key in seen:
+                        dups.append(key)
+                        continue
+                    seen.add(key)
+                    r = dict(r)
+                    r["symbol"] = key
+                    clean.append(r)
+                if bad or dups:
+                    if bad:
+                        st.error(f"无法识别: {', '.join(bad)}")
+                    if dups:
+                        st.error(f"重复代码 (已去重): {', '.join(sorted(set(dups)))}")
+                if not bad:
+                    save_portfolio_file({"base_currency": base, "holdings": clean})
+                    cached_quotes.clear()
+                    cached_fx.clear()
+                    if dups:
+                        st.toast("持仓已保存 (重复行已移除)")
+                    else:
+                        st.toast("持仓已保存")
             if c2.button("↩️ 重载持仓", width="stretch"):
                 st.session_state.pop("holdings_editor", None)
-                st.cache_data.clear()
                 st.rerun()
 
         with st.expander("🎯 自选提醒", expanded=False):
@@ -172,47 +219,47 @@ with st.sidebar:
                 df_w["lists"] = df_w["lists"].apply(
                     lambda v: ", ".join(v) if isinstance(v, list) else (str(v) if v else "")
                 )
-            edited_w = st.data_editor(
-                df_w,
-                num_rows="dynamic",
-                key="watchlist_editor",
-                width="stretch",
-                column_config={
-                    "symbol": st.column_config.TextColumn("代码"),
-                    "lists": st.column_config.TextColumn("所属列表", help="逗号分隔, 如: 科技,美股"),
-                    "upper_1": st.column_config.NumberColumn("上限 I", help="当地货币"),
-                    "upper_2": st.column_config.NumberColumn("上限 II", help="更严格的触发线"),
-                    "lower_1": st.column_config.NumberColumn("下限 I", help="当地货币"),
-                    "lower_2": st.column_config.NumberColumn("下限 II", help="更严格的触发线"),
-                    "note": st.column_config.TextColumn("备注"),
-                },
-            )
             c3, c4 = st.columns(2)
             if c3.button("💾 保存自选", width="stretch"):
                 rows = []
+                bad, dups = [], []
+                seen = set()
                 for r in edited_w.dropna(subset=["symbol"]).to_dict("records"):
+                    sym = str(r["symbol"]).strip()
+                    if not sym:
+                        continue
+                    key = _norm_sym(sym)
+                    try:
+                        parse(sym)
+                    except ValueError:
+                        bad.append(sym)
+                        continue
+                    if key in seen:
+                        dups.append(key)
+                        continue
+                    seen.add(key)
                     e = _normalize_entry(r)
+                    e["symbol"] = key
                     e["lists"] = parse_lists(e.get("lists"))
                     for k in ("upper_1", "upper_2", "lower_1", "lower_2"):
                         v = e.get(k)
                         if isinstance(v, float) and pd.isna(v):
                             e.pop(k, None)
                     rows.append(e)
-                bad = []
-                for r in rows:
-                    try:
-                        parse(str(r["symbol"]))
-                    except ValueError:
-                        bad.append(str(r["symbol"]))
-                if bad:
-                    st.error(f"无法识别: {', '.join(bad)}")
-                else:
+                if bad or dups:
+                    if bad:
+                        st.error(f"无法识别: {', '.join(bad)}")
+                    if dups:
+                        st.error(f"重复代码 (已去重): {', '.join(sorted(set(dups)))}")
+                if not bad:
                     save_watchlist({"watchlist": rows}, WATCHLIST_PATH)
-                    st.cache_data.clear()
-                    st.toast("自选已保存")
+                    cached_quotes.clear()
+                    if dups:
+                        st.toast("自选已保存 (重复行已移除)")
+                    else:
+                        st.toast("自选已保存")
             if c4.button("↩️ 重载自选", width="stretch"):
                 st.session_state.pop("watchlist_editor", None)
-                st.cache_data.clear()
                 st.rerun()
 
     st.divider()
@@ -274,8 +321,14 @@ if st.session_state.app_page == "portfolio":
                 else f"{m['total_pnl_pct']:+.2%}" if m["total_pnl_pct"] is not None
                 else None
             ),
+            delta_color="inverse",  # 红涨绿跌: 盈亏为正显示红色
         )
-        col3.metric(f"今日估算 ({base})", fmt(m["today_pnl"]))
+        col3.metric(
+            f"今日估算 ({base})",
+            fmt(m["today_pnl"]),
+            None if m["today_pnl"] is None else f"{m['today_pnl']:+,.0f}",
+            delta_color="inverse",
+        )
         col4.metric("持仓", f"{len(view)} / {len(holding_symbols)}")
     else:
         view = pd.DataFrame()
@@ -298,14 +351,20 @@ if st.session_state.app_page == "portfolio":
                 st.write(f"- {i}")
 
     tab1, tab4, tab2, tab3 = st.tabs(
-        ["💼 持仓明细", f"🎯 自选观察{' 🔔' + str(len(trig_all)) if not trig_all.empty else ''}", "🥧 资产配置", "📈 走势对比"]
+        [
+            "💼 持仓明细",
+            f"🎯 自选观察{' 🔔' + str(len(trig_all)) if len(trig_all) else ''}",
+            "🥧 资产配置",
+            "📈 走势对比",
+        ]
     )
     with tab1:
         if view.empty:
             st.info("暂无持仓数据。")
         else:
+            styled = view.style.map(_pnl_color, subset=["change_pct", "pnl", "pnl_pct", "today_pnl"])
             st.dataframe(
-                view,
+                styled,
                 width="stretch",
                 hide_index=True,
                 column_config={
@@ -314,13 +373,13 @@ if st.session_state.app_page == "portfolio":
                     "market": st.column_config.TextColumn("市场"),
                     "currency": st.column_config.TextColumn("币种"),
                     "price": st.column_config.NumberColumn("现价", format="%.3f"),
-                    "change_pct": st.column_config.NumberColumn("涨跌%", format="%.2f"),
+                    "change_pct": st.column_config.NumberColumn("涨跌%", format="%.2f%%"),
                     "quantity": st.column_config.NumberColumn("数量", format="%.6g"),
                     "avg_cost": st.column_config.NumberColumn("成本(当地)", format="%.4f"),
                     "market_value": st.column_config.NumberColumn(f"市值({base})", format="%.2f"),
                     "cost": st.column_config.NumberColumn(f"成本({base})", format="%.2f"),
                     "pnl": st.column_config.NumberColumn(f"盈亏({base})", format="%.2f"),
-                    "pnl_pct": st.column_config.NumberColumn("盈亏%", format="%.2f"),
+                    "pnl_pct": st.column_config.NumberColumn("盈亏%", format="%.2f%%"),
                     "weight": None,
                     "weight_pct": st.column_config.ProgressColumn(
                         "权重", min_value=0, max_value=100, format="%.1f%%"
@@ -375,17 +434,19 @@ if st.session_state.app_page == "portfolio":
             sel = st.multiselect("选择代码 (近 12 个月收盘价)", chart_symbols, default=default_sel)
             norm = st.toggle("归一化 (起点=100)", value=True)
             frames = {}
-            for s in sel:
-                try:
-                    h = cached_history(s, prefer_akshare)
-                    srs = pd.Series(
-                        h["close"].astype(float).tolist(),
-                        index=pd.to_datetime(h["date"]),
-                        name=s,
-                    )
-                    frames[s] = srs
-                except Exception as e:
-                    st.warning(f"{s}: {e}")
+            if sel:
+                with st.spinner(f"拉取 {len(sel)} 只代码的 12 个月历史..."):
+                    for s in sel:
+                        try:
+                            h = cached_history(s, prefer_akshare)
+                            srs = pd.Series(
+                                h["close"].astype(float).tolist(),
+                                index=pd.to_datetime(h["date"]),
+                                name=s,
+                            )
+                            frames[s] = srs
+                        except Exception as e:
+                            st.warning(f"{s}: {e}")
             if frames:
                 px_df = pd.DataFrame(frames)
                 px_df = px_df.ffill().dropna(how="all")
@@ -434,8 +495,18 @@ if st.session_state.app_page == "portfolio":
                     "当日涨跌幅 ↑": "change_asc",
                 }
                 wview = sort_watchlist(wview, mode_map.get(sort_mode, "default"))
+            styled_w = wview.style.map(
+                _pnl_color, subset=["change_pct"]
+            ).map(
+                lambda v: "color: #ef232a; font-weight: 600" if str(v).startswith(("🟠", "🔴")) else (
+                    "color: #f0a30a; font-weight: 600" if str(v).startswith("🟡") else (
+                        "color: #14b143; font-weight: 600" if str(v).startswith("🟢") else ""
+                    )
+                ),
+                subset=["status"],
+            )
             st.dataframe(
-                wview,
+                styled_w,
                 width="stretch",
                 hide_index=True,
                 column_config={
@@ -444,7 +515,7 @@ if st.session_state.app_page == "portfolio":
                     "market": st.column_config.TextColumn("市场"),
                     "currency": st.column_config.TextColumn("币种"),
                     "price": st.column_config.NumberColumn("现价", format="%.3f"),
-                    "change_pct": st.column_config.NumberColumn("涨跌%", format="%.2f"),
+                    "change_pct": st.column_config.NumberColumn("涨跌%", format="%.2f%%"),
                     "upper_1": st.column_config.NumberColumn("上限 I", format="%.2f"),
                     "upper_2": st.column_config.NumberColumn("上限 II", format="%.2f"),
                     "lower_1": st.column_config.NumberColumn("下限 I", format="%.2f"),

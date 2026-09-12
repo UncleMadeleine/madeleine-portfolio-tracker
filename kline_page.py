@@ -66,7 +66,7 @@ def render_kline_view(
         show_volume=show_volume, green_up=green_up, period=period,
     )
     st.plotly_chart(
-        fig, use_container_width=True,
+        fig,
         config={
             "displaylogo": False,
             "scrollZoom": True,
@@ -82,6 +82,8 @@ def render_kline_view(
     m2.metric(
         "区间涨跌",
         f"{s['change_pct']:+.2f}%" if s["change_pct"] is not None else "—",
+        delta=None if s["change_pct"] is None else round(s["change_pct"], 2),
+        delta_color="off" if s["change_pct"] is None else "inverse",  # 红涨绿跌
     )
     m3.metric(
         f"区间最高 ({s['period_high_date']})",
@@ -99,7 +101,7 @@ def render_kline_view(
 def render_kline_controls(prefer_akshare: bool) -> None:
     """查询控件 + 拉取/渲染 (输入驱动: 无提交不取数)."""
     qs = quick_symbols()
-    c1, c2, c3 = st.columns([2, 1, 1])
+    c1, c2, c3, c4 = st.columns([3, 1, 1, 1], vertical_alignment="bottom")
     ksym = c1.text_input(
         "代码",
         value=qs[0] if qs else "AAPL",
@@ -115,6 +117,11 @@ def render_kline_controls(prefer_akshare: bool) -> None:
         "周期", ["daily", "weekly", "monthly"], index=0,
         format_func=lambda v: charting.PERIOD_LABELS[v], key="kline_period",
     )
+    # 回车提交: text_input 回车 rerun 时 value 已变, 据此标记为已提交
+    entered = st.session_state.get("kline_last_symbol") != ksym
+    if c4.button("🔍 查询", type="primary"):
+        entered = True
+
     kc4, kc5 = st.columns(2)
     kmas = kc4.multiselect(
         "均线", [5, 10, 20, 30, 60, 120, 250], default=[5, 20, 60], key="kline_ma",
@@ -140,19 +147,18 @@ def render_kline_controls(prefer_akshare: bool) -> None:
         # 避免残留的 pill 选中项覆盖用户手动输入的代码。
         st.pills("常用 (持仓/自选)", qs, key="kline_quick", on_change=_pick_quick)
 
-    entered = st.button("🔍 查询 K线", type="primary", width="stretch")
-    if not entered and not st.session_state.get("kline_submitted"):
-        st.info("输入代码后点「查询 K线」获取数据 —— 页面启动不会预加载任何 K线。")
-        return
     if not ksym:
-        st.warning("请输入代码。")
+        st.info("输入代码后回车或点「查询」获取数据 —— 页面启动不会预加载任何 K线。")
         return
     if not is_valid_symbol(ksym):
         st.error(f"无法识别的代码: {ksym} (参考上方代码规范, 如 600519.SS / 0700.HK)")
         return
+    if not entered and not st.session_state.get("kline_submitted"):
+        st.info("回车或点「查询」获取 K线。")
+        return
 
-    if entered:
-        st.session_state["kline_submitted"] = True
+    st.session_state["kline_submitted"] = True
+    st.session_state["kline_last_symbol"] = ksym
 
     yahoo = normalize_or_none(ksym)
     try:

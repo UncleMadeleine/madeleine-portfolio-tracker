@@ -15,7 +15,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-import app_settings as S
+from . import settings as S
 from tracker import importer
 
 _CHAIN_LABELS = {

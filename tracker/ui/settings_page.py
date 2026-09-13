@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-import app_settings as S
+from . import settings as S
 
 _COLOR_SAMPLE_PCT = "+2.35%"
 

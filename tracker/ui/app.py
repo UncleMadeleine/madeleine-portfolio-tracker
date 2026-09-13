@@ -1,7 +1,10 @@
-"""Streamlit 投资组合追踪页面 (持仓 + 自选股价格提醒 + K线查询)."""
+"""Streamlit 投资组合追踪页面 (持仓 + 自选股价格提醒 + K线查询).
+
+运行: python -m streamlit run tracker/ui/app.py (仓库根执行)。
+"""
 from __future__ import annotations
 
-import json
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -9,16 +12,27 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-import app_settings as S
-import import_page
-import kline_page
-import settings_page
+# streamlit 以裸脚本执行本文件, 此时仓库根不在 sys.path — 手动引导,
+# 否则 `import tracker` (及其导入的相对包路径) 失败。
+_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
-from tracker import charting, prices
-from tracker.analytics import build_view, summarize
-from tracker.fx import get_fx_rates
-from tracker.symbols import parse
-from tracker.watchlist import (
+from tracker import charting, prices  # noqa: E402
+from tracker.analytics import build_view, summarize  # noqa: E402
+from tracker.fx import get_fx_rates  # noqa: E402
+from tracker.symbols import parse  # noqa: E402
+from tracker.ui import settings as S  # noqa: E402
+from tracker.ui.import_page import render_import_page  # noqa: E402
+from tracker.ui.kline_page import (  # noqa: E402
+    cached_kline,
+    normalize_or_none,
+    render_compare_chart,
+    render_kline_controls,
+    set_quick_symbols,
+)
+from tracker.ui.settings_page import render_settings_page  # noqa: E402
+from tracker.watchlist import (  # noqa: E402
     _normalize_entry,
     build_watchlist_view,
     entries_for,
@@ -31,7 +45,7 @@ from tracker.watchlist import (
     triggered_entries,
 )
 
-WATCHLIST_PATH = Path(__file__).parent / "watchlist.json"
+WATCHLIST_PATH = _ROOT / "watchlist.json"
 
 st.set_page_config(page_title="投资组合追踪", page_icon="📈", layout="wide")
 
@@ -260,7 +274,7 @@ if st.session_state.app_page == "portfolio":
     watch_symbols = [str(e["symbol"]) for e in all_watch_entries]
     all_symbols = tuple(dict.fromkeys(holding_symbols + watch_symbols))
 
-    kline_page.set_quick_symbols(list(all_symbols))
+    set_quick_symbols(list(all_symbols))
 
     with st.spinner("拉取行情 (首次加载需初始化数据引擎)..."):
         quotes, errors, notes = cached_quotes(all_symbols, prefer_akshare, use_ibkr)
@@ -472,7 +486,7 @@ if st.session_state.app_page == "portfolio":
 
         sel, bad = [], []
         for s in sel_raw:
-            y = kline_page.normalize_or_none(s)
+            y = normalize_or_none(s)
             (sel if y is not None else bad).append(y if y is not None else s)
         sel = list(dict.fromkeys(sel))
         if bad:
@@ -484,7 +498,7 @@ if st.session_state.app_page == "portfolio":
             with st.spinner(f"拉取 {len(sel)} 只代码近 {cmp_months} 个月 K线..."):
                 for s in sel:
                     try:
-                        d = kline_page.cached_kline(s, cmp_months, prefer_akshare)
+                        d = cached_kline(s, cmp_months, prefer_akshare)
                         if d.empty:
                             st.warning(f"{s}: 无有效K线数据")
                         else:
@@ -492,7 +506,7 @@ if st.session_state.app_page == "portfolio":
                     except Exception as e:
                         st.warning(f"{s}: {e}")
             if frames:
-                kline_page.render_compare_chart(
+                render_compare_chart(
                     charting.compare_payload(
                         frames, normalize=norm, period=cmp_period,
                         green_up=S.green_up(),
@@ -595,10 +609,10 @@ if st.session_state.app_page == "portfolio":
             )
 
 elif st.session_state.app_page == "import":
-    import_page.render_import_page(on_saved=_post_import)
+    render_import_page(on_saved=_post_import)
 
 elif st.session_state.app_page == "settings":
-    settings_page.render_settings_page()
+    render_settings_page()
 
 elif st.session_state.app_page == "kline":
-    kline_page.render_kline_controls(prefer_akshare=prefer_akshare)
+    render_kline_controls(prefer_akshare=prefer_akshare)

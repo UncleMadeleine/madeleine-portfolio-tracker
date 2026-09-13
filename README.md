@@ -56,7 +56,7 @@ pip install -r requirements.txt
 ### 启动 Streamlit 页面
 
 ```bash
-streamlit run app.py
+streamlit run tracker/ui/app.py
 ```
 
 页面默认运行在 `http://localhost:8501`，侧边栏三个页面：
@@ -251,11 +251,12 @@ python -m tracker.cli kline 0700.HK --period weekly --open  # 周K + 自动打�
 ## 架构
 
 ```
-app.py                Streamlit 主页（组合：持仓编辑/明细/配置/对比/自选提醒）
-kline_page.py         「K线」页面（搜索框 + lightweight-charts 组件 + 无限拖动）
-import_page.py        「导入」页面（IBKR 账户 / 链上钱包 / 券商文件, 追加合并或覆盖）
-settings_page.py      「设置」页面（配色 / 数据源 / 基础货币）
-app_settings.py       settings.json 读写（涨跌配色 / prefer_akshare / use_ibkr）+ portfolio 读写助手
+tracker/ui/           Streamlit 页面包（streamlit run tracker/ui/app.py）
+├── app.py              主页（组合：持仓编辑/明细/配置/对比/自选提醒）
+├── kline_page.py       「K线」页面（搜索框 + lightweight-charts 组件 + 无限拖动）
+├── import_page.py      「导入」页面（IBKR 账户 / 链上钱包 / 券商文件, 追加合并或覆盖）
+├── settings_page.py    「设置」页面（配色 / 数据源 / 基础货币）
+└── settings.py         settings.json 读写（涨跌配色 / prefer_akshare / use_ibkr）+ portfolio 读写助手
 tracker/
 ├── __main__.py         python -m tracker 入口（转发到 cli）
 ├── cli/                CLI 包（python -m tracker.cli，13 个子命令各一个模块）
@@ -473,7 +474,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 # Streamlit dashboard
-streamlit run app.py
+streamlit run tracker/ui/app.py
 
 # CLI examples
 python -m tracker.cli snapshot --json
@@ -498,8 +499,7 @@ IBKR disconnects silently fall back to the next source; the page continues runni
 ### Project Structure
 
 ```
-app.py             Streamlit dashboard (portfolio + K-line + import + settings pages)
-import_page.py     「导入」page (IBKR account / on-chain wallet / broker file)
+tracker/ui/        Streamlit dashboard (app.py + kline/import/settings pages + settings)
 tracker/           Core package: cli/ subcommands, providers/, symbols, prices, fx,
                    search, cache, charting, analytics, watchlist, snapshot,
                    importer, ibkr, ibkr_sync, ashare_sync, wallet

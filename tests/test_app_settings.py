@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 
-import app_settings as S
+from tracker.ui import settings as S
 
 
 def test_save_portfolio_file_stamps_authoritative_type(tmp_path, monkeypatch):

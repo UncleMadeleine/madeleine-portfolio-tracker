@@ -1,7 +1,7 @@
 """应用显示设置 (settings.json): 涨跌配色 / 数据源偏好, 设置页与各页面共用.
 
 基础货币仍存于 portfolio.json (CLI snapshot/--base 共享同一来源), 但由「设置」页编辑;
-本模块同时提供 portfolio.json 的读写助手, 供 app.py (持仓编辑) 与 settings_page.py 复用.
+本模块同时提供 portfolio.json 的读写助手, 供 app.py (持仓编辑) 与 settings_page 复用.
 """
 from __future__ import annotations
 
@@ -18,8 +18,10 @@ from tracker.charting import (
 )
 from tracker.symbols import type_for_symbol
 
-SETTINGS_PATH = Path(__file__).parent / "settings.json"
-PORTFOLIO_PATH = Path(__file__).parent / "portfolio.json"
+# 数据文件锚定仓库根 (包内目录会随部署位置漂移)
+_ROOT = Path(__file__).resolve().parent.parent.parent
+SETTINGS_PATH = _ROOT / "settings.json"
+PORTFOLIO_PATH = _ROOT / "portfolio.json"
 
 # 涨跌配色: cn = 红涨绿跌 (A股软件习惯, 默认) / intl = 绿涨红跌 (国际配色)
 SCHEME_CN = "cn"

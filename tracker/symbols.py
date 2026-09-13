@@ -79,6 +79,7 @@ class ParsedSymbol:
     market: Market
     currency: str
     is_b_share: bool = False
+    type: str = "global"  # 权威域标记: global / cn / crypto (内部字段, 用户不可见)
 
     @property
     def market_label(self) -> str:
@@ -117,6 +118,32 @@ def normalize(symbol: str) -> str:
     return f"{head}.{suffix}"
 
 
+def type_for_symbol(yahoo: str) -> str:
+    """自定义后缀规范 → 权威域标记 (唯一推导规则, 供配置打标与导入使用).
+
+    global: 裸代码 (美股, 含 BRK-B 类别股) 与 .HK/.DE/.L/.TO/.AX 等全球股票后缀
+    cn:     .SS/.SZ (沪深 A/B 股) 与 .BJ (北交所)
+    crypto: BASE-QUOTE 连字符格式 (计价货币为法币/稳定币)
+
+    与 parse() 的判定语义完全一致: 单字母连字符 (BRK-B) 是美股类别代码,
+    不是加密货币 —— 保证同一代码在任何路径下都不会路由到两个域。
+    """
+    s = yahoo.strip().upper()
+    if "-" in s and "." not in s:
+        base, _, quote = s.rpartition("-")
+        is_us_class = len(quote) == 1 and quote.isalpha()
+        # parse() 对无法识别的连字符代码显式报错; 打标只需处理两类合法形态:
+        # crypto (BASE-QUOTE, 计价货币为法币/稳定币) 与美股类别股 (单字母后缀)
+        if not is_us_class and (base in _KNOWN_CRYPTO or quote in _CRYPTO_QUOTES):
+            return "crypto"
+        return "global"
+    if "." in s:
+        suffix = s.rsplit(".", 1)[1]
+        if suffix in ("SS", "SZ", "BJ"):
+            return "cn"
+    return "global"
+
+
 def parse(symbol: str) -> ParsedSymbol:
     yahoo = normalize(symbol)
     # 加密货币: BTC-USD / ETH-EUR 等连字符格式 (Yahoo Finance crypto 行情)
@@ -128,6 +155,7 @@ def parse(symbol: str) -> ParsedSymbol:
                 yahoo=yahoo,
                 market=Market.CRYPTO,
                 currency=quote,
+                type="crypto",
             )
     if "-" in yahoo and "." not in yahoo:
         base, _, quote = yahoo.rpartition("-")
@@ -149,5 +177,6 @@ def parse(symbol: str) -> ParsedSymbol:
         if code.startswith(("900", "200")):
             is_b_share = True
     return ParsedSymbol(
-        raw=symbol.strip(), yahoo=yahoo, market=market, currency=currency, is_b_share=is_b_share
+        raw=symbol.strip(), yahoo=yahoo, market=market, currency=currency,
+        is_b_share=is_b_share, type=type_for_symbol(yahoo),
     )

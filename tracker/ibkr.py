@@ -20,7 +20,7 @@ from pathlib import Path
 import pandas as pd
 
 from .prices import Quote
-from .symbols import Market, ParsedSymbol
+from .symbols import Market, ParsedSymbol, type_for_symbol
 
 DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "ibkr.json"
 EXAMPLE_CONFIG = Path(__file__).resolve().parent.parent / "ibkr.example.json"
@@ -456,6 +456,7 @@ def positions_to_rows(positions) -> tuple[list[dict], list[str]]:
         rows.append(
             {
                 "symbol": y,
+                "type": type_for_symbol(y),
                 "quantity": qty,
                 "avg_cost": round(float(getattr(pos, "avgCost", 0) or 0), 6),
             }

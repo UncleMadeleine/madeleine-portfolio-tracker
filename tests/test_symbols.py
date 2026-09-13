@@ -176,3 +176,34 @@ def test_parse_crypto_4char_us_stock_boundary():
     assert p.market is Market.US
     # 已知 crypto 基础代码 + 法币后缀才会补全
     assert normalize("SOLUSD") == "SOL-USD"
+
+
+# ---------- 权威 type 字段 (系统内部域标记) ----------
+
+
+def test_type_for_symbol_three_domains():
+    from tracker.symbols import type_for_symbol
+
+    assert type_for_symbol("AAPL") == "global"
+    assert type_for_symbol("0700.HK") == "global"
+    assert type_for_symbol("SAP.DE") == "global"
+    assert type_for_symbol("600519.SS") == "cn"
+    assert type_for_symbol("200012.SZ") == "cn"
+    assert type_for_symbol("830799.BJ") == "cn"
+    assert type_for_symbol("BTC-USD") == "crypto"
+    assert type_for_symbol("ETH-USDT") == "crypto"
+
+
+def test_parse_sets_type():
+    assert parse("AAPL").type == "global"
+    assert parse("600519.SS").type == "cn"
+    assert parse("900902.SS").type == "cn"  # B股仍在 cn 域
+    assert parse("BTC-USD").type == "crypto"
+
+
+def test_type_same_suffix_never_two_domains():
+    from tracker.symbols import type_for_symbol
+
+    # 互斥性: 连字符+计价货币永远 crypto, 点后缀/裸代码永远股票
+    assert type_for_symbol("BRK-B") == "global"  # 美股类别股不是 crypto
+    assert parse("BRK-B").type == "global"

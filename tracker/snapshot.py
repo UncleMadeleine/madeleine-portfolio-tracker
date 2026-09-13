@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import prices
-from .symbols import parse
+from .symbols import parse, type_for_symbol
 from .analytics import build_view, summarize
 from .fx import get_fx_rates
 from .watchlist import (
@@ -33,7 +33,21 @@ def load_portfolio(path: str | Path) -> dict:
         return json.load(f)
 
 
+def _stamp_type(h: dict) -> dict:
+    """持仓条目补写权威 type 字段 (系统维护, 用户不可见不可改)."""
+    sym = str(h.get("symbol", "")).strip()
+    if not sym:
+        return h
+    try:
+        h["type"] = type_for_symbol(sym)
+    except Exception:
+        pass
+    return h
+
+
 def save_portfolio(data: dict, path: str | Path = DEFAULT_PORTFOLIO) -> None:
+    data = dict(data)
+    data["holdings"] = [_stamp_type(dict(h)) for h in data.get("holdings", [])]
     Path(path).write_text(
         json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False),
         encoding="utf-8",

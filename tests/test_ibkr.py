@@ -210,11 +210,11 @@ def test_positions_to_rows():
     ]
     rows, skipped = positions_to_rows(positions)
     assert rows == [
-        {"symbol": "AAPL", "quantity": 10.0, "avg_cost": 150.0},
-        {"symbol": "0700.HK", "quantity": 100.0, "avg_cost": 330.0},
-        {"symbol": "600519.SS", "quantity": 5.0, "avg_cost": 1400.0},
-        {"symbol": "900902.SS", "quantity": 200.0, "avg_cost": 12.5},
-        {"symbol": "200012.SZ", "quantity": 300.0, "avg_cost": 8.3},
+        {"symbol": "AAPL", "type": "global", "quantity": 10.0, "avg_cost": 150.0},
+        {"symbol": "0700.HK", "type": "global", "quantity": 100.0, "avg_cost": 330.0},
+        {"symbol": "600519.SS", "type": "cn", "quantity": 5.0, "avg_cost": 1400.0},
+        {"symbol": "900902.SS", "type": "cn", "quantity": 200.0, "avg_cost": 12.5},
+        {"symbol": "200012.SZ", "type": "cn", "quantity": 300.0, "avg_cost": 8.3},
     ]
     assert len(skipped) == 1 and "WEIRD" in skipped[0]
 
@@ -225,6 +225,8 @@ def _make_quote(sym, price):
 
 
 def test_get_quotes_ibkr_first_then_fallback(monkeypatch):
+    import tracker.providers.orchestration as orch
+
     ibkr_result = {"AAPL": _make_quote("AAPL", 333.0)}
 
     def fake_ibkr(parsed, cfg=None):
@@ -234,17 +236,12 @@ def test_get_quotes_ibkr_first_then_fallback(monkeypatch):
         return {p.yahoo: _make_quote(p.yahoo, 1.0) for p in parsed}
 
     monkeypatch.setattr(ibkr_mod, "get_quotes_ibkr", fake_ibkr)
-    monkeypatch.setattr(prices_mod, "_yahoo_batch", fake_batch)
+    monkeypatch.setattr(orch, "_yahoo_batch", fake_batch)
     # 清空缓存避免干扰
-    monkeypatch.setattr(prices_mod.cache_mod, "get_cached", lambda syms, ttl=300: {})
-    monkeypatch.setattr(prices_mod.cache_mod, "set_cached", lambda q: None)
+    monkeypatch.setattr(orch.cache_mod, "get_cached", lambda syms, ttl=300: {})
+    monkeypatch.setattr(orch.cache_mod, "set_cached", lambda q: None)
 
-    def no_retry(p, prefer_akshare=False):
-        raise AssertionError("不应触发逐个重试")
-
-    monkeypatch.setattr(prices_mod, "_fetch_quote", no_retry)
-
-    quotes, errors, notes = prices_mod.get_quotes(
+    quotes, errors, notes = orch.get_quotes(
         ["AAPL", "NVDA"], use_ibkr=True
     )
     assert quotes["AAPL"].price == 333.0
@@ -253,6 +250,8 @@ def test_get_quotes_ibkr_first_then_fallback(monkeypatch):
 
 
 def test_get_quotes_ibkr_unavailable_note(monkeypatch):
+    import tracker.providers.orchestration as orch
+
     def fake_ibkr(parsed, cfg=None):
         return {}, "ConnectionRefusedError: 拒绝"
 
@@ -260,32 +259,28 @@ def test_get_quotes_ibkr_unavailable_note(monkeypatch):
         return {p.yahoo: _make_quote(p.yahoo, 2.0) for p in parsed}
 
     monkeypatch.setattr(ibkr_mod, "get_quotes_ibkr", fake_ibkr)
-    monkeypatch.setattr(prices_mod, "_yahoo_batch", fake_batch)
-    monkeypatch.setattr(prices_mod.cache_mod, "get_cached", lambda syms, ttl=300: {})
-    monkeypatch.setattr(prices_mod.cache_mod, "set_cached", lambda q: None)
-    monkeypatch.setattr(
-        prices_mod, "_fetch_quote", lambda p, prefer_akshare=False: _make_quote(p.yahoo, 2.0)
-    )
+    monkeypatch.setattr(orch, "_yahoo_batch", fake_batch)
+    monkeypatch.setattr(orch.cache_mod, "get_cached", lambda syms, ttl=300: {})
+    monkeypatch.setattr(orch.cache_mod, "set_cached", lambda q: None)
 
-    quotes, errors, notes = prices_mod.get_quotes(["AAPL"], use_ibkr=True)
+    quotes, errors, notes = orch.get_quotes(["AAPL"], use_ibkr=True)
     assert quotes["AAPL"].price == 2.0
     assert len(notes) == 1 and "IBKR 不可用" in notes[0]
 
 
 def test_get_quotes_ibkr_not_used_by_default(monkeypatch):
+    import tracker.providers.orchestration as orch
+
     def fake_ibkr(parsed, cfg=None):
         raise AssertionError("未启用 IBKR 时不应调用")
 
     monkeypatch.setattr(ibkr_mod, "get_quotes_ibkr", fake_ibkr)
     monkeypatch.setattr(
-        prices_mod, "_yahoo_batch", lambda parsed: {p.yahoo: _make_quote(p.yahoo, 3.0) for p in parsed}
+        orch, "_yahoo_batch", lambda parsed: {p.yahoo: _make_quote(p.yahoo, 3.0) for p in parsed}
     )
-    monkeypatch.setattr(prices_mod.cache_mod, "get_cached", lambda syms, ttl=300: {})
-    monkeypatch.setattr(prices_mod.cache_mod, "set_cached", lambda q: None)
-    monkeypatch.setattr(
-        prices_mod, "_fetch_quote", lambda p, prefer_akshare=False: _make_quote(p.yahoo, 3.0)
-    )
-    quotes, errors, notes = prices_mod.get_quotes(["AAPL"])
+    monkeypatch.setattr(orch.cache_mod, "get_cached", lambda syms, ttl=300: {})
+    monkeypatch.setattr(orch.cache_mod, "set_cached", lambda q: None)
+    quotes, errors, notes = orch.get_quotes(["AAPL"])
     assert quotes["AAPL"].price == 3.0
     assert notes == []
 
@@ -330,7 +325,9 @@ def test_get_history_ibkr_fallback(monkeypatch):
     })
 
     monkeypatch.setattr(ibkr_mod, "get_history_ibkr", fake_ibkr)
-    monkeypatch.setattr(prices_mod, "_yahoo_history", lambda p, start_date=None, end_date=None: yahoo_df)
+    import tracker.providers.global_stocks as gs
+
+    monkeypatch.setattr(gs, "_yahoo_history", lambda p, start_date=None, end_date=None: yahoo_df)
 
     df = prices_mod.get_history("AAPL", months=3, use_ibkr=True)
     assert len(df) == 2

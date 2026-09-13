@@ -173,4 +173,4 @@ def test_search_symbols_returns_dicts(sample_entries):
     res = search_symbols("平安", entries=sample_entries)
     assert isinstance(res, list)
     for item in res:
-        assert set(item.keys()) == {"code", "name", "market"}
+        assert set(item.keys()) == {"code", "name", "market", "type"}

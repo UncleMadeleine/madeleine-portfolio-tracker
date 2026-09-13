@@ -21,6 +21,7 @@ from pathlib import Path
 import pandas as pd
 
 from .snapshot import DEFAULT_PORTFOLIO, load_portfolio, save_portfolio
+from .symbols import type_for_symbol
 
 # A股代码前缀 -> Yahoo 交易所后缀 (与 ibkr.py _A_SHARE_*_PREFIX 规则一致)
 _BJ_PREFIX = ("4", "8", "920")
@@ -138,6 +139,7 @@ def parse_positions_file(path: str | Path) -> tuple[list[dict], list[str]]:
         rows.append(
             {
                 "symbol": yahoo,
+                "type": type_for_symbol(yahoo),
                 "quantity": qty,
                 **({"avg_cost": round(avg_cost, 6)} if avg_cost else {}),
             }

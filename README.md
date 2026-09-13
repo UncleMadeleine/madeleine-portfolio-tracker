@@ -17,7 +17,9 @@ OpenBB Portfolio Tracker 是一款**本地优先**的投资组合追踪工具，
 - **Streamlit 可视化页面** — 持仓明细、资产配置饼图、走势对比、自选提醒
 - **统一 CLI** — 快照、报价、汇率、历史、K线、同步、缓存，全部 `--json` 输出
 
-> **核心设计**：数据源多级降级（IBKR → OpenBB/yfinance → akshare），离线可用的 SQLite 磁盘缓存，所有配置为可编辑 JSON 文件，不依赖任何云服务。
+> **核心设计**：数据层抽象为 **provider 层**（全球股票 / A股·B股 / 加密货币三域，后缀即域、互不冲突），
+> 多级降级（IBKR → yfinance → akshare / Binance），离线可用的 SQLite 磁盘缓存，
+> 所有配置为可编辑 JSON 文件，不依赖任何云服务。
 
 ---
 
@@ -100,18 +102,27 @@ python -m pytest tests/ -q
 
 ---
 
-## 代码规范（Yahoo Finance 后缀）
+## 代码规范（自有后缀规范 + 内部 type 字段）
 
-| 市场 | 后缀 | 示例 | 币种 | 说明 |
-|------|------|------|------|------|
-| 美股 | 无 | `AAPL` | USD | |
-| A股 | `.SS` / `.SZ` | `600519.SS` `000001.SZ` | CNY | 也接受 `.SH` |
-| B股 | `.SS` / `.SZ` | `900902.SS` `200012.SZ` | CNY | 上海 B 股 `9` 开头，深圳 B 股 `2` 开头 |
-| 港股 | `.HK` | `0700.HK` `0941.HK` | HKD | **4 位补零**；`00700.HK` 自动归一 |
-| 德股 | `.DE` 等 | `SAP.DE` | EUR | `.F` `.BE` `.DU` `.HM` `.SG` `.MU` 均可 |
-| 英股 | `.L` | `BP.L` | GBP | Yahoo 报价单位为便士（GBp），系统自动 ÷100 换算为英镑 |
-| 加股 | `.TO` 等 | `RY.TO` | CAD | `.V`（TSXV）`.CN` `.NE` 均可 |
-| 澳股 | `.AX` | `BHP.AX` | AUD | |
+后缀规范是**本项目自定义**的（恰好与 Yahoo Finance 兼容）；域的权威判据是系统内部维护的 **`type` 字段**
+（`global`/`cn`/`crypto`），在 portfolio/watchlist 保存与 IBKR/A股导入时自动推导覆写，用户不可见。
+
+| 市场 | 后缀 | 示例 | 币种 | type | 说明 |
+|------|------|------|------|------|------|
+| 美股 | 无 | `AAPL` | USD | global | |
+| A股 | `.SS` / `.SZ` | `600519.SS` `000001.SZ` | CNY | cn | 也接受 `.SH` |
+| B股 | `.SS` / `.SZ` | `900902.SS` `200012.SZ` | CNY | cn | 上海 B 股 `9` 开头，深圳 B 股 `2` 开头 |
+| 北交所 | `.BJ` | `830799.BJ` | CNY | cn | |
+| 港股 | `.HK` | `0700.HK` `0941.HK` | HKD | global | **4 位补零**；`00700.HK` 自动归一 |
+| 德股 | `.DE` 等 | `SAP.DE` | EUR | global | `.F` `.BE` `.DU` `.HM` `.SG` `.MU` 均可 |
+| 英股 | `.L` | `BP.L` | GBP | global | Yahoo 报价单位为便士（GBp），系统自动 ÷100 换算为英镑 |
+| 加股 | `.TO` 等 | `RY.TO` | CAD | global | `.V`（TSXV）`.CN` `.NE` 均可 |
+| 澳股 | `.AX` | `BHP.AX` | AUD | global | |
+| 加密货币 | `-QUOTE` | `BTC-USD` `ETH-USDT` | 计价货币 | crypto | 连字符 `BASE-QUOTE`（Yahoo crypto 规范） |
+
+**互斥保证**：点后缀/裸代码永远是股票，连字符+计价货币永远是加密货币（单字母连字符 `BRK-B`
+是美股类别股，不是 crypto）。推导唯一入口 `symbols.type_for_symbol()`；测试用例、搜索结果、
+IBKR 导入产出的代码均符合该规范。
 
 `avg_cost`（成本）按**当地货币**填写；英股填**英镑**（如 `4.30 = £4.30`，不是便士）。
 
@@ -147,8 +158,14 @@ python -m pytest tests/ -q
 tracker/
 ├── __main__.py         python -m tracker 入口（转发到 cli）
 ├── cli.py              CLI 统一入口（snapshot / quote / watchlist / fx / history / kline / sync / cache）
-├── symbols.py          代码解析、市场识别、GBp/港股补零归一
-├── prices.py           行情路由：IBKR 优先（批量快照）→ yfinance 批量 → akshare 降级 → 逐个重试
+├── symbols.py          自有代码规范、市场域识别、type_for_symbol() 权威域推导（唯一入口）
+├── providers/          **数据 provider 层**（按权威 type 域隔离）
+│   ├── base.py         Provider 基类 + Quote 数据结构 + resolve(type) 域路由
+│   ├── cn_stocks.py        A股/B股域（.SS/.SZ/.BJ）：akshare 固定优先, yfinance 兜底
+│   ├── crypto.py           加密货币域（BASE-QUOTE）：Binance API 优先, yfinance 兜底
+│   └── orchestration.py    批量编排：按域分组取数 → 聚合 quotes/errors/notes
+├── prices.py           行情门面（历史 API 保持不变, 全部路由到 providers）
+├── search.py           代码搜索：聚合三域目录（A股/港股 akshare + 加密货币 Binance）
 ├── fx.py               汇率：CFETS（akshare）优先，yfinance 货币对兜底（直对/逆对/USD 桥）
 ├── cache.py            行情 SQLite 磁盘缓存（实时 5 分钟 / K线 30 分钟）
 ├── charting.py         K线蜡烛图（plotly 开源渲染：清洗/均线/周月K/成交量/断轴）
@@ -158,12 +175,8 @@ tracker/
 ├── ibkr_sync.py        CLI：从 IBKR 账户持仓生成 portfolio.json
 └── snapshot.py         CLI 快照（持仓 + 自选，支持 --ibkr / --json）
 
-app.py                  Streamlit 页面（持仓编辑/指标/配置/走势/自选提醒/K线查询）
-kline_page.py           K线页面逻辑（输入驱动取数）
-
-tests/                  纯逻辑单元测试（mock 数据源，不联网）
-portfolio.json          持仓配置（页面可直接编辑保存）
-watchlist.json          自选股配置（页面可直接编辑保存）
+portfolio.json          持仓配置（页面可直接编辑保存; type 字段由系统自动维护, 手改无效）
+watchlist.json          自选股配置（页面可直接编辑保存; type 字段由系统自动维护, 手改无效）
 ibkr.example.json       IBKR 配置模板（随仓库提交）
 ibkr.json               IBKR 真实配置（已 gitignore，不随仓库提交）
 ```
@@ -188,38 +201,31 @@ python -m tracker.cli kline 600519.SS --ma 5,10,20,60   # 自定义均线
 python -m tracker.cli kline 0700.HK --period weekly --open  # 周K + 自动打开浏览器
 ```
 
-页面启动后侧边栏「🕯 K线」标签页可查询**任意代码**（不限于持仓/自选）。数据**不预加载**——输入代码点「查询 K线」才实时拉取（30 分钟磁盘缓存 + 10 分钟会话内存缓存），页面启动零行情请求；持仓/自选代码以「常用」快捷按钮一键填入。
-
-```bash
-streamlit run app.py   # 统一入口：投资组合 + K线 双页面
-```
-
 ---
 
-## 数据源与降级策略
+## 数据源与降级策略 (provider 层)
 
-行情路由优先级（可叠加启用）：
+数据层按市场域拆分为三个 provider（`tracker/providers/`），只在组合/watchlist 聚合。
+路由依据是系统内部维护的权威 `type` 字段（用户不可见），后缀规范仅用于推导 type：
 
-| 优先级 | 数据源 | 说明 |
-|--------|--------|------|
-| 1 | **IBKR**（TWS / IB Gateway） | 有订阅则为实时；无订阅则 delayed；一次 `reqTickers` 批量快照 |
-| 2 | **OpenBB → yfinance** | 批量 quote（1 次请求）+ 失败逐个重试 |
-| 3 | **akshare**（东财） | A股/港股 spot + 历史；大陆网络下可优先切 akshare |
-| 4 | **CFETS / yfinance** | 汇率：CFETS 一次拿全 XXX/CNY；直对/逆对/USD 桥接兜底 |
+| type | 覆盖代码 | 实时行情优先级 | 历史K线优先级 |
+|----------|----------|----------------|----------------|
+| **global** | 裸代码（美股）、`.HK/.DE/.L/.TO/.AX…` | IBKR(可选) → yfinance 批量 → 港股 akshare | IBKR(可选) → yfinance（港股可 `--akshare` 翻转） |
+| **cn** | `.SS/.SZ/.BJ`（A/B股、北交所） | **akshare 优先** → yfinance | **akshare 优先** → yfinance |
+| **crypto** | `BASE-QUOTE`（`BTC-USD`） | **Binance API** → yfinance 直连 | **Binance klines** → yfinance |
 
-- 页面侧栏可勾选「A股/港股优先 akshare」「🔗 IBKR 行情」
-- 英股 GBp 便士报价自动换算为 GBP；汇率缓存 10 分钟，行情缓存 5 分钟
+- **type 即域**：`type` 字段由系统在保存/导入时按 `symbols.type_for_symbol()` 自动推导覆写，
+  手改 JSON 无效。点后缀/裸代码永远是股票，连字符+计价货币永远是加密货币，同一代码不会映射两个域。
+  测试用例、搜索结果、IBKR 导入产出的代码均符合该规范。
+- 汇率：CFETS 一次拿全 XXX/CNY；直对/逆对/USD 桥接兜底
+- `--akshare` 开关现在仅影响港股数据源顺序（A股域固定 akshare 优先）
+- IBKR 行情可选叠加于任何域（需订阅）；英股 GBp 便士报价自动换算为 GBP；汇率缓存 10 分钟，行情缓存 5 分钟
 - IBKR 连接参数**从配置文件读取**（不写死在代码里）：优先 `ibkr.json`，其次 `ibkr.example.json` 模板兜底，也可用环境变量 `IBKR_CONFIG=/path/to/xxx.json` 指定；交易所映射在同一文件（A股默认 `SEHK`，B股可配置 `SHSE`/`SZSE`，因沪深港通合约挂在 HKEX 下，需配 `tradingClass`）
 - IBKR 断开时自动静默回退下一级数据源，不影响页面运行；持仓同步见下方
 
 ---
 
 ## 配置 IBKR 连接
-
-```bash
-# 复制模板为真实配置，再按需修改（真实配置已被 .gitignore 忽略，不会误提交）
-cp ibkr.example.json ibkr.json
-```
 
 - `ibkr.json` 含连接参数与**交易所映射**（`exchanges`）。Gateway 模式：`"mode": "paper"` 模拟盘（4002）/ `"live"` 实盘（4001），默认 paper；写 `"port"` 可显式指定任意端口（如 TWS 7496/7497）。环境变量 `IBKR_MODE=live` 可临时覆盖
 - 配置文件缺字段时自动继承模板/兜底值；`_comment` 开头的字段会被忽略
@@ -270,7 +276,7 @@ python -m tracker.cli sync --mode live        # 实盘模式写入 portfolio.jso
 
 > **Local-first multi-market portfolio tracker. Zero API keys. Completely free.**
 
-A **local-first** portfolio tracker supporting **A-shares / B-shares / HK / US / DE / GB / CA / AU** markets. Built with Streamlit, OpenBB (yfinance), and akshare.
+A **local-first** portfolio tracker supporting **A-shares / B-shares / HK / US / DE / GB / CA / AU** and **crypto**. Built with Streamlit, OpenBB (yfinance), akshare, and Binance. Data layer is split into three isolated **providers** (global stocks / CN stocks / crypto) that only meet at the portfolio & watchlist aggregation level.
 
 ### Features
 

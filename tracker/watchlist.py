@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 
 from .prices import Quote
-from .symbols import parse
+from .symbols import parse, type_for_symbol
 
 DEFAULT_WATCHLIST = Path(__file__).resolve().parent.parent / "watchlist.json"
 
@@ -68,8 +68,9 @@ def load_watchlist(path: str | Path = DEFAULT_WATCHLIST) -> dict:
 
 
 def save_watchlist(data: dict, path: str | Path = DEFAULT_WATCHLIST) -> None:
+    entries = [_normalize_entry(dict(e)) for e in data.get("watchlist", [])]
     Path(path).write_text(
-        json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False),
+        json.dumps({"watchlist": entries}, ensure_ascii=False, indent=2, allow_nan=False),
         encoding="utf-8",
     )
 
@@ -139,6 +140,13 @@ def _normalize_entry(e: dict) -> dict:
     for old, new in (("upper", "upper_1"), ("lower", "lower_1")):
         if old in out and new not in out:
             out[new] = out.pop(old)
+    # 权威 type 字段: 系统按自定义后缀规范推导并覆写 (用户不可见, 手改无效)
+    sym = str(out.get("symbol", "")).strip()
+    if sym:
+        try:
+            out["type"] = type_for_symbol(sym)
+        except Exception:
+            pass
     return out
 
 

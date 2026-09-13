@@ -30,7 +30,7 @@ class TestWatchlistCli:
         assert "新增 AAPL" in out
         data = _load(f)
         assert data["watchlist"] == [
-            {"symbol": "AAPL", "lists": ["科技"], "upper_1": 250.0, "note": "苹果"}
+            {"symbol": "AAPL", "lists": ["科技"], "upper_1": 250.0, "note": "苹果", "type": "global"}
         ]
 
     def test_add_merges_existing(self, tmp_path, capsys):
@@ -85,7 +85,7 @@ class TestWatchlistCli:
             capsys, "watchlist", "remove", "AAPL", "--file", str(f), "--list", "科技"
         )
         assert "已删除" in out
-        assert _load(f)["watchlist"] == [{"symbol": "AAPL", "lists": ["美股"]}]
+        assert _load(f)["watchlist"] == [{"symbol": "AAPL", "lists": ["美股"], "type": "global"}]
 
     def test_remove_from_last_list_deletes_entry(self, tmp_path, capsys):
         f = tmp_path / "w.json"
@@ -106,7 +106,7 @@ class TestWatchlistCli:
             capsys, "watchlist", "remove", "AAPL", "--file", str(f), "--list", "科技"
         )
         assert "未找到" in out
-        assert _load(f)["watchlist"] == [{"symbol": "AAPL", "lists": ["默认"]}]
+        assert _load(f)["watchlist"] == [{"symbol": "AAPL", "lists": ["默认"], "type": "global"}]
 
     def test_list_no_quotes(self, tmp_path, capsys):
         f = tmp_path / "w.json"
@@ -134,7 +134,7 @@ class TestPortfolioCli:
         assert "新增 AAPL" in out
         data = _load(f)
         assert data["holdings"] == [
-            {"symbol": "AAPL", "quantity": 10.0, "avg_cost": 180.0}
+            {"symbol": "AAPL", "quantity": 10.0, "avg_cost": 180.0, "type": "global"}
         ]
 
     def test_add_updates_existing(self, tmp_path, capsys):

@@ -26,9 +26,13 @@ def test_cfets_table_skips_nan(monkeypatch):
             "卖报价": [6.72, 7.79, 0.856],
         }
     )
-    import akshare as ak
 
-    monkeypatch.setattr(ak, "fx_spot_quote", lambda: df)
+    class FakeAk:
+        fx_spot_quote = lambda self, **kw: df
+
+    import sys
+
+    monkeypatch.setitem(sys.modules, "akshare", FakeAk())
     table = fx._cfets_table()
     assert abs(table["USD"] - 6.71) < 1e-9
     assert abs(table["HKD"] - 0.8555) < 1e-9
@@ -78,9 +82,13 @@ def test_cfets_table_parsing(monkeypatch):
             "卖报价": [6.72, 4.32, 1.17],
         }
     )
-    import akshare as ak
 
-    monkeypatch.setattr(ak, "fx_spot_quote", lambda: df)
+    class FakeAk:
+        fx_spot_quote = lambda self, **kw: df
+
+    import sys
+
+    monkeypatch.setitem(sys.modules, "akshare", FakeAk())
     table = fx._cfets_table()
     assert table["CNY"] == 1.0
     assert abs(table["USD"] - 6.71) < 1e-9

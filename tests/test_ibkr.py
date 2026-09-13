@@ -346,6 +346,27 @@ def test_get_fx_rate_ibkr_fallback(monkeypatch):
     assert abs(rate - 7.1) < 1e-9
 
 
+def test_ibkr_to_yahoo_b_shares_without_exchange():
+    # SMART + 空 primaryExchange 是 IBKR 常见返回; B 股必须靠代码形态识别,
+    # 否则沪 B 会被当成美股裸代码、深 B 会被当成港股
+    assert ibkr_to_yahoo("900902", "SMART", "", "USD") == "900902.SS"
+    assert ibkr_to_yahoo("200012", "SMART", "", "HKD") == "200012.SZ"
+    # 六位数字但非 B 股形态的 USD/HKD 合约不受影响 (如美股代码不会误判)
+    assert ibkr_to_yahoo("AAPL", "SMART", "", "USD") == "AAPL"
+
+
+def test_quote_from_ticker_pence_case_insensitive():
+    # 便士符号大小写混用时都必须换算为英镑 (÷100), 否则价格放大 100 倍
+    for ccy in ("GBp", "GBX", "gbx", "gbX", "gBp"):
+        q = quote_from_ticker("BP.L", FakeTicker(price=539.7, close=528.0, currency=ccy))
+        assert q.currency == "GBP", ccy
+        assert abs(q.price - 5.397) < 1e-9, ccy
+        assert abs(q.prev_close - 5.28) < 1e-9, ccy
+    # 精确 GBP 已是英镑, 不能再除 100
+    q_gbp = quote_from_ticker("X", FakeTicker(price=5.397, close=5.28, currency="GBP"))
+    assert q_gbp.price == 5.397
+
+
 def test_run_sync_json_writes_portfolio(tmp_path, capsys, monkeypatch):
     # --json 非 dry-run 模式必须实际写入 portfolio 文件
     import tracker.ibkr_sync as sync_mod

@@ -121,6 +121,34 @@ class TestWatchlistCli:
         assert "科技" in out
         assert "upper_1=250" in out
 
+    def test_remove_comma_separated_scope(self, tmp_path, capsys):
+        """--list 支持逗号分隔多个列表, 与 add 的语义一致."""
+        f = tmp_path / "w.json"
+        f.write_text(
+            json.dumps(
+                {"watchlist": [{"symbol": "AAPL", "lists": ["科技", "美股", "核心"]}]}
+            ),
+            encoding="utf-8",
+        )
+        out = _run(
+            capsys, "watchlist", "remove", "AAPL", "--file", str(f), "--list", "科技,美股"
+        )
+        assert "已删除" in out
+        # 仅移除指定两个列表, 仍保留「核心」
+        assert _load(f)["watchlist"] == [
+            {"symbol": "AAPL", "lists": ["核心"], "type": "global"}
+        ]
+
+    def test_add_json_output(self, tmp_path, capsys):
+        f = tmp_path / "w.json"
+        f.write_text(json.dumps({"watchlist": []}), encoding="utf-8")
+        out = _run(
+            capsys, "watchlist", "add", "AAPL", "--file", str(f),
+            "--list", "科技", "--json",
+        )
+        data = json.loads(out)
+        assert data["changed"] == ["新增 AAPL"]
+        assert data["watchlist"][0]["symbol"] == "AAPL"
 
 
 class TestPortfolioCli:
@@ -316,6 +344,18 @@ class TestReportCli:
         assert data["summary"]["by_list"] == {"美股": {"total": 1, "triggered": 1}}
         assert list(data["by_list"].keys()) == ["美股"]
 
+    def test_report_comma_separated_scope(self, tmp_path, capsys, monkeypatch):
+        """-w 支持逗号分隔多个列表; 不得把它们当成一个假列表名."""
+        monkeypatch.setattr(cli.prices, "get_quotes", self._fake_quotes)
+        out = _run(
+            capsys, "report", "--file", str(self._watchlist(tmp_path)),
+            "-f", "json", "-w", "科技,美股",
+        )
+        data = json.loads(out)
+        assert data["summary"]["total"] == 2
+        # 分组应为真实的两个列表, 而不是 "科技,美股"
+        assert set(data["summary"]["by_list"]) == {"科技", "美股"}
+        assert set(data["by_list"]) == {"科技", "美股"}
 
 class TestSnapshotJson:
     def test_snapshot_json_serializable(self):

@@ -34,15 +34,17 @@ def test_parse_cn():
 
 
 def test_parse_cn_b_shares():
+    # B 股以外币计价: 沪 B 为美元, 深 B 为港币 (与 IBKR 合约币种、
+    # yfinance 行情 currency 字段一致); 用 CNY 会导致汇率折算错误
     sh_b = parse("900902.SS")
     assert sh_b.market is Market.CN
-    assert sh_b.currency == "CNY"
+    assert sh_b.currency == "USD"
     assert sh_b.ak_code == "900902"
     assert sh_b.is_b_share is True
     assert sh_b.market_label == "B股"
     sz_b = parse("200012.SZ")
     assert sz_b.market is Market.CN
-    assert sz_b.currency == "CNY"
+    assert sz_b.currency == "HKD"
     assert sz_b.ak_code == "200012"
     assert sz_b.is_b_share is True
     assert sz_b.market_label == "B股"
@@ -207,3 +209,15 @@ def test_type_same_suffix_never_two_domains():
     # 互斥性: 连字符+计价货币永远 crypto, 点后缀/裸代码永远股票
     assert type_for_symbol("BRK-B") == "global"  # 美股类别股不是 crypto
     assert parse("BRK-B").type == "global"
+
+
+def test_is_pence_case_insensitive():
+    from tracker.symbols import is_pence
+
+    # LSE 便士符号各数据源大小写不一 (yfinance 用 GBp, IBKR 用 GBX/GBp)
+    for ccy in ("GBp", "GBX", "GBx", "gbx", "gbX", "gBp", "  GBp "):
+        assert is_pence(ccy), ccy
+    # 精确 "GBP" 是英镑本体, 不能再除 100
+    assert not is_pence("GBP")
+    assert not is_pence("USD")
+    assert not is_pence("")

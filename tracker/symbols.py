@@ -52,7 +52,16 @@ _SUFFIX_MARKET: dict[str, Market] = {
     "AX": Market.AU,
 }
 
-PENCE_CURRENCIES = {"GBp", "GBX", "GBx"}
+# 便士计价符号: LSE 以 GBp/GBX 报价 (1 GBP = 100 便士), 实际数据源大小写混用。
+# 判定规则: 代码形如 <G><B><p|X> (任意大小写) 即便士; 精确的 "GBP" 是英镑本体,
+# 若把它当便士会在 GBP 报价上再除 100, 结果偏小 100 倍。
+def is_pence(currency: str) -> bool:
+    """该币种代码是否为 LSE 便士计价 (GBp/GBX 任意大小写; 精确 "GBP" 不算)."""
+    s = str(currency).strip()
+    if s == "GBP":
+        return False
+    return s.upper() in ("GBP", "GBX")
+
 
 # 加密货币常见基础代码 (用于 BTCUSD → BTC-USD 自动补全)
 _KNOWN_CRYPTO: set[str] = {
@@ -174,8 +183,12 @@ def parse(symbol: str) -> ParsedSymbol:
     is_b_share = False
     if market is Market.CN:
         code = yahoo.split(".")[0]
-        if code.startswith(("900", "200")):
+        if code.startswith("900"):
             is_b_share = True
+            currency = "USD"  # 沪 B 以美元交易
+        elif code.startswith("200"):
+            is_b_share = True
+            currency = "HKD"  # 深 B 以港币交易
     return ParsedSymbol(
         raw=symbol.strip(), yahoo=yahoo, market=market, currency=currency,
         is_b_share=is_b_share, type=type_for_symbol(yahoo),

@@ -20,7 +20,7 @@ from pathlib import Path
 import pandas as pd
 
 from .prices import Quote
-from .symbols import Market, ParsedSymbol, type_for_symbol
+from .symbols import Market, ParsedSymbol, is_pence, type_for_symbol
 
 DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "ibkr.json"
 EXAMPLE_CONFIG = Path(__file__).resolve().parent.parent / "ibkr.example.json"
@@ -225,7 +225,7 @@ def quote_from_ticker(yahoo_symbol: str, ticker) -> Quote | None:
     chg = None
     if close and close > 0:
         chg = (price / close - 1) * 100
-    if raw_ccy in ("GBp", "GBX", "GBx"):
+    if is_pence(raw_ccy):
         currency = "GBP"
         price = price / 100
         if close:
@@ -300,6 +300,14 @@ def ibkr_to_yahoo(
     # SMART/空 等通用路由代号不携带真实交易所信息, 此时以 primaryExchange 为准,
     # 否则 SMART+SHSE 的沪 B 股会误判为美股, SMART+SZSE 的深 B 股会误判为港股
     exkey = prim if ex in ("", "SMART", "BESTEXEC") else ex
+    # B 股: 沪 B 以 USD、深 B 以 HKD 计价的 9xxxxx/2xxxxx 六位代码。
+    # 交易所/primaryExchange 可能缺失 (SMART + 空), 因此必须先按代码形态判定,
+    # 否则沪 B 会被当成美股 (裸代码)、深 B 会被当成港股 (.HK)。
+    if len(raw) == 6 and raw.isdigit() and ccy in ("USD", "HKD"):
+        if raw.startswith("900"):
+            return f"{raw}.SS"
+        if raw.startswith("200"):
+            return f"{raw}.SZ"
     if ccy == "CNY":
         if raw[:1] in _A_SHARE_BJ_PREFIX or raw.startswith("920"):
             return f"{raw}.BJ"

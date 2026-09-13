@@ -65,7 +65,8 @@ def clean_ohlc(df: pd.DataFrame) -> pd.DataFrame:
         (out["high"] >= out["low"] - 1e-9)
         & (out["high"] >= body_hi - 1e-9)
         & (out["low"] <= body_lo + 1e-9)
-        & (out["close"] > 0)
+        # 任一价格 <=0 都是无效行情 (停牌/坏数据), 会污染区间高低点与绘图
+        & (out[["open", "high", "low", "close"]] > 0).all(axis=1)
     )
     out = out[ok]
     # 稳定排序: 重复日期保留输入中最后一条 (来源覆盖顺序有意义)

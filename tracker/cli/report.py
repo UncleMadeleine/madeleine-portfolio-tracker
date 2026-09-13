@@ -14,6 +14,7 @@ from ..watchlist import (
     build_watchlist_view,
     entries_for,
     load_watchlist,
+    parse_lists,
     sort_watchlist,
     triggered_entries,
 )
@@ -49,11 +50,14 @@ def _build_report(args) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, list[str]
     trig = triggered_entries(wview)
     issues = [f"{k}: {v}" for k, v in errors.items()] + wissues + notes
     sym_lists: dict[str, list[str]] = {}
+    # -w 支持逗号分隔多个列表; 取交集而不是把原始字符串当成单个列表名,
+    # 否则报告会多出一个名为 "科技,美股" 的假分组
+    scope = set(parse_lists(args.watchlist)) if args.watchlist else set()
     for e in entries:
         try:
             names = list(e.get("lists") or [])
-            if args.watchlist:
-                names = [args.watchlist]
+            if scope:
+                names = [n for n in names if n in scope]
             sym_lists.setdefault(_sym(e), names)
         except ValueError:
             pass

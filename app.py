@@ -54,6 +54,14 @@ def fmt(v, digits: int = 2) -> str:
     return f"{v:,.{digits}f}"
 
 
+def _norm_sym(sym: str) -> str:
+    """代码 → Yahoo 规范形式; 无法识别时退回原始大写 (调用方随后报错)."""
+    try:
+        return parse(sym).yahoo
+    except ValueError:
+        return sym.strip().upper()
+
+
 def _pnl_color(v) -> str:
     """涨跌单元格字体色: 涨/跌按全局配色 (0/缺失不着色)。"""
     if v is None or (isinstance(v, float) and pd.isna(v)) or v == 0:
@@ -222,9 +230,11 @@ with st.sidebar:
                     e = _normalize_entry(r)
                     e["symbol"] = key
                     e["lists"] = parse_lists(e.get("lists"))
-                    for k in ("upper_1", "upper_2", "lower_1", "lower_2"):
+                    # data_editor 清空单元格会产生 NaN; note 若是 NaN 会让
+                    # save_watchlist 的 allow_nan=False 直接抛 ValueError
+                    for k in ("upper_1", "upper_2", "lower_1", "lower_2", "note"):
                         v = e.get(k)
-                        if isinstance(v, float) and pd.isna(v):
+                        if v is None or (isinstance(v, float) and pd.isna(v)):
                             e.pop(k, None)
                     rows.append(e)
                 if bad or dups:

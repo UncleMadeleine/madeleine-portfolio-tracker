@@ -61,7 +61,9 @@ def get_ohlc(
     from .charting import clean_ohlc
 
     p = parse(symbol)
-    is_range = start_date is not None
+    # 只要指定了任一端日期就是「区间查询」: 结果可能被截断, 不能当作完整
+    # months 窗口读写 (key 只有 symbol+months), 否则会把截断数据污染进缓存
+    is_range = start_date is not None or end_date is not None
     if not refresh and not is_range:
         cached = cache_mod.get_ohlc_cached(p.yahoo, months)
         if cached is not None:

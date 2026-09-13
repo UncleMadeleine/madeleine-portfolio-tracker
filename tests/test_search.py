@@ -174,3 +174,55 @@ def test_search_symbols_returns_dicts(sample_entries):
     assert isinstance(res, list)
     for item in res:
         assert set(item.keys()) == {"code", "name", "market", "type"}
+
+
+# ---------- 本地目录缓存 ----------
+
+
+def test_fresh_cache_is_used_without_network(tmp_path, monkeypatch):
+    """新鲜缓存必须直接命中, 不得再走网络 (CACHE_TTL 缺失曾导致每次都重取)."""
+    import json
+    import time
+
+    from tracker import search
+
+    cache = tmp_path / "symbol_list.json"
+    cache.write_text(
+        json.dumps(
+            {
+                "fetched_at": time.time(),
+                "entries": [
+                    {"code": "AAPL", "name": "苹果", "market": "美股", "type": "global"}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(search, "CACHE_FILE", cache)
+
+    def _boom():
+        raise AssertionError("新鲜缓存命中时不应请求网络")
+
+    monkeypatch.setattr(search, "_fetch_all", _boom)
+    entries = search.load_symbol_list()
+    assert [e.code for e in entries] == ["AAPL"]
+
+
+def test_expired_cache_refetches(tmp_path, monkeypatch):
+    """过期缓存应触发刷新."""
+    import json
+
+    from tracker import search
+
+    cache = tmp_path / "symbol_list.json"
+    cache.write_text(
+        json.dumps({"fetched_at": 0, "entries": [{"code": "OLD", "name": "旧", "market": "美股"}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(search, "CACHE_FILE", cache)
+    monkeypatch.setattr(
+        search, "_fetch_all",
+        lambda: [search.SymbolEntry("NEW", "新", "美股", "global")],
+    )
+    entries = search.load_symbol_list()
+    assert [e.code for e in entries] == ["NEW"]

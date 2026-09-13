@@ -327,11 +327,14 @@ def render_kline_controls(prefer_akshare: bool) -> None:
                         prefer_akshare=prefer_akshare,
                     )
                 if not older_df.empty:
+                    before_bars = len(full_df)
                     combined = pd.concat([older_df, full_df])
                     combined = combined.drop_duplicates(subset="date", keep="first")
                     combined = combined.sort_values("date").reset_index(drop=True)
                     st.session_state["kline_full_df"] = combined
-                    shift = len(older_df)
+                    # 平移量 = 实际新增的 K 线数。older_df 与 full_df 在
+                    # before_date 当天重叠, 用 len(older_df) 会多算, 视窗右移过头
+                    shift = len(combined) - before_bars
                     total_bars = len(combined)
                     old_from = old_range.get("from", 0)
                     old_to = old_range.get("to", 0)

@@ -62,6 +62,9 @@ def watchlist_add(args) -> None:
                 found["note"] = args.note
             changed.append(f"更新 {p.yahoo}")
     save_watchlist(data, args.file)
+    if args.json:
+        _print_json({"changed": changed, "watchlist": data.get("watchlist", [])})
+        return
     print("✅ " + "; ".join(changed))
 
 
@@ -76,7 +79,9 @@ def watchlist_remove(args) -> None:
             targets.add(parse(s).yahoo)
         except ValueError:
             targets.add(s.strip().upper())
-    scope = args.wl_list
+    # --list 允许多个列表 (逗号分隔, 与 add/entries_for 行为一致);
+    # 直接拿原串比对单个列表名会永远匹配不上, 导致静默删不掉
+    scope = set(parse_lists(args.wl_list)) if args.wl_list else set()
     remaining: list[dict] = []
     removed: list[str] = []
     for e in data.get("watchlist", []):
@@ -85,18 +90,16 @@ def watchlist_remove(args) -> None:
             if scope:
                 # 仅从指定列表移除; 仍属其他列表则保留
                 cur = e.get("lists") or []
-                if scope in cur:
-                    cur = [n for n in cur if n != scope]
+                keep = [n for n in cur if n not in scope]
+                if len(keep) != len(cur):
                     removed.append(sym)
-                    if cur:
-                        e["lists"] = cur
+                    if keep:
+                        e["lists"] = keep
                         remaining.append(e)
-                        continue
-                    # 已不属于任何列表 → 整体删除
-                    continue
-                # 不在指定列表中 → 保留不动
-                remaining.append(e)
-                continue
+                    # 已不属于任何列表 → 整体删除 (不入 remaining)
+                else:
+                    # 不在指定列表中 → 保留不动
+                    remaining.append(e)
             else:
                 removed.append(sym)
         else:

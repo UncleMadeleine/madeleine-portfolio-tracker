@@ -83,6 +83,25 @@ class TestCleanOclc:
         assert len(out) == 12
         assert not (out["date"] >= pd.Timestamp(2025, 2, 3)).any()
 
+    def test_clean_drops_non_positive_prices(self):
+        """任一 OHLC 价格 <=0 都是无效行情, 会污染区间高低点与绘图."""
+        bad = pd.DataFrame(
+            [
+                # low = 0 (close 正常)
+                {"date": pd.Timestamp(2025, 3, 3), "open": 10, "high": 12, "low": 0, "close": 11, "volume": 1},
+                # open = 0
+                {"date": pd.Timestamp(2025, 3, 4), "open": 0, "high": 12, "low": 1, "close": 11, "volume": 1},
+                # high = 0
+                {"date": pd.Timestamp(2025, 3, 5), "open": 1, "high": 0, "low": 0, "close": 1, "volume": 1},
+            ]
+        )
+        out = charting.clean_ohlc(pd.concat([_mk_df(), bad], ignore_index=True))
+        assert len(out) == 12
+        assert (out[["open", "high", "low", "close"]] > 0).all().all()
+        # 摘要不得被零价行拉低
+        s = charting.summarize_ohlc(pd.concat([_mk_df(), bad], ignore_index=True))
+        assert s["period_low"] > 0
+
     def test_clean_empty_and_missing_cols(self):
         assert charting.clean_ohlc(None).empty
         assert charting.clean_ohlc(pd.DataFrame()).empty
@@ -322,6 +341,23 @@ class TestGetOhlc:
         monkeypatch.setattr(prices, "get_history", fake_history)
         prices.get_ohlc("AAPL", months=12)
         prices.get_ohlc("AAPL", months=12, refresh=True)
+        assert calls["n"] == 2
+
+    def test_end_date_only_does_not_poison_cache(self, monkeypatch):
+        """只给 end_date 的区间查询结果被截断, 不得写入 months 缓存."""
+        from tracker import prices
+
+        calls = {"n": 0}
+
+        def fake_history(symbol, months=12, start_date=None, end_date=None, prefer_akshare=False, use_ibkr=False):
+            calls["n"] += 1
+            return _mk_df()
+
+        monkeypatch.setattr(prices, "get_history", fake_history)
+        truncated = prices.get_ohlc("AAPL", months=12, end_date="2025-01-10")
+        assert len(truncated) == 12
+        # 再次请求完整窗口必须重新取数 (缓存里没有这次截断的数据)
+        prices.get_ohlc("AAPL", months=12)
         assert calls["n"] == 2
 
     def test_invalid_symbol_raises(self):

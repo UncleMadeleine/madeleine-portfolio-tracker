@@ -38,6 +38,9 @@ def code_to_yahoo(code: str) -> str | None:
         if raw.upper().startswith(prefix):
             raw = raw[len(prefix):].lstrip(".")
             break
+    # 数值读入残留的小数形式 (1.0 → 1) 先归一为整数串
+    if raw.endswith(".0"):
+        raw = raw[:-2]
     if not raw.isdigit() or len(raw) != 6:
         return None
     if raw.startswith(_BJ_PREFIX):
@@ -95,7 +98,7 @@ def parse_positions_file(path: str | Path) -> tuple[list[dict], list[str]]:
     suffix = p.suffix.lower()
     if suffix in (".xlsx", ".xls"):
         try:
-            df = pd.read_excel(p)
+            df = pd.read_excel(p, dtype=str)
         except ImportError as e:
             raise RuntimeError(
                 "读取 Excel 需要 openpyxl, 请: pip install openpyxl"
@@ -105,7 +108,8 @@ def parse_positions_file(path: str | Path) -> tuple[list[dict], list[str]]:
         df = None
         for enc in ("utf-8", "gbk", "gb18030", "utf-8-sig"):
             try:
-                df = pd.read_csv(p, encoding=enc)
+                # dtype=str: 券商导出常省略前导零 (000001), 按数值读入会变成 1 而丢失代码
+                df = pd.read_csv(p, encoding=enc, dtype=str)
                 break
             except UnicodeDecodeError:
                 continue
@@ -141,7 +145,8 @@ def parse_positions_file(path: str | Path) -> tuple[list[dict], list[str]]:
                 "symbol": yahoo,
                 "type": type_for_symbol(yahoo),
                 "quantity": qty,
-                **({"avg_cost": round(avg_cost, 6)} if avg_cost else {}),
+                # avg_cost=0 是合法成本 (如送股/配股后), 不能被当作缺失去掉
+                **({"avg_cost": round(avg_cost, 6)} if avg_cost is not None else {}),
             }
         )
     return rows, skipped

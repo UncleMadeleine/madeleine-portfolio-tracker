@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from ..symbols import PENCE_CURRENCIES, Market, ParsedSymbol, normalize
+from ..symbols import Market, ParsedSymbol, is_pence, normalize
 from ..util import with_timeout
 from .base import Provider, Quote
 
@@ -51,8 +51,10 @@ def _quote_from_dump(p: ParsedSymbol, d: dict) -> Quote | None:
     raw_ccy = _pick(d, "currency")
     if raw_ccy is None:
         raw_ccy = "GBp" if p.market is Market.GB else p.currency
-    raw_ccy = str(raw_ccy)
-    if raw_ccy in PENCE_CURRENCIES:
+    raw_ccy = str(raw_ccy).strip()
+    # 便士符号大小写混用 (GBp/GBX/gbx/…), 必须先判定再大写, 否则小写 "gbx"
+    # 会被当作普通货币而漏掉 ÷100, 英股价格放大 100 倍
+    if is_pence(raw_ccy):
         currency = "GBP"
         price = float(price) / 100
         if prev is not None:

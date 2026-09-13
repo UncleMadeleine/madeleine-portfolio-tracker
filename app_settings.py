@@ -99,9 +99,11 @@ def _clean_rows(rows: list[dict]) -> list[dict]:
 
 
 def save_portfolio_file(data: dict) -> None:
-    data = dict(data)
-    data["holdings"] = _clean_rows(data.get("holdings", []))
+    """保存持仓/基础货币, 保留文件中其它键 (_说明 等文档/自定义字段)."""
+    merged = load_portfolio_file()
+    merged.update(data)
+    merged["holdings"] = _clean_rows(merged.get("holdings", []))
     PORTFOLIO_PATH.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False),
+        json.dumps(merged, ensure_ascii=False, indent=2, allow_nan=False),
         encoding="utf-8",
     )

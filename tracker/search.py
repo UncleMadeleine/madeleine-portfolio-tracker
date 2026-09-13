@@ -20,6 +20,8 @@ from .util import with_timeout
 
 # 本地缓存文件 (data/ 已在 .gitignore, 不入库)
 CACHE_FILE = Path(__file__).resolve().parent.parent / "data" / "symbol_list.json"
+# 缓存有效期: 1 天 (86400 秒); 收盘后列表基本不变
+CACHE_TTL = 86400
 # akshare 接口超时 (秒), 避免卡死 UI
 _FETCH_TIMEOUT = 20.0
 _HK_SINA_TIMEOUT = 90.0  # sina 港股列表分页抓取 (~2 分钟), 超时上限略低

@@ -10,8 +10,9 @@
   fx        汇率查询
   history   历史价格 (近 N 个月)
   kline     K线蜡烛图 (交互式 HTML + 摘要, 含成交量/均线/周月K)
-  sync      从 IB Gateway 账户同步持仓 (--mode paper|live)
-  import-wallet 从链上地址导入加密资产 (eth/bsc/polygon/arbitrum/avalanche)
+  import    统一持仓导入 (ibkr / wallet / file, 追加合并或 --overwrite 覆盖)
+  sync      从 IB Gateway 账户同步持仓 (已并入 import ibkr, 保留兼容)
+  import-wallet 从链上地址导入加密资产 (已并入 import wallet, 保留兼容)
   cache     行情磁盘缓存管理 (info / clear)
 
 所有子命令均支持 --json 输出机器可读结果, 便于脚本与 AI 消费。
@@ -35,6 +36,7 @@ from .quote import cmd_quote
 from .report import cmd_report
 from .snapshot import cmd_snapshot
 from .sync import cmd_sync
+from .importer import cmd_import
 from .wallet import cmd_import_wallet
 from .watchlist import cmd_watchlist
 
@@ -256,27 +258,107 @@ def build_parser() -> argparse.ArgumentParser:
     p_k.add_argument("--json", action="store_true", help="输出 JSON 数据 (不生成图表)")
     p_k.set_defaults(func=cmd_kline)
 
-    # ---- sync ----
+    # ---- import ----
+    p_imp = sub.add_parser(
+        "import", help="统一持仓导入 (ibkr / wallet / file)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "导入方式: 默认追加合并 (按代码更新数量/成本, 新代码追加, 其余持仓保留);\n"
+            "          --overwrite 覆盖全部持仓 (写前自动备份 .bak)。\n"
+            "示例:\n"
+            "  tracker import ibkr --dry-run                     # 预览 IBKR 账户持仓\n"
+            "  tracker import ibkr --mode live --overwrite       # 实盘账户, 覆盖写入\n"
+            "  tracker import wallet eth 0xd8dA... --dry-run     # 预览链上余额\n"
+            "  tracker import wallet bsc 0x... --base-currency USDT\n"
+            "  tracker import file 持仓.csv                       # 券商导出文件追加导入\n"
+            "  tracker import file 持仓.xlsx --overwrite --json\n"
+        ),
+    )
+    imp_sub = p_imp.add_subparsers(dest="source", metavar="<来源>", required=True)
+
+    p_i_ibkr = imp_sub.add_parser(
+        "ibkr", help="从 IB Gateway 账户导入持仓",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "示例:\n"
+            "  tracker import ibkr --dry-run          # 仅预览\n"
+            "  tracker import ibkr --mode paper       # 模拟账户 (端口 4002)\n"
+            "  tracker import ibkr --overwrite        # 覆盖全部持仓\n"
+        ),
+    )
+    p_i_ibkr.add_argument("--portfolio", default=str(DEFAULT_PORTFOLIO), help="portfolio.json 路径")
+    p_i_ibkr.add_argument("--mode", choices=["paper", "live"], default=None,
+                          help="Gateway API 模式: paper 模拟(4002) / live 实盘(4001); 缺省用配置")
+    p_i_ibkr.add_argument("--overwrite", action="store_true",
+                          help="覆盖全部持仓 (缺省追加合并)")
+    p_i_ibkr.add_argument("--dry-run", action="store_true", help="仅预览, 不写入")
+    p_i_ibkr.add_argument("--json", action="store_true", help="输出 JSON")
+    p_i_ibkr.set_defaults(func=cmd_import)
+
+    p_i_wallet = imp_sub.add_parser(
+        "wallet", help="从链上地址导入加密资产 (轻钱包: tokenlist + balanceOf)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "支持链: eth, bsc, polygon, arbitrum, avalanche\n"
+            "示例:\n"
+            "  tracker import wallet eth 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045\n"
+            "  tracker import wallet bsc 0x... --base-currency USDT --dry-run\n"
+            "  tracker import wallet polygon 0x... --tokenlist my_tokens.json\n"
+        ),
+    )
+    p_i_wallet.add_argument("chain", help="链名称: eth / bsc / polygon / arbitrum / avalanche")
+    p_i_wallet.add_argument("address", help="链上地址 (0x + 40 位十六进制)")
+    p_i_wallet.add_argument("--portfolio", default=str(DEFAULT_PORTFOLIO), help="portfolio.json 路径")
+    p_i_wallet.add_argument("--tokenlist", default=None, help="外部 tokenlist JSON 路径 (覆盖内置列表)")
+    p_i_wallet.add_argument("--base-currency", default="USD", help="计价货币 (默认 USD)")
+    p_i_wallet.add_argument("--overwrite", action="store_true",
+                            help="覆盖全部持仓 (缺省追加合并)")
+    p_i_wallet.add_argument("--dry-run", action="store_true", help="仅查询预览, 不写入")
+    p_i_wallet.add_argument("--json", action="store_true", help="输出 JSON")
+    p_i_wallet.set_defaults(func=cmd_import)
+
+    p_i_file = imp_sub.add_parser(
+        "file", help="从券商导出文件导入 (A股 CSV/Excel)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "示例:\n"
+            "  tracker import file 持仓.csv                  # 追加合并\n"
+            "  tracker import file 持仓.xlsx --overwrite     # 覆盖全部持仓\n"
+            "  tracker import file 持仓.csv --dry-run        # 仅解析预览\n"
+        ),
+    )
+    p_i_file.add_argument("file", help="券商导出的持仓文件路径 (CSV/Excel)")
+    p_i_file.add_argument("--portfolio", default=str(DEFAULT_PORTFOLIO), help="portfolio.json 路径")
+    p_i_file.add_argument("--overwrite", action="store_true",
+                          help="覆盖全部持仓 (缺省追加合并)")
+    p_i_file.add_argument("--dry-run", action="store_true", help="仅预览, 不写入")
+    p_i_file.add_argument("--json", action="store_true", help="输出 JSON")
+    p_i_file.set_defaults(func=cmd_import)
+
+    # ---- sync (兼容入口, 已并入 import ibkr) ----
     p_sync = sub.add_parser(
-        "sync", help="从 IB Gateway 账户同步持仓",
+        "sync", help="从 IB Gateway 账户同步持仓 (已并入 import ibkr)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
             "  tracker sync --dry-run                # 预览同步结果, 不写入\n"
             "  tracker sync --mode paper             # 模拟账户 (端口 4002)\n"
             "  tracker sync --mode live --json       # 实盘账户 + JSON 输出\n"
+            "  tracker sync --append                 # 追加合并 (缺省覆盖全部持仓)\n"
         ),
     )
     p_sync.add_argument("--portfolio", default=str(DEFAULT_PORTFOLIO))
     p_sync.add_argument("--dry-run", action="store_true", help="仅预览, 不写入")
     p_sync.add_argument("--mode", choices=["paper", "live"], default=None,
                         help="Gateway API 模式: paper 模拟(4002) / live 实盘(4001); 缺省用配置")
+    p_sync.add_argument("--append", action="store_true",
+                        help="追加合并 (按代码更新/新增); 缺省覆盖全部持仓")
     p_sync.add_argument("--json", action="store_true")
     p_sync.set_defaults(func=cmd_sync)
 
-    # ---- import-wallet ----
+    # ---- import-wallet (兼容入口, 已并入 import wallet) ----
     p_wallet = sub.add_parser(
-        "import-wallet", help="从链上地址导入加密资产 (轻钱包: tokenlist + balanceOf)",
+        "import-wallet", help="从链上地址导入加密资产 (已并入 import wallet)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "支持链: eth, bsc, polygon, arbitrum, avalanche\n"
@@ -292,7 +374,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_wallet.add_argument("--portfolio", default=str(DEFAULT_PORTFOLIO), help="portfolio.json 路径")
     p_wallet.add_argument("--tokenlist", default=None, help="外部 tokenlist JSON 路径 (覆盖内置列表)")
     p_wallet.add_argument("--base-currency", default="USD", help="计价货币 (默认 USD)")
-    p_wallet.add_argument("--add", action="store_true", help="将余额写入 portfolio.json")
+    p_wallet.add_argument("--add", action="store_true", help="将余额追加写入 portfolio.json")
+    p_wallet.add_argument("--overwrite", action="store_true",
+                          help="覆盖全部持仓 (与 --add 互斥语义, 指定即写入)")
     p_wallet.add_argument("--json", action="store_true", help="输出 JSON")
     p_wallet.set_defaults(func=cmd_import_wallet)
 

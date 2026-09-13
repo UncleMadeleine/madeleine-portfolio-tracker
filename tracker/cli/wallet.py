@@ -1,12 +1,14 @@
-"""import-wallet 子命令: 通过链上公钥/地址查询余额并导入投资组合."""
+"""import-wallet 子命令: 通过链上公钥/地址查询余额并导入投资组合.
+
+兼容入口 — 写盘已统一到 tracker.importer (推荐: tracker import wallet).
+"""
 from __future__ import annotations
 
 import argparse
 
-from ..snapshot import load_portfolio, save_portfolio
-from ..symbols import parse
+from .. import importer
 from .. import wallet as wallet_mod
-from ._common import _finish_with_error, _print_json, _sym
+from ._common import _finish_with_error, _print_json
 
 
 def _print_holdings_table(holdings: list[dict]) -> None:
@@ -64,32 +66,20 @@ def cmd_import_wallet(args: argparse.Namespace) -> None:
             for e in errors:
                 print(f"  - {e}")
 
-    if args.add:
-        if not holdings:
-            print("\n⏭ 未发现非零余额, 跳过写入 portfolio.json")
-            return
-        data = load_portfolio(args.portfolio)
-        existing_syms: set[str] = {_sym(h) for h in data.get("holdings", [])}
-        rows = data.setdefault("holdings", [])
-        added: list[str] = []
-        for h in holdings:
-            sym = h["symbol"]
-            try:
-                p = parse(sym)
-                yahoo = p.yahoo
-            except ValueError:
-                yahoo = sym.upper()
-            if yahoo in existing_syms:
-                continue
-            row: dict = {"symbol": yahoo, "quantity": h["quantity"], "type": "crypto"}
-            rows.append(row)
-            added.append(yahoo)
-            existing_syms.add(yahoo)
-        save_portfolio(data, args.portfolio)
-        if args.json:
-            _print_json({"added": added, "portfolio_path": args.portfolio})
-        else:
-            print(f"\n✅ 已写入 {len(added)} 个代币 → {args.portfolio}")
-            if added:
-                print(f"   新增: {', '.join(added)}")
-            print("   (avg_cost 未设置, 请在组合页补填)")
+    if not (args.add or args.overwrite):
+        return
+    rows = importer.wallet_rows(result)
+    if not rows:
+        print("\n⏭ 未发现非零余额, 跳过写入 portfolio.json")
+        return
+    mode = importer.MODE_OVERWRITE if args.overwrite else importer.MODE_APPEND
+    res = importer.apply_import(rows, args.portfolio, mode=mode)
+    if args.json:
+        _print_json({"import": res})
+        return
+    n = len(res["added"]) + len(res["updated"])
+    print(f"\n✅ 已写入 {n} 个代币 → {args.portfolio} "
+          f"(新增 {len(res['added'])} · 更新 {len(res['updated'])})")
+    if res["added"]:
+        print(f"   新增: {', '.join(res['added'])}")
+    print("   (avg_cost 未设置, 请在组合页补填)")

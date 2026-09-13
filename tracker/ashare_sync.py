@@ -10,17 +10,18 @@
     python -m tracker.ashare_sync 持仓.csv
     python -m tracker.ashare_sync 持仓.xlsx --dry-run
     python -m tracker.ashare_sync 持仓.csv --json
+    tracker import file 持仓.csv --overwrite   # 统一 CLI 入口 (tracker.importer)
 """
 from __future__ import annotations
 
 import argparse
 import json
-import shutil
 from pathlib import Path
 
 import pandas as pd
 
-from .snapshot import DEFAULT_PORTFOLIO, load_portfolio, save_portfolio
+from . import importer
+from .snapshot import DEFAULT_PORTFOLIO
 from .symbols import type_for_symbol
 
 # A股代码前缀 -> Yahoo 交易所后缀 (与 ibkr.py _A_SHARE_*_PREFIX 规则一致)
@@ -155,18 +156,12 @@ def parse_positions_file(path: str | Path) -> tuple[list[dict], list[str]]:
 def run_sync(args) -> None:
     rows, skipped = parse_positions_file(args.file)
 
-    written = False
-    base = "CNY"
-    if not args.dry_run and rows:
-        target = Path(args.portfolio)
-        if target.exists():
-            try:
-                base = load_portfolio(target).get("base_currency", "CNY")
-            except Exception:
-                pass
-            shutil.copy(target, Path(str(target) + ".bak"))
-        save_portfolio({"base_currency": base, "holdings": rows}, target)
-        written = True
+    mode = (
+        importer.MODE_APPEND
+        if getattr(args, "append", False)
+        else importer.MODE_OVERWRITE
+    )
+    result = importer.apply_import(rows, args.portfolio, mode=mode, dry_run=args.dry_run)
 
     if getattr(args, "json", False):
         print(
@@ -176,7 +171,10 @@ def run_sync(args) -> None:
                     "positions": rows,
                     "skipped": skipped,
                     "dry_run": bool(args.dry_run),
-                    "written": written,
+                    "written": result["written"],
+                    "mode": mode,
+                    "added": result["added"],
+                    "updated": result["updated"],
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -198,17 +196,26 @@ def run_sync(args) -> None:
     if args.dry_run or not rows:
         return
 
-    if written:
+    if result["written"]:
         print(f"\n已备份原文件: {Path(args.portfolio).name}.bak")
-        print(f"✅ 已写入 {args.portfolio} (基础货币保留: {base})")
+        print(
+            f"✅ 已写入 {args.portfolio} "
+            f"({'追加合并' if mode == importer.MODE_APPEND else '覆盖'}; "
+            f"新增 {len(result['added'])} · 更新 {len(result['updated'])}, "
+            f"共 {result['total']} 条持仓, 基础货币保留)"
+        )
     print("提示: avg_cost 为券商导出的成本价(当地货币), 仅供估算。")
 
 
 def main(argv=None) -> None:
-    ap = argparse.ArgumentParser(description="A股券商持仓文件导入 (CSV/Excel)")
+    ap = argparse.ArgumentParser(
+        description="A股券商持仓文件导入 (CSV/Excel; 等价 tracker import file)"
+    )
     ap.add_argument("file", help="券商导出的持仓文件路径 (CSV/Excel)")
     ap.add_argument("--portfolio", default=str(DEFAULT_PORTFOLIO))
     ap.add_argument("--dry-run", action="store_true", help="仅打印, 不写入")
+    ap.add_argument("--append", action="store_true",
+                    help="追加合并 (按代码更新/新增); 缺省覆盖全部持仓")
     ap.add_argument("--json", action="store_true", help="输出 JSON 而非表格")
     args = ap.parse_args(argv)
     run_sync(args)

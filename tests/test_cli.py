@@ -317,6 +317,101 @@ class TestImportWalletCli:
         assert "不支持的链" in capsys.readouterr().err
 
 
+class TestImportCli:
+    """统一 import 子命令 (file 离线; wallet 的 RPC 全部 mock)."""
+
+    ADDR = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
+    CSV = "证券代码,证券名称,持仓数量,成本价\n600519,贵州茅台,10,1500\n"
+
+    def _csv(self, tmp_path):
+        f = tmp_path / "pos.csv"
+        f.write_text(self.CSV, encoding="utf-8")
+        return f
+
+    def _portfolio(self, tmp_path):
+        f = tmp_path / "p.json"
+        f.write_text(
+            json.dumps(
+                {"base_currency": "CNY", "holdings": [{"symbol": "AAPL", "quantity": 10}]}
+            ),
+            encoding="utf-8",
+        )
+        return f
+
+    def _mock_rpc(self, monkeypatch, native_wei: int):
+        import tracker.wallet as wallet_mod
+
+        class _Resp:
+            status_code = 200
+
+            def __init__(self, body):
+                self._body = body
+
+            def json(self):
+                return self._body
+
+        class _Req:
+            def post(self, url, json=None, params=None, timeout=None, headers=None):
+                if json["method"] == "eth_getBalance":
+                    return _Resp({"result": hex(native_wei)})
+                return _Resp({"result": "0x0"})
+
+        monkeypatch.setattr(wallet_mod, "_requests", lambda: _Req())
+
+    def test_import_file_append(self, tmp_path, capsys):
+        pf = self._portfolio(tmp_path)
+        out = _run(capsys, "import", "file", str(self._csv(tmp_path)),
+                   "--portfolio", str(pf))
+        assert "已写入" in out and "新增 1" in out
+        data = _load(pf)
+        assert [h["symbol"] for h in data["holdings"]] == ["AAPL", "600519.SS"]
+
+    def test_import_file_overwrite(self, tmp_path, capsys):
+        pf = self._portfolio(tmp_path)
+        out = _run(capsys, "import", "file", str(self._csv(tmp_path)),
+                   "--portfolio", str(pf), "--overwrite")
+        assert "覆盖" in out
+        data = _load(pf)
+        assert [h["symbol"] for h in data["holdings"]] == ["600519.SS"]
+        assert (tmp_path / "p.json.bak").exists()
+
+    def test_import_file_dry_run_json(self, tmp_path, capsys):
+        pf = self._portfolio(tmp_path)
+        out = _run(capsys, "import", "file", str(self._csv(tmp_path)),
+                   "--portfolio", str(pf), "--dry-run", "--json")
+        payload = json.loads(out)
+        assert payload["source"] == "file"
+        assert payload["mode"] == "append"
+        assert payload["written"] is False
+        assert payload["positions"][0]["symbol"] == "600519.SS"
+        assert len(_load(pf)["holdings"]) == 1
+
+    def test_import_file_missing(self, tmp_path, capsys):
+        with pytest.raises(SystemExit):
+            _run(capsys, "import", "file", str(tmp_path / "nope.csv"),
+                 "--portfolio", str(self._portfolio(tmp_path)))
+
+    def test_import_wallet_append(self, tmp_path, capsys, monkeypatch):
+        self._mock_rpc(monkeypatch, 2 * 10**18)
+        pf = self._portfolio(tmp_path)
+        out = _run(capsys, "import", "wallet", "eth", self.ADDR,
+                   "--portfolio", str(pf))
+        assert "已写入" in out
+        data = _load(pf)
+        assert [h["symbol"] for h in data["holdings"]] == ["AAPL", "ETH-USD"]
+
+    def test_import_wallet_dry_run(self, tmp_path, capsys, monkeypatch):
+        self._mock_rpc(monkeypatch, 2 * 10**18)
+        pf = self._portfolio(tmp_path)
+        out = _run(capsys, "import", "wallet", "eth", self.ADDR,
+                   "--portfolio", str(pf), "--dry-run", "--json")
+        payload = json.loads(out)
+        assert payload["source"] == "wallet"
+        assert payload["written"] is False
+        assert payload["positions"][0]["symbol"] == "ETH-USD"
+        assert len(_load(pf)["holdings"]) == 1
+
+
 class TestCacheCli:
     def test_cache_info_and_clear(self, tmp_path, capsys, monkeypatch):
         db = tmp_path / "test_quotes_cache.db"

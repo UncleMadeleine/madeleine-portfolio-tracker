@@ -374,8 +374,8 @@ def test_run_sync_json_writes_portfolio(tmp_path, capsys, monkeypatch):
     positions = [
         FakePosition(FakeContract("AAPL", "SMART", "USD"), 10.0, 150.0),
     ]
-    monkeypatch.setattr(sync_mod, "fetch_positions", lambda cfg: positions)
-    monkeypatch.setattr(sync_mod, "load_config", lambda: {})
+    monkeypatch.setattr(ibkr_mod, "fetch_positions", lambda cfg: positions)
+    monkeypatch.setattr(ibkr_mod, "load_config", lambda: {})
     p = tmp_path / "p.json"
     p.write_text(json.dumps({"base_currency": "USD", "holdings": []}), encoding="utf-8")
     sync_mod.run_sync(
@@ -395,8 +395,8 @@ def test_run_sync_json_dry_run_no_write(tmp_path, capsys, monkeypatch):
     positions = [
         FakePosition(FakeContract("AAPL", "SMART", "USD"), 10.0, 150.0),
     ]
-    monkeypatch.setattr(sync_mod, "fetch_positions", lambda cfg: positions)
-    monkeypatch.setattr(sync_mod, "load_config", lambda: {})
+    monkeypatch.setattr(ibkr_mod, "fetch_positions", lambda cfg: positions)
+    monkeypatch.setattr(ibkr_mod, "load_config", lambda: {})
     p = tmp_path / "p.json"
     sync_mod.run_sync(
         types.SimpleNamespace(dry_run=True, json=True, portfolio=str(p))

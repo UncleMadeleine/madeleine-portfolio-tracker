@@ -10,6 +10,7 @@ import plotly.express as px
 import streamlit as st
 
 import app_settings as S
+import import_page
 import kline_page
 import settings_page
 
@@ -48,6 +49,20 @@ def cached_fx(base: str, currencies: tuple[str, ...]):
     return get_fx_rates(base, list(currencies))
 
 
+_PAGES = {
+    "portfolio": ":material/pie_chart: 组合",
+    "kline": ":material/candlestick_chart: K线",
+    "import": ":material/download: 导入",
+    "settings": ":material/settings: 设置",
+}
+
+
+def _post_import() -> None:
+    """导入写盘后清行情/汇率缓存, 让新持仓立即取数."""
+    cached_quotes.clear()
+    cached_fx.clear()
+
+
 def fmt(v, digits: int = 2) -> str:
     if v is None or (isinstance(v, float) and pd.isna(v)):
         return "—"
@@ -83,31 +98,14 @@ with st.sidebar:
     portfolio = S.load_portfolio_file()
     page = st.segmented_control(
         "页面",
-        [
-            ":material/pie_chart: 组合",
-            ":material/candlestick_chart: K线",
-            ":material/settings: 设置",
-        ],
-        default=[{
-            "portfolio": ":material/pie_chart: 组合",
-            "kline": ":material/candlestick_chart: K线",
-            "settings": ":material/settings: 设置",
-        }[st.session_state.app_page]],
+        list(_PAGES.values()),
+        default=[_PAGES[st.session_state.app_page]],
         label_visibility="collapsed",
         key="app_page_radio",
     )
     if page is None:  # segmented_control 允许取消选中: 保持原页面
-        page = {
-            "portfolio": ":material/pie_chart: 组合",
-            "kline": ":material/candlestick_chart: K线",
-            "settings": ":material/settings: 设置",
-        }[st.session_state.app_page]
-    if "K线" in str(page):
-        st.session_state.app_page = "kline"
-    elif "设置" in str(page):
-        st.session_state.app_page = "settings"
-    else:
-        st.session_state.app_page = "portfolio"
+        page = _PAGES[st.session_state.app_page]
+    st.session_state.app_page = {v: k for k, v in _PAGES.items()}[str(page)]
     base = portfolio.get("base_currency", "CNY")
     prefer_akshare = settings["prefer_akshare"]
     use_ibkr = settings["use_ibkr"]
@@ -167,72 +165,6 @@ with st.sidebar:
             if c2.button("重载", icon=":material/refresh:", width="stretch", key="reload_holdings"):
                 st.session_state.pop("holdings_editor", None)
                 st.rerun()
-
-        with st.expander(":material/account_balance_wallet: 导入钱包", expanded=False):
-            st.caption(
-                "通过链上公钥/地址查询余额后导入组合。"
-                "仅读操作，无需私钥。支持: eth, bsc, polygon, arbitrum, avalanche"
-            )
-            from tracker.wallet import import_wallet, _SUPPORTED_CHAINS
-            w_chain = st.selectbox(
-                "链", sorted(_SUPPORTED_CHAINS),
-                format_func=lambda c: {
-                    "eth": "Ethereum", "bsc": "BNB Chain", "polygon": "Polygon",
-                    "arbitrum": "Arbitrum", "avalanche": "Avalanche",
-                }.get(c, c),
-                key="wallet_chain",
-            )
-            w_addr = st.text_input("地址 (0x + 40 位 hex)", placeholder="0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", key="wallet_addr")
-            w_base = st.selectbox("计价货币", ["USD", "USDT", "USDC", "EUR", "CNY"], key="wallet_base")
-            if st.button("查询余额", icon=":material/search:", width="stretch", key="query_wallet"):
-                if not w_addr.strip():
-                    st.warning("请输入链上地址")
-                else:
-                    with st.spinner(f"正在查询 {w_chain} 链..."):
-                        try:
-                            w_result = import_wallet(w_chain, w_addr.strip(), base_currency=w_base)
-                            st.session_state["wallet_result"] = w_result
-                        except ValueError as e:
-                            st.error(str(e))
-                        except RuntimeError as e:
-                            st.error(f"RPC 查询失败: {e}")
-            w_result_state = st.session_state.get("wallet_result")
-            if w_result_state:
-                holdings = w_result_state.get("holdings", [])
-                if holdings:
-                    rows = []
-                    for h in holdings:
-                        rows.append({
-                            "symbol": h.get("symbol", "?"),
-                            "quantity": h.get("quantity", 0),
-                            "avg_cost": None,
-                            "source": h.get("source", "?"),
-                        })
-                    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-                    if st.button("确认导入组合", icon=":material/add_circle:", width="stretch", key="add_wallet_holdings"):
-                        data = S.load_portfolio_file()
-                        existing_syms = {_norm_sym(str(h.get("symbol", ""))) for h in data.get("holdings", [])}
-                        rows_list = data.setdefault("holdings", [])
-                        added = []
-                        for h in holdings:
-                            sym = h["symbol"]
-                            try:
-                                yahoo = parse(sym).yahoo
-                            except ValueError:
-                                yahoo = sym.upper()
-                            if yahoo in existing_syms:
-                                continue
-                            rows_list.append({"symbol": yahoo, "quantity": h["quantity"], "type": "crypto"})
-                            added.append(yahoo)
-                            existing_syms.add(yahoo)
-                        S.save_portfolio_file(data)
-                        st.session_state.pop("wallet_result", None)
-                        st.toast(f"已导入 {len(added)} 个代币")
-                        if added:
-                            st.caption("新增: " + ", ".join(added) + " (avg_cost 请在组合页补填)")
-                        st.rerun()
-                else:
-                    st.caption("未发现非零余额")
 
         with st.expander(":material/notifications: 自选提醒", expanded=False):
             if not watch.get("watchlist"):
@@ -661,6 +593,9 @@ if st.session_state.app_page == "portfolio":
                     "triggered": None,
                 },
             )
+
+elif st.session_state.app_page == "import":
+    import_page.render_import_page(on_saved=_post_import)
 
 elif st.session_state.app_page == "settings":
     settings_page.render_settings_page()

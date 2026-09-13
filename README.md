@@ -115,20 +115,19 @@ python -m tracker.cli export -f md -o snapshot.md
 python -m tracker.cli export -f csv -o holdings.csv
 
 # 从链上地址查询加密资产余额（只读，支持 eth/bsc/polygon/arbitrum/avalanche）
-python -m tracker.cli import-wallet eth 0xd8dA...6045           # 仅查询
-python -m tracker.cli import-wallet eth 0x... --add             # 写入 portfolio.json
+python -m tracker.cli import wallet eth 0xd8dA...6045 --dry-run  # 仅查询
+python -m tracker.cli import wallet eth 0x...                    # 追加写入 portfolio.json
 
 # 行情磁盘缓存管理
 python -m tracker.cli cache info
 python -m tracker.cli cache clear
 
-# 从 IBKR 同步真实持仓（需 Gateway 已登录，API 已启用）
-python -m tracker.cli sync --dry-run          # 仅预览
-python -m tracker.cli sync --mode live        # 实盘模式（默认 paper 模拟 4002）
-
-# 从券商导出文件导入 A股持仓（CSV/Excel，同花顺/通达信/华泰/东财/QMT 等）
-python -m tracker.ashare_sync 持仓.csv --dry-run
-python -m tracker.ashare_sync 持仓.xlsx
+# 统一导入（追加合并为默认，--overwrite 覆盖全部持仓，写前自动备份 .bak）
+python -m tracker.cli import ibkr --dry-run            # 预览 IBKR 账户持仓（需 Gateway 已登录）
+python -m tracker.cli import ibkr --mode live --overwrite
+python -m tracker.cli import wallet eth 0xd8dA...      # 链上钱包余额追加导入
+python -m tracker.cli import file 持仓.csv --dry-run   # 券商导出 CSV/Excel 解析预览
+# 兼容入口: sync / import-wallet / python -m tracker.ibkr_sync|ashare_sync 仍可用
 
 # 运行单元测试（不联网，纯逻辑 mock）
 python -m pytest tests/ -q
@@ -254,11 +253,12 @@ python -m tracker.cli kline 0700.HK --period weekly --open  # 周K + 自动打�
 ```
 app.py                Streamlit 主页（组合：持仓编辑/明细/配置/对比/自选提醒）
 kline_page.py         「K线」页面（搜索框 + lightweight-charts 组件 + 无限拖动）
+import_page.py        「导入」页面（IBKR 账户 / 链上钱包 / 券商文件, 追加合并或覆盖）
 settings_page.py      「设置」页面（配色 / 数据源 / 基础货币）
 app_settings.py       settings.json 读写（涨跌配色 / prefer_akshare / use_ibkr）+ portfolio 读写助手
 tracker/
 ├── __main__.py         python -m tracker 入口（转发到 cli）
-├── cli/                CLI 包（python -m tracker.cli，12 个子命令各一个模块）
+├── cli/                CLI 包（python -m tracker.cli，13 个子命令各一个模块）
 │   ├── __init__.py       argparse 注册与分发
 │   ├── snapshot.py       快照（持仓 + 自选 + 阈值触发）
 │   ├── quote.py          实时行情
@@ -269,8 +269,9 @@ tracker/
 │   ├── fx.py             汇率
 │   ├── history.py        历史价格
 │   ├── kline.py          K线 HTML + 摘要（--json 输出数据）
-│   ├── sync.py           IBKR 持仓同步
-│   ├── wallet.py         链上钱包导入
+│   ├── importer.py       统一导入（import ibkr / wallet / file, 追加/覆盖）
+│   ├── sync.py           IBKR 持仓同步（兼容入口 → import ibkr）
+│   ├── wallet.py         链上钱包导入（兼容入口 → import wallet）
 │   └── cache.py          磁盘缓存管理
 ├── symbols.py          自有代码规范、市场域识别、type_for_symbol() 权威域推导（唯一入口）
 ├── providers/          **数据 provider 层**（按权威 type 域隔离）
@@ -287,9 +288,10 @@ tracker/
 ├── analytics.py        组合视图与指标（纯函数）
 ├── watchlist.py        自选股视图与价格阈值状态（纯函数 + 配置读写）
 ├── snapshot.py         快照核心（持仓 + 自选聚合）
-├── ibkr.py             IBKR 行情接入（可选依赖 ib_async，失败静默回退）
-├── ibkr_sync.py        从 IBKR 账户持仓生成 portfolio.json
-├── ashare_sync.py      A股券商持仓文件导入（CSV/Excel → portfolio.json）
+├── ibkr.py             IBKR 行情接入 + 持仓读取（可选依赖 ib_async，失败静默回退）
+├── importer.py         **统一导入管道**：三来源采集 → 追加/覆盖合并 → 备份写盘
+├── ibkr_sync.py        IBKR 持仓导入兼容入口（委托 importer，等价 import ibkr）
+├── ashare_sync.py      A股券商文件解析 + 兼容入口（等价 import file）
 └── wallet.py           链上钱包余额查询（EVM 五链, 轻钱包 RPC, 只读）
 portfolio.json          持仓配置（页面可直接编辑保存; type 字段由系统自动维护, 手改无效）
 watchlist.json          自选股配置（页面可直接编辑保存; type 字段由系统自动维护, 手改无效）
@@ -338,19 +340,32 @@ IBKR_CONFIG=/data/my-ibkr.json python -m tracker.cli snapshot --ibkr
 
 ---
 
-## 券商持仓导入
+## 持仓导入（IBKR / 链上钱包 / 券商文件）
 
-### IBKR 同步
+三种来源统一走 `tracker.importer` 管道：CLI `import` 子命令与 Streamlit 侧边栏「导入」页
+（三 tab 各自独立导入）调用同一套采集 + 合并 + 写盘逻辑。
+
+**导入方式**（CLI 与页面一致）：
+
+- **追加合并**（默认）：按代码更新 `quantity`/`avg_cost`，新代码追加，其余持仓保留
+- **覆盖**（`--overwrite`）：清空现有持仓后重写
+
+写盘前自动备份 `portfolio.json.bak`；保留 `base_currency` 与文件中的其它自定义键；
+`--dry-run` 仅预览不写入；采集结果为空时即使覆盖模式也不会清空文件。
+
+### IBKR 账户
 
 ```bash
-python -m tracker.cli sync --dry-run          # 预览，仅打印不写入
-python -m tracker.cli sync --mode live        # 实盘模式写入 portfolio.json（自动备份 .bak）
+python -m tracker.cli import ibkr --dry-run          # 预览，仅打印不写入
+python -m tracker.cli import ibkr --mode live        # 实盘模式追加导入（自动备份 .bak）
+python -m tracker.cli import ibkr --overwrite        # 覆盖全部持仓
 ```
 
 - 自动将 IBKR 账户股票持仓转换为规范代码并写入 `portfolio.json`
 - 保留原有 `base_currency`；`avg_cost` 取自 IBKR（合约货币每股均价，含佣金）
 - 无法映射为规范代码的标的（权证/期权/基金等）会跳过并在控制台提示
 - 反向映射规则：`SEHK + CNY → .SS/.SZ`；`SHSE + USD → .SS (B股)`；`SZSE + HKD → .SZ (B股)`；`SEHK + HKD → .HK`；`IBIS/FWB + EUR → .DE`；`LSE + GBP → .L`；`TSE + CAD → .TO`；`ASX + AUD → .AX`；`SMART + USD → 原码`
+- 兼容入口：`python -m tracker.cli sync` / `python -m tracker.ibkr_sync`（默认覆盖，加 `--append` 追加）
 
 ### A股券商文件导入
 
@@ -358,29 +373,30 @@ A股券商无跨券商统一 API（监管对个人程序化接入持续收紧）
 在券商客户端（同花顺/通达信/华泰/东财/QMT 等）手动导出持仓为 CSV/Excel，本工具解析后映射为 `.SS/.SZ/.BJ` 代码写入 `portfolio.json`。零凭证、跨平台、自动备份。
 
 ```bash
-python -m tracker.ashare_sync 持仓.csv --dry-run   # 预览
-python -m tracker.ashare_sync 持仓.xlsx            # 写入（自动备份 .bak）
-python -m tracker.ashare_sync 持仓.csv --json      # JSON 输出
+python -m tracker.cli import file 持仓.csv --dry-run   # 预览
+python -m tracker.cli import file 持仓.xlsx            # 追加导入（自动备份 .bak）
+python -m tracker.cli import file 持仓.csv --overwrite --json
 ```
 
 - 列名模糊匹配（代码/数量/成本列，各家券商叫法不同也能识别）；CSV 自动尝试 utf-8/gbk/gb18030 编码
 - 仅识别 6 位 A股代码，非 A股行跳过并提示
+- 兼容入口：`python -m tracker.ashare_sync 持仓.csv`（默认覆盖，加 `--append` 追加）
+- 页面端：「导入」页 → 「券商文件」tab 上传 CSV/Excel 预览后导入
 
----
+### 链上钱包导入（加密资产）
 
-## 链上钱包导入（加密资产）
-
-只读查询 EVM 链上地址余额并（可选）写入 `portfolio.json`，无需 API key、不接触私钥：
+只读查询 EVM 链上地址余额并写入 `portfolio.json`，无需 API key、不接触私钥：
 
 ```bash
-python -m tracker.cli import-wallet eth 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045
-python -m tracker.cli import-wallet bsc 0x... --base-currency USDT --add --json
-python -m tracker.cli import-wallet polygon 0x... --tokenlist my_tokens.json --add
+python -m tracker.cli import wallet eth 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045 --dry-run
+python -m tracker.cli import wallet bsc 0x... --base-currency USDT --json
+python -m tracker.cli import wallet polygon 0x... --tokenlist my_tokens.json
 ```
 
 - 支持链：`eth` / `bsc` / `polygon` / `arbitrum` / `avalanche`（每链多个公共 RPC 自动切换）
 - 轻钱包策略：主币 `eth_getBalance` + ERC-20 `balanceOf` 批量调用；内置主流代币 tokenlist，可用外部 JSON 覆盖
 - 不依赖 web3.py，直接 HTTP JSON-RPC
+- 兼容入口：`python -m tracker.cli import-wallet`（`--add` 追加写入 / `--overwrite` 覆盖）
 
 ---
 
@@ -446,8 +462,8 @@ A **local-first** portfolio tracker supporting **A-shares / B-shares / Beijing S
 - **IBKR integration** — TWS / IB Gateway snapshots + position sync, automatic fallback
 - **K-line charts** — daily/weekly/monthly, MA overlays, volume, MACD/RSI/KDJ/Bollinger, infinite drag-back loading
 - **Multi-symbol comparison** — same-coordinate overlay, normalized to 100
-- **CLI wallets & broker import** — EVM on-chain balance import (5 chains), A-share broker CSV/Excel import
-- **Unified CLI** — 12 subcommands (snapshot, quote, portfolio, watchlist, report, export, fx, history, kline, sync, import-wallet, cache); all support `--json`
+- **Unified import pipeline** — IBKR account / EVM wallet (5 chains) / A-share broker CSV-Excel file, each with append-merge or overwrite mode (auto .bak backup); same logic drives the Streamlit「导入」page
+- **Unified CLI** — 13 subcommands (snapshot, quote, portfolio, watchlist, report, export, fx, history, kline, import, sync, import-wallet, cache); all support `--json`
 
 ### Quick Start
 
@@ -463,8 +479,8 @@ streamlit run app.py
 python -m tracker.cli snapshot --json
 python -m tracker.cli quote AAPL 600519.SS BTC-USD
 python -m tracker.cli kline AAPL --months 12
-python -m tracker.cli sync --dry-run
-python -m tracker.ashare_sync positions.csv --dry-run
+python -m tracker.cli import ibkr --dry-run
+python -m tracker.cli import file positions.csv --dry-run
 ```
 
 ### Data Source Fallback
@@ -482,10 +498,11 @@ IBKR disconnects silently fall back to the next source; the page continues runni
 ### Project Structure
 
 ```
-app.py             Streamlit dashboard (portfolio + K-line + settings pages)
+app.py             Streamlit dashboard (portfolio + K-line + import + settings pages)
+import_page.py     「导入」page (IBKR account / on-chain wallet / broker file)
 tracker/           Core package: cli/ subcommands, providers/, symbols, prices, fx,
                    search, cache, charting, analytics, watchlist, snapshot,
-                   ibkr, ibkr_sync, ashare_sync, wallet
+                   importer, ibkr, ibkr_sync, ashare_sync, wallet
 portfolio.json     Holdings config (editable via page)
 watchlist.json     Watchlist config (editable via page)
 settings.json      Display & data-source settings

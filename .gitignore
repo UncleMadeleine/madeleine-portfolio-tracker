@@ -9,6 +9,7 @@ venv/
 # Data & secrets
 data/*.sqlite
 data/*.db
+data/kline_*.html
 *.sqlite
 *.db
 .env

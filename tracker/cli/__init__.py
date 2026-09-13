@@ -11,6 +11,7 @@
   history   历史价格 (近 N 个月)
   kline     K线蜡烛图 (交互式 HTML + 摘要, 含成交量/均线/周月K)
   sync      从 IB Gateway 账户同步持仓 (--mode paper|live)
+  import-wallet 从链上地址导入加密资产 (eth/bsc/polygon/arbitrum/avalanche)
   cache     行情磁盘缓存管理 (info / clear)
 
 所有子命令均支持 --json 输出机器可读结果, 便于脚本与 AI 消费。
@@ -34,6 +35,7 @@ from .quote import cmd_quote
 from .report import cmd_report
 from .snapshot import cmd_snapshot
 from .sync import cmd_sync
+from .wallet import cmd_import_wallet
 from .watchlist import cmd_watchlist
 
 
@@ -271,6 +273,28 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Gateway API 模式: paper 模拟(4002) / live 实盘(4001); 缺省用配置")
     p_sync.add_argument("--json", action="store_true")
     p_sync.set_defaults(func=cmd_sync)
+
+    # ---- import-wallet ----
+    p_wallet = sub.add_parser(
+        "import-wallet", help="从链上地址导入加密资产 (轻钱包: tokenlist + balanceOf)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "支持链: eth, bsc, polygon, arbitrum, avalanche\n"
+            "示例:\n"
+            "  tracker import-wallet eth 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045\n"
+            "  tracker import-wallet bsc 0x... --base-currency USDT\n"
+            "  tracker import-wallet eth 0x... --add --json\n"
+            "  tracker import-wallet polygon 0x... --tokenlist my_tokens.json --add\n"
+        ),
+    )
+    p_wallet.add_argument("chain", help="链名称: eth / bsc / polygon / arbitrum / avalanche")
+    p_wallet.add_argument("address", help="链上地址 (0x + 40 位十六进制)")
+    p_wallet.add_argument("--portfolio", default=str(DEFAULT_PORTFOLIO), help="portfolio.json 路径")
+    p_wallet.add_argument("--tokenlist", default=None, help="外部 tokenlist JSON 路径 (覆盖内置列表)")
+    p_wallet.add_argument("--base-currency", default="USD", help="计价货币 (默认 USD)")
+    p_wallet.add_argument("--add", action="store_true", help="将余额写入 portfolio.json")
+    p_wallet.add_argument("--json", action="store_true", help="输出 JSON")
+    p_wallet.set_defaults(func=cmd_import_wallet)
 
     # ---- cache ----
     p_c = sub.add_parser(

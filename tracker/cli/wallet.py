@@ -2,12 +2,11 @@
 from __future__ import annotations
 
 import argparse
-import sys
 
-from ..snapshot import DEFAULT_PORTFOLIO, load_portfolio, save_portfolio
+from ..snapshot import load_portfolio, save_portfolio
 from ..symbols import parse
+from .. import wallet as wallet_mod
 from ._common import _finish_with_error, _print_json, _sym
-from . import wallet as wallet_mod
 
 
 def _print_holdings_table(holdings: list[dict]) -> None:

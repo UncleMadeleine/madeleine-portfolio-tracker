@@ -4,12 +4,23 @@ from __future__ import annotations
 import pandas as pd
 
 from .. import prices
-from ._common import _print_json
+from ..symbols import parse
+from ._common import _finish_with_error, _print_json
 
 
 def cmd_history(args) -> None:
     """查询历史价格 (近 N 个月), 支持 --json."""
-    df = prices.get_history(args.symbol, months=args.months, prefer_akshare=args.akshare, use_ibkr=args.ibkr)
+    try:
+        parse(args.symbol)
+    except ValueError as e:
+        _finish_with_error(str(e))
+    try:
+        df = prices.get_history(
+            args.symbol, months=args.months,
+            prefer_akshare=args.akshare, use_ibkr=args.ibkr,
+        )
+    except Exception as e:
+        _finish_with_error(f"{args.symbol}: 历史数据获取失败 ({e})")
     if args.json:
         recs = df.copy()
         recs["date"] = recs["date"].astype(str)

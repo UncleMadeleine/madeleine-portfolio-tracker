@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
 
 from tracker import wallet as wallet_mod
-from tracker.symbols import parse
 
 
 # ---------------------------------------------------------------------------
@@ -113,7 +113,24 @@ class TestSupportedChains:
         for chain, cfg in wallet_mod._CHAIN_CONFIG.items():
             tl_key = cfg.get("tokenlist")
             if tl_key:
-                assert tl_key in wallet_mod._BUILTIN_TOKENLIST, f"{chain} tokenlist key '{tl_key}' not found"
+                assert tl_key in wallet_mod._BUILTIN_TOKENLIST, f"chain {chain} tokenlist key '{tl_key}' not found"
+
+    def test_tokenlist_addresses_well_formed(self):
+        for chain, tokens in wallet_mod._BUILTIN_TOKENLIST.items():
+            for contract, info in tokens.items():
+                assert re.fullmatch(r"0x[0-9a-fA-F]{40}", contract), f"{chain} {contract}"
+                assert info["decimals"] >= 0, f"{chain} {contract}"
+
+    def test_tokenlist_symbols_are_valid_crypto_bases(self):
+        """代币符号会拼成 BASE-QUOTE 写入 portfolio.json, 必须是 parse 可识别的 crypto 代码."""
+        from tracker.symbols import Market, parse
+
+        for chain, tokens in wallet_mod._BUILTIN_TOKENLIST.items():
+            for contract, info in tokens.items():
+                code = wallet_mod._symbol_for_token(info["symbol"], chain)
+                p = parse(code)
+                assert p.market is Market.CRYPTO, f"{chain} {contract} → {code}"
+                assert p.currency == "USD", f"{chain} {contract} → {code}"
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +269,19 @@ class TestERC20Balance:
                 "eth", 6, 2.0,
             )
 
+    @pytest.mark.parametrize("payload", [{"result": "not-hex"}, {"result": None}, {"result": ""}])
+    def test_malformed_result_returns_none(self, monkeypatch, payload):
+        """节点返回非 hex / 空载荷时按无余额处理, 不得抛 ValueError 给调用方."""
+        monkeypatch.setattr(
+            wallet_mod, "_requests",
+            lambda: _make_fake_requests([payload]),
+        )
+        assert wallet_mod._erc20_balance(
+            "0xd8da6bf26964af9d7eed9e03e53415d37aaa96045",
+            self.USDT_CONTRACT,
+            "eth", 6, 10.0,
+        ) is None
+
 
 # ---------------------------------------------------------------------------
 # import_wallet integration
@@ -292,6 +322,19 @@ class TestImportWallet:
             "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
         )
         assert result["holdings"] == []
+
+    def test_malformed_payload_does_not_abort_import(self, monkeypatch):
+        """节点返回非 hex 载荷时跳过该代币, 整个导入不得崩掉 (曾抛 ValueError 逃出 except)."""
+        monkeypatch.setattr(
+            wallet_mod, "_try_rpc_hosts",
+            lambda hosts, payload, timeout: "not-hex",
+        )
+        result = wallet_mod.import_wallet(
+            "eth",
+            "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+        )
+        assert result["holdings"] == []
+        assert result["errors"] == []
 
     def test_unsupported_chain_raises(self):
         with pytest.raises(ValueError, match="不支持的链"):

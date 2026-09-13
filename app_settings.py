@@ -16,6 +16,7 @@ from tracker.charting import (
     INTL_DOWN_COLOR,
     INTL_UP_COLOR,
 )
+from tracker.symbols import type_for_symbol
 
 SETTINGS_PATH = Path(__file__).parent / "settings.json"
 PORTFOLIO_PATH = Path(__file__).parent / "portfolio.json"
@@ -98,11 +99,24 @@ def _clean_rows(rows: list[dict]) -> list[dict]:
     return out
 
 
+def _stamp_type(row: dict) -> dict:
+    """持仓条目补写权威 type 字段 (系统维护, 用户不可见不可改)."""
+    sym = str(row.get("symbol", "")).strip()
+    if sym:
+        try:
+            row["type"] = type_for_symbol(sym)
+        except Exception:
+            pass
+    return row
+
+
 def save_portfolio_file(data: dict) -> None:
     """保存持仓/基础货币, 保留文件中其它键 (_说明 等文档/自定义字段)."""
     merged = load_portfolio_file()
     merged.update(data)
-    merged["holdings"] = _clean_rows(merged.get("holdings", []))
+    merged["holdings"] = [
+        _stamp_type(r) for r in _clean_rows(merged.get("holdings", []))
+    ]
     PORTFOLIO_PATH.write_text(
         json.dumps(merged, ensure_ascii=False, indent=2, allow_nan=False),
         encoding="utf-8",

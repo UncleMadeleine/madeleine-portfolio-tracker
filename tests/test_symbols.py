@@ -165,6 +165,28 @@ def test_parse_crypto_non_crypto_hyphen_is_error():
         parse("FOO-BAR")
 
 
+def test_parse_crypto_alt_quote_assets():
+    # 币本位计价 (search 目录会产出 BTC/ETH/BNB/FDUSD 计价的交易对):
+    # 必须识别为 crypto 并保留计价货币, 不能落回美股/USD
+    for sym, ccy in (
+        ("ETH-BTC", "BTC"),
+        ("ARKM-BTC", "BTC"),
+        ("WIF-ETH", "ETH"),
+        ("PEPE-BNB", "BNB"),
+        ("BTC-FDUSD", "FDUSD"),
+    ):
+        p = parse(sym)
+        assert p.market is Market.CRYPTO, sym
+        assert p.currency == ccy, sym
+        assert p.type == "crypto", sym
+        assert p.market_label == "加密货币", sym
+
+
+def test_normalize_crypto_alt_quote_no_separator():
+    assert normalize("ETHBTC") == "ETH-BTC"
+    assert normalize("BTCFDUSD") == "BTC-FDUSD"
+
+
 def test_parse_crypto_short_base_not_crypto():
     # len<=3 的无分隔符代码 (如 700) 不走 crypto 补全, 仍按无后缀处理
     assert normalize("700") == "700"
@@ -209,6 +231,16 @@ def test_type_same_suffix_never_two_domains():
     # 互斥性: 连字符+计价货币永远 crypto, 点后缀/裸代码永远股票
     assert type_for_symbol("BRK-B") == "global"  # 美股类别股不是 crypto
     assert parse("BRK-B").type == "global"
+
+
+def test_type_for_symbol_normalizes_aliases():
+    from tracker.symbols import type_for_symbol
+
+    # 手写别名必须先归一, 否则配置会被打上与 parse 不一致的域标记
+    for sym in ("600519.SH", "00700.HK", "btc-usd", "BTCUSDT", "ETHBTC"):
+        assert type_for_symbol(sym) == parse(sym).type, sym
+    assert type_for_symbol("600519.SH") == "cn"
+    assert type_for_symbol("BTCUSDT") == "crypto"
 
 
 def test_is_pence_case_insensitive():

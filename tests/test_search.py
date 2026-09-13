@@ -226,3 +226,37 @@ def test_expired_cache_refetches(tmp_path, monkeypatch):
     )
     entries = search.load_symbol_list()
     assert [e.code for e in entries] == ["NEW"]
+
+
+# ---------- 加密货币目录 (Binance exchangeInfo) ----------
+
+
+def test_crypto_catalog_codes_are_parseable(monkeypatch):
+    """目录产出的每个代码都必须能被 parse 识别为 crypto (否则搜索结果不可用)."""
+    from tracker import search
+    from tracker.providers import crypto as crypto_mod
+    from tracker.symbols import Market, parse
+
+    pairs = [
+        ("BTC", "USDT"), ("ETH", "BTC"), ("ARKM", "BTC"),
+        ("WIF", "ETH"), ("PEPE", "BNB"), ("BTC", "FDUSD"),
+    ]
+    monkeypatch.setattr(
+        crypto_mod, "_get",
+        lambda path, params=None: {
+            "symbols": [
+                {
+                    "symbol": f"{b}{q}", "baseAsset": b, "quoteAsset": q,
+                    "status": "TRADING", "isSpotTradingAllowed": True,
+                }
+                for b, q in pairs
+            ]
+        },
+    )
+    entries = search.fetch_crypto_symbols()
+    assert [e.code for e in entries] == [f"{b}-{q}" for b, q in pairs]
+    for e in entries:
+        p = parse(e.code)
+        assert p.market is Market.CRYPTO, e.code
+        assert p.currency == e.code.split("-")[1], e.code
+        assert e.type == "crypto", e.code

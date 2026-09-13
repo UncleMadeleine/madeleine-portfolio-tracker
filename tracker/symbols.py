@@ -73,11 +73,13 @@ _KNOWN_CRYPTO: set[str] = {
     "FTM", "SAND", "MANA", "AXS", "IMX", "GALA", "CRV", "SUSHI", "1INCH",
 }
 
-# 加密货币计价货币 (法币 + 主流稳定币; Yahoo Finance 用 BTC-USD 格式)
+# 加密货币计价货币 (法币 + 主流稳定币 + 主流币本位; Yahoo Finance 用 BTC-USD 格式)
+# 必须覆盖 search._CRYPTO_QUOTE_ASSETS: 目录产出的每个 BASE-QUOTE 都要能被 parse 识别
 _CRYPTO_QUOTES: set[str] = {
     "USD", "EUR", "GBP", "JPY", "KRW", "AUD", "CAD", "CHF", "SGD", "HKD",
     "INR", "BRL", "CNY", "RUB", "TRY", "MXN", "ZAR", "THB", "IDR",
-    "USDT", "USDC", "DAI", "BUSD",
+    "USDT", "USDC", "DAI", "BUSD", "FDUSD", "TUSD",
+    "BTC", "ETH", "BNB",
 }
 
 
@@ -107,10 +109,10 @@ class ParsedSymbol:
 
 def normalize(symbol: str) -> str:
     s = symbol.strip().upper()
-    # 加密货币无分隔符格式: BTCUSD → BTC-USD, BTCUSDT → BTC-USDT (Yahoo Finance 格式)
+    # 加密货币无分隔符格式: BTCUSD → BTC-USD, BTCFDUSD → BTC-FDUSD (Yahoo Finance 格式)
     if "-" not in s and "." not in s and len(s) > 3:
-        # 计价货币按长度从长到短匹配 (USDT/USDC/BUSD 4位, 其余 3位)
-        for qlen in (4, 3):
+        # 计价货币按长度从长到短匹配 (FDUSD 5位, USDT/USDC/BUSD 4位, 其余 3位)
+        for qlen in sorted({len(q) for q in _CRYPTO_QUOTES}, reverse=True):
             if len(s) <= qlen:
                 continue
             quote = s[-qlen:]
@@ -132,12 +134,14 @@ def type_for_symbol(yahoo: str) -> str:
 
     global: 裸代码 (美股, 含 BRK-B 类别股) 与 .HK/.DE/.L/.TO/.AX 等全球股票后缀
     cn:     .SS/.SZ (沪深 A/B 股) 与 .BJ (北交所)
-    crypto: BASE-QUOTE 连字符格式 (计价货币为法币/稳定币)
+    crypto: BASE-QUOTE 连字符格式 (计价货币为法币/稳定币/主流币本位)
 
     与 parse() 的判定语义完全一致: 单字母连字符 (BRK-B) 是美股类别代码,
     不是加密货币 —— 保证同一代码在任何路径下都不会路由到两个域。
+    先经 normalize() 归一 (如 600519.SH → 600519.SS, 00700.HK → 0700.HK,
+    BTCUSDT → BTC-USDT), 否则配置里手写的别名会被打上错误的域标记。
     """
-    s = yahoo.strip().upper()
+    s = normalize(yahoo)
     if "-" in s and "." not in s:
         base, _, quote = s.rpartition("-")
         is_us_class = len(quote) == 1 and quote.isalpha()

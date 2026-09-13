@@ -70,14 +70,6 @@ def _pnl_color(v) -> str:
     return f"color: {up_c}" if v > 0 else f"color: {down_c}"
 
 
-def _on_base_change() -> None:
-    """基础货币即时落盘 (on_change 回调)."""
-    new_base = st.session_state.get("set_base_currency", "CNY")
-    data = S.load_portfolio_file()
-    S.save_portfolio_file({"base_currency": new_base, "holdings": data.get("holdings", [])})
-    st.toast(f"基础货币已保存为 {new_base}")
-
-
 watch = load_watchlist(WATCHLIST_PATH)
 if not watch.get("watchlist"):
     watch["watchlist"] = []
@@ -219,7 +211,7 @@ with st.sidebar:
                     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
                     if st.button("确认导入组合", icon=":material/add_circle:", width="stretch", key="add_wallet_holdings"):
                         data = S.load_portfolio_file()
-                        existing_syms = {_sym(h) for h in data.get("holdings", [])}
+                        existing_syms = {_norm_sym(str(h.get("symbol", ""))) for h in data.get("holdings", [])}
                         rows_list = data.setdefault("holdings", [])
                         added = []
                         for h in holdings:

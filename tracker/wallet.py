@@ -17,9 +17,11 @@ from pathlib import Path
 from typing import Any
 
 # ---------------------------------------------------------------------------
-# 内置 tokenlist (symbol → contract_address, decimals)
+# 内置 tokenlist (contract_address → symbol, decimals)
 # 覆盖 ETH / BSC / Polygon / Arbitrum / Avalanche 五条 EVM 链的主流 ERC-20
 # decimals 按各链实际情况填写 (同一合约在跨链时 decimals 通常相同)
+# 地址经链上 eth_getCode + symbol()/decimals() 与 CoinGecko 平台地址双向核对;
+# symbol 是写入 portfolio.json 的计价基础 (BASE-QUOTE), 需为 Yahoo 可报价代码
 # ---------------------------------------------------------------------------
 
 _BUILTIN_TOKENLIST: dict[str, dict[str, dict[str, Any]]] = {
@@ -31,27 +33,21 @@ _BUILTIN_TOKENLIST: dict[str, dict[str, dict[str, Any]]] = {
         "0x514910771AF9Ca656af840dff83E8264EcF986CA": {"symbol": "LINK", "decimals": 18},
         "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984": {"symbol": "UNI",  "decimals": 18},
         "0x7fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9": {"symbol": "AAVE", "decimals": 18},
-        "0x7D1AfA7B718fb893dB30A3EaBc7F3Dc6687F2Af2": {"symbol": "OSMO", "decimals": 18},
         "0x95aD61b0a150d79219dCF64E1E6Cc01f0B64C4cE": {"symbol": "SHIB", "decimals": 18},
-        "0x53E0bca35eC356BD5ddDFebbD1Fc0fD03FaBad39": {"symbol": "LINK", "decimals": 18},
-        "0xbbbbCa6a901c926Ff4b5d0Edabb1895D0E5B7Ac4": {"symbol": "LDO",  "decimals": 18},
-        "0x744d70FdBE2Ba190Cf701b68BB4F40AaDAd17a34": {"symbol": "LRC",  "decimals": 18},
         "0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84": {"symbol": "stETH","decimals": 18},
-        "0x4DA996F6DaC57926F6803a8729A0F6C0f8b46a52": {"symbol": "FET",  "decimals": 18},
         "0xaea46A60368A7bD060eec7DF8CBa43b7EF41Ad85": {"symbol": "FET",  "decimals": 18},
-        "0xaea46A60368A7bD060eec7DF8CBa43b7EF41Ad85": {"symbol": "ASI",  "decimals": 18},
-        "0x6De037ef9aD2725EB401Bbb258219A0a562cC76a": {"symbol": "DEXT", "decimals": 18},
-        "0x8e870D67F660D95d5be530380D0eC0bd38802F20": {"symbol": "USDC", "decimals": 6},
+        "0x5A98FcBEA516Cf06857215779Fd812CA3beF1B32": {"symbol": "LDO",  "decimals": 18},
+        "0xBBbbCA6A901c926F240b89EacB641d8Aec7AEafD": {"symbol": "LRC",  "decimals": 18},
+        "0xfB7B4564402E5500dB5bB6d63Ae671302777C75a": {"symbol": "DEXT", "decimals": 18},
     },
     "bsc": {
         "0x55d398326f99059fF775485246999027B3197955": {"symbol": "USDT", "decimals": 18},
         "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d": {"symbol": "USDC", "decimals": 18},
-        "0x1AF3F329e8E1541D56CD0Ea7A311268536619D87": {"symbol": "DAI",  "decimals": 18},
+        "0x1AF3F329e8BE154074D8769D1FFa4eE058B1DBc3": {"symbol": "DAI",  "decimals": 18},
         "0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c": {"symbol": "BTCB", "decimals": 18},
         "0x2170Ed0880ac9A755fd29B2688956BD959F933F8": {"symbol": "ETH",  "decimals": 18},
-        "0x3EE2200Efb34d11511661dC73D4e0B94630E15a6": {"symbol": "ID",   "decimals": 18},
+        "0x2dfF88A56767223A5529eA5960Da7A3F5f766406": {"symbol": "ID",   "decimals": 18},
         "0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82": {"symbol": "CAKE", "decimals": 18},
-        "0xB8c77482e45F1F44DfE594E661E3D76E1cD71D38": {"symbol": "BNB",  "decimals": 18},
     },
     "polygon": {
         "0xc2132D05D31c914a87C6611C10748AEb04B58e8F": {"symbol": "USDT", "decimals": 6},
@@ -66,18 +62,19 @@ _BUILTIN_TOKENLIST: dict[str, dict[str, dict[str, Any]]] = {
         "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9": {"symbol": "USDT", "decimals": 6},
         "0xaf88d065e77c8cC2239327C5EDb3A432268e5831": {"symbol": "USDC", "decimals": 6},
         "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1": {"symbol": "DAI",  "decimals": 18},
-        "0x2f2a2543B76A4166549F7AabC2aA4C6792014B55": {"symbol": "WBTC", "decimals": 8},
-        "0x5979D7b546E38E414F7E9822514be443A4800529": {"symbol": "WETH", "decimals": 18},
-        "0x912CE59144191C1204E64559FE8253a0e49C6548": {"symbol": "ARB",  "decimals": 18},
-        "0xEC70Dcb4A1EFa46b8F2D97f3107389B9Dd1941F0": {"symbol": "RPL",  "decimals": 18},
+        "0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f": {"symbol": "WBTC", "decimals": 8},
+        "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1": {"symbol": "WETH", "decimals": 18},
+        "0x5979D7b546E38E414F7E9822514be443A4800529": {"symbol": "wstETH","decimals": 18},
+        "0x912CE59144191C1204E64559FE8253a0e49E6548": {"symbol": "ARB",  "decimals": 18},
+        "0xB766039cc6DB368759C1E56B79AFfE831d0Cc507": {"symbol": "RPL",  "decimals": 18},
     },
     "avalanche": {
         "0x9702230A8Ea53601f5cD2dc00fDBc13d4dF4A8c7": {"symbol": "USDT", "decimals": 6},
-        "0xB97EF9Ef8734C71904D8002F8b6B66d17E6bF257": {"symbol": "USDC", "decimals": 6},
-        "0xd586E7F844cEa2F87f50152665BCbc2C279D8b70": {"symbol": "DAI",  "decimals": 18},
-        "0x50bce64397c75488465253c0A034b8097fea6578": {"symbol": "WBTC", "decimals": 8},
-        "0x49D5c2BfFc6E2A3cB9BdF7F4A5d5E2c8f5D6B7aC": {"symbol": "WETH", "decimals": 18},
-        "0x7213Cced07217F6B58a40c1e743b73ef1d3E84d6": {"symbol": "JOE",  "decimals": 18},
+        "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E": {"symbol": "USDC", "decimals": 6},
+        "0xd586E7F844cEa2F87f50152665BCbc2C279D8d70": {"symbol": "DAI",  "decimals": 18},
+        "0x0555E30da8f98308EdB960aa94C0Db47230d2B9c": {"symbol": "WBTC", "decimals": 8},
+        "0x49D5c2BdFfac6CE2BFdB6640F4F80f226bc10bAB": {"symbol": "WETH", "decimals": 18},
+        "0x6e84a6216eA6dACC71eE8E6b0a5B7322EEbC0fDd": {"symbol": "JOE",  "decimals": 18},
     },
 }
 
@@ -91,10 +88,10 @@ _CHAIN_CONFIG: dict[str, dict[str, Any]] = {
         "native_symbol": "ETH",
         "native_decimals": 18,
         "rpc": [
-            "https://eth.llamarpc.com",
             "https://ethereum.publicnode.com",
-            "https://rpc.ankr.com/eth",
-            "https://1rpc.io/eth",
+            "https://eth.drpc.org",
+            "https://eth.merkle.io",
+            "https://rpc.flashbots.net",
         ],
         "tokenlist": "eth",
     },
@@ -105,7 +102,7 @@ _CHAIN_CONFIG: dict[str, dict[str, Any]] = {
         "rpc": [
             "https://bsc-dataseed1.binance.org",
             "https://bsc-dataseed2.binance.org",
-            "https://rpc.ankr.com/bsc",
+            "https://bsc.publicnode.com",
         ],
         "tokenlist": "bsc",
     },
@@ -114,9 +111,8 @@ _CHAIN_CONFIG: dict[str, dict[str, Any]] = {
         "native_symbol": "MATIC",
         "native_decimals": 18,
         "rpc": [
-            "https://polygon-rpc.com",
-            "https://rpc.ankr.com/polygon",
-            "https://1rpc.io/matic",
+            "https://polygon-bor-rpc.publicnode.com",
+            "https://polygon.drpc.org",
         ],
         "tokenlist": "polygon",
     },
@@ -125,8 +121,9 @@ _CHAIN_CONFIG: dict[str, dict[str, Any]] = {
         "native_symbol": "ETH",
         "native_decimals": 18,
         "rpc": [
-            "https://rpc.ankr.com/arbitrum",
+            "https://arb1.arbitrum.io/rpc",
             "https://arbitrum.publicnode.com",
+            "https://arbitrum.drpc.org",
         ],
         "tokenlist": "arbitrum",
     },
@@ -135,8 +132,9 @@ _CHAIN_CONFIG: dict[str, dict[str, Any]] = {
         "native_symbol": "AVAX",
         "native_decimals": 18,
         "rpc": [
-            "https://rpc.ankr.com/avalanche",
-            "https://1rpc.io/avax",
+            "https://api.avax.network/ext/bc/C/rpc",
+            "https://avalanche-c-chain-rpc.publicnode.com",
+            "https://avalanche.drpc.org",
         ],
         "tokenlist": "avalanche",
     },
@@ -252,9 +250,15 @@ def _erc20_balance(
         "params": [{"to": contract, "data": data_topic}, "latest"],
     }
     raw_hex = _try_rpc_hosts(_CHAIN_CONFIG[chain]["rpc"], payload, timeout)
-    if not raw_hex or raw_hex == "0x" or int(raw_hex, 16) == 0:
+    # 节点可能返回空串 / 非 hex 载荷 (畸形响应): 一律按无余额处理,
+    # 不能把 ValueError 抛给调用方 (import_wallet 只兜 RuntimeError)
+    try:
+        raw = int(raw_hex, 16)
+    except (TypeError, ValueError):
         return None
-    amount = int(raw_hex, 16) / (10 ** decimals)
+    if raw == 0:
+        return None
+    amount = raw / (10 ** decimals)
     return {
         "symbol": None,   # 由调用方从 tokenlist 填入
         "contract": contract,

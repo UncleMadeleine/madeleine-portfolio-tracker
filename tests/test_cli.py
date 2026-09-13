@@ -249,6 +249,74 @@ class TestPortfolioCli:
         assert "CNY" in out and "USD" in out
         assert _load(f)["base_currency"] == "USD"
 
+class TestImportWalletCli:
+    """import-wallet 子命令 (RPC 全部 mock, 离线)."""
+
+    ADDR = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
+
+    def _mock_rpc(self, monkeypatch, native_wei: int):
+        import tracker.wallet as wallet_mod
+
+        class _Resp:
+            status_code = 200
+
+            def __init__(self, body):
+                self._body = body
+
+            def json(self):
+                return self._body
+
+        class _Req:
+            def post(self, url, json=None, params=None, timeout=None, headers=None):
+                if json["method"] == "eth_getBalance":
+                    return _Resp({"result": hex(native_wei)})
+                return _Resp({"result": "0x0"})  # 所有 ERC-20 余额为 0
+
+        monkeypatch.setattr(wallet_mod, "_requests", lambda: _Req())
+
+    def test_import_wallet_json(self, capsys, monkeypatch):
+        self._mock_rpc(monkeypatch, 2 * 10**18)
+        out = _run(capsys, "import-wallet", "eth", self.ADDR, "--json")
+        payload = json.loads(out)
+        assert payload["chain"] == "eth"
+        assert payload["address"] == self.ADDR.lower()
+        assert payload["holdings"] == [
+            {
+                "symbol": "ETH-USD",
+                "quantity": 2.0,
+                "contract": None,
+                "source": "native",
+                "chain": "eth",
+            }
+        ]
+
+    def test_import_wallet_add_writes_portfolio(self, tmp_path, capsys, monkeypatch):
+        self._mock_rpc(monkeypatch, 2 * 10**18)
+        f = tmp_path / "p.json"
+        f.write_text(
+            json.dumps(
+                {"base_currency": "CNY", "holdings": [{"symbol": "AAPL", "quantity": 10}]}
+            ),
+            encoding="utf-8",
+        )
+        out = _run(
+            capsys, "import-wallet", "eth", self.ADDR,
+            "--portfolio", str(f), "--add",
+        )
+        assert "已写入 1 个代币" in out
+        assert "ETH-USD" in out
+        data = _load(f)
+        assert [h["symbol"] for h in data["holdings"]] == ["AAPL", "ETH-USD"]
+        assert data["holdings"][1]["type"] == "crypto"
+        assert data["base_currency"] == "CNY"
+
+    def test_import_wallet_unsupported_chain(self, capsys):
+        with pytest.raises(SystemExit) as exc:
+            _run(capsys, "import-wallet", "solana", self.ADDR)
+        assert exc.value.code == 2
+        assert "不支持的链" in capsys.readouterr().err
+
+
 class TestCacheCli:
     def test_cache_info_and_clear(self, tmp_path, capsys, monkeypatch):
         db = tmp_path / "test_quotes_cache.db"

@@ -135,3 +135,44 @@ def test_parse_crypto_unknown_base_with_hyphen():
     p = parse("FOO-USD")
     assert p.market is Market.CRYPTO
     assert p.currency == "USD"
+
+
+def test_parse_crypto_stablecoin_quote():
+    # 稳定币计价: BTC-USDT 也识别为 crypto, 币种保留 USDT
+    p = parse("BTC-USDT")
+    assert p.market is Market.CRYPTO
+    assert p.currency == "USDT"
+    assert p.yahoo == "BTC-USDT"
+
+
+def test_normalize_crypto_stablecoin_no_separator():
+    assert normalize("BTCUSDT") == "BTC-USDT"
+    assert normalize("ethusdt") == "ETH-USDT"
+
+
+def test_parse_crypto_suffix_quote_lower_input():
+    # 大小写不敏感 + 首尾空白
+    p = parse("  btc-usd ")
+    assert p.yahoo == "BTC-USD"
+    assert p.market is Market.CRYPTO
+
+
+def test_parse_crypto_non_crypto_hyphen_is_error():
+    # 连字符后缀不是计价货币时不能误判为加密货币
+    with pytest.raises(ValueError):
+        parse("FOO-BAR")
+
+
+def test_parse_crypto_short_base_not_crypto():
+    # len<=3 的无分隔符代码 (如 700) 不走 crypto 补全, 仍按无后缀处理
+    assert normalize("700") == "700"
+    with pytest.raises(ValueError):
+        parse("700.ZZ")
+
+
+def test_parse_crypto_4char_us_stock_boundary():
+    # 4 字符无分隔符且不在已知 crypto 表内 → 美股 (不误判)
+    p = parse("COIN")
+    assert p.market is Market.US
+    # 已知 crypto 基础代码 + 法币后缀才会补全
+    assert normalize("SOLUSD") == "SOL-USD"

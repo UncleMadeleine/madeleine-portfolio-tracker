@@ -150,3 +150,101 @@ def test_summarize_empty():
     assert m["total_pnl"] is None
     assert m["cost_coverage"] is None
     assert m["by_market"].empty
+
+
+# ---------- 加密货币 + 股票混合组合 ----------
+
+
+def test_build_view_crypto_stock_mixed():
+    """BTC-USD 与 AAPL/600519.SS 共存: 各自按当地货币折算进同一 base."""
+    holdings = [
+        {"symbol": "AAPL", "quantity": 10, "avg_cost": 100.0},
+        {"symbol": "600519.SS", "quantity": 100, "avg_cost": 10.0},
+        {"symbol": "BTC-USD", "quantity": 0.5, "avg_cost": 30000.0},
+    ]
+    quotes = {
+        "AAPL": make_quote("AAPL", 150.0, ccy="USD"),
+        "600519.SS": make_quote("600519.SS", 20.0, ccy="CNY"),
+        "BTC-USD": make_quote("BTC-USD", 60000.0, ccy="USD"),
+    }
+    fx = {"USD": 7.0, "CNY": 1.0}
+    view, issues = build_view(holdings, quotes, fx)
+    assert issues == []
+    assert len(view) == 3
+    assert set(view["symbol"]) == {"AAPL", "600519.SS", "BTC-USD"}
+    # BTC 行: 0.5 * 60000 * 7.0 = 210000; 成本 0.5 * 30000 * 7.0 = 105000
+    btc = view[view["symbol"] == "BTC-USD"].iloc[0]
+    assert btc["market_value"] == 210000.0
+    assert btc["cost"] == 105000.0
+    assert btc["pnl"] == 105000.0
+    assert btc["pnl_pct"] == 1.0
+    assert btc["market"] == "加密货币"
+    assert btc["currency"] == "USD"
+    # 权重合计 100%; BTC 按市值排序应排第一 (210000 > 150000 > 2000)
+    assert abs(view["weight_pct"].sum() - 100.0) < 1e-9
+    assert view.iloc[0]["symbol"] == "BTC-USD"
+
+
+def test_summarize_crypto_stock_mixed():
+    """混合组合汇总: total 覆盖三市场, by_market/by_currency 聚合正确."""
+    holdings = [
+        {"symbol": "AAPL", "quantity": 10, "avg_cost": 100.0},
+        {"symbol": "BTC-USD", "quantity": 0.5, "avg_cost": 30000.0},
+    ]
+    quotes = {
+        "AAPL": make_quote("AAPL", 150.0, ccy="USD"),
+        "BTC-USD": make_quote("BTC-USD", 60000.0, ccy="USD"),
+    }
+    fx = {"USD": 7.0}
+    view, issues = build_view(holdings, quotes, fx)
+    assert issues == []
+    m = summarize(view)
+    # AAPL 10*150*7 = 10500; BTC 0.5*60000*7 = 210000
+    assert m["total_value"] == 220500.0
+    assert m["total_cost"] == (10 * 100 + 0.5 * 30000) * 7.0
+    assert m["total_pnl"] == 220500.0 - (10 * 100 + 0.5 * 30000) * 7.0
+    assert m["cost_coverage"] == 1.0
+    assert m["by_market"]["加密货币"] == 210000.0
+    assert m["by_market"]["美股"] == 10500.0
+    assert m["by_currency"]["USD"] == 220500.0
+
+
+def test_build_view_crypto_quote_failure_flags_issue():
+    """crypto 行情缺失降级: 该行剔除并产出 issue, 其余持仓不受影响."""
+    holdings = [
+        {"symbol": "AAPL", "quantity": 10, "avg_cost": 100.0},
+        {"symbol": "BTC-USD", "quantity": 0.5, "avg_cost": 30000.0},
+    ]
+    quotes = {
+        "AAPL": make_quote("AAPL", 150.0, ccy="USD"),
+        # BTC-USD 缺行情
+    }
+    fx = {"USD": 7.0}
+    view, issues = build_view(holdings, quotes, fx)
+    assert view["symbol"].tolist() == ["AAPL"]
+    assert issues == ["BTC-USD: 行情缺失"]
+
+
+def test_build_view_crypto_eur_quote_needs_eur_fx():
+    """BTC-EUR 计价: 用 EUR 汇率折算, 缺 EUR 汇率时报缺失并剔除该行."""
+    holdings = [{"symbol": "BTC-EUR", "quantity": 1.0, "avg_cost": 50000.0}]
+    quotes = {"BTC-EUR": make_quote("BTC-EUR", 55000.0, ccy="EUR")}
+    fx = {"USD": 7.0, "EUR": 7.6}
+    view, issues = build_view(holdings, quotes, fx)
+    assert issues == []
+    assert view.iloc[0]["market_value"] == 55000.0 * 7.6
+    # 缺 EUR 汇率
+    view2, issues2 = build_view(holdings, quotes, {"USD": 7.0})
+    assert view2.empty
+    assert issues2 == ["BTC-EUR: 缺少 EUR 汇率"]
+
+
+def test_build_view_no_separator_crypto_input():
+    """持仓文件里写 BTCUSD (无连字符) 也归一为 BTC-USD 行."""
+    holdings = [{"symbol": "BTCUSD", "quantity": 1.0, "avg_cost": 30000.0}]
+    quotes = {"BTC-USD": make_quote("BTC-USD", 60000.0, ccy="USD")}
+    fx = {"USD": 7.0}
+    view, issues = build_view(holdings, quotes, fx)
+    assert issues == []
+    assert view.iloc[0]["symbol"] == "BTC-USD"
+    assert view.iloc[0]["market"] == "加密货币"

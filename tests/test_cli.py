@@ -453,6 +453,138 @@ class TestExportCli:
         assert data["base_currency"] == "USD"
 
 
+class TestSnapshotCryptoMixed:
+    """加密货币与股票混合组合的快照 (离线: mock 行情与汇率)."""
+
+    def _portfolio(self, tmp_path):
+        f = tmp_path / "p.json"
+        f.write_text(
+            json.dumps(
+                {
+                    "base_currency": "CNY",
+                    "holdings": [
+                        {"symbol": "AAPL", "quantity": 10, "avg_cost": 180},
+                        {"symbol": "BTC-USD", "quantity": 0.5, "avg_cost": 30000},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return f
+
+    def _watchlist(self, tmp_path):
+        f = tmp_path / "w.json"
+        f.write_text(
+            json.dumps(
+                {
+                    "watchlist": [
+                        {
+                            "symbol": "ETH-USD", "lists": ["加密货币"],
+                            "upper_1": 3000, "upper_2": 3500,
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        return f
+
+    def _fake_quotes(self, symbols, prefer_akshare=False, use_ibkr=False):
+        data = {
+            "AAPL": Quote("AAPL", "Apple", 200.0, 195.0, 2.56, "USD"),
+            "BTC-USD": Quote("BTC-USD", None, 60000.0, 58000.0, 3.45, "USD"),
+            "ETH-USD": Quote("ETH-USD", None, 3200.0, 3100.0, 3.23, "USD"),
+        }
+        return {s: data[s] for s in symbols if s in data}, {}, []
+
+    def _fake_fx(self, base, currencies, use_ibkr=False):
+        rates = {"CNY": 1.0, "USD": 7.2}
+        return {c: rates[c] for c in currencies if c in rates}, []
+
+    def _patch(self, monkeypatch):
+        monkeypatch.setattr(cli.prices, "get_quotes", self._fake_quotes)
+        monkeypatch.setattr("tracker.snapshot.get_fx_rates", self._fake_fx)
+
+    def test_snapshot_json_mixed_crypto_stock(self, tmp_path, capsys, monkeypatch):
+        self._patch(monkeypatch)
+        out = _run(
+            capsys, "snapshot", "--json",
+            "--portfolio", str(self._portfolio(tmp_path)),
+            "--watchlist-file", str(self._watchlist(tmp_path)),
+        )
+        data = json.loads(out)
+        # 序列化干净: 无 NaN 字面量
+        assert "NaN" not in out
+        by_sym = {h["symbol"]: h for h in data["holdings"]}
+        assert set(by_sym) == {"AAPL", "BTC-USD"}
+        assert by_sym["BTC-USD"]["market"] == "加密货币"
+        # BTC: 0.5 * 60000 * 7.2 = 216000; AAPL: 10 * 200 * 7.2 = 14400
+        assert by_sym["BTC-USD"]["market_value"] == 216000.0
+        assert by_sym["AAPL"]["market_value"] == 14400.0
+        assert data["summary"]["total_value"] == 230400.0
+        assert data["summary"]["by_market"]["加密货币"] == 216000.0
+        assert data["summary"]["by_currency"] == {"USD": 230400.0}
+        assert data["issues"] == []
+
+    def test_snapshot_mixed_crypto_watchlist_trigger(self, tmp_path, capsys, monkeypatch):
+        """ETH 现价 3200 介于 upper_1 (3000) 与 upper_2 (3500) 之间 → 触发上限 I."""
+        self._patch(monkeypatch)
+        out = _run(
+            capsys, "snapshot", "--json",
+            "--portfolio", str(self._portfolio(tmp_path)),
+            "--watchlist-file", str(self._watchlist(tmp_path)),
+        )
+        data = json.loads(out)
+        assert data["triggered"][0]["symbol"] == "ETH-USD"
+        assert "上限 I" in data["triggered"][0]["status"]
+
+    def test_snapshot_text_mixed_outputs_crypto_rows(self, tmp_path, capsys, monkeypatch):
+        """文本快照: 持仓表含 BTC-USD, 市场分布含「加密货币」."""
+        self._patch(monkeypatch)
+        out = _run(
+            capsys, "snapshot",
+            "--portfolio", str(self._portfolio(tmp_path)),
+            "--watchlist-file", str(self._watchlist(tmp_path)),
+        )
+        assert "BTC-USD" in out
+        assert "加密货币" in out
+        assert "浮动盈亏" in out
+
+    def test_export_md_mixed(self, tmp_path, capsys, monkeypatch):
+        """混合组合导出 Markdown: 市场分布与加密货币行都在."""
+        self._patch(monkeypatch)
+        out = _run(
+            capsys, "export", "-f", "md",
+            "--portfolio", str(self._portfolio(tmp_path)),
+            "--watchlist-file", str(self._watchlist(tmp_path)),
+        )
+        assert "BTC-USD" in out
+        assert "加密货币" in out
+
+    def test_portfolio_add_crypto_normalizes_input(self, tmp_path, capsys, monkeypatch):
+        """portfolio add BTCUSD → 存储为 Yahoo 规范格式 BTC-USD, 且组合里股票共存."""
+        f = tmp_path / "p2.json"
+        f.write_text(json.dumps({"base_currency": "CNY", "holdings": []}), encoding="utf-8")
+        _run(capsys, "portfolio", "add", "BTCUSD", "--portfolio", str(f),
+             "--quantity", "0.5", "--avg-cost", "30000")
+        _run(capsys, "portfolio", "add", "600519.SS", "--portfolio", str(f),
+             "--quantity", "100", "--avg-cost", "1500")
+        holdings = _load(f)["holdings"]
+        assert {h["symbol"] for h in holdings} == {"BTC-USD", "600519.SS"}
+        assert holdings[0]["quantity"] == 0.5
+
+    def test_watchlist_add_crypto_thresholds(self, tmp_path, capsys, monkeypatch):
+        """watchlist add 无分隔符 ETHUSD → 归一为 ETH-USD 并保存两级阈值."""
+        f = tmp_path / "w2.json"
+        f.write_text(json.dumps({"watchlist": []}), encoding="utf-8")
+        _run(capsys, "watchlist", "add", "ETHUSD", "--file", str(f),
+             "--list", "加密货币", "--upper1", "3000", "--upper2", "3500")
+        e = _load(f)["watchlist"][0]
+        assert e["symbol"] == "ETH-USD"
+        assert e["upper_1"] == 3000.0
+        assert e["upper_2"] == 3500.0
+
+
 class TestVersion:
     """--version / -v 全局选项."""
 

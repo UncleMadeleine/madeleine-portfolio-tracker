@@ -97,12 +97,16 @@ class ParsedSymbol:
 
 def normalize(symbol: str) -> str:
     s = symbol.strip().upper()
-    # 加密货币无分隔符格式: BTCUSD → BTC-USD (Yahoo Finance 格式)
+    # 加密货币无分隔符格式: BTCUSD → BTC-USD, BTCUSDT → BTC-USDT (Yahoo Finance 格式)
     if "-" not in s and "." not in s and len(s) > 3:
-        quote = s[-3:]
-        base = s[:-3]
-        if quote in _CRYPTO_QUOTES and base in _KNOWN_CRYPTO:
-            return f"{base}-{quote}"
+        # 计价货币按长度从长到短匹配 (USDT/USDC/BUSD 4位, 其余 3位)
+        for qlen in (4, 3):
+            if len(s) <= qlen:
+                continue
+            quote = s[-qlen:]
+            base = s[:-qlen]
+            if quote in _CRYPTO_QUOTES and base in _KNOWN_CRYPTO:
+                return f"{base}-{quote}"
     if "." not in s:
         return s
     head, _, suffix = s.rpartition(".")
@@ -125,6 +129,12 @@ def parse(symbol: str) -> ParsedSymbol:
                 market=Market.CRYPTO,
                 currency=quote,
             )
+    if "-" in yahoo and "." not in yahoo:
+        base, _, quote = yahoo.rpartition("-")
+        # 连字符既不是 crypto 计价货币、也不符合美股类别代码 (如 BRK-B / BRK.B) 的形态
+        # (美股类别 1 个大写字母) 且 base 非已知 crypto → 大概率是无效代码, 显式报错
+        if base not in _KNOWN_CRYPTO and not (len(quote) == 1 and quote.isalpha()):
+            raise ValueError(f"无法识别的代码: {symbol}")
     if "." not in yahoo:
         market = Market.US
     else:

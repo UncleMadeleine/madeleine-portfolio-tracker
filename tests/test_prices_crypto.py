@@ -65,6 +65,7 @@ def test_get_quotes_crypto_failure_does_not_block_stocks(monkeypatch):
 
     monkeypatch.setattr(orch, "_yahoo_batch", fake_batch)
     monkeypatch.setattr(crypto_mod, "_binance_quote", failing_crypto)
+    monkeypatch.setattr(crypto_mod, "_hl_quote", failing_crypto)
     monkeypatch.setattr(crypto_mod, "_yf_quote", failing_crypto)
 
     quotes, errors, notes = get_quotes(["AAPL", "BTC-USD"])
@@ -87,12 +88,13 @@ def test_crypto_domain_routing_and_suffixes():
 
 
 def test_crypto_quote_route_binance_first():
-    """crypto 源链固定 Binance 在前, yfinance 兜底."""
+    """crypto 源链固定 Binance → Hyperliquid (仅USD系) → yfinance."""
     p = parse("BTC-USD")
     provider = resolve(p.market)
     route = provider.quote_sources(p)
     assert route[0] is crypto_mod._binance_quote
-    assert route[1] is crypto_mod._yf_quote
+    assert route[1] is crypto_mod._hl_quote
+    assert route[2] is crypto_mod._yf_quote
 
 
 def test_binance_quote_from_ticker(monkeypatch):
@@ -183,4 +185,70 @@ def test_binance_history_shape(monkeypatch):
     assert list(df.columns) == ["date", "open", "high", "low", "close", "volume"]
     assert len(df) == 2
     assert df["close"].iloc[0] == 78306.43
+
+
+def _fake_hl_ctx(coin="BTC", mark="61000.5", prev="60000.0"):
+    """构造 HL metaAndAssetCtxs 假响应: [{"universe": [...]}, [ctx, ...]]."""
+    universe = {"universe": [{"name": coin}, {"name": "ETH"}]}
+    ctxs = [{"markPx": mark, "prevDayPx": prev}, {"markPx": "2400.0", "prevDayPx": "2350.0"}]
+    return [universe, ctxs]
+
+
+def test_hl_quote_from_asset_ctxs(monkeypatch):
+    """HL 永续行情: markPx 现价 + prevDayPx 昨收 → Quote (单请求)."""
+    monkeypatch.setattr(crypto_mod, "_hl_post", lambda payload: _fake_hl_ctx())
+
+    q = crypto_mod._hl_quote(parse("BTC-USD"))
+    assert q.symbol == "BTC-USD"
+    assert q.price == 61000.5
+    assert q.prev_close == 60000.0
+    assert q.change_pct == pytest.approx((61000.5 / 60000.0 - 1) * 100)
+    assert q.currency == "USD"
+
+
+def test_hl_quote_unknown_coin_raises(monkeypatch):
+    """HL 永续无此币种时抛错, 供降级到 yfinance."""
+    monkeypatch.setattr(crypto_mod, "_hl_post", lambda payload: _fake_hl_ctx())
+
+    with pytest.raises(RuntimeError, match="无此币种"):
+        crypto_mod._hl_quote(parse("FOO-USD"))
+
+
+def test_hl_quote_non_usd_quote_skips(monkeypatch):
+    """非USD系计价 (如 ETH-BTC) 直接拒绝, 不发请求."""
+    called = []
+    monkeypatch.setattr(crypto_mod, "_hl_post", lambda payload: called.append(payload))
+
+    with pytest.raises(ValueError, match="非USD系计价"):
+        crypto_mod._hl_quote(parse("ETH-BTC"))
+    assert called == []
+
+
+def test_hl_history_shape(monkeypatch):
+    """HL candleSnapshot → 标准列名升序 DataFrame."""
+    bars = [
+        {"t": 1788912000000, "o": "78455.8", "h": "79760.0", "l": "77770.0", "c": "78306.43", "v": "14129.92"},
+        {"t": 1788998400000, "o": "78306.43", "h": "78564.39", "l": "76464.0", "c": "76568.72", "v": "15320.37"},
+    ]
+    monkeypatch.setattr(crypto_mod, "_hl_post", lambda payload: bars)
+
+    df = crypto_mod._hl_history(parse("BTC-USD"), "2026-09-05", "2026-09-07")
+    assert list(df.columns) == ["date", "open", "high", "low", "close", "volume"]
+    assert len(df) == 2
+    assert df["close"].iloc[0] == 78306.43
     assert df["date"].iloc[0] < df["date"].iloc[1]
+
+
+def test_crypto_quote_falls_back_to_hyperliquid(monkeypatch):
+    """Binance 失败 → HL 接管; 记录的 errors 为空."""
+    import tracker.providers.orchestration as orch
+
+    def failing_binance(p):
+        raise RuntimeError("Binance API 不可达")
+
+    monkeypatch.setattr(crypto_mod, "_binance_quote", failing_binance)
+    monkeypatch.setattr(crypto_mod, "_hl_quote", lambda p: _q(p.yahoo, 61000.5))
+
+    quotes, errors, notes = get_quotes(["BTC-USD"])
+    assert quotes["BTC-USD"].price == 61000.5
+    assert errors == {}

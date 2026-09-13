@@ -1,6 +1,7 @@
 """加密货币 provider: 完全独立走加密货币 API, 不与股票数据源混用.
 
-优先 Binance 公开 REST API (spot, 无需 key), 失败降级 yfinance 直连
+优先 Binance 公开 REST API (spot, 无需 key), 失败降级 Hyperliquid 永续合约价
+(仅 USD 系计价代码, markPx 与现货价存在基差), 再降级 yfinance 直连
 (OpenBB equity.quote 对 crypto 缺 last_price, 必须直连)。
 代码规范: BASE-QUOTE (BTC-USD / ETH-USDT), 计价货币见 symbols._CRYPTO_QUOTES。
 """
@@ -21,6 +22,87 @@ _KLINES_LIMIT = 1000
 # 实时行情进程内缓存: 短 TTL, 批量混查同币对时合并请求
 _spot_ttl = 5.0
 _spot_cache: dict[str, tuple[float, dict]] = {}
+
+# Hyperliquid 永续合约 (第二数据源): 公开 info 端点免鉴权, 仅覆盖 USD 系计价代码。
+# HL 现货交易对为 @N/UBTC 等包装命名, 无法稳定映射, 故只用 perp (BTC/ETH 裸名)。
+_HL_URL = "https://api.hyperliquid.xyz/info"
+
+
+def _hl_usd_quote(quote: str) -> bool:
+    """该计价货币可否用 HL 永续价近似 (USD 系: USD/USDT/USDC/FDUSD 等)."""
+    return quote.upper() in {"USD", "USDT", "USDC", "FDUSD", "TUSD", "BUSD", "DAI"}
+
+
+def _hl_post(payload: dict):
+    req = _requests()
+    r = req.post(_HL_URL, json=payload, timeout=_HTTP_TIMEOUT)
+    if r.status_code != 200:
+        raise RuntimeError(f"Hyperliquid {r.status_code}: {r.text[:120]}")
+    return r.json()
+
+
+def _hl_coin(p: ParsedSymbol) -> str:
+    """BTC-USD → HL 永续币种名; 非法代码或 HL 不该接管的计价货币抛 ValueError."""
+    base, _, quote = p.yahoo.rpartition("-")
+    if not base or not _hl_usd_quote(quote):
+        raise ValueError(f"{p.yahoo}: 非USD系计价, 不适用 Hyperliquid 永续源")
+    return base.upper()
+
+
+def _hl_quote(p: ParsedSymbol) -> Quote:
+    """HL 永续行情: 单次 metaAndAssetCtxs 取 markPx 现价 + prevDayPx 昨收."""
+    coin = _hl_coin(p)
+    meta, ctxs = _hl_post({"type": "metaAndAssetCtxs"})
+    ctx = next(
+        (c for a, c in zip(meta.get("universe", []), ctxs) if a.get("name") == coin),
+        None,
+    )
+    if ctx is None:
+        raise RuntimeError(f"{coin}: Hyperliquid 永续无此币种")
+    price = float(ctx.get("markPx") or 0)
+    if price <= 0:
+        raise RuntimeError(f"{coin}: Hyperliquid 无有效最新价")
+    try:
+        prev = float(ctx["prevDayPx"]) if ctx.get("prevDayPx") else None
+    except (TypeError, ValueError):
+        prev = None
+    chg = (price / prev - 1) * 100 if prev else None
+    return Quote(
+        symbol=p.yahoo,
+        name=f"{coin} (HL perp)",
+        price=price,
+        prev_close=prev,
+        change_pct=chg,
+        currency=p.currency,
+    )
+
+
+def _hl_history(p: ParsedSymbol, start_date: str, end_date: str | None) -> pd.DataFrame:
+    """HL 永续 1d candleSnapshot → date/open/high/low/close/volume (升序)."""
+    coin = _hl_coin(p)
+    start_ms = int(pd.Timestamp(start_date, tz="UTC").timestamp() * 1000)
+    end_ms = (
+        int(pd.Timestamp(end_date, tz="UTC").timestamp() * 1000 + 86_399_000)
+        if end_date
+        else int(time.time() * 1000)
+    )
+    bars = _hl_post({"type": "candleSnapshot", "req": {"coin": coin, "interval": "1d", "startTime": start_ms, "endTime": end_ms}})
+    rows = [
+        {
+            "date": pd.Timestamp(int(b["t"]), unit="ms", tz="UTC").date(),
+            "open": float(b["o"]),
+            "high": float(b["h"]),
+            "low": float(b["l"]),
+            "close": float(b["c"]),
+            "volume": float(b["v"]),
+        }
+        for b in bars
+    ]
+    df = pd.DataFrame(rows)
+    if df.empty:
+        raise RuntimeError(f"{coin}: Hyperliquid 无历史K线")
+    df["date"] = pd.to_datetime(df["date"])
+    return df
 
 
 def _requests():
@@ -184,15 +266,15 @@ def _obb():
 
 
 class CryptoProvider(Provider):
-    """加密货币域: Binance 优先, yfinance 兜底; 与股票数据源完全隔离."""
-
+    """加密货币域: Binance 优先, Hyperliquid 永续次之 (仅USD系计价), yfinance 兜底; 与股票数据源完全隔离."""
     name = "crypto"
 
     def quote_sources(self, p: ParsedSymbol, prefer_first: bool = False) -> list:
-        return [_binance_quote, _yf_quote]
+        return [_binance_quote, _hl_quote, _yf_quote]
 
     def history_sources(self, p: ParsedSymbol, start_date: str, end_date: str | None, prefer_first: bool = False) -> list:
         return [
             lambda: _binance_history(p, start_date, end_date),
+            lambda: _hl_history(p, start_date, end_date),
             lambda: _yf_history(p, start_date, end_date),
         ]

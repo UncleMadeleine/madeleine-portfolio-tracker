@@ -9,7 +9,9 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+import app_settings as S
 import kline_page
+import settings_page
 
 from tracker import charting, prices
 from tracker.analytics import build_view, summarize
@@ -28,43 +30,12 @@ from tracker.watchlist import (
     triggered_entries,
 )
 
-PORTFOLIO_PATH = Path(__file__).parent / "portfolio.json"
 WATCHLIST_PATH = Path(__file__).parent / "watchlist.json"
-BASE_CURRENCIES = ["CNY", "USD", "EUR", "HKD"]
 
 st.set_page_config(page_title="投资组合追踪", page_icon="📈", layout="wide")
 
 if "app_page" not in st.session_state:
     st.session_state.app_page = "portfolio"
-
-
-def load_portfolio_file() -> dict:
-    if PORTFOLIO_PATH.exists():
-        return json.loads(PORTFOLIO_PATH.read_text(encoding="utf-8"))
-    return {"base_currency": "CNY", "holdings": []}
-
-
-def _clean_rows(rows: list[dict]) -> list[dict]:
-    out = []
-    for r in rows:
-        clean = {}
-        for k, v in r.items():
-            if isinstance(v, float) and pd.isna(v):
-                continue
-            if v is None:
-                continue
-            clean[k] = v
-        out.append(clean)
-    return out
-
-
-def save_portfolio_file(data: dict) -> None:
-    data = dict(data)
-    data["holdings"] = _clean_rows(data.get("holdings", []))
-    PORTFOLIO_PATH.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False),
-        encoding="utf-8",
-    )
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -83,34 +54,21 @@ def fmt(v, digits: int = 2) -> str:
     return f"{v:,.{digits}f}"
 
 
-UP_COLOR, DOWN_COLOR = "#ef232a", "#14b143"  # 与 K线默认一致: 红涨绿跌
-
-
-def _norm_sym(s) -> str:
-    """规范化为 Yahoo 代码; 无法解析时返回大写原文。"""
-    try:
-        return parse(str(s)).yahoo
-    except ValueError:
-        return str(s).strip().upper()
-
-
 def _pnl_color(v) -> str:
-    """涨跌单元格字体色: 涨红跌绿 (0/缺失不着色)。"""
+    """涨跌单元格字体色: 涨/跌按全局配色 (0/缺失不着色)。"""
     if v is None or (isinstance(v, float) and pd.isna(v)) or v == 0:
         return ""
-    return f"color: {UP_COLOR}" if v > 0 else f"color: {DOWN_COLOR}"
+    up_c, down_c = S.up_down_colors()
+    return f"color: {up_c}" if v > 0 else f"color: {down_c}"
 
 
 def _on_base_change() -> None:
-    """切换基础货币立即落盘, 不依赖「保存持仓」。"""
-    new_base = st.session_state.get("base_currency", "CNY")
-    data = load_portfolio_file()
-    save_portfolio_file({"base_currency": new_base, "holdings": data.get("holdings", [])})
+    """基础货币即时落盘 (on_change 回调)."""
+    new_base = st.session_state.get("set_base_currency", "CNY")
+    data = S.load_portfolio_file()
+    S.save_portfolio_file({"base_currency": new_base, "holdings": data.get("holdings", [])})
     st.toast(f"基础货币已保存为 {new_base}")
 
-
-portfolio = load_portfolio_file()
-saved_base = portfolio.get("base_currency", "CNY")
 
 watch = load_watchlist(WATCHLIST_PATH)
 if not watch.get("watchlist"):
@@ -121,30 +79,38 @@ with st.sidebar:
         ":material/candlestick_chart: **组合追踪**",
         help="多市场持仓 + 自选提醒 · 数据源 Yahoo/akshare",
     )
+    settings = S.load_settings()
+    portfolio = S.load_portfolio_file()
     page = st.segmented_control(
         "页面",
-        [":material/pie_chart: 组合", ":material/candlestick_chart: K线"],
-        default=[":material/pie_chart: 组合"]
-        if st.session_state.app_page == "portfolio"
-        else [":material/candlestick_chart: K线"],
+        [
+            ":material/pie_chart: 组合",
+            ":material/candlestick_chart: K线",
+            ":material/settings: 设置",
+        ],
+        default=[{
+            "portfolio": ":material/pie_chart: 组合",
+            "kline": ":material/candlestick_chart: K线",
+            "settings": ":material/settings: 设置",
+        }[st.session_state.app_page]],
         label_visibility="collapsed",
         key="app_page_radio",
     )
     if page is None:  # segmented_control 允许取消选中: 保持原页面
-        page = ":material/pie_chart: 组合" if st.session_state.app_page == "portfolio" else ":material/candlestick_chart: K线"
-    st.session_state.app_page = "kline" if "K线" in str(page) else "portfolio"
-    base = st.selectbox(
-        "基础货币", BASE_CURRENCIES,
-        index=BASE_CURRENCIES.index(saved_base) if saved_base in BASE_CURRENCIES else 0,
-        key="base_currency",
-        on_change=_on_base_change,
-    )
-    prefer_akshare = st.toggle("A股/港股优先 akshare (国内网络)", value=False)
-    use_ibkr = st.toggle(
-        "IBKR 行情 (需本机 IB Gateway)",
-        value=False,
-        help="启用后优先从 IBKR 获取行情 (有订阅则为实时), 失败自动回退 Yahoo/akshare。连接参数见 ibkr.json (mode: paper=4002 / live=4001)",
-    )
+        page = {
+            "portfolio": ":material/pie_chart: 组合",
+            "kline": ":material/candlestick_chart: K线",
+            "settings": ":material/settings: 设置",
+        }[st.session_state.app_page]
+    if "K线" in str(page):
+        st.session_state.app_page = "kline"
+    elif "设置" in str(page):
+        st.session_state.app_page = "settings"
+    else:
+        st.session_state.app_page = "portfolio"
+    base = portfolio.get("base_currency", "CNY")
+    prefer_akshare = settings["prefer_akshare"]
+    use_ibkr = settings["use_ibkr"]
 
     if st.session_state.app_page == "portfolio":
         with st.expander(":material/edit_note: 持仓管理", expanded=True):
@@ -191,7 +157,7 @@ with st.sidebar:
                     if dups:
                         st.error(f"重复代码 (已去重): {', '.join(sorted(set(dups)))}")
                 if not bad:
-                    save_portfolio_file({"base_currency": base, "holdings": clean})
+                    S.save_portfolio_file({"base_currency": base, "holdings": clean})
                     cached_quotes.clear()
                     cached_fx.clear()
                     if dups:
@@ -356,14 +322,14 @@ if st.session_state.app_page == "portfolio":
                 f"浮动盈亏 ({base})",
                 fmt(m["total_pnl"]),
                 pnl_delta,
-                delta_color="inverse",  # 红涨绿跌: 盈亏为正显示红色
+                delta_color=S.delta_color(),  # 涨跌配色跟随设置: 红↑绿↓ 或 绿↑红↓
                 border=True,
             )
             st.metric(
                 f"今日估算 ({base})",
                 fmt(m["today_pnl"]),
                 None if m["today_pnl"] is None else f"{m['today_pnl']:+,.0f}",
-                delta_color="inverse",
+                delta_color=S.delta_color(),
                 border=True,
             )
             st.metric(
@@ -379,7 +345,7 @@ if st.session_state.app_page == "portfolio":
             top.markdown(
                 f":material/notifications_active: **{len(trig_all)} 只自选触及价格阈值** · "
                 + " · ".join(
-                    f"**:red[{r['symbol']}]** {r['status'].split(' ', 1)[1]}"
+                    f"**:{S.up_down_tags()[0]}[{r['symbol']}]** {r['status'].split(' ', 1)[1]}"
                     for _, r in trig_all.iterrows()
                 )
             )
@@ -528,7 +494,8 @@ if st.session_state.app_page == "portfolio":
             if frames:
                 kline_page.render_compare_chart(
                     charting.compare_payload(
-                        frames, normalize=norm, period=cmp_period
+                        frames, normalize=norm, period=cmp_period,
+                        green_up=S.green_up(),
                     ),
                     height=560,
                 )
@@ -537,8 +504,9 @@ if st.session_state.app_page == "portfolio":
                     dd = charting.resample_ohlc(d, cmp_period) if cmp_period != "daily" else d
                     if len(dd) >= 2:
                         pct = float(dd["close"].iloc[-1]) / float(dd["close"].iloc[0]) - 1
+                        up_tag, down_tag = S.up_down_tags()
                         chg.append(
-                            f"{sym} {':red' if pct >= 0 else ':green'}[{pct:+.2%}]"
+                            f"{sym} :{up_tag}[{pct:+.2%}]" if pct >= 0 else f"{sym} :{down_tag}[{pct:+.2%}]"
                         )
                 if chg:
                     st.markdown("区间涨跌: " + " · ".join(chg))
@@ -591,9 +559,9 @@ if st.session_state.app_page == "portfolio":
             styled_w = wview.style.map(
                 _pnl_color, subset=["change_pct"]
             ).map(
-                lambda v: f"color: {UP_COLOR}; font-weight: 600" if str(v).startswith(("🟠", "🔴")) else (
+                lambda v: f"color: {S.up_down_colors()[0]}; font-weight: 600" if str(v).startswith(("🟠", "🔴")) else (
                     "color: #f0a30a; font-weight: 600" if str(v).startswith("🟡") else (
-                        f"color: {DOWN_COLOR}; font-weight: 600" if str(v).startswith("🟢") else ""
+                        f"color: {S.up_down_colors()[1]}; font-weight: 600" if str(v).startswith("🟢") else ""
                     )
                 ),
                 subset=["status"],
@@ -625,6 +593,9 @@ if st.session_state.app_page == "portfolio":
                     "triggered": None,
                 },
             )
+
+elif st.session_state.app_page == "settings":
+    settings_page.render_settings_page()
 
 elif st.session_state.app_page == "kline":
     kline_page.render_kline_controls(prefer_akshare=prefer_akshare)

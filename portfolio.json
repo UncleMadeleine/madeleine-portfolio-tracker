@@ -1,16 +1,55 @@
 {
-  "base_currency": "CNY",
   "_说明": "avg_cost 为当地货币成本; 英股按英镑计(非便士, 如 4.3 = £4.30); 港股代码 4 位补零(0700.HK); A股后缀 .SS/.SZ; 规范详见 README",
   "holdings": [
-    { "symbol": "AAPL", "quantity": 10, "avg_cost": 180.0 },
-    { "symbol": "NVDA", "quantity": 5, "avg_cost": 90.0 },
-    { "symbol": "SAP.DE", "quantity": 3, "avg_cost": 190.0 },
-    { "symbol": "BP.L", "quantity": 40, "avg_cost": 4.3 },
-    { "symbol": "RY.TO", "quantity": 8, "avg_cost": 165.0 },
-    { "symbol": "BHP.AX", "quantity": 20, "avg_cost": 42.0 },
-    { "symbol": "0700.HK", "quantity": 100, "avg_cost": 330.0 },
-    { "symbol": "0941.HK", "quantity": 200, "avg_cost": 75.0 },
-    { "symbol": "600519.SS", "quantity": 10, "avg_cost": 1500.0 },
-    { "symbol": "000001.SZ", "quantity": 1000, "avg_cost": 10.5 }
+    {
+      "symbol": "AAPL",
+      "quantity": 10,
+      "avg_cost": 180.0
+    },
+    {
+      "symbol": "NVDA",
+      "quantity": 5,
+      "avg_cost": 90.0
+    },
+    {
+      "symbol": "SAP.DE",
+      "quantity": 3,
+      "avg_cost": 190.0
+    },
+    {
+      "symbol": "BP.L",
+      "quantity": 40,
+      "avg_cost": 4.3
+    },
+    {
+      "symbol": "RY.TO",
+      "quantity": 8,
+      "avg_cost": 165.0
+    },
+    {
+      "symbol": "BHP.AX",
+      "quantity": 20,
+      "avg_cost": 42.0
+    },
+    {
+      "symbol": "0700.HK",
+      "quantity": 100,
+      "avg_cost": 330.0
+    },
+    {
+      "symbol": "0941.HK",
+      "quantity": 200,
+      "avg_cost": 75.0
+    },
+    {
+      "symbol": "600519.SS",
+      "quantity": 10,
+      "avg_cost": 1500.0
+    },
+    {
+      "symbol": "000001.SZ",
+      "quantity": 1000,
+      "avg_cost": 10.5
+    }
   ]
 }

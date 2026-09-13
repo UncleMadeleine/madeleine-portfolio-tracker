@@ -11,6 +11,8 @@ from datetime import datetime, timedelta
 import pandas as pd
 import streamlit as st
 
+import app_settings
+
 from tracker import charting, prices, search
 from tracker.symbols import parse
 
@@ -199,12 +201,12 @@ def render_kline_controls(prefer_akshare: bool) -> None:
     if c4.button("查询", type="primary", icon=":material/search:"):
         entered = True
 
-    opt1, opt2, opt3 = st.columns([1, 1, 2])
+    opt1, opt2 = st.columns([1, 1])
     kmas = opt1.multiselect(
         "均线", [5, 10, 20, 30, 60, 120, 250], default=[5, 20, 60], key="kline_ma",
     )
     kvol = opt2.toggle("成交量", value=True, key="kline_vol")
-    kgreen = opt3.toggle("绿涨红跌 (国际配色)", value=False, key="kline_color")
+    kgreen = app_settings.green_up()  # 涨跌配色全局统一, 在「设置」页切换
 
     # 技术指标选择 (多选 + 可调参数)
     ind_sel = st.multiselect(

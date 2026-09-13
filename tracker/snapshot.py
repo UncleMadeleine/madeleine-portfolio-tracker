@@ -8,6 +8,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import prices
+from .symbols import parse
 from .analytics import build_view, summarize
 from .fx import get_fx_rates
 from .watchlist import (
@@ -92,7 +93,17 @@ def take_snapshot(
         symbols, prefer_akshare=prefer_akshare, use_ibkr=use_ibkr
     )
     if holdings:
-        currencies = sorted({q.currency for q in quotes.values()})
+        # 只对持仓实际涉及的币种取汇率; 自选股不做换算,
+        # 把自选币种混进来会造成虚假的「汇率缺失」告警
+        holding_syms = set()
+        for h in holdings:
+            try:
+                holding_syms.add(parse(str(h["symbol"])).yahoo)
+            except ValueError:
+                holding_syms.add(str(h["symbol"]).strip().upper())
+        currencies = sorted({
+            q.currency for k, q in quotes.items() if k in holding_syms
+        })
         fx, fx_missing = get_fx_rates(base, currencies, use_ibkr=use_ibkr)
     else:
         fx, fx_missing = {}, []

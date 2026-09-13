@@ -249,11 +249,13 @@ def render_kline_controls(prefer_akshare: bool) -> None:
     if not is_valid_symbol(ksym):
         st.error(f"无法识别的代码: {ksym} (参考上方代码规范, 如 600519.SS / 0700.HK)")
         return
-    if not entered and not st.session_state.get("kline_submitted"):
+    # 改参数 (均线/成交量/指标/周期) 不自动重新取数: 需显式回车或点「查询」;
+    # 只有代码本身变化 (entered=True) 才视为新查询
+    if not entered:
         st.info("回车或点「查询」获取 K线。")
         return
 
-    st.session_state["kline_submitted"] = True
+    st.session_state.pop("kline_submitted", None)
     st.session_state["kline_last_symbol"] = ksym
 
     yahoo = normalize_or_none(ksym)

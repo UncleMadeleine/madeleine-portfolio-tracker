@@ -14,6 +14,10 @@ def portfolio_add(args) -> None:
         _finish_with_error("请指定要添加的代码, 如: portfolio add AAPL --quantity 10 --avg-cost 180")
     if args.quantity is None:
         _finish_with_error("请指定持仓数量 --quantity")
+    if args.quantity <= 0:
+        _finish_with_error(f"持仓数量必须为正数, 得到: {args.quantity}")
+    if args.avg_cost is not None and args.avg_cost < 0:
+        _finish_with_error(f"成本价不能为负数, 得到: {args.avg_cost}")
     data = load_portfolio(args.portfolio)
     holdings = data.setdefault("holdings", [])
     changed: list[str] = []
@@ -36,6 +40,9 @@ def portfolio_add(args) -> None:
                 found["avg_cost"] = args.avg_cost
             changed.append(f"更新 {p.yahoo} 数量 {args.quantity}")
     save_portfolio(data, args.portfolio)
+    if args.json:
+        _print_json({"changed": changed, "holdings": data.get("holdings", [])})
+        return
     print("✅ " + "; ".join(changed))
 
 
@@ -55,12 +62,13 @@ def portfolio_remove(args) -> None:
     removed = [_sym(h) for h in original if _sym(h) in targets]
     data["holdings"] = remaining
     save_portfolio(data, args.portfolio)
+    if args.json:
+        _print_json({"removed": removed})
+        return
     if removed:
         print(f"✅ 已删除: {', '.join(removed)}")
     else:
         print("未找到可删除的持仓")
-    if args.json:
-        _print_json({"removed": removed})
 
 
 def portfolio_list(args) -> None:
@@ -95,6 +103,9 @@ def portfolio_set_base(args) -> None:
     old = data.get("base_currency", "CNY")
     data["base_currency"] = currency.upper()
     save_portfolio(data, args.portfolio)
+    if args.json:
+        _print_json({"base_currency": data["base_currency"], "previous": old})
+        return
     print(f"✅ 基础货币: {old} → {data['base_currency']}")
 
 

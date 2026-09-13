@@ -23,9 +23,16 @@ def build_view(
         except ValueError as e:
             issues.append(str(e))
             continue
-        qty = float(h.get("quantity") or 0)
+        # Streamlit data_editor 清空单元格会产生 NaN; `NaN or 0` 仍得 NaN, 需显式判
+        raw_qty = h.get("quantity")
+        if raw_qty is None or (isinstance(raw_qty, float) and math.isnan(raw_qty)):
+            raw_qty = 0
+        qty = float(raw_qty or 0)
         cost = h.get("avg_cost")
-        cost = float(cost) if cost not in (None, "") else None
+        if cost is None or (isinstance(cost, float) and math.isnan(cost)) or cost == "":
+            cost = None
+        else:
+            cost = float(cost)
         q = quotes.get(p.yahoo)
         if q is None or q.price is None or not math.isfinite(q.price):
             issues.append(f"{p.yahoo}: 行情缺失")

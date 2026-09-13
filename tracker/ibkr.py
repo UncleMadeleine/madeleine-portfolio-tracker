@@ -297,7 +297,9 @@ def ibkr_to_yahoo(
     ex = (exchange or "").upper()
     prim = (primary_exchange or "").upper()
     ccy = (currency or "").upper()
-    exkey = ex or prim
+    # SMART/空 等通用路由代号不携带真实交易所信息, 此时以 primaryExchange 为准,
+    # 否则 SMART+SHSE 的沪 B 股会误判为美股, SMART+SZSE 的深 B 股会误判为港股
+    exkey = prim if ex in ("", "SMART", "BESTEXEC") else ex
     if ccy == "CNY":
         if raw[:1] in _A_SHARE_BJ_PREFIX or raw.startswith("920"):
             return f"{raw}.BJ"

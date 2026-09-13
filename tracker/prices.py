@@ -88,26 +88,26 @@ def _yahoo_quote(p: ParsedSymbol) -> Quote:
 
 _AK_SPOT_TTL = 60
 _AK_TIMEOUT = 6.0
-_ak_spot_cache: tuple[float, dict[Market, pd.DataFrame]] = (0.0, {})
+# 按市场独立缓存: 某市场接口失败不影响其它市场, 且失败不占用 TTL (可重试)
+_ak_spot_cache: dict[Market, tuple[float, pd.DataFrame]] = {}
 
 
 def _ak_spot(market: Market) -> pd.DataFrame:
     global _ak_spot_cache
     now = time.time()
-    if now - _ak_spot_cache[0] < _AK_SPOT_TTL:
-        return _ak_spot_cache[1].get(market, pd.DataFrame())
+    hit = _ak_spot_cache.get(market)
+    if hit and now - hit[0] < _AK_SPOT_TTL:
+        return hit[1]
     ak = _ak()
-    tables: dict[Market, pd.DataFrame] = {}
+    fetcher = {Market.CN: ak.stock_zh_a_spot_em, Market.HK: ak.stock_hk_spot_em}.get(market)
+    if fetcher is None:
+        return pd.DataFrame()
     try:
-        tables[Market.CN] = with_timeout(ak.stock_zh_a_spot_em, _AK_TIMEOUT)
+        df = with_timeout(fetcher, _AK_TIMEOUT)
     except Exception:
-        pass
-    try:
-        tables[Market.HK] = with_timeout(ak.stock_hk_spot_em, _AK_TIMEOUT)
-    except Exception:
-        pass
-    _ak_spot_cache = (now, tables)
-    return tables.get(market, pd.DataFrame())
+        return pd.DataFrame()
+    _ak_spot_cache[market] = (now, df)
+    return df
 
 
 def _akshare_quote(p: ParsedSymbol) -> Quote:
@@ -319,7 +319,12 @@ def get_quotes(
                     except Exception as e:
                         errors[p.yahoo] = str(e)
 
-    fresh = {sym: q for sym, q in quotes.items() if sym in by_yahoo}
+    # 只回写本次真正取到的新鲜行情 (IBKR/akshare/yahoo), 缓存命中项不重写,
+    # 否则 set_cached 会刷新其 fetched_at, TTL 被无限延长
+    fresh = {
+        sym: q for sym, q in quotes.items()
+        if sym in by_yahoo and sym not in cached
+    }
     cache_mod.set_cached(fresh)
     return quotes, errors, notes
 
@@ -440,7 +445,6 @@ def get_ohlc(
 
     p = parse(symbol)
     is_range = start_date is not None
-    cache_key = start_date or months
     if not refresh and not is_range:
         cached = cache_mod.get_ohlc_cached(p.yahoo, months)
         if cached is not None:

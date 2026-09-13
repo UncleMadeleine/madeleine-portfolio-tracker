@@ -50,6 +50,13 @@ def load_watchlist(path: str | Path = DEFAULT_WATCHLIST) -> dict:
                 if sym not in merged:
                     merged[sym] = dict(e)
                     merged[sym].setdefault("lists", [])
+                else:
+                    # 同名代码在多个列表中各有一份阈值/备注: 保留先出现的,
+                    # 缺失字段 (如只在旧列表设过 upper) 从后出现的补齐
+                    for k, v in e.items():
+                        if k == "symbol" or k == "lists":
+                            continue
+                        merged[sym].setdefault(k, v)
                 if name not in merged[sym]["lists"]:
                     merged[sym]["lists"].append(name)
         entries = list(merged.values())
@@ -85,12 +92,18 @@ def merge_entries(data: dict) -> list[dict]:
 
 
 def entries_for(data: dict, name: str | None = None) -> list[dict]:
-    """按所属列表过滤条目; name 为空返回全部."""
+    """按所属列表过滤条目; name 为空返回全部.
+
+    name 支持逗号分隔多个列表 (与 add --list 一致), 命中任一即返回.
+    """
     if not name:
+        return merge_entries(data)
+    names = set(parse_lists(name)) - {"默认"}
+    if not names:
         return merge_entries(data)
     return [
         e for e in (data or {}).get("watchlist", [])
-        if name in (e.get("lists", []) or [])
+        if names & set(e.get("lists", []) or [])
     ]
 
 

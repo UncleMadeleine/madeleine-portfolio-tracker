@@ -723,9 +723,9 @@ def kline_payload(
         {
             "time": t,
             "open": round(float(o), 6), "high": round(float(h), 6),
-            "low": round(float(l), 6), "close": round(float(c), 6),
+            "low": round(float(lo), 6), "close": round(float(c), 6),
         }
-        for t, o, h, l, c in zip(dates, df["open"], df["high"], df["low"], df["close"])
+        for t, o, h, lo, c in zip(dates, df["open"], df["high"], df["low"], df["close"])
     ]
     up_vol, down_vol = _rgba(up, 0.55), _rgba(down, 0.55)
     vols = [
@@ -872,7 +872,7 @@ def compare_payload(
             )
     if not lines:
         raise ValueError("无有效对比数据")
-    names = " vs ".join(l["name"] for l in lines[:4]) + (" …" if len(lines) > 4 else "")
+    names = " vs ".join(ln["name"] for ln in lines[:4]) + (" …" if len(lines) > 4 else "")
     up, down = (INTL_UP_COLOR, INTL_DOWN_COLOR) if green_up else (CN_UP_COLOR, CN_DOWN_COLOR)
     return {
         "mode": "compare",

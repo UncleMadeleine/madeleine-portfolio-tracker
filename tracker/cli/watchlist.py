@@ -103,12 +103,13 @@ def watchlist_remove(args) -> None:
             remaining.append(e)
     data["watchlist"] = remaining
     save_watchlist(data, args.file)
+    if args.json:
+        _print_json({"removed": removed})
+        return
     if removed:
         print(f"✅ 已删除: {', '.join(removed)}")
     else:
         print("未找到可删除的代码 (可能不在自选中)")
-    if args.json:
-        _print_json({"removed": removed})
 
 
 def watchlist_list(args) -> None:

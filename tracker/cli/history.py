@@ -15,6 +15,9 @@ def cmd_history(args) -> None:
         recs["date"] = recs["date"].astype(str)
         _print_json(recs.to_dict(orient="records"))
         return
+    if df.empty:
+        print(f"⚠ {args.symbol}: 无历史数据")
+        return
     close = df["close"].astype(float)
     change = (close.iloc[-1] / close.iloc[0] - 1) * 100 if len(close) >= 2 else None
     print(f"\n=== 历史行情 {args.symbol} (近 {args.months} 个月, 共 {len(df)} 个交易日) ===")

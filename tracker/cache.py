@@ -84,7 +84,7 @@ def set_ohlc_cached(symbol: str, months: int, df: pd.DataFrame) -> None:
     recs["date"] = pd.to_datetime(recs["date"]).dt.strftime("%Y-%m-%d")
     cols = [c for c in ("date", "open", "high", "low", "close", "volume") if c in recs.columns]
     payload = json.dumps(recs[cols].to_dict(orient="records"))
-    with sqlite3.connect(CACHE_DB) as con:
+    with _lock, sqlite3.connect(CACHE_DB) as con:
         con.execute(
             """
             INSERT INTO ohlc_cache (symbol, months, payload, fetched_at)
@@ -115,7 +115,7 @@ def get_cached(symbols: list[str], ttl: int = CACHE_TTL) -> dict[str, "Quote"]:
                 hits[sym] = Quote(
                     symbol=sym, name=name, price=price,
                     prev_close=float(prev) if prev is not None else None,
-                    change_pct=float(chg) if chg else None,
+                    change_pct=float(chg) if chg is not None else None,
                     currency=str(ccy),
                 )
     return hits
@@ -132,7 +132,7 @@ def set_cached(quotes: dict[str, "Quote"]) -> None:
         if q.price is None or q.price <= 0:
             continue
         rows.append((q.symbol, q.name, q.price, q.prev_close, q.change_pct, q.currency, now))
-    with sqlite3.connect(CACHE_DB) as con:
+    with _lock, sqlite3.connect(CACHE_DB) as con:
         con.executemany(
             """
             INSERT INTO quotes (symbol, name, price, prev_close, change_pct, currency, fetched_at)
@@ -182,7 +182,7 @@ def info() -> dict:
 def clear() -> int:
     """清空全部缓存 (行情 + K线), 返回删除条数."""
     _ensure_db()
-    with sqlite3.connect(CACHE_DB) as con:
+    with _lock, sqlite3.connect(CACHE_DB) as con:
         n_quotes = con.execute("DELETE FROM quotes").rowcount
         n_ohlc = con.execute("DELETE FROM ohlc_cache").rowcount
         con.commit()

@@ -13,7 +13,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import importer
-from .snapshot import DEFAULT_PORTFOLIO
+from .storage import PORTFOLIO_PATH as DEFAULT_PORTFOLIO
 
 
 def run_sync(args) -> None:

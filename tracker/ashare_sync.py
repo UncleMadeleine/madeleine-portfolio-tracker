@@ -21,7 +21,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import importer
-from .snapshot import DEFAULT_PORTFOLIO
+from .storage import PORTFOLIO_PATH as DEFAULT_PORTFOLIO
 from .symbols import type_for_symbol
 
 # A股代码前缀 -> Yahoo 交易所后缀 (与 ibkr.py _A_SHARE_*_PREFIX 规则一致)

@@ -23,7 +23,7 @@ import argparse
 
 # 暴露 prices 供测试 monkeypatch (cli.prices.get_quotes)
 from .. import prices  # noqa: F401
-from ..snapshot import DEFAULT_PORTFOLIO
+from ..storage import PORTFOLIO_PATH as DEFAULT_PORTFOLIO
 from ..watchlist import DEFAULT_WATCHLIST
 from ._common import VERSION
 from .cache import cmd_cache

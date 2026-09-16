@@ -1,15 +1,17 @@
-"""应用设置与 portfolio.json 读写测试 (纯文件操作, 不依赖 Streamlit 运行时)."""
+"""存储层 (portfolio.json / watchlist.json / settings.json) 读写测试 (纯文件操作)."""
 from __future__ import annotations
 
 import json
 
-from tracker.ui import settings as S
+import pytest
+
+from tracker import storage
 
 
-def test_save_portfolio_file_stamps_authoritative_type(tmp_path, monkeypatch):
-    """页面保存持仓时必须补写权威 type 字段 (与 CLI/IBKR 导入路径一致)."""
-    monkeypatch.setattr(S, "PORTFOLIO_PATH", tmp_path / "portfolio.json")
-    S.save_portfolio_file(
+def test_save_portfolio_stamps_authoritative_type(tmp_path):
+    """保存持仓时必须补写权威 type 字段 (与 CLI/导入路径一致)."""
+    path = tmp_path / "portfolio.json"
+    storage.save_portfolio(
         {
             "base_currency": "CNY",
             "holdings": [
@@ -17,25 +19,71 @@ def test_save_portfolio_file_stamps_authoritative_type(tmp_path, monkeypatch):
                 {"symbol": "BTCUSDT", "quantity": 2},
                 {"symbol": "BRK-B", "quantity": 1},
             ],
-        }
+        },
+        path,
     )
-    data = json.loads((tmp_path / "portfolio.json").read_text(encoding="utf-8"))
+    data = json.loads(path.read_text(encoding="utf-8"))
     assert [h["type"] for h in data["holdings"]] == ["cn", "crypto", "global"]
     assert data["base_currency"] == "CNY"
 
 
-def test_save_portfolio_file_keeps_other_keys(tmp_path, monkeypatch):
+def test_save_portfolio_keeps_other_keys(tmp_path):
     """保存持仓不得丢掉文件中的文档/自定义键, 且 NaN 单元格被清理."""
     path = tmp_path / "portfolio.json"
     path.write_text(
         json.dumps({"_说明": "文档", "base_currency": "USD", "holdings": []}),
         encoding="utf-8",
     )
-    monkeypatch.setattr(S, "PORTFOLIO_PATH", path)
-    S.save_portfolio_file(
-        {"holdings": [{"symbol": "AAPL", "quantity": 10, "avg_cost": float("nan")}]}
+    storage.save_portfolio(
+        {"holdings": [{"symbol": "AAPL", "quantity": 10, "avg_cost": float("nan")}]},
+        path,
     )
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["_说明"] == "文档"
     assert data["base_currency"] == "USD"
     assert data["holdings"] == [{"symbol": "AAPL", "quantity": 10, "type": "global"}]
+
+
+def test_load_portfolio_missing_file_returns_empty(tmp_path):
+    """文件缺失返回空组合 (UI/CLI 行为一致)."""
+    data = storage.load_portfolio(tmp_path / "nope.json")
+    assert data == {"base_currency": "CNY", "holdings": []}
+
+
+def test_load_watchlist_stamps_type(tmp_path):
+    """读取侧同样补写权威 type (手改 JSON 无效)."""
+    path = tmp_path / "watchlist.json"
+    path.write_text(
+        json.dumps({"watchlist": [{"symbol": "TSLA", "lists": ["科技"], "type": "cn"}]}),
+        encoding="utf-8",
+    )
+    data = storage.load_watchlist(path)
+    assert data["watchlist"][0]["type"] == "global"
+
+
+def test_save_watchlist_stamps_type_and_migrates_keys(tmp_path):
+    path = tmp_path / "watchlist.json"
+    storage.save_watchlist(
+        {"watchlist": [{"symbol": "0700.HK", "upper": 300}]}, path
+    )
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["watchlist"] == [
+        {"symbol": "0700.HK", "upper_1": 300, "type": "global"}
+    ]
+
+
+def test_settings_roundtrip_and_defaults(tmp_path):
+    path = tmp_path / "settings.json"
+    assert storage.load_settings(path) == storage.DEFAULT_SETTINGS
+    storage.save_settings({"color_scheme": "intl"}, path)
+    assert storage.load_settings(path)["color_scheme"] == "intl"
+    path.write_text("not json{", encoding="utf-8")
+    assert storage.load_settings(path) == storage.DEFAULT_SETTINGS
+
+
+def test_backup_file(tmp_path):
+    src = tmp_path / "p.json"
+    assert storage.backup_file(src) is None
+    src.write_text("{}", encoding="utf-8")
+    assert storage.backup_file(src) == str(src) + ".bak"
+    assert (tmp_path / "p.json.bak").exists()

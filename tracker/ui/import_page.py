@@ -8,7 +8,6 @@
 """
 from __future__ import annotations
 
-import shutil
 import tempfile
 from pathlib import Path
 
@@ -16,7 +15,7 @@ import pandas as pd
 import streamlit as st
 
 from . import settings as S
-from tracker import importer
+from tracker import importer, storage
 
 _CHAIN_LABELS = {
     "eth": "Ethereum",
@@ -217,12 +216,11 @@ def _preview_and_confirm(
         icon=":material/download_done:",
         key=f"{state_key}_confirm",
     ):
-        data = S.load_portfolio_file()
+        data = storage.load_portfolio(storage.PORTFOLIO_PATH)
         merged, stats = importer.merge_holdings(data.get("holdings", []), rows, mode)
-        if S.PORTFOLIO_PATH.exists():
-            shutil.copy(S.PORTFOLIO_PATH, str(S.PORTFOLIO_PATH) + ".bak")
+        storage.backup_file(storage.PORTFOLIO_PATH)
         data["holdings"] = merged
-        S.save_portfolio_file(data)
+        storage.save_portfolio(data)
         st.session_state.pop(state_key, None)
         if callable(on_saved):
             on_saved()

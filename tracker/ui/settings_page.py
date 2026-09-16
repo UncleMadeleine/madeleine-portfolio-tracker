@@ -4,13 +4,14 @@ from __future__ import annotations
 import streamlit as st
 
 from . import settings as S
+from tracker import storage
 
 _COLOR_SAMPLE_PCT = "+2.35%"
 
 
 def render_settings_page() -> None:
     """设置页: 即改即存 (on_change 回调落盘), 其余页面每次 rerun 读 settings.json."""
-    settings = S.load_settings()
+    settings = storage.load_settings()
     st.markdown("### :material/settings: 设置")
     st.caption("设置保存到项目根目录 settings.json, 全部页面生效; 基础货币另存于 portfolio.json。")
 
@@ -50,7 +51,7 @@ def render_settings_page() -> None:
 
     # ---- 基础货币 ----
     st.markdown("#### 基础货币")
-    portfolio = S.load_portfolio_file()
+    portfolio = storage.load_portfolio(storage.PORTFOLIO_PATH)
     saved_base = portfolio.get("base_currency", "CNY")
     st.selectbox(
         "基础货币",
@@ -66,7 +67,7 @@ def render_settings_page() -> None:
 
 def _save_display() -> None:
     """保存显示与数据源设置; 基础货币以外的改动只影响前端渲染."""
-    S.save_settings(
+    storage.save_settings(
         {
             "color_scheme": st.session_state.get("set_color_scheme", S.SCHEME_CN),
             "prefer_akshare": bool(st.session_state.get("set_prefer_akshare")),
@@ -79,6 +80,6 @@ def _save_display() -> None:
 def _save_base() -> None:
     """切换基础货币立即写入 portfolio.json (与原侧栏行为一致)."""
     new_base = st.session_state.get("set_base_currency", "CNY")
-    data = S.load_portfolio_file()
-    S.save_portfolio_file({"base_currency": new_base, "holdings": data.get("holdings", [])})
+    data = storage.load_portfolio(storage.PORTFOLIO_PATH)
+    storage.save_portfolio({"base_currency": new_base, "holdings": data.get("holdings", [])})
     st.toast(f"基础货币已保存为 {new_base}")

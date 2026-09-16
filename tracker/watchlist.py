@@ -1,16 +1,20 @@
 """自选股观察与价格阈值提醒 (支持两级阈值)."""
 from __future__ import annotations
 
-import json
 import math
-from pathlib import Path
 
 import pandas as pd
 
 from .prices import Quote
-from .symbols import parse, type_for_symbol
+from .storage import (
+    WATCHLIST_PATH as DEFAULT_WATCHLIST,
+    load_watchlist,
+    normalize_watch_entry as _normalize_entry,
+    parse_lists,
+    save_watchlist,
+)
+from .symbols import parse
 
-DEFAULT_WATCHLIST = Path(__file__).resolve().parent.parent / "watchlist.json"
 
 STATUS_UPPER_1 = "🟠 突破上限 I"
 STATUS_UPPER_2 = "🔴 突破上限 II"
@@ -25,54 +29,6 @@ _STATUS_RANK = {
     STATUS_LOWER_2: 4,
     STATUS_WITHIN: 5,
 }
-
-
-def load_watchlist(path: str | Path = DEFAULT_WATCHLIST) -> dict:
-    p = Path(path)
-    if not p.exists():
-        return {"watchlist": []}
-    with open(p, encoding="utf-8") as f:
-        raw = json.load(f)
-    if "watchlist" in raw:
-        entries = []
-        for e in raw["watchlist"]:
-            e = dict(e)
-            e["lists"] = parse_lists(e.get("lists"))
-            entries.append(e)
-        return {"watchlist": entries}
-    if "watchlists" in raw:
-        merged: dict[str, dict] = {}
-        for name, lst in raw["watchlists"].items():
-            for e in lst:
-                sym = str(e.get("symbol", "")).strip()
-                if not sym:
-                    continue
-                if sym not in merged:
-                    merged[sym] = dict(e)
-                    merged[sym].setdefault("lists", [])
-                else:
-                    # 同名代码在多个列表中各有一份阈值/备注: 保留先出现的,
-                    # 缺失字段 (如只在旧列表设过 upper) 从后出现的补齐
-                    for k, v in e.items():
-                        if k == "symbol" or k == "lists":
-                            continue
-                        merged[sym].setdefault(k, v)
-                if name not in merged[sym]["lists"]:
-                    merged[sym]["lists"].append(name)
-        entries = list(merged.values())
-        for e in entries:
-            if not e["lists"]:
-                e["lists"] = ["默认"]
-        return {"watchlist": entries}
-    return {"watchlist": []}
-
-
-def save_watchlist(data: dict, path: str | Path = DEFAULT_WATCHLIST) -> None:
-    entries = [_normalize_entry(dict(e)) for e in data.get("watchlist", [])]
-    Path(path).write_text(
-        json.dumps({"watchlist": entries}, ensure_ascii=False, indent=2, allow_nan=False),
-        encoding="utf-8",
-    )
 
 
 def list_names(data: dict) -> list[str]:
@@ -91,7 +47,6 @@ def merge_entries(data: dict) -> list[dict]:
         if str(e.get("symbol", "")).strip()
     ]
 
-
 def entries_for(data: dict, name: str | None = None) -> list[dict]:
     """按所属列表过滤条目; name 为空返回全部.
 
@@ -108,17 +63,6 @@ def entries_for(data: dict, name: str | None = None) -> list[dict]:
     ]
 
 
-def parse_lists(v) -> list[str]:
-    """把逗号分隔字符串/列表解析为归属列表; 空则回退默认."""
-    if v is None or (isinstance(v, float) and math.isnan(v)):
-        return ["默认"]
-    if isinstance(v, list):
-        items = [str(x).strip() for x in v]
-    else:
-        items = [x.strip() for x in str(v).replace("，", ",").split(",")]
-    return [x for x in items if x] or ["默认"]
-
-
 def _num(v) -> float | None:
     if v in (None, ""):
         return None
@@ -133,21 +77,6 @@ def _note_str(v) -> str:
     if v is None or (isinstance(v, float) and math.isnan(v)):
         return ""
     return str(v)
-
-
-def _normalize_entry(e: dict) -> dict:
-    out = dict(e)
-    for old, new in (("upper", "upper_1"), ("lower", "lower_1")):
-        if old in out and new not in out:
-            out[new] = out.pop(old)
-    # 权威 type 字段: 系统按自定义后缀规范推导并覆写 (用户不可见, 手改无效)
-    sym = str(out.get("symbol", "")).strip()
-    if sym:
-        try:
-            out["type"] = type_for_symbol(sym)
-        except Exception:
-            pass
-    return out
 
 
 def build_watchlist_view(

@@ -17,11 +17,10 @@ tracker.ibkr_sync / tracker.ashare_sync 的 run_sync 为兼容入口.
 """
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 from typing import Any
 
-from .snapshot import DEFAULT_PORTFOLIO, load_portfolio, save_portfolio
+from .storage import PORTFOLIO_PATH as DEFAULT_PORTFOLIO, backup_file, load_portfolio, save_portfolio
 from .symbols import parse
 
 MODE_APPEND = "append"
@@ -155,19 +154,12 @@ def apply_import(
     与其它自定义键。dry_run=True 或 rows 为空时不写文件 (written=False)。
     """
     target = Path(portfolio)
-    data: dict = {}
-    if target.exists():
-        try:
-            data = load_portfolio(target)
-        except Exception:
-            data = {}
+    data: dict = load_portfolio(target) if target.exists() else {}
     merged, stats = merge_holdings(data.get("holdings", []), rows, mode)
     written = False
     backup = None
     if not dry_run and rows:
-        if target.exists():
-            backup = str(target) + ".bak"
-            shutil.copy(target, backup)
+        backup = backup_file(target)
         data["holdings"] = merged
         data.setdefault("base_currency", "CNY")
         save_portfolio(data, target)

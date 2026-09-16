@@ -204,7 +204,7 @@ def test_load_migrates_old_flat_format(tmp_path):
     )
     data = load_watchlist(f)
     assert list_names(data) == ["默认"]
-    assert data["watchlist"] == [{"symbol": "AAPL", "upper_1": 100, "lists": ["默认"]}]
+    assert data["watchlist"] == [{"symbol": "AAPL", "upper_1": 100, "lists": ["默认"], "type": "global"}]
 
 
 def test_load_migrates_old_nested_format(tmp_path):
@@ -228,7 +228,7 @@ def test_load_new_format(tmp_path):
     )
     data = load_watchlist(f)
     assert list_names(data) == ["科技", "美股"]
-    assert entries_for(data, "科技") == [{"symbol": "AAPL", "lists": ["科技", "美股"]}]
+    assert entries_for(data, "科技") == [{"symbol": "AAPL", "lists": ["科技", "美股"], "type": "global"}]
 
 
 def test_load_missing_file(tmp_path):

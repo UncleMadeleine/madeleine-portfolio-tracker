@@ -3,14 +3,14 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 
 import pandas as pd
 
 from . import prices
-from .symbols import parse, type_for_symbol
 from .analytics import build_view, summarize
 from .fx import get_fx_rates
+from .storage import PORTFOLIO_PATH as DEFAULT_PORTFOLIO, load_portfolio
+from .symbols import parse
 from .watchlist import (
     DEFAULT_WATCHLIST,
     build_watchlist_view,
@@ -19,40 +19,11 @@ from .watchlist import (
     triggered_entries,
 )
 
-DEFAULT_PORTFOLIO = Path(__file__).resolve().parent.parent / "portfolio.json"
-
 WATCH_COLS = [
     "symbol", "name", "market", "currency", "price", "change_pct",
     "upper_1", "upper_2", "lower_1", "lower_2", "status",
     "dist_upper_1_pct", "dist_upper_2_pct", "dist_lower_1_pct", "dist_lower_2_pct", "note",
 ]
-
-
-def load_portfolio(path: str | Path) -> dict:
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
-
-
-def _stamp_type(h: dict) -> dict:
-    """持仓条目补写权威 type 字段 (系统维护, 用户不可见不可改)."""
-    sym = str(h.get("symbol", "")).strip()
-    if not sym:
-        return h
-    try:
-        h["type"] = type_for_symbol(sym)
-    except Exception:
-        pass
-    return h
-
-
-def save_portfolio(data: dict, path: str | Path = DEFAULT_PORTFOLIO) -> None:
-    data = dict(data)
-    data["holdings"] = [_stamp_type(dict(h)) for h in data.get("holdings", [])]
-    Path(path).write_text(
-        json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False),
-        encoding="utf-8",
-    )
-
 
 def _records(df: pd.DataFrame) -> list[dict]:
     """DataFrame -> records, NaN/NaT 转 None 便于 JSON 序列化."""

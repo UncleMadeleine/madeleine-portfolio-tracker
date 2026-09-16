@@ -22,6 +22,7 @@ from tracker import charting, prices  # noqa: E402
 from tracker.analytics import build_view, summarize  # noqa: E402
 from tracker.fx import get_fx_rates  # noqa: E402
 from tracker.symbols import parse  # noqa: E402
+from tracker import storage
 from tracker.ui import settings as S  # noqa: E402
 from tracker.ui.import_page import render_import_page  # noqa: E402
 from tracker.ui.kline_page import (  # noqa: E402
@@ -45,7 +46,7 @@ from tracker.watchlist import (  # noqa: E402
     triggered_entries,
 )
 
-WATCHLIST_PATH = _ROOT / "watchlist.json"
+WATCHLIST_PATH = storage.WATCHLIST_PATH
 
 st.set_page_config(page_title="投资组合追踪", page_icon="📈", layout="wide")
 
@@ -99,7 +100,7 @@ def _pnl_color(v) -> str:
     return f"color: {up_c}" if v > 0 else f"color: {down_c}"
 
 
-watch = load_watchlist(WATCHLIST_PATH)
+watch = storage.load_watchlist(WATCHLIST_PATH)
 if not watch.get("watchlist"):
     watch["watchlist"] = []
 
@@ -108,8 +109,8 @@ with st.sidebar:
         ":material/candlestick_chart: **组合追踪**",
         help="多市场持仓 + 自选提醒 · 数据源 Yahoo/akshare",
     )
-    settings = S.load_settings()
-    portfolio = S.load_portfolio_file()
+    settings = storage.load_settings()
+    portfolio = storage.load_portfolio(storage.PORTFOLIO_PATH)
     page = st.segmented_control(
         "页面",
         list(_PAGES.values()),
@@ -169,7 +170,7 @@ with st.sidebar:
                     if dups:
                         st.error(f"重复代码 (已去重): {', '.join(sorted(set(dups)))}")
                 if not bad:
-                    S.save_portfolio_file({"base_currency": base, "holdings": clean})
+                    storage.save_portfolio({"base_currency": base, "holdings": clean})
                     cached_quotes.clear()
                     cached_fx.clear()
                     if dups:
@@ -247,7 +248,7 @@ with st.sidebar:
                     if dups:
                         st.error(f"重复代码 (已去重): {', '.join(sorted(set(dups)))}")
                 if not bad:
-                    save_watchlist({"watchlist": rows}, WATCHLIST_PATH)
+                    storage.save_watchlist({"watchlist": rows}, WATCHLIST_PATH)
                     cached_quotes.clear()
                     if dups:
                         st.toast("自选已保存 (重复行已移除)")

@@ -24,7 +24,7 @@ import argparse
 # 暴露 prices 供测试 monkeypatch (cli.prices.get_quotes)
 from .. import prices  # noqa: F401
 from ..storage import PORTFOLIO_PATH as DEFAULT_PORTFOLIO
-from ..watchlist import DEFAULT_WATCHLIST
+from ..watchlist import DEFAULT_WATCHLIST  # storage 门面 (watchlist.json 常量)
 from ._common import VERSION
 from .cache import cmd_cache
 from .export import cmd_export

@@ -6,7 +6,7 @@ import pytest
 from tracker import cli
 from tracker.cache import set_cached
 from tracker.prices import Quote
-from tracker.snapshot import snapshot_json
+from tracker.services.snapshot import snapshot_json
 
 
 def _run(capsys, *argv):
@@ -595,7 +595,6 @@ class TestExportCli:
 
     def _patch(self, monkeypatch):
         monkeypatch.setattr(cli.prices, "get_quotes", self._fake_quotes)
-        monkeypatch.setattr("tracker.snapshot.get_fx_rates", self._fake_fx)
 
     def test_export_json(self, tmp_path, capsys, monkeypatch):
         self._patch(monkeypatch)
@@ -706,7 +705,7 @@ class TestSnapshotCryptoMixed:
 
     def _patch(self, monkeypatch):
         monkeypatch.setattr(cli.prices, "get_quotes", self._fake_quotes)
-        monkeypatch.setattr("tracker.snapshot.get_fx_rates", self._fake_fx)
+        monkeypatch.setattr("tracker.services.snapshot.get_fx_rates", self._fake_fx)
 
     def test_snapshot_json_mixed_crypto_stock(self, tmp_path, capsys, monkeypatch):
         self._patch(monkeypatch)

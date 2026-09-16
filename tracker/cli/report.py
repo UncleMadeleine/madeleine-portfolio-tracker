@@ -9,15 +9,13 @@ from pathlib import Path
 
 import pandas as pd
 
-from .. import prices
-from ..watchlist import (
-    build_watchlist_view,
+from ..services.watchlist import (
     entries_for,
-    load_watchlist,
-    parse_lists,
+    fetch_watchlist_view,
     sort_watchlist,
     triggered_entries,
 )
+from ..watchlist import load_watchlist, parse_lists
 from ._common import _fmt_num, _fmt_pct, _records, _sanitize, _sym
 
 _MD_COLS = [
@@ -41,14 +39,11 @@ def _build_report(args) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, list[str]
     """拉取行情并构建自选视图 / 触发条目 / 列表映射 / 问题清单."""
     data = load_watchlist(args.file)
     entries = entries_for(data, args.watchlist)
-    symbols = [str(e["symbol"]) for e in entries]
-    quotes, errors, notes = prices.get_quotes(
-        symbols, prefer_akshare=args.akshare, use_ibkr=args.ibkr
+    wview, issues = fetch_watchlist_view(
+        entries, prefer_akshare=args.akshare, use_ibkr=args.ibkr
     )
-    wview, wissues = build_watchlist_view(entries, quotes)
     wview = sort_watchlist(wview, args.sort)
     trig = triggered_entries(wview)
-    issues = [f"{k}: {v}" for k, v in errors.items()] + wissues + notes
     sym_lists: dict[str, list[str]] = {}
     # -w 支持逗号分隔多个列表; 取交集而不是把原始字符串当成单个列表名,
     # 否则报告会多出一个名为 "科技,美股" 的假分组

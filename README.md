@@ -287,8 +287,11 @@ tracker/
 ├── cache.py            行情 SQLite 磁盘缓存（实时 5 分钟 / K线 30 分钟）
 ├── charting.py         K线渲染（plotly CLI HTML + lightweight-charts 页面组件：蜡烛/均线/指标/对比）
 ├── analytics.py        组合视图与指标（纯函数）
-├── watchlist.py        自选股视图与价格阈值状态（纯函数 + 配置读写）
-├── snapshot.py         快照核心（持仓 + 自选聚合）
+├── watchlist.py        自选配置存储门面（读写委托 storage，仅 I/O 归一）
+├── services/           **独立用例层**（用例 = 取数 providers/fx + 纯函数计算 + 组装视图）
+│   ├── rules.py          阈值规则（纯函数：两级上下限状态判定 + 距离）
+│   ├── watchlist.py      自选视图组装 + 取数用例（watchlist list / report 复用）
+│   └── snapshot.py       快照用例（take_snapshot / snapshot_json, 存储剥离）
 ├── ibkr.py             IBKR 行情接入 + 持仓读取（可选依赖 ib_async，失败静默回退）
 ├── importer.py         **统一导入管道**：三来源采集 → 追加/覆盖合并 → 备份写盘
 ├── ibkr_sync.py        IBKR 持仓导入兼容入口（委托 importer，等价 import ibkr）

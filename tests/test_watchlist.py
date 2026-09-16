@@ -3,21 +3,22 @@ import json
 import pandas as pd
 
 from tracker.prices import Quote
-from tracker.watchlist import (
+from tracker.services.rules import (
     STATUS_LOWER_1,
     STATUS_LOWER_2,
     STATUS_UPPER_1,
     STATUS_UPPER_2,
     STATUS_WITHIN,
+)
+from tracker.services.watchlist import (
     build_watchlist_view,
     entries_for,
     list_names,
-    load_watchlist,
     merge_entries,
-    parse_lists,
     sort_watchlist,
     triggered_entries,
 )
+from tracker.watchlist import load_watchlist, parse_lists
 
 
 def q(sym, price, ccy="USD"):

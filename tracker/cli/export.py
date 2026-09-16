@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from ..snapshot import snapshot_json, take_snapshot
+from ..services.snapshot import snapshot_json, take_snapshot
 from ..storage import load_portfolio
 from ..watchlist import load_watchlist
 from ._common import _sanitize

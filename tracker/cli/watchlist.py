@@ -5,14 +5,12 @@ import pandas as pd
 
 from .. import prices
 from ..symbols import parse
-from ..watchlist import (
+from ..services.watchlist import (
     build_watchlist_view,
     entries_for,
-    load_watchlist,
-    parse_lists,
-    save_watchlist,
     triggered_entries,
 )
+from ..watchlist import load_watchlist, parse_lists, save_watchlist
 from ._common import _finish_with_error, _print_json, _records, _sym
 
 

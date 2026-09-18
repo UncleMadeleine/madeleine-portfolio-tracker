@@ -6,7 +6,9 @@ skipped 为无法导入/查询失败的说明 (不阻断整体导入).
 
 merge_holdings() 与 apply_import() 是合并与写盘的唯一入口, 支持两种模式:
   - append    追加合并: 已有代码更新 quantity (row 带 avg_cost 时一并更新),
-              新代码追加, 其余持仓原样保留
+              新代码追加, 其余持仓原样保留。带 import_source 溯源键的行
+              (钱包导入) 按 (代码, 来源) 合并: 同来源覆盖 (重复导入幂等),
+              不同来源累加 (多链/多地址同名代币不互相覆盖)
   - overwrite 覆盖:     忽略现有持仓, 全部由本次 rows 组成
 
 apply_import() 写盘前自动备份 <portfolio>.bak, 并保留文件中的
@@ -46,6 +48,15 @@ def normalize_row(row: dict) -> dict:
     return r
 
 
+def _merge_key(row: dict) -> tuple[str, str]:
+    """合并键: (代码, 导入来源).
+
+    无 import_source 的普通导入 (IBKR / A股券商文件) 沿用「按代码覆盖」语义,
+    保证同一账户重复同步是幂等的。
+    """
+    return (_norm_sym(row.get("symbol", "")), str(row.get("import_source") or ""))
+
+
 # ---------------------------------------------------------------------------
 # 采集 (各来源 → 统一 rows)
 # ---------------------------------------------------------------------------
@@ -69,7 +80,13 @@ def collect_ashare_file(path: str | Path) -> tuple[list[dict], list[str]]:
 
 
 def wallet_rows(result: dict) -> list[dict]:
-    """wallet.import_wallet() 结果 → portfolio rows (无 avg_cost, 导入后补填)."""
+    """wallet.import_wallet() 结果 → portfolio rows (无 avg_cost, 导入后补填).
+
+    带 import_source 溯源键 (链 + 地址): 同一地址重复导入按代码覆盖 (幂等),
+    不同地址/链的同名代币 (如 eth 与 bsc 上的 USDT-USD) 在合并时累加,
+    避免多钱包余额互相覆盖造成静默丢失。
+    """
+    source = f"wallet:{result.get('chain') or ''}:{result.get('address') or ''}"
     rows: list[dict] = []
     for h in result.get("holdings", []):
         rows.append(
@@ -77,6 +94,7 @@ def wallet_rows(result: dict) -> list[dict]:
                 "symbol": _norm_sym(h.get("symbol", "")),
                 "quantity": h.get("quantity", 0),
                 "type": "crypto",
+                "import_source": source,
             }
         )
     return rows
@@ -123,21 +141,36 @@ def merge_holdings(
         stats["added"] = [r["symbol"] for r in normalized]
         return normalized, stats
     merged = [dict(h) for h in existing]
-    index: dict[str, int] = {}
+    index: dict[tuple[str, str], int] = {}
     for i, h in enumerate(merged):
-        index.setdefault(_norm_sym(h.get("symbol", "")), i)
+        index.setdefault(_merge_key(h), i)
     for r in normalized:
         sym = r["symbol"]
-        if sym in index:
-            target = merged[index[sym]]
+        key = _merge_key(r)
+        if key in index:
+            target = merged[index[key]]
             target["quantity"] = r["quantity"]
             if "avg_cost" in r:
                 target["avg_cost"] = r["avg_cost"]
             stats["updated"].append(sym)
-        else:
-            merged.append(r)
-            index[sym] = len(merged) - 1
-            stats["added"].append(sym)
+            continue
+        # 同代码但来源不同 (不同链/地址的钱包导入): 累加数量, 不覆盖
+        same = next(
+            (
+                i for i, h in enumerate(merged)
+                if r.get("import_source") and _norm_sym(h.get("symbol", "")) == sym
+            ),
+            None,
+        )
+        if same is not None:
+            merged[same]["quantity"] = (
+                float(merged[same].get("quantity") or 0) + float(r["quantity"] or 0)
+            )
+            stats["updated"].append(sym)
+            continue
+        merged.append(r)
+        index[key] = len(merged) - 1
+        stats["added"].append(sym)
     return merged, stats
 
 

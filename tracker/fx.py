@@ -73,7 +73,7 @@ def _cfets_table() -> dict[str, float]:
             mid = (float(row["买报价"]) + float(row["卖报价"])) / 2
         except (TypeError, ValueError):
             continue
-        if not math.isfinite(mid):
+        if not math.isfinite(mid) or mid <= 0:
             continue
         base, quote = parts
         if base == "100JPY":
@@ -90,6 +90,8 @@ def _cfets_rate(src: str, dst: str) -> float | None:
     except Exception:
         return None
     if src not in table or dst not in table:
+        return None
+    if not table[src] or not table[dst]:
         return None
     r = table[src] / table[dst]
     return r if math.isfinite(r) else None

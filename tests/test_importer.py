@@ -72,6 +72,26 @@ class TestMergeHoldings:
         with pytest.raises(ValueError, match="未知导入模式"):
             importer.merge_holdings([], [], "bogus")
 
+    def test_append_sums_same_symbol_from_different_wallet_sources(self):
+        """不同链/地址的钱包导入同名代币 (eth 与 bsc 的 USDT-USD) 累加, 不互相覆盖."""
+        existing = [{"symbol": "USDT-USD", "quantity": 100.0, "type": "crypto",
+                     "import_source": "wallet:eth:0xaaa"}]
+        rows = [{"symbol": "USDT-USD", "quantity": 50.0, "type": "crypto",
+                 "import_source": "wallet:bsc:0xbbb"}]
+        merged, stats = importer.merge_holdings(existing, rows, mode="append")
+        assert len(merged) == 1
+        assert merged[0]["quantity"] == 150.0
+        assert stats == {"added": [], "updated": ["USDT-USD"]}
+
+    def test_append_same_wallet_source_is_idempotent(self):
+        """同一地址重复导入按代码覆盖, 不累加 (重复执行不翻倍)."""
+        existing = [{"symbol": "USDT-USD", "quantity": 100.0, "type": "crypto",
+                     "import_source": "wallet:eth:0xaaa"}]
+        rows = [{"symbol": "USDT-USD", "quantity": 100.0, "type": "crypto",
+                 "import_source": "wallet:eth:0xaaa"}]
+        merged, _ = importer.merge_holdings(existing, rows, mode="append")
+        assert merged[0]["quantity"] == 100.0
+
 
 class TestApplyImport:
     def test_append_writes_and_backs_up(self, tmp_path):
@@ -127,18 +147,22 @@ class TestApplyImport:
 class TestWalletRows:
     def test_converts_holdings(self):
         raw = {
+            "chain": "eth",
+            "address": "0xabc",
             "holdings": [
                 {"symbol": "ETH-USD", "quantity": 2.0, "contract": None,
                  "source": "native", "chain": "eth"},
                 {"symbol": "USDT-USD", "quantity": 100.0,
                  "contract": "0xdac17f...", "source": "erc20", "chain": "eth"},
-            ]
+            ],
         }
         rows = importer.wallet_rows(raw)
-        assert rows == [
-            {"symbol": "ETH-USD", "quantity": 2.0, "type": "crypto"},
-            {"symbol": "USDT-USD", "quantity": 100.0, "type": "crypto"},
+        assert [(r["symbol"], r["quantity"], r["type"]) for r in rows] == [
+            ("ETH-USD", 2.0, "crypto"),
+            ("USDT-USD", 100.0, "crypto"),
         ]
+        # 同一地址产出的行共享同一溯源键 (合并时据此判定幂等覆盖)
+        assert len({r["import_source"] for r in rows}) == 1
 
     def test_empty(self):
         assert importer.wallet_rows({"holdings": []}) == []

@@ -26,6 +26,33 @@ def _isolate_cache(monkeypatch, tmp_path):
     monkeypatch.setattr(orch.cache_mod, "set_cached", lambda q: None)
 
 
+def test_ak_spot_routes_bj_to_cn_spot(monkeypatch):
+    """北交所 (.BJ) 与沪深共用东财 A 股快照; 缺映射会让 BJ 永远降级 yfinance."""
+    import sys
+
+    import tracker.providers.global_stocks as gs
+
+    calls = []
+    df = pd.DataFrame(
+        {"代码": ["920100"], "最新价": [12.5], "昨收": [12.0], "涨跌幅": [4.17]}
+    )
+
+    class FakeAk:
+        def stock_zh_a_spot_em(self):
+            calls.append("cn")
+            return df
+
+        def stock_hk_spot_em(self):
+            calls.append("hk")
+            return pd.DataFrame()
+
+    monkeypatch.setitem(sys.modules, "akshare", FakeAk())
+    monkeypatch.setattr(gs, "_ak_spot_cache", {})
+    out = gs._ak_spot(Market.BJ)
+    assert calls == ["cn"]
+    assert list(out["代码"]) == ["920100"]
+
+
 def test_get_quotes_mixed_crypto_and_stocks_split_routing(monkeypatch):
     """混合查询: crypto 走本域 provider 逐个取, 股票走批量; 两域互不干扰."""
     import tracker.providers.orchestration as orch

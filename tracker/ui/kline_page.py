@@ -107,7 +107,10 @@ def render_kline_view(
         "区间涨跌",
         f"{s['change_pct']:+.2f}%" if s["change_pct"] is not None else "—",
         delta=None if s["change_pct"] is None else round(s["change_pct"], 2),
-        delta_color="off" if s["change_pct"] is None else "inverse",  # 红涨绿跌
+        delta_color=(
+            "off" if s["change_pct"] is None
+            else ("normal" if green_up else "inverse")  # 跟随全局涨跌配色
+        ),
     )
     m3.metric(
         f"区间最高 ({s['period_high_date']})",
@@ -154,11 +157,13 @@ def _render_symbol_search() -> None:
     options_list = [
         f"{r['code']} · {r['name']} ({r['market']})" for r in results
     ]
+    # selectbox 在 session_state 里存的是选项值 (字符串), 不是索引 → 用值反查代码
+    code_by_option = {opt: r["code"] for opt, r in zip(options_list, results)}
 
     def _on_pick():
-        idx = st.session_state.get("kline_search_select")
-        if isinstance(idx, int) and 0 <= idx < len(results):
-            st.session_state["kline_symbol"] = results[idx]["code"]
+        code = code_by_option.get(st.session_state.get("kline_search_select"))
+        if code:
+            st.session_state["kline_symbol"] = code
             # 触发查询 (与手动回车等价)
             st.session_state["kline_last_symbol"] = None
 
@@ -196,10 +201,13 @@ def render_kline_controls(prefer_akshare: bool) -> None:
         "周期", ["daily", "weekly", "monthly"], index=0,
         format_func=lambda v: charting.PERIOD_LABELS[v], key="kline_period",
     )
-    # 回车提交: text_input 回车 rerun 时 value 已变, 据此标记为已提交
-    entered = st.session_state.get("kline_last_symbol") != ksym
+    # 提交判定: 代码变化 (回车/快捷 pill/搜索选择) 或点击「查询」才算新查询;
+    # 首次渲染只记录输入框当前值, 不视为提交 (页面启动不预加载任何 K线)
+    if "kline_last_symbol" not in st.session_state:
+        st.session_state["kline_last_symbol"] = ksym
+    submitted = st.session_state["kline_last_symbol"] != ksym
     if c4.button("查询", type="primary", icon=":material/search:"):
-        entered = True
+        submitted = True
 
     opt1, opt2 = st.columns([1, 1])
     kmas = opt1.multiselect(
@@ -251,26 +259,29 @@ def render_kline_controls(prefer_akshare: bool) -> None:
     if not is_valid_symbol(ksym):
         st.error(f"无法识别的代码: {ksym} (参考上方代码规范, 如 600519.SS / 0700.HK)")
         return
-    # 改参数 (均线/成交量/指标/周期) 不自动重新取数: 需显式回车或点「查询」;
-    # 只有代码本身变化 (entered=True) 才视为新查询
-    if not entered:
-        st.info("回车或点「查询」获取 K线。")
+    yahoo = normalize_or_none(ksym)
+    if submitted:
+        st.session_state["kline_last_symbol"] = ksym
+
+    # 首次渲染 (从未取过数) 且非用户提交 → 不预加载
+    if not submitted and st.session_state.get("kline_current_symbol") is None:
+        st.info("输入代码后回车或点「查询」获取数据 —— 页面启动不会预加载任何 K线。")
         return
 
-    st.session_state.pop("kline_submitted", None)
-    st.session_state["kline_last_symbol"] = ksym
-
-    yahoo = normalize_or_none(ksym)
+    # 展示参数 (均线/成交量/指标/周期) 变化只重绘, 不重新取数;
+    # 代码或范围变化才丢弃缓存重新取数。组件 need_more 触发的 rerun 走重绘分支,
+    # 否则图表会在拖动时被这里的早退清掉, 无限拖动永远拿不到更早的数据。
+    data_changed = (
+        st.session_state.get("kline_current_symbol") != yahoo
+        or st.session_state.get("kline_last_months") != kmonths
+    )
 
     # ---- 无限拖动: 维护全量数据集 (session_state), 组件返回 need_more 时自动扩展 ----
-    if (
-        entered
-        or st.session_state.get("kline_current_symbol") != yahoo
-        or st.session_state.get("kline_last_months") != kmonths
-    ):
+    if submitted or data_changed:
         st.session_state["kline_full_df"] = None
         st.session_state["kline_preserve_range"] = None
         st.session_state["kline_last_range"] = None
+        st.session_state["kline_last_before"] = None
         st.session_state["kline_fetching"] = False
 
     st.session_state["kline_current_symbol"] = yahoo

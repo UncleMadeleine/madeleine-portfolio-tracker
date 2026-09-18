@@ -136,7 +136,12 @@ def _ak_spot(market: Market) -> pd.DataFrame:
     if hit and now - hit[0] < _AK_SPOT_TTL:
         return hit[1]
     ak = _ak()
-    fetcher = {Market.CN: ak.stock_zh_a_spot_em, Market.HK: ak.stock_hk_spot_em}.get(market)
+    fetcher = {
+        Market.CN: ak.stock_zh_a_spot_em,
+        # 北交所同属东财「沪深京 A 股」快照, 缺此映射会让 .BJ 永远降级 yfinance
+        Market.BJ: ak.stock_zh_a_spot_em,
+        Market.HK: ak.stock_hk_spot_em,
+    }.get(market)
     if fetcher is None:
         return pd.DataFrame()
     try:

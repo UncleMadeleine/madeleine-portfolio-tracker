@@ -282,9 +282,11 @@ def _load_tokenlist(tokenlist_path: str | None) -> dict[str, dict[str, dict[str,
         raw = json.loads(p.read_text(encoding="utf-8"))
         loaded: dict[str, dict[str, dict[str, Any]]] = {}
         for chain_key, tokens in raw.items():
-            loaded[chain_key] = {}
+            # 链名统一小写: 上层按 chain.lower() 查表, 外部文件写 "ETH" 会静默查不到
+            key = chain_key.lower()
+            loaded[key] = {}
             for contract, info in tokens.items():
-                loaded[chain_key][contract.lower()] = {
+                loaded[key][contract.lower()] = {
                     "symbol": info["symbol"],
                     "decimals": info["decimals"],
                 }

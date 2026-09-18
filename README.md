@@ -351,10 +351,14 @@ IBKR_CONFIG=/data/my-ibkr.json python -m tracker.cli snapshot --ibkr
 
 **导入方式**（CLI 与页面一致）：
 
-- **追加合并**（默认）：按代码更新 `quantity`/`avg_cost`，新代码追加，其余持仓保留
+- **追加合并**（默认）：按代码更新 `quantity`/`avg_cost`，新代码追加，其余持仓保留。
+  钱包导入额外带来源标记（链 + 地址）：同一地址重复导入仍是覆盖（幂等），
+  不同地址/链的同名代币（如 eth 与 bsc 上的 `USDT-USD`）会累加，不会互相覆盖
 - **覆盖**（`--overwrite`）：清空现有持仓后重写
 
 写盘前自动备份 `portfolio.json.bak`；保留 `base_currency` 与文件中的其它自定义键；
+写盘为原子操作（临时文件 + `os.replace`），中断不会留下半截 JSON；若 `portfolio.json` /
+`watchlist.json` 损坏，读取时自动尝试同名 `.bak` 恢复，仍失败则报可读错误退出（不会静默清空数据）。
 `--dry-run` 仅预览不写入；采集结果为空时即使覆盖模式也不会清空文件。
 
 ### IBKR 账户
@@ -368,7 +372,7 @@ python -m tracker.cli import ibkr --overwrite        # 覆盖全部持仓
 - 自动将 IBKR 账户股票持仓转换为规范代码并写入 `portfolio.json`
 - 保留原有 `base_currency`；`avg_cost` 取自 IBKR（合约货币每股均价，含佣金）
 - 无法映射为规范代码的标的（权证/期权/基金等）会跳过并在控制台提示
-- 反向映射规则：`SEHK + CNY → .SS/.SZ`；`SHSE + USD → .SS (B股)`；`SZSE + HKD → .SZ (B股)`；`SEHK + HKD → .HK`；`IBIS/FWB + EUR → .DE`；`LSE + GBP → .L`；`TSE + CAD → .TO`；`ASX + AUD → .AX`；`SMART + USD → 原码`
+- 反向映射规则：`SEHK + CNY → .SS/.SZ`；`SHSE + USD → .SS (B股)`；`SZSE + HKD → .SZ (B股)`；`SEHK + HKD → .HK`；`IBIS/FWB + EUR → .DE`；`LSE + GBP → .L`；`TSE + CAD → .TO`；`TSXV + CAD → .V`；`CSE + CAD → .CN`；`NEOEX + CAD → .NE`；`ASX + AUD → .AX`；`SMART + USD → 原码`
 - 兼容入口：`python -m tracker.cli sync` / `python -m tracker.ibkr_sync`（默认覆盖，加 `--append` 追加）
 
 ### A股券商文件导入

@@ -87,3 +87,43 @@ def test_backup_file(tmp_path):
     src.write_text("{}", encoding="utf-8")
     assert storage.backup_file(src) == str(src) + ".bak"
     assert (tmp_path / "p.json.bak").exists()
+
+
+def test_load_portfolio_recovers_from_backup_when_corrupt(tmp_path):
+    """portfolio.json 损坏时从 .bak 恢复, 不静默返回空组合 (否则下次保存会清空数据)."""
+    path = tmp_path / "portfolio.json"
+    path.write_text("{ truncated", encoding="utf-8")
+    (tmp_path / "portfolio.json.bak").write_text(
+        json.dumps({"base_currency": "USD", "holdings": [{"symbol": "AAPL", "quantity": 3}]}),
+        encoding="utf-8",
+    )
+    data = storage.load_portfolio(path)
+    assert data["holdings"] == [{"symbol": "AAPL", "quantity": 3}]
+
+
+def test_load_portfolio_corrupt_without_backup_raises_readable_error(tmp_path):
+    """无 .bak 可恢复时报可读错误, 而不是裸 JSONDecodeError."""
+    path = tmp_path / "portfolio.json"
+    path.write_text("{ truncated", encoding="utf-8")
+    with pytest.raises(ValueError, match="不是合法 JSON"):
+        storage.load_portfolio(path)
+
+
+def test_load_watchlist_corrupt_without_backup_raises_readable_error(tmp_path):
+    path = tmp_path / "watchlist.json"
+    path.write_text("{ truncated", encoding="utf-8")
+    with pytest.raises(ValueError, match="不是合法 JSON"):
+        storage.load_watchlist(path)
+
+
+def test_save_portfolio_failure_leaves_original_intact(tmp_path):
+    """写盘失败不得破坏已有文件 —— 原地截断写会留下半截 JSON."""
+    path = tmp_path / "portfolio.json"
+    storage.save_portfolio({"holdings": [{"symbol": "AAPL", "quantity": 1}]}, path)
+    before = path.read_text(encoding="utf-8")
+    with pytest.raises(TypeError):
+        storage.save_portfolio(
+            {"holdings": [{"symbol": "AAPL", "quantity": object()}]}, path
+        )
+    assert path.read_text(encoding="utf-8") == before
+    assert [p.name for p in tmp_path.iterdir()] == ["portfolio.json"]

@@ -39,6 +39,35 @@ def test_cfets_table_skips_nan(monkeypatch):
     assert "EUR" not in table
 
 
+def test_cfets_table_skips_zero_mid(monkeypatch):
+    """中价为 0 的货币对不入表, 否则交叉汇率会除零崩溃."""
+    monkeypatch.setattr(fx, "_cfets_cache", (0.0, {}))
+    df = pd.DataFrame(
+        {
+            "货币对": ["USD/CNY", "EUR/CNY"],
+            "买报价": [6.70, 0.0],
+            "卖报价": [6.72, 0.0],
+        }
+    )
+
+    class FakeAk:
+        fx_spot_quote = lambda self, **kw: df
+
+    import sys
+
+    monkeypatch.setitem(sys.modules, "akshare", FakeAk())
+    table = fx._cfets_table()
+    assert abs(table["USD"] - 6.71) < 1e-9
+    assert "EUR" not in table
+
+
+def test_cfets_zero_rate_degrades_to_yahoo(monkeypatch):
+    """CFETS 表里出现 0 汇率时降级到 yahoo 兜底, 不抛 ZeroDivisionError."""
+    monkeypatch.setattr(fx, "_cfets_table", lambda: {"CNY": 1.0, "USD": 6.71, "EUR": 0.0})
+    monkeypatch.setattr(fx, "_pair_rate", lambda a, b: 7.5)
+    assert fx.get_rate("USD", "EUR") == 7.5
+
+
 def test_cfets_first(monkeypatch):
     monkeypatch.setattr(fx, "_cfets_rate", lambda s, d: 7.1)
     monkeypatch.setattr(fx, "_yahoo_pair", lambda p: 7.2)

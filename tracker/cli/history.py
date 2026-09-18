@@ -5,7 +5,7 @@ import pandas as pd
 
 from .. import prices
 from ..symbols import parse
-from ._common import _finish_with_error, _print_json
+from ._common import _finish_with_error, _print_json, _records
 
 
 def cmd_history(args) -> None:
@@ -24,7 +24,8 @@ def cmd_history(args) -> None:
     if args.json:
         recs = df.copy()
         recs["date"] = recs["date"].astype(str)
-        _print_json(recs.to_dict(orient="records"))
+        # _records 把 NaN/NaT 转 None: json.dumps 默认会输出裸 NaN, 不是合法 JSON
+        _print_json(_records(recs))
         return
     if df.empty:
         print(f"⚠ {args.symbol}: 无历史数据")

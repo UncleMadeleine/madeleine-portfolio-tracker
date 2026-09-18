@@ -216,7 +216,9 @@ def test_load_migrates_old_nested_format(tmp_path):
     )
     data = load_watchlist(f)
     assert list_names(data) == ["科技"]
-    assert data["watchlist"] == [{"symbol": "AAPL", "upper_1": 100, "lists": ["科技"]}]
+    assert data["watchlist"] == [
+        {"symbol": "AAPL", "upper_1": 100, "lists": ["科技"], "type": "global"}
+    ]
 
 
 def test_load_new_format(tmp_path):
@@ -247,6 +249,12 @@ def test_list_names_and_entries():
         ]
     }
     assert list_names(data) == ["默认", "科技", "美股"]
+    assert entries_for(data, "默认") == [{"symbol": "A", "lists": ["默认"]}]
+    assert entries_for(data, "默认,科技") == [
+        {"symbol": "A", "lists": ["默认"]},
+        {"symbol": "B", "lists": ["科技", "美股"]},
+        {"symbol": "C", "lists": ["科技"]},
+    ]
     assert entries_for(data, "科技") == [{"symbol": "B", "lists": ["科技", "美股"]}, {"symbol": "C", "lists": ["科技"]}]
     assert entries_for(data, "美股") == [{"symbol": "B", "lists": ["科技", "美股"]}]
     assert entries_for(data) == [

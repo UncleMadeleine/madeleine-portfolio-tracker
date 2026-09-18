@@ -188,6 +188,8 @@ def test_ibkr_to_yahoo_mappings():
         (("BP", "LSE", "", "GBX"), "BP.L"),
         (("RY", "TSE", "", "CAD"), "RY.TO"),
         (("X", "TSXV", "", "CAD"), "X.V"),
+        (("ABC", "CSE", "", "CAD"), "ABC.CN"),
+        (("DEF", "NEOEX", "", "CAD"), "DEF.NE"),
         (("BHP", "ASX", "", "AUD"), "BHP.AX"),
         (("BRK B", "SMART", "", "USD"), "BRK-B"),
         (("AAPL", "SMART", "", "USD"), "AAPL"),

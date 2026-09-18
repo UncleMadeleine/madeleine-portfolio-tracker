@@ -33,17 +33,17 @@ from tracker.ui.kline_page import (  # noqa: E402
     set_quick_symbols,
 )
 from tracker.ui.settings_page import render_settings_page  # noqa: E402
-from tracker.watchlist import (  # noqa: E402
-    _normalize_entry,
+from tracker.services.watchlist import (  # noqa: E402
     build_watchlist_view,
     entries_for,
     list_names,
-    load_watchlist,
     merge_entries,
-    parse_lists,
-    save_watchlist,
     sort_watchlist,
     triggered_entries,
+)
+from tracker.watchlist import (  # noqa: E402
+    normalize_watch_entry,
+    parse_lists,
 )
 
 WATCHLIST_PATH = storage.WATCHLIST_PATH
@@ -170,6 +170,17 @@ with st.sidebar:
                     if dups:
                         st.error(f"重复代码 (已去重): {', '.join(sorted(set(dups)))}")
                 if not bad:
+                    # 保留编辑器不展示的溯源键 (如钱包导入的 import_source), 否则页面
+                    # 保存一次就丢掉, 后续多钱包导入会退化成同代码互相覆盖
+                    extra = {
+                        _norm_sym(h.get("symbol", "")): {
+                            k: v for k, v in h.items()
+                            if k not in ("symbol", "quantity", "avg_cost", "type")
+                        }
+                        for h in portfolio.get("holdings", [])
+                    }
+                    for r in clean:
+                        r.update(extra.get(r["symbol"], {}))
                     storage.save_portfolio({"base_currency": base, "holdings": clean})
                     cached_quotes.clear()
                     cached_fx.clear()
@@ -232,7 +243,7 @@ with st.sidebar:
                         dups.append(key)
                         continue
                     seen.add(key)
-                    e = _normalize_entry(r)
+                    e = normalize_watch_entry(r)
                     e["symbol"] = key
                     e["lists"] = parse_lists(e.get("lists"))
                     # data_editor 清空单元格会产生 NaN; note 若是 NaN 会让

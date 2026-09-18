@@ -249,6 +249,36 @@ class TestPortfolioCli:
         assert "CNY" in out and "USD" in out
         assert _load(f)["base_currency"] == "USD"
 
+    def test_corrupt_file_reports_readable_error(self, tmp_path, capsys):
+        """portfolio.json 损坏时报可读错误并以退出码 2 结束, 不抛 traceback."""
+        f = tmp_path / "p.json"
+        f.write_text("{ broken", encoding="utf-8")
+        with pytest.raises(SystemExit) as exc:
+            _run(capsys, "portfolio", "list", "--portfolio", str(f))
+        assert exc.value.code == 2
+        assert "不是合法 JSON" in capsys.readouterr().err
+
+
+class TestHistoryCli:
+    def test_history_json_nulls_missing_ohlcv(self, capsys, monkeypatch):
+        """缺 open/high/low/volume 的行必须输出 null, 不能是裸 NaN (非法 JSON)."""
+        df = pd.DataFrame(
+            [
+                {"date": pd.Timestamp("2024-01-02"), "open": float("nan"),
+                 "high": float("nan"), "low": float("nan"), "close": 1.5,
+                 "volume": float("nan")},
+                {"date": pd.Timestamp("2024-01-03"), "open": 1.6, "high": 1.7,
+                 "low": 1.5, "close": 1.65, "volume": 100.0},
+            ]
+        )
+        monkeypatch.setattr("tracker.prices.get_history", lambda *a, **k: df)
+        out = _run(capsys, "history", "AAPL", "--json")
+        assert "NaN" not in out
+        rows = json.loads(out)
+        assert rows[0]["open"] is None
+        assert rows[1]["close"] == 1.65
+
+
 class TestImportWalletCli:
     """import-wallet 子命令 (RPC 全部 mock, 离线)."""
 
@@ -315,6 +345,22 @@ class TestImportWalletCli:
             _run(capsys, "import-wallet", "solana", self.ADDR)
         assert exc.value.code == 2
         assert "不支持的链" in capsys.readouterr().err
+
+    def test_import_wallet_json_add_emits_single_object(self, tmp_path, capsys, monkeypatch):
+        """--json 与 --add 同用时只能输出一个 JSON 对象 (两个拼接会解析失败)."""
+        self._mock_rpc(monkeypatch, 2 * 10**18)
+        f = tmp_path / "p.json"
+        f.write_text(
+            json.dumps({"base_currency": "CNY", "holdings": []}), encoding="utf-8"
+        )
+        out = _run(
+            capsys, "import-wallet", "eth", self.ADDR,
+            "--portfolio", str(f), "--add", "--json",
+        )
+        payload = json.loads(out)
+        assert payload["chain"] == "eth"
+        assert payload["import"]["written"] is True
+        assert payload["import"]["added"] == ["ETH-USD"]
 
 
 class TestImportCli:

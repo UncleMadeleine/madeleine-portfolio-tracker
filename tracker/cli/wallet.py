@@ -54,28 +54,30 @@ def cmd_import_wallet(args: argparse.Namespace) -> None:
     holdings = result.get("holdings", [])
     errors = result.get("errors", [])
 
+    # 写入先于输出完成, 保证 --json 只打印一个 JSON 对象 (查询结果 + 写入结果)
+    rows = importer.wallet_rows(result) if (args.add or args.overwrite) else []
+    res = None
+    if rows:
+        mode = importer.MODE_OVERWRITE if args.overwrite else importer.MODE_APPEND
+        res = importer.apply_import(rows, args.portfolio, mode=mode)
+
     if args.json:
-        _print_json(result)
-    else:
-        print(f"\n链: {wallet_mod._CHAIN_CONFIG[chain]['label']} ({chain})")
-        print(f"地址: {result['address']}")
-        print(f"计价: {args.base_currency.upper()}")
-        _print_holdings_table(holdings)
-        if errors:
-            print("\n⚠ 警告:")
-            for e in errors:
-                print(f"  - {e}")
+        _print_json({**result, "import": res})
+        return
+
+    print(f"\n链: {wallet_mod._CHAIN_CONFIG[chain]['label']} ({chain})")
+    print(f"地址: {result['address']}")
+    print(f"计价: {args.base_currency.upper()}")
+    _print_holdings_table(holdings)
+    if errors:
+        print("\n⚠ 警告:")
+        for e in errors:
+            print(f"  - {e}")
 
     if not (args.add or args.overwrite):
         return
-    rows = importer.wallet_rows(result)
     if not rows:
         print("\n⏭ 未发现非零余额, 跳过写入 portfolio.json")
-        return
-    mode = importer.MODE_OVERWRITE if args.overwrite else importer.MODE_APPEND
-    res = importer.apply_import(rows, args.portfolio, mode=mode)
-    if args.json:
-        _print_json({"import": res})
         return
     n = len(res["added"]) + len(res["updated"])
     print(f"\n✅ 已写入 {n} 个代币 → {args.portfolio} "

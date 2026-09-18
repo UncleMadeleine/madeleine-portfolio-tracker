@@ -448,6 +448,15 @@ class TestLoadTokenlist:
         tl = wallet_mod._load_tokenlist(str(p))
         assert "0xdac17f958d2ee523a2206206994597c13d831ec7" in tl["eth"]
 
+    def test_external_file_normalizes_chain_key_lower(self, tmp_path):
+        """链名大小写不敏感: 外部文件写 "ETH" 也要能被 chain.lower() 查到."""
+        custom = {"ETH": {"0xdac17f958d2ee523a2206206994597c13d831ec7": {"symbol": "USDT", "decimals": 6}}}
+        p = tmp_path / "tl.json"
+        p.write_text(json.dumps(custom), encoding="utf-8")
+        tl = wallet_mod._load_tokenlist(str(p))
+        assert "eth" in tl
+        assert "0xdac17f958d2ee523a2206206994597c13d831ec7" in tl["eth"]
+
     def test_missing_external_file_raises(self):
         with pytest.raises(FileNotFoundError):
             wallet_mod._load_tokenlist("/nonexistent/path/tokens.json")

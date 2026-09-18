@@ -11,7 +11,9 @@ CLI 与 Streamlit 页面共用同一组函数, 保证 schema 归一与权威 typ
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import tempfile
 from pathlib import Path
 
 from .symbols import type_for_symbol
@@ -23,6 +25,10 @@ WATCHLIST_PATH = _ROOT / "watchlist.json"
 SETTINGS_PATH = _ROOT / "settings.json"
 
 DEFAULT_BASE_CURRENCY = "CNY"
+
+
+class CorruptDataError(ValueError):
+    """数据文件损坏且无法从 .bak 恢复 (CLI 据此给出可读错误而非 traceback)."""
 
 
 # ---------------------------------------------------------------------------
@@ -45,11 +51,43 @@ def _read_json(path: str | Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _read_json_or_recover(path: str | Path) -> dict:
+    """读取 JSON; 文件损坏时尝试同名 .bak 恢复, 仍失败则抛出可读错误。
+
+    不静默返回空数据 —— 否则下一次保存会把损坏文件直接覆盖成空组合, 造成数据丢失。
+    """
+    try:
+        return _read_json(path)
+    except json.JSONDecodeError as e:
+        bak = Path(f"{path}.bak")
+        if bak.exists():
+            try:
+                return _read_json(bak)
+            except (json.JSONDecodeError, OSError):
+                pass
+        raise CorruptDataError(
+            f"{path} 不是合法 JSON ({e.msg}, 第 {e.lineno} 行); "
+            f"已尝试从 {bak.name} 恢复但失败, 请修复或删除该文件后重试。"
+        ) from e
+
+
 def _write_json(data: dict, path: str | Path) -> None:
-    Path(path).write_text(
-        json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False),
-        encoding="utf-8",
-    )
+    """原子写: 先写同目录临时文件再 os.replace, 中断不会把原文件截断成半截 JSON。"""
+    p = Path(path)
+    payload = json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False)
+    fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=f".{p.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, p)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _stamp_type(row: dict) -> dict:
@@ -71,7 +109,7 @@ def load_portfolio(path: str | Path = PORTFOLIO_PATH) -> dict:
     """读取持仓文件; 文件缺失时返回空组合。"""
     if not Path(path).exists():
         return {"base_currency": DEFAULT_BASE_CURRENCY, "holdings": []}
-    return _read_json(path)
+    return _read_json_or_recover(path)
 
 
 def _clean_rows(rows: list) -> list[dict]:
@@ -137,7 +175,7 @@ def load_watchlist(path: str | Path = WATCHLIST_PATH) -> dict:
     p = Path(path)
     if not p.exists():
         return {"watchlist": []}
-    raw = _read_json(p)
+    raw = _read_json_or_recover(p)
     if "watchlist" in raw:
         entries = []
         for e in raw["watchlist"]:
@@ -164,11 +202,12 @@ def load_watchlist(path: str | Path = WATCHLIST_PATH) -> dict:
                         merged[sym].setdefault(k, v)
                 if name not in merged[sym]["lists"]:
                     merged[sym]["lists"].append(name)
-        entries = list(merged.values())
-        for e in entries:
+        entries = []
+        for e in merged.values():
             if not e["lists"]:
                 e["lists"] = ["默认"]
-            normalize_watch_entry(e)
+            # normalize_watch_entry 返回副本 (不改原对象), 必须接收返回值
+            entries.append(normalize_watch_entry(e))
         return {"watchlist": entries}
     return {"watchlist": []}
 

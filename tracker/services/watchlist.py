@@ -14,6 +14,7 @@ import math
 import pandas as pd
 
 from .. import prices
+from ..providers.base import Quote
 from ..storage import parse_lists, normalize_watch_entry
 from ..symbols import parse
 from .rules import (
@@ -47,7 +48,7 @@ def entries_for(data: dict, name: str | None = None) -> list[dict]:
     """
     if not name:
         return merge_entries(data)
-    names = set(parse_lists(name)) - {"默认"}
+    names = set(parse_lists(name))
     if not names:
         return merge_entries(data)
     return [

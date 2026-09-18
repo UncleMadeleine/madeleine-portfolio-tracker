@@ -23,9 +23,9 @@ import argparse
 
 # 暴露 prices 供测试 monkeypatch (cli.prices.get_quotes)
 from .. import prices  # noqa: F401
-from ..storage import PORTFOLIO_PATH as DEFAULT_PORTFOLIO
+from ..storage import PORTFOLIO_PATH as DEFAULT_PORTFOLIO, CorruptDataError
 from ..watchlist import DEFAULT_WATCHLIST  # storage 门面 (watchlist.json 常量)
-from ._common import VERSION
+from ._common import VERSION, _finish_with_error
 from .cache import cmd_cache
 from .export import cmd_export
 from .fx import cmd_fx
@@ -402,4 +402,7 @@ def main(argv=None) -> None:
     """CLI 入口: 解析参数并分发到对应子命令."""
     parser = build_parser()
     args = parser.parse_args(argv)
-    args.func(args)
+    try:
+        args.func(args)
+    except CorruptDataError as e:
+        _finish_with_error(str(e))

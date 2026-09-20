@@ -149,7 +149,7 @@ def test_kline_payload_omits_all_zero_volume():
     assert payload["volume"] == []
 
 
-def test_kline_payload_keeps_real_volume():
+def test_kline_payload_keeps_real_volume_with_positive_volume():
     from tracker.charting import clean_ohlc, kline_payload
 
     df = _fake_history("AAPL")

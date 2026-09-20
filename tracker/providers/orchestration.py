@@ -1,7 +1,8 @@
 """批量编排: 按域分组调用 provider, 聚合行情/历史结果.
 
 输入混合代码列表 → parse → 按 provider 分组 → 各域独立取数 (IBKR 只注入全球域
-与 A 股域的批量行情前置) → 汇总 quotes/errors/notes。任一域失败不影响其它域。
+与 A 股域的批量行情前置; 指数域无实时行情, 直接记 errors) → 汇总 quotes/errors/notes。
+任一域失败不影响其它域。
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ from .base import Quote, resolve
 from .crypto import CryptoProvider
 from .cn_stocks import CNStocksProvider
 from .global_stocks import GlobalStocksProvider, _akshare_quote, _yahoo_batch, _yahoo_history
+from .index import IndexProvider
 
 __all__ = ["get_quotes", "get_history"]
 
@@ -68,6 +70,10 @@ def get_quotes(
         if p.yahoo in quotes:
             continue
         provider = _route_provider(p)
+        if isinstance(provider, IndexProvider):
+            # 指数域无实时行情 (仅历史K线): 显式记入 errors, 不进全球/股票源链
+            errors.setdefault(p.yahoo, f"{p.yahoo}: 指数域仅提供历史K线 (index-kline), 无实时行情")
+            continue
         if isinstance(provider, CryptoProvider):
             groups.setdefault("crypto", []).append(p)
         elif isinstance(provider, CNStocksProvider):

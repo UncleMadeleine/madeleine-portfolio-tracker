@@ -76,6 +76,24 @@ def test_index_provider_rejects_quote():
     with pytest.raises(NotImplementedError):
         IndexProvider().fetch_quote(parse("IX.DXY"), prefer_first=False)
 
+def test_get_quotes_routes_index_to_explicit_error(monkeypatch):
+    """IX.* 混入实时行情查询: 记入明确 errors, 不落入 global 域误查 yfinance."""
+    import tracker.providers.orchestration as orch
+
+    def no_batch(parsed):
+        raise AssertionError("指数代码不得进入全球域批量行情")
+
+    monkeypatch.setattr(orch, "_yahoo_batch", no_batch)
+    monkeypatch.setattr(orch.cache_mod, "get_cached", lambda syms, ttl=300: {})
+    monkeypatch.setattr(orch.cache_mod, "set_cached", lambda q: None)
+
+    quotes, errors, notes = orch.get_quotes(["IX.DXY", "IX.VIX"])
+    assert quotes == {}
+    assert set(errors) == {"IX.DXY", "IX.VIX"}
+    assert all("无实时行情" in msg for msg in errors.values())
+
+
+
 
 # ---------- K线门面 ----------
 

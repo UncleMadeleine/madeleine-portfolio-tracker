@@ -1,0 +1,9 @@
+{
+  "_说明": "示例配置: 复制为 watchlist.json 后修改。一个代码可属多个列表 (lists 数组); 两级阈值 upper_1/upper_2、lower_1/lower_2 按当地货币; type 由系统自动推导, 手改无效",
+  "watchlist": [
+    { "symbol": "TSLA", "lists": ["科技", "美股"], "upper_1": 420, "upper_2": 450, "lower_1": 280, "lower_2": 250, "note": "两级提醒" },
+    { "symbol": "NVDA", "lists": ["科技", "美股"], "upper_1": 260, "lower_1": 200, "note": "关注" },
+    { "symbol": "600036.SS", "lists": ["银行", "A股"], "upper_1": 55, "lower_1": 38, "note": "A股示例" },
+    { "symbol": "BTC-USD", "lists": ["加密"], "note": "无阈值仅跟踪" }
+  ]
+}

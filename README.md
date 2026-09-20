@@ -309,12 +309,15 @@ tracker/
 ├── ibkr_sync.py        IBKR 持仓导入兼容入口（委托 importer，等价 import ibkr）
 ├── ashare_sync.py      A股券商文件解析 + 兼容入口（等价 import file）
 └── wallet.py           链上钱包余额查询（EVM 五链, 轻钱包 RPC, 只读）
-portfolio.json          持仓配置（页面可直接编辑保存; type 字段由系统自动维护, 手改无效）
-watchlist.json          自选股配置（页面可直接编辑保存; type 字段由系统自动维护, 手改无效）
-settings.json           显示与数据源设置（配色 / prefer_akshare / use_ibkr）
+portfolio.json          持仓配置（页面可直接编辑保存; type 字段由系统自动维护, 手改无效;
+                        用户本地数据, 已 gitignore, 模板 portfolio.example.json）
+watchlist.json          自选股配置（页面可直接编辑保存; type 字段由系统自动维护, 手改无效;
+                        用户本地数据, 已 gitignore, 模板 watchlist.example.json）
+settings.json           显示与数据源设置（配色 / prefer_akshare / use_ibkr;
+                        已 gitignore, 模板 settings.example.json）
+*.example.json          各配置模板（随仓库提交: 首次使用 cp <名>.example.json <名>.json）
 ibkr.example.json       IBKR 配置模板（随仓库提交）
 ibkr.json               IBKR 真实配置（已 gitignore，不随仓库提交）
-data/tokenlist.json     链上代币目录（内置备份, 可 --tokenlist 覆盖）
 docs/                   研究笔记（如 A股券商导入方案调研）
 tests/                  单元测试（离线, mock）
 ```

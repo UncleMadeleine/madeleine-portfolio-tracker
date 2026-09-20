@@ -1,0 +1,6 @@
+{
+  "_说明": "示例配置: 复制为 settings.json 后修改。color_scheme: cn(红涨绿跌) / intl(绿涨红跌); prefer_akshare: A股/港股数据源优先级; use_ibkr: 启用 IBKR 行情",
+  "color_scheme": "cn",
+  "prefer_akshare": false,
+  "use_ibkr": false
+}

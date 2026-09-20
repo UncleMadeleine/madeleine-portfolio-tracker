@@ -16,6 +16,11 @@ data/symbol_list.json
 .env
 .streamlit/secrets.toml
 
+# 用户本地数据 (持仓/自选/设置): 不入库, 模板见 *.example.json
+portfolio.json
+watchlist.json
+settings.json
+
 # IBKR 真实配置 (含敏感连接信息), 模板见 ibkr.example.json
 ibkr.json
 

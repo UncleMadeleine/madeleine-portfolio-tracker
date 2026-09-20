@@ -1,0 +1,10 @@
+{
+  "_说明": "示例配置: 复制为 portfolio.json 后修改。avg_cost 为当地货币成本; 英股按英镑计(非便士, 如 4.3 = £4.30); 港股代码 4 位补零(0700.HK); A股后缀 .SS/.SZ; type 由系统自动推导, 手改无效",
+  "base_currency": "CNY",
+  "holdings": [
+    { "symbol": "AAPL", "quantity": 10, "avg_cost": 180.0 },
+    { "symbol": "0700.HK", "quantity": 100, "avg_cost": 330.0 },
+    { "symbol": "600519.SS", "quantity": 10, "avg_cost": 1500.0 },
+    { "symbol": "BTC-USD", "quantity": 0.1, "avg_cost": 50000.0 }
+  ]
+}

@@ -1,12 +1,12 @@
 """「K线」页面: 任意代码实时查询 (持仓/自选 + 自由输入).
 
-K线与投资组合、自选同级的独立功能 —— 不依赖持仓/自选配置,
-任何合法的 Yahoo 规范代码都能查。数据不预加载, 用户提交后实时拉取
-(30 分钟磁盘缓存 + 10 分钟会话内存缓存, 切换参数不重复请求网络)。
+两种查询模式:
+- 滑动 (默认): 一次加载深度历史 (默认近10年, 可选上市以来), 图表内连续拖动 /
+  缩放全程纯前端; 拖近数据左缘自动向前补更早数据, 直到上市首日。
+- 范围: 先选范围再点「查询」的旧流程 (兜底, 与滑动模式同代码不同数据路径)。
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
 
 import pandas as pd
 import streamlit as st
@@ -19,6 +19,8 @@ from tracker.symbols import parse
 # 顶部快捷代码 (来自当前持仓与自选, 不预取任何行情数据, 仅展示代码名)
 KLINE_SYMBOLS_KEY = "kline_quick_symbols"
 
+# 滑动模式每次向前扩展的历史年数 (约 500 根日K, 一次网络请求可接受)
+_EXTEND_YEARS = 2
 # TradingView lightweight-charts 组件 (st.components.v2, JS 不过 DOMPurify):
 # 拖动平移 / 滚轮·捏合缩放 / 触控板双指手势, 券商 App 通用交互.
 _KLINE_CHART = st.components.v2.component(
@@ -42,6 +44,12 @@ def set_quick_symbols(symbols: list[str]) -> None:
 def cached_kline(symbol: str, months: int, prefer_akshare: bool):
     """K线日线 (磁盘缓存 + 内存缓存双层, TTL 内切换参数不重复请求网络)."""
     return prices.get_ohlc(symbol, months=months, prefer_akshare=prefer_akshare)
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def cached_kline_years(symbol: str, years: int, prefer_akshare: bool):
+    """按年数取K线 (滑动模式深度加载): months=years*12, 缓存键独立于月份参数."""
+    return prices.get_ohlc(symbol, months=years * 12, prefer_akshare=prefer_akshare)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -77,11 +85,12 @@ def render_kline_view(
     green_up: bool,
     currency: str | None,
     indicators: dict | None = None,
-    preserve_range: dict | None = None,
+    has_more: bool = False,
+    query_id: str | None = None,
 ) -> dict | None:
     """K线图 + 摘要指标 (供 K线页面与 CLI 内嵌使用, 纯渲染无取数).
 
-    返回组件交互结果 (need_more / range), 供无限拖动扩展数据使用.
+    返回组件交互结果 (need_more / qid / seq), 供滑动模式扩展数据使用.
     """
     if period != "daily":
         kdf = charting.resample_ohlc(kdf, period)
@@ -93,7 +102,8 @@ def render_kline_view(
             kdf, symbol, currency=currency, mas=tuple(mas),
             show_volume=show_volume, green_up=green_up, period=period,
             indicators=indicators,
-            preserve_range=preserve_range,
+            has_more=has_more,
+            query_id=query_id,
         ),
         height=680,
     )
@@ -249,8 +259,118 @@ def _render_symbol_search() -> None:
     )
 
 
+def _slide_query_id(yahoo: str, depth_years: int) -> str:
+    """滑动模式查询标识: 代码|深度. 变化时组件丢弃视口锚点回退初始区间."""
+    return f"{yahoo}|{depth_years}"
+
+
+def _render_slide_mode(
+    yahoo: str,
+    kdepth: int,
+    kperiod: str,
+    kmas: list[int],
+    kvol: bool,
+    kgreen: bool,
+    indicators: dict,
+    prefer_akshare: bool,
+) -> None:
+    """滑动模式: 一次深度加载 + 组件内无限拖动 (拖近左缘自动补更早历史).
+
+    - kdepth>0: 首次加载近 kdepth 年; kdepth==0 (上市以来): 一次拉全量, 不再扩展。
+    - 数据集存 session_state (kline_slide_df); 组件 need_more 时按最早日期向前
+      补 EXTEND_YEARS 年, 直到成功新增 0 根 (到上市首日, 置 has_more=False 收口)。
+    - 周期/均线/指标/成交量变化只重绘, 不重新取数。
+    """
+    qid = _slide_query_id(yahoo, kdepth)
+    state_key = "kline_slide_df"
+    state_qid_key = "kline_slide_qid"
+
+    qid_changed = st.session_state.get(state_qid_key) != qid
+    if qid_changed:
+        st.session_state[state_key] = None
+        st.session_state[state_qid_key] = qid
+        st.session_state["kline_slide_exhausted"] = False
+        st.session_state["kline_slide_seq"] = None
+
+    df_all: pd.DataFrame | None = st.session_state.get(state_key)
+    first_load = df_all is None  # 本轮是否刚拉过首次数据 (need_more 同轮到达也允许扩展)
+    if first_load:
+        try:
+            with st.spinner(f"拉取 {yahoo} K线 ({'上市以来' if kdepth == 0 else f'近 {kdepth} 年'})..."):
+                kdf = (
+                    cached_kline_years(yahoo, 50, prefer_akshare)  # 50 年≈全历史兜底
+                    if kdepth == 0
+                    else cached_kline_years(yahoo, kdepth, prefer_akshare)
+                )
+        except Exception as e:
+            st.warning(f"{yahoo}: {e}")
+            return
+        if not isinstance(kdf, pd.DataFrame) or kdf.empty:
+            st.warning(f"{yahoo}: 无有效K线数据。")
+            return
+        st.session_state[state_key] = kdf
+        st.session_state["kline_queried"] = True
+        df_all = kdf
+
+    try:
+        kcur = parse(yahoo).currency
+    except ValueError:
+        kcur = None
+
+    result = render_kline_view(
+        df_all, yahoo, period=kperiod, mas=kmas,
+        show_volume=kvol, green_up=kgreen, currency=kcur,
+        indicators=indicators or None,
+        has_more=kdepth != 0,
+        query_id=qid,
+    )
+
+    # 拖近左缘 → 向前补数据 (rerun 进入本分支); 已到上市首日 (exhausted) 时不扩展。
+    # 组件用 setTriggerValue("need_more", {seq, qid}) 上报 → result.need_more = {seq, qid}
+    more = result if isinstance(result, dict) else None
+    trigger = more.get("need_more") if more else None
+    if not isinstance(trigger, dict):
+        return
+    if trigger.get("qid") != qid:
+        return
+    if st.session_state.get("kline_slide_exhausted"):
+        return
+    last_seq = st.session_state.get("kline_slide_seq")
+    seq = trigger.get("seq", 0)
+    if last_seq is not None and seq <= last_seq:
+        return
+    st.session_state["kline_slide_seq"] = seq
+
+    cur_first = df_all["date"].min()
+    before_date = (cur_first + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    fetch_start = (cur_first - pd.Timedelta(days=365 * _EXTEND_YEARS)).strftime("%Y-%m-%d")
+    try:
+        with st.spinner(f"正在加载更早数据 ({fetch_start} 之前)..."):
+            older_df = prices.get_ohlc(
+                yahoo,
+                start_date=fetch_start,
+                end_date=before_date,
+                prefer_akshare=prefer_akshare,
+            )
+    except Exception as e:
+        st.warning(f"加载更早历史失败: {e}")
+        return
+    older_df = charting.clean_ohlc(older_df) if older_df is not None else older_df
+    if older_df is None or older_df.empty:
+        st.session_state["kline_slide_exhausted"] = True
+        st.toast("已加载到最早历史数据。")
+        return
+    combined = charting.clean_ohlc(pd.concat([older_df, df_all], ignore_index=True))
+    if len(combined) <= len(df_all):
+        st.session_state["kline_slide_exhausted"] = True
+        st.toast("已加载到最早历史数据。")
+        return
+    st.session_state[state_key] = combined
+    st.rerun()
+
+
 def render_kline_controls(prefer_akshare: bool) -> None:
-    """查询控件 + 拉取/渲染 (输入驱动: 无提交不取数)."""
+    """查询控件 + 拉取/渲染 (滑动 / 范围双模式, 输入驱动)."""
     qs = quick_symbols()
     st.markdown("### :material/candlestick_chart: K线查询")
 
@@ -264,16 +384,28 @@ def render_kline_controls(prefer_akshare: bool) -> None:
         key="kline_symbol",
         placeholder="如: AAPL · 600519.SS · 0700.HK · SAP.DE · BP.L · BTC-USD",
     )
-    ksym = (ksym or "").strip().upper()
-    kmonths = c2.selectbox(
-        "范围", [3, 6, 12, 24, 36], index=2,
-        format_func=lambda m: f"近 {m} 个月", key="kline_months",
+    kmode = st.segmented_control(
+        "查询模式", ["滑动", "范围"], default="滑动", key="kline_mode",
+        help="滑动: 一次加载深度历史, 图表内连续拖动, 拖到左缘自动补更早数据; "
+        "范围: 先选范围再查询 (兜底模式)",
     )
+    ksym = (ksym or "").strip().upper()
+    if kmode == "滑动":
+        kdepth = c2.selectbox(
+            "加载深度", [2, 5, 10, 20, 0], index=2,
+            format_func=lambda y: "上市以来" if y == 0 else f"近 {y} 年",
+            key="kline_depth",
+        )
+    else:
+        kdepth = c2.selectbox(
+            "范围", [3, 6, 12, 24, 36], index=2,
+            format_func=lambda m: f"近 {m} 个月", key="kline_months",
+        )
     kperiod = c3.selectbox(
         "周期", ["daily", "weekly", "monthly"], index=0,
         format_func=lambda v: charting.PERIOD_LABELS[v], key="kline_period",
     )
-    # 提交判定: 代码变化 (回车/快捷 pill/搜索选择) 或点击「查询」才算新查询;
+    # 范围模式提交判定: 代码变化 (回车/快捷 pill/搜索选择) 或点「查询」;
     # 首次渲染只记录输入框当前值, 不视为提交 (页面启动不预加载任何 K线)
     if "kline_last_symbol" not in st.session_state:
         st.session_state["kline_last_symbol"] = ksym
@@ -326,108 +458,58 @@ def render_kline_controls(prefer_akshare: bool) -> None:
         st.pills("常用 (持仓/自选)", qs, key="kline_quick", on_change=_pick_quick)
 
     if not ksym:
-        st.info("输入代码后回车或点「查询」获取数据 —— 页面启动不会预加载任何 K线。")
+        st.info("输入代码后回车获取数据 —— 页面启动不会预加载任何 K线。")
         return
     if not is_valid_symbol(ksym):
         st.error(f"无法识别的代码: {ksym} (参考上方代码规范, 如 600519.SS / 0700.HK)")
         return
     yahoo = normalize_or_none(ksym)
-    if submitted:
-        st.session_state["kline_last_symbol"] = ksym
-
-    # 首次渲染 (从未取过数) 且非用户提交 → 不预加载
-    if not submitted and st.session_state.get("kline_current_symbol") is None:
-        st.info("输入代码后回车或点「查询」获取数据 —— 页面启动不会预加载任何 K线。")
+    if yahoo is None:
         return
 
-    # 展示参数 (均线/成交量/指标/周期) 变化只重绘, 不重新取数;
-    # 代码或范围变化才丢弃缓存重新取数。组件 need_more 触发的 rerun 走重绘分支,
-    # 否则图表会在拖动时被这里的早退清掉, 无限拖动永远拿不到更早的数据。
+    # 两种模式共享「已查询过」状态: 任一模式下渲染过图表 (kline_queried),
+    # 切换模式后用当前 ksym+kdepth 直接取数渲染, 不再要求重新提交。
+    if kmode == "滑动":
+        _render_slide_mode(
+            yahoo, kdepth, kperiod, kmas, kvol, kgreen, indicators, prefer_akshare,
+        )
+        return
+    # ---- 范围模式 (旧流程兜底) ----
+    submitted = submitted or st.session_state.get("kline_queried") is True
+    if not submitted:
+        st.info("输入代码后回车或点「查询」获取数据 —— 页面启动不会预加载任何 K线。")
+        return
+    st.session_state["kline_last_symbol"] = ksym
+    st.session_state["kline_queried"] = True
+    # 范围模式: 代码/范围变化才重新取数; 其余参数变化只重绘。
     data_changed = (
         st.session_state.get("kline_current_symbol") != yahoo
-        or st.session_state.get("kline_last_months") != kmonths
+        or st.session_state.get("kline_last_months") != kdepth
     )
-
-    # ---- 无限拖动: 维护全量数据集 (session_state), 组件返回 need_more 时自动扩展 ----
-    if submitted or data_changed:
-        st.session_state["kline_full_df"] = None
-        st.session_state["kline_preserve_range"] = None
-        st.session_state["kline_last_range"] = None
-        st.session_state["kline_last_before"] = None
-        st.session_state["kline_fetching"] = False
-
-    st.session_state["kline_current_symbol"] = yahoo
-    st.session_state["kline_last_months"] = kmonths
-    if st.session_state["kline_full_df"] is None:
+    if data_changed or st.session_state.get("kline_current_df") is None:
         try:
             with st.spinner(f"拉取 {yahoo} K线..."):
-                kdf = cached_kline(yahoo, kmonths, prefer_akshare)
+                kdf = cached_kline(yahoo, kdepth, prefer_akshare)
         except Exception as e:
             st.warning(f"{yahoo}: {e}")
             return
         if kdf.empty:
             st.warning(f"{yahoo}: 无有效K线数据。")
             return
-        st.session_state["kline_full_df"] = kdf
-
-    full_df = st.session_state["kline_full_df"]
-    preserve_range = st.session_state.get("kline_preserve_range")
-    st.session_state["kline_preserve_range"] = None
-
+        st.session_state["kline_current_df"] = kdf
+        st.session_state["kline_current_symbol"] = yahoo
+        st.session_state["kline_last_months"] = kdepth
+    kdf = st.session_state["kline_current_df"]
     try:
         kcur = parse(yahoo).currency
     except ValueError:
         kcur = None
-
-    result = render_kline_view(
-        full_df, yahoo, period=kperiod, mas=kmas,
+    render_kline_view(
+        kdf, yahoo, period=kperiod, mas=kmas,
         show_volume=kvol, green_up=kgreen, currency=kcur,
         indicators=indicators or None,
-        preserve_range=preserve_range,
     )
 
-    # 处理无限拖动扩展数据
-    if result and isinstance(result, dict) and result.get("need_more"):
-        old_range = result.get("range", {})
-        before_date = result.get("before")
-        if before_date and not st.session_state.get("kline_fetching"):
-            last_before = st.session_state.get("kline_last_before")
-            if last_before == before_date:
-                st.session_state["kline_preserve_range"] = None
-                return
-            st.session_state["kline_fetching"] = True
-            st.session_state["kline_last_range"] = old_range
-            st.session_state["kline_last_before"] = before_date
-            try:
-                before_dt = datetime.strptime(before_date, "%Y-%m-%d")
-                fetch_start = (before_dt - timedelta(days=365)).strftime("%Y-%m-%d")
-                with st.spinner(f"正在加载更早数据 ({fetch_start} -> {before_date})..."):
-                    older_df = prices.get_ohlc(
-                        yahoo,
-                        start_date=fetch_start,
-                        end_date=before_date,
-                        prefer_akshare=prefer_akshare,
-                    )
-                if not older_df.empty:
-                    before_bars = len(full_df)
-                    combined = pd.concat([older_df, full_df])
-                    combined = combined.drop_duplicates(subset="date", keep="first")
-                    combined = combined.sort_values("date").reset_index(drop=True)
-                    st.session_state["kline_full_df"] = combined
-                    # 平移量 = 实际新增的 K 线数。older_df 与 full_df 在
-                    # before_date 当天重叠, 用 len(older_df) 会多算, 视窗右移过头
-                    shift = len(combined) - before_bars
-                    total_bars = len(combined)
-                    old_from = old_range.get("from", 0)
-                    old_to = old_range.get("to", 0)
-                    preserve_from = max(old_from + shift, int(total_bars * 0.3))
-                    preserve_to = preserve_from + (old_to - old_from)
-                    st.session_state["kline_preserve_range"] = {"from": preserve_from, "to": preserve_to}
-            except Exception as e:
-                st.warning(f"扩展历史数据失败: {e}")
-            finally:
-                st.session_state["kline_fetching"] = False
-                st.rerun()
 
 def render_kline_page(prefer_akshare: bool) -> None:
     """「K线」页入口: 单只查询 + 多股对比 两个子功能 (st.tabs)."""

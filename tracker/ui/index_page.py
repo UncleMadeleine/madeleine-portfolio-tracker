@@ -83,4 +83,5 @@ def render_index_page() -> None:
         kdf, f"{index_label(key)} ({yahoo})", period=iperiod, mas=imas,
         show_volume=False, green_up=settings.green_up(),
         currency=None,  # 指数以点数/%计价, 不标货币
+        has_more=False,  # 指数页固定范围, 不做无限拖动扩展
     )

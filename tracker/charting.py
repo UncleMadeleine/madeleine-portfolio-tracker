@@ -609,34 +609,58 @@ export default function (component) {
   var n = isCompare
     ? Math.max.apply(null, CFG.lines.map(function (l) { return l.data.length; }).concat([1]))
     : CFG.candles.length;
-  if (CFG.preserveRange) {
-    try {
-      chart.timeScale().setVisibleLogicalRange(CFG.preserveRange);
-    } catch (e) {
-      try {
-        chart.timeScale().setVisibleLogicalRange({ from: n - Math.min(n, CFG.initBars), to: n - 1 + 4 });
-      } catch (e2) { chart.timeScale().fitContent(); }
+  // 视口还原: 组件因数据更新重建时, 按「锚点 bar 时间 + 分数偏移 + 半宽」还原拖动位置
+  // (bar 索引无关, 日/周/月K 通用)。锚点存 window 级 store (按 queryId 键):
+  // Streamlit 更新 data 时会重建 .lwc-wrap DOM 节点, DOM 属性随之丢失;
+  // queryId 变化 (换代码/深度) 时旧键自然失效回退初始区间。
+  if (!window.__lwcViewStore) { window.__lwcViewStore = {}; }
+  var viewStore = CFG.queryId ? window.__lwcViewStore[CFG.queryId] : null;
+  var restored = null;
+  if (viewStore && viewStore.t && CFG.candles.length) {
+    var vlo = 0, vhi = CFG.candles.length - 1, vai = -1;
+    while (vlo <= vhi) {
+      var vmi = (vlo + vhi) >> 1;
+      if (CFG.candles[vmi].time === viewStore.t) { vai = vmi; break; }
+      if (CFG.candles[vmi].time < viewStore.t) { vlo = vmi + 1; } else { vhi = vmi - 1; }
     }
-  } else {
-    try {
-      chart.timeScale().setVisibleLogicalRange({ from: n - Math.min(n, CFG.initBars), to: n - 1 + 4 });
-    } catch (e) { chart.timeScale().fitContent(); }
+    if (vai >= 0) {
+      restored = {
+        from: vai + viewStore.frac - viewStore.half,
+        to: vai + viewStore.frac + viewStore.half,
+      };
+    }
   }
-
-  // 无限拖动: 监听可见区间变化, 当拖动到左侧边缘时通知 Python 拉取更早数据
-  var lastFetchTime = 0;
-  chart.timeScale().subscribeVisibleLogicalRangeChange(function(range) {
-    if (isCompare) return;
+  try {
+    chart.timeScale().setVisibleLogicalRange(
+      restored || { from: n - Math.min(n, CFG.initBars), to: n - 1 + 4 }
+    );
+  } catch (e) {
+    try { chart.timeScale().fitContent(); } catch (e2) {}
+  }
+  // 无限拖动: 视口拖近数据左缘 (from<5, 即基本贴到最早的K线) 时通知 Python
+  // 向前追加更早历史 (hasMore=false 已到最早). 阈值取小值: 每次扩展后视口距
+  // 左缘约一整段扩展量, 不会在扩展 rerun 后立刻自触发形成补数循环。
+  // 每次视口变化先写锚点; seq 供 Python 去重, qid 供 Python 拒绝换查询后的残留值,
+  // 1.5s 节流避免连续拖动刷屏。
+  var lastFired = 0;
+  chart.timeScale().subscribeVisibleLogicalRangeChange(function (range) {
+    if (!range) return;
+    if (CFG.candles.length) {
+      var mid = (range.from + range.to) / 2;
+      var fl = Math.max(0, Math.min(CFG.candles.length - 1, Math.floor(mid)));
+      window.__lwcViewStore[CFG.queryId] = {
+        t: CFG.candles[fl].time,
+        frac: mid - fl,
+        half: (range.to - range.from) / 2,
+      };
+    }
+    if (isCompare || CFG.hasMore === false) return;
     var now = Date.now();
-    if (now - lastFetchTime < 8000) return;
-    var totalBars = CFG.candles.length;
-    if (range && totalBars > 20 && range.from < totalBars * 0.2) {
-      lastFetchTime = now;
-      component.setValue({
-        need_more: true,
-        before: CFG.candles[0].time,
-        range: {from: range.from, to: range.to}
-      });
+    if (now - lastFired < 1500) return;
+    if (range.from < 5) {
+      lastFired = now;
+      // CCv2 组件对象无 setValue: need_more 是一次性事件 → setTriggerValue
+      component.setTriggerValue("need_more", { seq: now, qid: CFG.queryId });
     }
   });
 
@@ -710,7 +734,8 @@ def kline_payload(
     height: int = 680,
     init_bars: int = 140,
     indicators: dict | None = None,
-    preserve_range: dict | None = None,
+    has_more: bool = False,
+    query_id: str | None = None,
 ) -> dict:
     """生成传给 K线组件 (st.components.v2) 的数据 payload.
 
@@ -719,6 +744,8 @@ def kline_payload(
 
     indicators: 可选, 键为指标名 (macd/rsi/kdj/boll), 值为参数 dict;
                 如 {"macd": {"fast": 12, "slow": 26, "signal": 9}, "rsi": {"period": 14}}.
+    has_more: False 时组件停止「拖近左缘加载更早历史」回调 (指数页/已到上市首日).
+    query_id: 查询标识 (代码|深度), 变化时组件丢弃视口锚点回退初始区间.
     """
     df = clean_ohlc(df)
     if df.empty:
@@ -842,8 +869,9 @@ def kline_payload(
             },
         },
     }
-    if preserve_range:
-        payload["preserveRange"] = preserve_range
+    # hasMore=false 告知组件已到最早数据; queryId 用于视口锚点失效判定
+    payload["hasMore"] = has_more
+    payload["queryId"] = query_id
     return payload
 
 

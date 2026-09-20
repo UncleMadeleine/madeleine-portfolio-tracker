@@ -193,8 +193,10 @@ def _month_rule() -> str:
 
 def resample_ohlc(df: pd.DataFrame, period: str) -> pd.DataFrame:
     """日线重采样为周K (W-FRI) / 月K; open=首日开, high=最高, low=最低, close=末日收, volume=求和."""
-    if period == "daily" or df is None or df.empty:
-        return clean_ohlc(df)
+    if df is None or df.empty:
+        return pd.DataFrame(columns=list(OHLC_COLUMNS))
+    if period == "daily":
+        return df.reset_index(drop=True)[list(OHLC_COLUMNS)]
     rule = "W-FRI" if period == "weekly" else _month_rule()
     out = (
         clean_ohlc(df)

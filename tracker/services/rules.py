@@ -44,10 +44,11 @@ def parse_thresholds(entry: dict) -> dict[str, float | None]:
 
 def evaluate_thresholds(
     thresholds: Mapping[str, float | None], price: float
-) -> tuple[str, dict[str, float]]:
+) -> tuple[str, dict[str, float | None]]:
     """按两级上下限判定状态并计算距离 (%); 无阈值时返回 (STATUS_WITHIN, {}).
 
     判定顺序: 上限 II > 上限 I > 下限 II > 下限 I, 边界取等号 (含)。
+    dist 仅包含已设置阈值对应的距离键, 调用方须用 .get() 安全访问。
     """
     upper_1 = thresholds.get("upper_1")
     upper_2 = thresholds.get("upper_2")
@@ -63,7 +64,7 @@ def evaluate_thresholds(
         status = STATUS_LOWER_1
     else:
         status = STATUS_WITHIN
-    dist: dict[str, float] = {}
+    dist: dict[str, float | None] = {}
     if upper_1 is not None and price > 0:
         dist["dist_upper_1_pct"] = (upper_1 / price - 1) * 100
     if upper_2 is not None and price > 0:

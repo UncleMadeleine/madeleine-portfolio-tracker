@@ -101,6 +101,9 @@ def get_cached(symbols: list[str], ttl: int = CACHE_TTL) -> dict[str, "Quote"]:
     """返回缓存命中的 Symbol→Quote 字典, 未命中者不在返回值中."""
     from .prices import Quote
 
+    if not symbols:
+        return {}
+
     _ensure_db()
     now = time.time()
     hits: dict[str, Quote] = {}
@@ -173,8 +176,8 @@ def info() -> dict:
         "ohlc_ttl_seconds": OHLC_TTL,
         "ohlc_total": ohlc_total,
         "ohlc_fresh": ohlc_fresh,
-        "oldest_at": oldest,
-        "newest_at": newest,
+        "oldest_at": oldest or 0.0,
+        "newest_at": newest or 0.0,
         "size_bytes": size,
     }
 

@@ -13,6 +13,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import importer
+from .cli._common import _finish_with_error
 from .storage import PORTFOLIO_PATH as DEFAULT_PORTFOLIO
 
 
@@ -20,9 +21,7 @@ def run_sync(args) -> None:
     try:
         rows, skipped = importer.collect_ibkr(mode=getattr(args, "mode", None))
     except Exception as e:
-        print(f"❌ {e}")
-        print("请确认 IB Gateway 已登录运行, 且 API 连接已启用 (ibkr.json 配置的 mode/port)。")
-        raise SystemExit(1)
+        _finish_with_error(f"{e} (请确认 IB Gateway 已登录运行, 且 API 连接已启用)")
 
     mode = (
         importer.MODE_APPEND

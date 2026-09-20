@@ -89,7 +89,7 @@ INDEX_CATALOG: dict[str, dict[str, str]] = {
 def index_key(symbol: str) -> str | None:
     """IX.<KEY> → 指数 key; 非指数代码返回 None (供 type 推导提前短路)."""
     s = str(symbol).strip().upper()
-    if not s.startswith("IX.") or "." not in s[3:]:
+    if not s.startswith("IX.") or len(s) <= 3:
         return None
     key = s[3:]
     return key if key in INDEX_CATALOG else None
@@ -103,19 +103,10 @@ def index_label(key: str) -> str:
 # 便士计价符号: LSE 以 GBp/GBX 报价 (1 GBP = 100 便士), 实际数据源大小写混用。
 # 判定规则: 代码形如 <G><B><p|X> (任意大小写) 即便士; 精确的 "GBP" 是英镑本体,
 # 若把它当便士会在 GBP 报价上再除 100, 结果偏小 100 倍。
-def index_key(symbol: str) -> str | None:
-    """IX.<KEY> → 指数 key; 非指数代码返回 None (供 type 推导提前短路)."""
-    s = str(symbol).strip().upper()
-    if not s.startswith("IX.") or len(s) <= 3:
-        return None
-    key = s[3:]
-    return key if key in INDEX_CATALOG else None
-
-
 def is_pence(currency: str) -> bool:
     """该币种代码是否为 LSE 便士计价 (GBp/GBX 任意大小写; 精确 "GBP" 不算)."""
     s = str(currency).strip()
-    if s == "GBP":
+    if not s or s == "GBP":
         return False
     return s.upper() in ("GBP", "GBX")
 

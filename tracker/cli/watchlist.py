@@ -142,7 +142,7 @@ def watchlist_list(args) -> None:
     )
     wview, wissues = build_watchlist_view(entries, quotes)
     trig = triggered_entries(wview)
-    issues = [f"{k}: {v}" for k, v in errors.items()] + wissues + notes
+    issues = [f"{k}: {v}" for k, v in errors.items()] + wissues
     if args.json:
         _print_json(
             {
@@ -150,6 +150,7 @@ def watchlist_list(args) -> None:
                 "watchlist": _records(wview),
                 "triggered": _records(trig),
                 "issues": issues,
+                "notes": notes,
             }
         )
         return
@@ -176,6 +177,8 @@ def watchlist_list(args) -> None:
         print("\n自选中暂无阈值触发。")
     for i in issues:
         print(f"  ⚠ {i}")
+    for n in notes:
+        print(f"  ℹ {n}")
 
 
 def cmd_watchlist(args) -> None:

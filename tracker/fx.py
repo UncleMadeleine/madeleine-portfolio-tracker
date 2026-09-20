@@ -64,6 +64,7 @@ def _cfets_table() -> dict[str, float]:
     df = with_timeout(ak.fx_spot_quote, _CFETS_TIMEOUT)
     out: dict[str, float] = {"CNY": 1.0}
     if df is None or df.empty:
+        _cfets_cache = (now, out)
         return out
     for _, row in df.iterrows():
         parts = str(row["货币对"]).split("/")

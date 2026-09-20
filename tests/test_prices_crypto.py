@@ -246,7 +246,7 @@ def test_hl_quote_non_usd_quote_skips(monkeypatch):
     called = []
     monkeypatch.setattr(crypto_mod, "_hl_post", lambda payload: called.append(payload))
 
-    with pytest.raises(ValueError, match="非USD系计价"):
+    with pytest.raises(ValueError, match="计价货币 BTC 非 USD 系"):
         crypto_mod._hl_quote(parse("ETH-BTC"))
     assert called == []
 

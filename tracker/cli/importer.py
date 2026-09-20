@@ -19,13 +19,14 @@ from ._common import _finish_with_error, _print_json
 
 def _collect(args: argparse.Namespace) -> tuple[list[dict], list[str], str]:
     """按来源采集持仓, 返回 (rows, skipped, 来源标签)."""
-    if args.source == "ibkr":
+    source = getattr(args, "source", None)
+    if source == "ibkr":
         try:
             rows, skipped = importer.collect_ibkr(mode=args.mode)
         except Exception as e:
             _finish_with_error(f"{e} (请确认 IB Gateway 已登录运行, 且 API 连接已启用)")
         return rows, skipped, "IBKR 账户持仓"
-    if args.source == "wallet":
+    if source == "wallet":
         try:
             rows, skipped, raw = importer.collect_wallet(
                 args.chain.lower(),

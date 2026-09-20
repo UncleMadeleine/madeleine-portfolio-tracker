@@ -144,7 +144,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_p.add_argument("--portfolio", default=str(DEFAULT_PORTFOLIO), help="portfolio.json 路径")
     p_p.add_argument("--quantity", type=float, help="持仓数量 (add 时必填)")
     p_p.add_argument("--avg-cost", type=float, help="成本价 (当地货币, add 时可选)")
-    p_p.add_argument("--currency", help="基础货币 (set-base 时指定, 如 CNY/USD)")
+    p_p.add_argument("--currency", help="基础货币 (set-base 时指定, 如 CNY/USD); 也可作为位置参数: set-base USD")
     p_p.add_argument("--json", action="store_true", help="输出 JSON")
     p_p.set_defaults(func=cmd_portfolio)
 

@@ -1,12 +1,13 @@
 """加密货币 provider: 完全独立走加密货币 API, 不与股票数据源混用.
 
 优先 Binance 公开 REST API (spot, 无需 key), 失败降级 Hyperliquid 永续合约价
-(仅 USD 系计价代码, markPx 与现货价存在基差), 再降级 yfinance 直连
-(OpenBB equity.quote 对 crypto 缺 last_price, 必须直连)。
+(仅 USD 系计价代码, markPx  与现货价存在基差), 再降级 yfinance 直连
+(OpenBB equity.quote 对 crypto 缺 last_price, 必须直连).
 代码规范: BASE-QUOTE (BTC-USD / ETH-USDT), 计价货币见 symbols._CRYPTO_QUOTES。
 """
 from __future__ import annotations
 
+import json
 import time
 
 import pandas as pd
@@ -44,8 +45,10 @@ def _hl_post(payload: dict):
 def _hl_coin(p: ParsedSymbol) -> str:
     """BTC-USD → HL 永续币种名; 非法代码或 HL 不该接管的计价货币抛 ValueError."""
     base, _, quote = p.yahoo.rpartition("-")
-    if not base or not _hl_usd_quote(quote):
-        raise ValueError(f"{p.yahoo}: 非USD系计价, 不适用 Hyperliquid 永续源")
+    if not base:
+        raise ValueError(f"{p.yahoo}: 无效代码")
+    if not _hl_usd_quote(quote):
+        raise ValueError(f"{p.yahoo}: 计价货币 {quote} 非 USD 系, 不适用 Hyperliquid")
     return base.upper()
 
 
@@ -127,7 +130,11 @@ def _get(path: str, params: dict | None = None):
         try:
             r = req.get(f"{host}{path}", params=params, timeout=_HTTP_TIMEOUT)
             if r.status_code == 200:
-                return r.json()
+                try:
+                    return r.json()
+                except (json.JSONDecodeError, ValueError):
+                    last_err = RuntimeError(f"Binance {host} 返回非 JSON (状态码 200 但内容异常)")
+                    continue
             last_err = RuntimeError(f"Binance {r.status_code}: {r.text[:120]}")
         except Exception as e:  # noqa: BLE001 - 尝试下一个域名
             last_err = e
@@ -257,12 +264,6 @@ def _yf_history(p: ParsedSymbol, start_date: str, end_date: str | None) -> pd.Da
     df = df.dropna(subset=["close"])
     keep = [c for c in ("date", "open", "high", "low", "close", "volume") if c in df.columns]
     return df[keep]
-
-
-def _obb():
-    from openbb import obb
-
-    return obb
 
 
 class CryptoProvider(Provider):

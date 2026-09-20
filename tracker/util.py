@@ -18,8 +18,13 @@ def with_timeout(fn, timeout: float, *args, **kwargs):
         try:
             fut.set_result(fn(*args, **kwargs))
         except BaseException as e:  # noqa: BLE001 - 透传给调用方
-            fut.set_exception(e)
+            if not fut.done():
+                fut.set_exception(e)
 
     t = threading.Thread(target=_runner, daemon=True)
     t.start()
-    return fut.result(timeout=timeout)
+    try:
+        return fut.result(timeout=timeout)
+    except Exception:
+        fut.cancel()
+        raise

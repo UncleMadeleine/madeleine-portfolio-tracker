@@ -325,9 +325,9 @@ def ibkr_to_yahoo(
         return f"{sym}.L"
     # 加拿大: Yahoo 后缀按交易所区分 (CSE=.CN, Cboe Canada/NEO=.NE, TSXV=.V, 其余=.TO);
     # 必须在 ccy == "CAD" 兜底之前判定, 否则所有加元持仓都会被当成 TSX
-    if exkey in ("CSE", "CNQ"):
+    if exkey in ("CSE",):
         return f"{sym}.CN"
-    if exkey == "NEOEX":
+    if exkey in ("NEO", "NEOEX"):
         return f"{sym}.NE"
     if ccy == "CAD" or exkey in ("TSE", "TSXV", "TSX", "CDGX"):
         return f"{sym}.V" if exkey == "TSXV" else f"{sym}.TO"

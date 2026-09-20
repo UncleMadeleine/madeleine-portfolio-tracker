@@ -11,14 +11,8 @@ from .. import prices
 from ..analytics import build_view, summarize
 from ..fx import get_fx_rates
 from ..symbols import parse
+from ..cli._common import _records
 from .watchlist import build_watchlist_view, entries_for, triggered_entries
-
-
-def _records(df: pd.DataFrame) -> list[dict]:
-    """DataFrame -> records, NaN/NaT 转 None 便于 JSON 序列化."""
-    if df is None or df.empty:
-        return []
-    return df.astype(object).where(pd.notnull(df), None).to_dict(orient="records")
 
 
 def _series_to_dict(s) -> dict[str, float]:

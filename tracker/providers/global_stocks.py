@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+import threading
+
 import pandas as pd
 
 from ..symbols import Market, ParsedSymbol, is_pence, normalize
@@ -14,6 +16,7 @@ from .base import Provider, Quote
 _AK_TIMEOUT = 6.0
 # 按市场独立缓存: 某市场接口失败不影响其它市场, 且失败不占用 TTL (可重试)
 _ak_spot_cache: dict[Market, tuple[float, pd.DataFrame]] = {}
+_ak_spot_lock = threading.Lock()
 _AK_SPOT_TTL = 60
 
 
@@ -132,13 +135,13 @@ def _yahoo_history(p: ParsedSymbol, start_date: str, end_date: str | None = None
 def _ak_spot(market: Market) -> pd.DataFrame:
     global _ak_spot_cache
     now = pd.Timestamp.now().timestamp()
-    hit = _ak_spot_cache.get(market)
-    if hit and now - hit[0] < _AK_SPOT_TTL:
-        return hit[1]
+    with _ak_spot_lock:
+        hit = _ak_spot_cache.get(market)
+        if hit and now - hit[0] < _AK_SPOT_TTL:
+            return hit[1]
     ak = _ak()
     fetcher = {
         Market.CN: ak.stock_zh_a_spot_em,
-        # 北交所同属东财「沪深京 A 股」快照, 缺此映射会让 .BJ 永远降级 yfinance
         Market.BJ: ak.stock_zh_a_spot_em,
         Market.HK: ak.stock_hk_spot_em,
     }.get(market)
@@ -148,7 +151,10 @@ def _ak_spot(market: Market) -> pd.DataFrame:
         df = with_timeout(fetcher, _AK_TIMEOUT)
     except Exception:
         return pd.DataFrame()
-    _ak_spot_cache[market] = (now, df)
+    if df.empty:
+        return df
+    with _ak_spot_lock:
+        _ak_spot_cache[market] = (now, df)
     return df
 
 
@@ -193,10 +199,15 @@ def _akshare_history(p: ParsedSymbol, start_date: str, end_date: str | None = No
             kwargs["end_date"] = end
         df = ak.stock_zh_a_hist(**kwargs)
     else:
-        kwargs = {"symbol": p.ak_code, "period": "daily", "start_date": start, "adjust": "qfq"}
+        ak_code = p.ak_code or ""
+        if not ak_code or not ak_code.isdigit():
+            raise ValueError(f"{p.yahoo}: 无效港股代码 (ak_code={ak_code!r})")
+        kwargs = {"symbol": ak_code, "period": "daily", "start_date": start, "adjust": "qfq"}
         if end:
             kwargs["end_date"] = end
         df = ak.stock_hk_hist(**kwargs)
+        if df.empty:
+            raise RuntimeError(f"{p.yahoo}: akshare HK history 无数据")
     df = df.rename(
         columns={
             "日期": "date",

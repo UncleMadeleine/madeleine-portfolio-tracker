@@ -18,20 +18,14 @@ _ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from tracker import charting, prices  # noqa: E402
+from tracker import prices  # noqa: E402
 from tracker.analytics import build_view, summarize  # noqa: E402
 from tracker.fx import get_fx_rates  # noqa: E402
 from tracker.symbols import parse  # noqa: E402
-from tracker import storage
+from tracker import storage  # noqa: E402
 from tracker.ui import settings as S  # noqa: E402
 from tracker.ui.import_page import render_import_page  # noqa: E402
-from tracker.ui.kline_page import (  # noqa: E402
-    cached_kline,
-    normalize_or_none,
-    render_compare_chart,
-    render_kline_controls,
-    set_quick_symbols,
-)
+from tracker.ui.kline_page import render_kline_page, set_quick_symbols  # noqa: E402
 from tracker.ui.index_page import render_index_page  # noqa: E402
 from tracker.ui.settings_page import render_settings_page  # noqa: E402
 from tracker.services.watchlist import (  # noqa: E402
@@ -393,12 +387,11 @@ if st.session_state.app_page == "portfolio":
             for i in issues:
                 st.write(f"- {i}")
 
-    tab1, tab4, tab2, tab3 = st.tabs(
+    tab1, tab4, tab2 = st.tabs(
         [
             ":material/table_chart: 持仓明细",
             f":material/visibility: 自选观察{' :red[🔔' + str(len(trig_all)) + ']' if len(trig_all) else ''}",
             ":material/donut_large: 资产配置",
-            ":material/show_chart: 走势对比",
         ]
     )
     with tab1:
@@ -471,78 +464,6 @@ if st.session_state.app_page == "portfolio":
                 ),
                 width="stretch",
             )
-
-    with tab3:
-        chart_symbols = list(
-            dict.fromkeys(
-                (view["symbol"].tolist() if not view.empty else [])
-                + (wview_all["symbol"].tolist() if not wview_all.empty else [])
-            )
-        )
-        c1, c2, c3, c4 = st.columns([4, 1, 1, 1], vertical_alignment="bottom")
-        sel_raw = c1.multiselect(
-            "对比代码",
-            chart_symbols,
-            default=chart_symbols[:2],
-            accept_new_options=True,
-            key="compare_sel",
-            placeholder="选择持仓/自选, 或直接输入任意代码 (如 NVDA)",
-        )
-        cmp_months = c2.selectbox(
-            "范围", [3, 6, 12, 24, 36], index=2,
-            format_func=lambda m: f"近 {m} 个月", key="compare_months",
-        )
-        cmp_period = c3.selectbox(
-            "周期", ["daily", "weekly", "monthly"], index=0,
-            format_func=lambda v: charting.PERIOD_LABELS[v], key="compare_period",
-        )
-        norm = c4.toggle("归一化 (起点=100)", value=True, key="compare_norm")
-
-        sel, bad = [], []
-        for s in sel_raw:
-            y = normalize_or_none(s)
-            (sel if y is not None else bad).append(y if y is not None else s)
-        sel = list(dict.fromkeys(sel))
-        if bad:
-            st.error(f"无法识别: {', '.join(bad)}")
-        if not sel:
-            st.info("选择持仓/自选代码, 或直接输入任意代码 (如 NVDA · 600519.SS) 开始对比。")
-        else:
-            frames = {}
-            with st.spinner(f"拉取 {len(sel)} 只代码近 {cmp_months} 个月 K线..."):
-                for s in sel:
-                    try:
-                        d = cached_kline(s, cmp_months, prefer_akshare)
-                        if d.empty:
-                            st.warning(f"{s}: 无有效K线数据")
-                        else:
-                            frames[s] = d
-                    except Exception as e:
-                        st.warning(f"{s}: {e}")
-            if frames:
-                render_compare_chart(
-                    charting.compare_payload(
-                        frames, normalize=norm, period=cmp_period,
-                        green_up=S.green_up(),
-                    ),
-                    height=560,
-                )
-                chg = []
-                for sym, d in frames.items():
-                    dd = charting.resample_ohlc(d, cmp_period) if cmp_period != "daily" else d
-                    if len(dd) >= 2:
-                        pct = float(dd["close"].iloc[-1]) / float(dd["close"].iloc[0]) - 1
-                        up_tag, down_tag = S.up_down_tags()
-                        chg.append(
-                            f"{sym} :{up_tag}[{pct:+.2%}]" if pct >= 0 else f"{sym} :{down_tag}[{pct:+.2%}]"
-                        )
-                if chg:
-                    st.markdown("区间涨跌: " + " · ".join(chg))
-                if norm:
-                    st.caption(
-                        "各代码按自身区间首个收盘归一化 (=100); 不同市场按各自交易日绘制, "
-                        "拖动平移 / 滚轮缩放, 悬停查看当日各代码取值。"
-                    )
 
     with tab4:
         if not watch.get("watchlist"):
@@ -629,6 +550,6 @@ elif st.session_state.app_page == "settings":
     render_settings_page()
 
 elif st.session_state.app_page == "kline":
-    render_kline_controls(prefer_akshare=prefer_akshare)
+    render_kline_page(prefer_akshare)
 elif st.session_state.app_page == "index":
     render_index_page()

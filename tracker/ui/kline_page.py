@@ -131,6 +131,78 @@ def render_compare_chart(data: dict, *, height: int = 560) -> None:
     _KLINE_CHART(key="compare_chart", data=data, height=height)
 
 
+def render_compare_controls(prefer_akshare: bool, quick_symbols: list[str]) -> None:
+    """多股走势对比 (K线子功能): 任意代码同坐标系折线对比, 输入驱动无提交也拉取.
+
+    代码候选 = 持仓/自选 (quick_symbols) + 自由输入; 数据复用 cached_kline。
+    """
+    chart_symbols = list(dict.fromkeys(quick_symbols))
+    c1, c2, c3, c4 = st.columns([4, 1, 1, 1], vertical_alignment="bottom")
+    sel_raw = c1.multiselect(
+        "对比代码",
+        chart_symbols,
+        default=chart_symbols[:2],
+        accept_new_options=True,
+        key="compare_sel",
+        placeholder="选择持仓/自选, 或直接输入任意代码 (如 NVDA)",
+    )
+    cmp_months = c2.selectbox(
+        "范围", [3, 6, 12, 24, 36], index=2,
+        format_func=lambda m: f"近 {m} 个月", key="compare_months",
+    )
+    cmp_period = c3.selectbox(
+        "周期", ["daily", "weekly", "monthly"], index=0,
+        format_func=lambda v: charting.PERIOD_LABELS[v], key="compare_period",
+    )
+    norm = c4.toggle("归一化 (起点=100)", value=True, key="compare_norm")
+
+    sel, bad = [], []
+    for s in sel_raw:
+        y = normalize_or_none(s)
+        (sel if y is not None else bad).append(y if y is not None else s)
+    sel = list(dict.fromkeys(sel))
+    if bad:
+        st.error(f"无法识别: {', '.join(bad)}")
+    if not sel:
+        st.info("选择持仓/自选代码, 或直接输入任意代码 (如 NVDA · 600519.SS) 开始对比。")
+        return
+    frames = {}
+    with st.spinner(f"拉取 {len(sel)} 只代码近 {cmp_months} 个月 K线..."):
+        for s in sel:
+            try:
+                d = cached_kline(s, cmp_months, prefer_akshare)
+                if d.empty:
+                    st.warning(f"{s}: 无有效K线数据")
+                else:
+                    frames[s] = d
+            except Exception as e:
+                st.warning(f"{s}: {e}")
+    if frames:
+        render_compare_chart(
+            charting.compare_payload(
+                frames, normalize=norm, period=cmp_period,
+                green_up=settings.green_up(),
+            ),
+            height=560,
+        )
+        chg = []
+        for sym, d in frames.items():
+            dd = charting.resample_ohlc(d, cmp_period) if cmp_period != "daily" else d
+            if len(dd) >= 2:
+                pct = float(dd["close"].iloc[-1]) / float(dd["close"].iloc[0]) - 1
+                up_tag, down_tag = settings.up_down_tags()
+                chg.append(
+                    f"{sym} :{up_tag}[{pct:+.2%}]" if pct >= 0 else f"{sym} :{down_tag}[{pct:+.2%}]"
+                )
+        if chg:
+            st.markdown("区间涨跌: " + " · ".join(chg))
+        if norm:
+            st.caption(
+                "各代码按自身区间首个收盘归一化 (=100); 不同市场按各自交易日绘制, "
+                "拖动平移 / 滚轮缩放, 悬停查看当日各代码取值。"
+            )
+
+
 def _render_symbol_search() -> None:
     """搜索框: 输入代码/名称片段 → 模糊匹配本地缓存 → 下拉选择自动填入代码.
 
@@ -286,7 +358,6 @@ def render_kline_controls(prefer_akshare: bool) -> None:
 
     st.session_state["kline_current_symbol"] = yahoo
     st.session_state["kline_last_months"] = kmonths
-
     if st.session_state["kline_full_df"] is None:
         try:
             with st.spinner(f"拉取 {yahoo} K线..."):
@@ -357,3 +428,13 @@ def render_kline_controls(prefer_akshare: bool) -> None:
             finally:
                 st.session_state["kline_fetching"] = False
                 st.rerun()
+
+def render_kline_page(prefer_akshare: bool) -> None:
+    """「K线」页入口: 单只查询 + 多股对比 两个子功能 (st.tabs)."""
+    tab_single, tab_compare = st.tabs(
+        [":material/candlestick_chart: 单只查询", ":material/show_chart: 走势对比"]
+    )
+    with tab_compare:
+        render_compare_controls(prefer_akshare, quick_symbols())
+    with tab_single:
+        render_kline_controls(prefer_akshare)

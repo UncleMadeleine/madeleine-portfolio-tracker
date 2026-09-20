@@ -9,10 +9,10 @@ import pandas as pd
 import streamlit as st
 
 from . import settings
-from .kline_page import _KLINE_CHART, render_kline_view
+from .kline_page import render_kline_view
 
 from tracker import charting, prices
-from tracker.symbols import INDEX_CATALOG, index_label, parse
+from tracker.symbols import INDEX_CATALOG, index_label
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -22,7 +22,7 @@ def cached_index_kline(symbol: str, months: int):
 
 
 def render_index_page() -> None:
-    """指数K线查询页: 分组选择指数 → 拉取 → 渲染 (输入驱动, 无提交不取数)."""
+    """指数K线查询页: 分组选择指数 → 切换即拉取渲染 (无按钮, 选择驱动)."""
     st.markdown("### :material/insights: 指数K线")
 
     groups = {
@@ -67,23 +67,6 @@ def render_index_page() -> None:
 
     key = labels[chosen]
     yahoo = f"IX.{key}"
-    # 提交判定: 指数/范围变化或点「查询」; 首次渲染只记录当前值, 不预加载
-    if "index_last_symbol" not in st.session_state:
-        st.session_state["index_last_symbol"] = yahoo
-        st.session_state["index_last_months"] = imonths
-    submitted = (
-        st.session_state["index_last_symbol"] != yahoo
-        or st.session_state["index_last_months"] != imonths
-    )
-    if st.button("查询", type="primary", icon=":material/search:", key="index_query"):
-        submitted = True
-    if not submitted and st.session_state.get("index_current_symbol") is None:
-        st.info("选择指数后点「查询」获取数据 —— 页面启动不会预加载任何指数K线。")
-        return
-
-    if submitted:
-        st.session_state["index_last_symbol"] = yahoo
-        st.session_state["index_last_months"] = imonths
     st.session_state["index_current_symbol"] = yahoo
 
     try:

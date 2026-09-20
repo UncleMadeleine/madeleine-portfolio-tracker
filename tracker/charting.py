@@ -411,6 +411,9 @@ export default function (component) {
   var root = component.parentElement;
   var el = root.querySelector('.lwc-chart');
   var legend = root.querySelector('.lwc-legend');
+  // data 变化时 Streamlit 会重新执行本函数但不调用上一次的 cleanup (仅 unmount 时调用),
+  // 残留的旧 chart 实例会叠层并遮挡新图 — 挂载前先清空容器。
+  while (el.firstChild) { el.removeChild(el.firstChild); }
   if (CFG.height) { el.parentElement.style.height = CFG.height + 'px'; }
   var LC = window.LightweightCharts;
   var chart = LC.createChart(el, CFG.options);
@@ -729,10 +732,16 @@ def kline_payload(
         for t, o, h, lo, c in zip(dates, df["open"], df["high"], df["low"], df["close"])
     ]
     up_vol, down_vol = _rgba(up, 0.55), _rgba(down, 0.55)
-    vols = [
-        {"time": t, "value": float(v), "color": up_vol if c >= o else down_vol}
-        for t, v, c, o in zip(dates, df["volume"], df["close"], df["open"])
-    ]
+    # 指数等标的无成交量语义 (全 0): 省略成交量序列, 副图不渲染全零柱
+    has_volume = bool((df["volume"] != 0).any())
+    vols = (
+        [
+            {"time": t, "value": float(v), "color": up_vol if c >= o else down_vol}
+            for t, v, c, o in zip(dates, df["volume"], df["close"], df["open"])
+        ]
+        if has_volume
+        else []
+    )
     ma_series = []
     for i, (n, srs) in enumerate(compute_ma(df, mas).items()):
         data = [

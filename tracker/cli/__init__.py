@@ -12,8 +12,7 @@
   kline     K线蜡烛图 (交互式 HTML + 摘要, 含成交量/均线/周月K)
   import    统一持仓导入 (ibkr / wallet / file, 追加合并或 --overwrite 覆盖)
   sync      从 IB Gateway 账户同步持仓 (已并入 import ibkr, 保留兼容)
-  import-wallet 从链上地址导入加密资产 (已并入 import wallet, 保留兼容)
-  cache     行情磁盘缓存管理 (info / clear)
+  index-kline 宏观/风险指数K线 (IX.<KEY>, 独立于股票 kline)
 
 所有子命令均支持 --json 输出机器可读结果, 便于脚本与 AI 消费。
 """
@@ -31,6 +30,7 @@ from .export import cmd_export
 from .fx import cmd_fx
 from .history import cmd_history
 from .kline import cmd_kline
+from .index_kline import cmd_index_kline
 from .portfolio import cmd_portfolio
 from .quote import cmd_quote
 from .report import cmd_report
@@ -258,6 +258,33 @@ def build_parser() -> argparse.ArgumentParser:
     p_k.add_argument("--json", action="store_true", help="输出 JSON 数据 (不生成图表)")
     p_k.set_defaults(func=cmd_kline)
 
+    # ---- index-kline ----
+    p_ik = sub.add_parser(
+        "index-kline", help="宏观/风险指数K线 (IX.<KEY>, 独立于股票 kline)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "示例:\n"
+            "  tracker index-kline IX.DXY --months 12\n"
+            "  tracker index-kline IX.VIX --period weekly --json\n"
+            "  tracker index-kline IX.CSI300 --list\n"
+        ),
+    )
+    p_ik.add_argument("symbol", nargs="?", default=None,
+                      help="指数代码 IX.<KEY>, 如 IX.DXY / IX.VIX / IX.CSI300")
+    p_ik.add_argument("--list", action="store_true", help="列出已收录指数目录")
+    p_ik.add_argument("--months", type=int, default=12, help="拉取近 N 个月日线")
+    p_ik.add_argument("--period", choices=["daily", "weekly", "monthly"], default="daily",
+                      help="K线周期 (默认日K)")
+    p_ik.add_argument("--ma", default="5,20,60", help="均线周期, 逗号分隔 (如 5,10,20,60)")
+    p_ik.add_argument("--volume", action="store_true", help="显示成交量副图 (指数一般无意义)")
+    p_ik.add_argument("--refresh", action="store_true", help="忽略缓存强制刷新")
+    p_ik.add_argument("--output", "-o", default=None,
+                      help="HTML 输出路径 (默认 data/index_kline_<代码>.html)")
+    p_ik.add_argument("--open", dest="open_browser", action="store_true",
+                      help="生成后自动在浏览器打开")
+    p_ik.add_argument("--json", action="store_true", help="输出 JSON 数据 (不生成图表)")
+    p_ik.set_defaults(func=cmd_index_kline)
+
     # ---- import ----
     p_imp = sub.add_parser(
         "import", help="统一持仓导入 (ibkr / wallet / file)",
@@ -403,6 +430,11 @@ def main(argv=None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        if getattr(args, "list", False) and args.command == "index-kline":
+            from .index_kline import print_index_catalog
+
+            print_index_catalog()
+            return
         args.func(args)
     except CorruptDataError as e:
         _finish_with_error(str(e))

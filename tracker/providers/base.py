@@ -81,6 +81,8 @@ def resolve(type_or_market) -> Provider:
     ).upper()
     if t == "CRYPTO":
         return PROVIDERS["crypto"]
+    if t == "INDEX":
+        return PROVIDERS["index"]
     if t in ("CN", "BJ"):
         return PROVIDERS["cn"]
     if t in ("GLOBAL", "US", "HK", "DE", "GB", "CA", "AU"):

@@ -33,7 +33,7 @@ __all__ = [
     "get_quotes",
     "get_history",
     "get_ohlc",
-    "parse",
+    "get_index_history",
 ]
 
 
@@ -71,4 +71,33 @@ def get_ohlc(
     df = clean_ohlc(get_history(symbol, months=months, start_date=start_date, end_date=end_date, prefer_akshare=prefer_akshare, use_ibkr=use_ibkr))
     if not df.empty and not is_range:
         cache_mod.set_ohlc_cached(p.yahoo, months, df)
+    return df
+
+
+def get_index_history(
+    symbol: str,
+    months: int = 12,
+    refresh: bool = False,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> pd.DataFrame:
+    """指数日线 K 线 (IX.<KEY>): 独立于股票 get_ohlc, 缓存键加 index: 前缀隔离.
+
+    指数域不参与 IBKR 批量行情, 故无 use_ibkr / prefer_akshare 参数;
+    中国指数固定 akshare 优先, 其余 yfinance 主源 (源链见 providers/index.py).
+    """
+    from .charting import clean_ohlc
+
+    p = parse(symbol)
+    if p.type != "index":
+        raise ValueError(f"{p.yahoo}: 不是指数代码 (指数代码规范 IX.<KEY>, 如 IX.DXY)")
+    key = f"index:{p.yahoo}"
+    is_range = start_date is not None or end_date is not None
+    if not refresh and not is_range:
+        cached = cache_mod.get_ohlc_cached(key, months)
+        if cached is not None:
+            return cached
+    df = clean_ohlc(get_history(symbol, months=months, start_date=start_date, end_date=end_date))
+    if not df.empty and not is_range:
+        cache_mod.set_ohlc_cached(key, months, df)
     return df

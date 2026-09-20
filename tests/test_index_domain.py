@@ -1,0 +1,140 @@
+"""指数域 (IX.<KEY>) 测试: 代码解析/路由隔离/provider 源链/K线门面 (不联网)."""
+from __future__ import annotations
+
+import pandas as pd
+import pytest
+
+from tracker import prices
+from tracker.providers import PROVIDERS, provider_for
+from tracker.providers.base import resolve
+from tracker.providers.index import IndexProvider
+from tracker.symbols import INDEX_CATALOG, Market, index_key, index_label, parse, type_for_symbol
+
+
+# ---------- 代码解析 ----------
+
+
+def test_index_symbols_parse_to_index_domain():
+    p = parse("IX.DXY")
+    assert p.yahoo == "IX.DXY"
+    assert p.market is Market.INDEX
+    assert p.type == "index"
+    assert p.currency == "USD"
+
+
+def test_index_parse_case_insensitive():
+    assert parse("ix.vix").yahoo == "IX.VIX"
+    assert parse(" Ix.Csi300 ").yahoo == "IX.CSI300"
+
+
+def test_index_cn_entries_expose_akshare_code():
+    assert parse("IX.CSI300").ak_code == "000300" or INDEX_CATALOG["CSI300"]["ak"] == "sh000300"
+
+
+def test_unknown_index_key_rejected():
+    with pytest.raises(ValueError, match="未收录的指数代码"):
+        parse("IX.NOPE")
+
+
+def test_type_for_symbol_routes_index_exclusively():
+    assert type_for_symbol("IX.NDX") == "index"
+    # 指数与股票/加密货币互不误判
+    assert type_for_symbol("AAPL") == "global"
+    assert type_for_symbol("600519.SS") == "cn"
+    assert type_for_symbol("BTC-USD") == "crypto"
+
+
+def test_index_symbols_never_leak_into_stock_domains():
+    for key in INDEX_CATALOG:
+        assert parse(f"IX.{key}").type == "index"
+        assert parse(f"IX.{key}").market is Market.INDEX
+
+
+# ---------- provider 路由 ----------
+
+
+def test_resolve_routes_index_domain():
+    assert resolve("index").name == "index"
+    assert isinstance(resolve("index"), IndexProvider)
+    assert isinstance(provider_for(Market.INDEX), IndexProvider)
+    assert PROVIDERS["index"] is resolve("index")
+
+
+def test_index_provider_source_chains():
+    provider = IndexProvider()
+    # 中国指数: akshare 优先 (与 A 股域数据源惯例一致)
+    cn = parse("IX.SSE")
+    chains = provider.history_sources(cn, "2025-01-01", None)
+    assert chains[0].__name__ == "ak"      # akshare 新浪源优先
+    assert chains[1].__name__ == "yf"
+    # 目录中无 ak 代码且不在美股新浪表的指数: 仅 yfinance
+    vix = parse("IX.VIX")
+    assert len(provider.history_sources(vix, "2025-01-01", None)) == 1
+
+
+def test_index_provider_rejects_quote():
+    with pytest.raises(NotImplementedError):
+        IndexProvider().fetch_quote(parse("IX.DXY"), prefer_first=False)
+
+
+# ---------- K线门面 ----------
+
+
+def _fake_history(symbol, months=12, start_date=None, end_date=None, **kw):
+    idx = pd.date_range("2024-01-01", periods=30, freq="D")
+    return pd.DataFrame(
+        {
+            "date": idx,
+            "open": 1.0,
+            "high": 1.2,
+            "low": 0.9,
+            "close": [1.0 + i * 0.01 for i in range(30)],
+            "volume": 0.0,  # 指数无成交量
+        }
+    )
+
+
+def test_kline_payload_keeps_real_volume():
+    from tracker.charting import clean_ohlc, kline_payload
+
+    df = _fake_history("AAPL")
+    df["volume"] = 100.0
+    payload = kline_payload(df, "AAPL", show_volume=True)
+    assert len(payload["volume"]) == len(clean_ohlc(df))
+
+
+def test_get_index_history_rejects_non_index_symbol():
+    with pytest.raises(ValueError, match="不是指数代码"):
+        prices.get_index_history("AAPL")
+
+
+def test_get_index_history_routes_through_index_provider(monkeypatch):
+    calls = []
+
+    def fake_get_history(symbol, months=12, start_date=None, end_date=None, **kw):
+        calls.append(symbol)
+        return _fake_history(symbol)
+
+    monkeypatch.setattr("tracker.prices.get_history", fake_get_history)
+    df = prices.get_index_history("IX.DXY", months=6, refresh=True)
+    assert calls == ["IX.DXY"]
+    assert list(df.columns) == ["date", "open", "high", "low", "close", "volume"]
+
+
+# ---------- 绘图: 零成交量省略 ----------
+
+
+def test_kline_payload_omits_all_zero_volume():
+    from tracker.charting import kline_payload
+
+    payload = kline_payload(_fake_history("IX.DXY"), "IX.DXY", show_volume=True)
+    assert payload["volume"] == []
+
+
+def test_kline_payload_keeps_real_volume():
+    from tracker.charting import clean_ohlc, kline_payload
+
+    df = _fake_history("AAPL")
+    df["volume"] = 100.0
+    payload = kline_payload(df, "AAPL", show_volume=True)
+    assert len(payload["volume"]) == len(clean_ohlc(df))

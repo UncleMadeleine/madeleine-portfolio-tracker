@@ -32,6 +32,7 @@ from tracker.ui.kline_page import (  # noqa: E402
     render_kline_controls,
     set_quick_symbols,
 )
+from tracker.ui.index_page import render_index_page  # noqa: E402
 from tracker.ui.settings_page import render_settings_page  # noqa: E402
 from tracker.services.watchlist import (  # noqa: E402
     build_watchlist_view,
@@ -67,6 +68,7 @@ def cached_fx(base: str, currencies: tuple[str, ...]):
 _PAGES = {
     "portfolio": ":material/pie_chart: 组合",
     "kline": ":material/candlestick_chart: K线",
+    "index": ":material/insights: 指数K线",
     "import": ":material/download: 导入",
     "settings": ":material/settings: 设置",
 }
@@ -628,3 +630,5 @@ elif st.session_state.app_page == "settings":
 
 elif st.session_state.app_page == "kline":
     render_kline_controls(prefer_akshare=prefer_akshare)
+elif st.session_state.app_page == "index":
+    render_index_page()

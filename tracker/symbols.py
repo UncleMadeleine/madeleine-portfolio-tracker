@@ -15,6 +15,7 @@ class Market(str, Enum):
     AU = "AU"
     BJ = "BJ"
     CRYPTO = "CRYPTO"
+    INDEX = "INDEX"
 
 
 MARKET_META: dict[Market, dict[str, str]] = {
@@ -27,6 +28,7 @@ MARKET_META: dict[Market, dict[str, str]] = {
     Market.AU: {"label": "澳股", "currency": "AUD"},
     Market.BJ: {"label": "北交所", "currency": "CNY"},
     Market.CRYPTO: {"label": "加密货币", "currency": "USD"},
+    Market.INDEX: {"label": "指数", "currency": "USD"},
 }
 
 _SUFFIX_MARKET: dict[str, Market] = {
@@ -52,9 +54,64 @@ _SUFFIX_MARKET: dict[str, Market] = {
     "AX": Market.AU,
 }
 
+# 宏观/风险指数目录: 与股票域完全隔离的独立代码规范 (IX.<KEY>).
+# yf: Yahoo Finance 全球指数代码; ak: akshare 新浪指数代码 (stock_zh_index_daily /
+# index_us_stock_sina, 缺省 = key 本身). currency 仅作展示 (指数无交割货币).
+INDEX_CATALOG: dict[str, dict[str, str]] = {
+    # -- 风险/波动率 --
+    "VIX":  {"name": "恐慌指数 VIX", "yf": "^VIX", "currency": "USD"},
+    "VIX3M": {"name": "VIX 3个月", "yf": "^VIX3M", "currency": "USD"},
+    "MOVE": {"name": "美债波动率 MOVE", "yf": "^MOVE", "currency": "USD"},
+    # -- 美元与利率 --
+    "DXY":  {"name": "美元指数", "yf": "DX-Y.NYB", "currency": "USD"},
+    "US10Y": {"name": "美债 10 年收益率", "yf": "^TNX", "currency": "%"},
+    "US02Y": {"name": "美债 2 年收益率", "yf": "^IRX", "currency": "%"},
+    # -- 美股指数 --
+    "SPX":  {"name": "标普 500", "yf": "^GSPC", "currency": "点"},
+    "NDX":  {"name": "纳斯达克 100", "yf": "^NDX", "currency": "点"},
+    "DJI":  {"name": "道琼斯工业", "yf": "^DJI", "currency": "点"},
+    "RUT":  {"name": "罗素 2000", "yf": "^RUT", "currency": "点"},
+    # -- 全球指数 --
+    "DAX":  {"name": "德国 DAX", "yf": "^GDAXI", "currency": "点"},
+    "FTSE": {"name": "英国富时 100", "yf": "^FTSE", "currency": "点"},
+    "N225": {"name": "日经 225", "yf": "^N225", "currency": "点"},
+    "HSI":  {"name": "恒生指数", "yf": "^HSI", "currency": "点"},
+    # -- 中国指数 (akshare 新浪源, 与 A 股域数据源惯例一致) --
+    "CSI300": {"name": "沪深 300", "ak": "sh000300", "currency": "点"},
+    "CSI500": {"name": "中证 500", "ak": "sh000905", "currency": "点"},
+    "CSI1000": {"name": "中证 1000", "ak": "sh000852", "currency": "点"},
+    "SSE":   {"name": "上证指数", "ak": "sh000001", "currency": "点"},
+    "SZSE":  {"name": "深证成指", "ak": "sz399001", "currency": "点"},
+    "CYB":   {"name": "创业板指", "ak": "sz399006", "currency": "点"},
+    "KECHUANG50": {"name": "科创 50", "ak": "sh000688", "currency": "点"},
+}
+
+def index_key(symbol: str) -> str | None:
+    """IX.<KEY> → 指数 key; 非指数代码返回 None (供 type 推导提前短路)."""
+    s = str(symbol).strip().upper()
+    if not s.startswith("IX.") or "." not in s[3:]:
+        return None
+    key = s[3:]
+    return key if key in INDEX_CATALOG else None
+
+
+def index_label(key: str) -> str:
+    """指数 key → 展示名 (如 DXY → 美元指数); 未知 key 原样返回."""
+    e = INDEX_CATALOG.get(key)
+    return e["name"] if e else key
+
 # 便士计价符号: LSE 以 GBp/GBX 报价 (1 GBP = 100 便士), 实际数据源大小写混用。
 # 判定规则: 代码形如 <G><B><p|X> (任意大小写) 即便士; 精确的 "GBP" 是英镑本体,
 # 若把它当便士会在 GBP 报价上再除 100, 结果偏小 100 倍。
+def index_key(symbol: str) -> str | None:
+    """IX.<KEY> → 指数 key; 非指数代码返回 None (供 type 推导提前短路)."""
+    s = str(symbol).strip().upper()
+    if not s.startswith("IX.") or len(s) <= 3:
+        return None
+    key = s[3:]
+    return key if key in INDEX_CATALOG else None
+
+
 def is_pence(currency: str) -> bool:
     """该币种代码是否为 LSE 便士计价 (GBp/GBX 任意大小写; 精确 "GBP" 不算)."""
     s = str(currency).strip()
@@ -135,6 +192,7 @@ def type_for_symbol(yahoo: str) -> str:
     global: 裸代码 (美股, 含 BRK-B 类别股) 与 .HK/.DE/.L/.TO/.AX 等全球股票后缀
     cn:     .SS/.SZ (沪深 A/B 股) 与 .BJ (北交所)
     crypto: BASE-QUOTE 连字符格式 (计价货币为法币/稳定币/主流币本位)
+    index:  IX.<KEY> 宏观/风险指数 (IX.DXY 美元指数 / IX.VIX 恐慌指数 ...)
 
     与 parse() 的判定语义完全一致: 单字母连字符 (BRK-B) 是美股类别代码,
     不是加密货币 —— 保证同一代码在任何路径下都不会路由到两个域。
@@ -149,17 +207,27 @@ def type_for_symbol(yahoo: str) -> str:
         # crypto (BASE-QUOTE, 计价货币为法币/稳定币) 与美股类别股 (单字母后缀)
         if not is_us_class and (base in _KNOWN_CRYPTO or quote in _CRYPTO_QUOTES):
             return "crypto"
-        return "global"
+    # 宏观/风险指数 (IX.<KEY>): 独立域, 与股票代码永不冲突 (IX 前缀 + 目录校验)
+    if index_key(s):
+        return "index"
     if "." in s:
         suffix = s.rsplit(".", 1)[1]
         if suffix in ("SS", "SZ", "BJ"):
             return "cn"
     return "global"
-
-
 def parse(symbol: str) -> ParsedSymbol:
+    # 宏观/风险指数: IX.<KEY> (独立域, 目录校验; 与股票代码永不冲突)
     yahoo = normalize(symbol)
+    ikey = index_key(yahoo)
+    if ikey:
+        return ParsedSymbol(
+            raw=symbol.strip(), yahoo=yahoo, market=Market.INDEX,
+            currency=INDEX_CATALOG[ikey]["currency"], type="index",
+        )
+
     # 加密货币: BTC-USD / ETH-EUR 等连字符格式 (Yahoo Finance crypto 行情)
+    if yahoo.startswith("IX."):
+        raise ValueError(f"未收录的指数代码: {symbol} (指数目录: {', '.join(INDEX_CATALOG)})")
     if "-" in yahoo and "." not in yahoo:
         base, _, quote = yahoo.rpartition("-")
         if quote in _CRYPTO_QUOTES:

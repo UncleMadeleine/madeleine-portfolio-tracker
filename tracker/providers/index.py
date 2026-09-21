@@ -36,12 +36,16 @@ def _catalog(p: ParsedSymbol) -> dict:
 
 
 def _slice_range(df: pd.DataFrame, start_date: str, end_date: str | None) -> pd.DataFrame:
-    """akshare 返回全量历史, 本地按 start/end 过滤 (升序)."""
+    """akshare 返回全量历史, 本地按 start/end 过滤 (升序).
+
+    end_date 为闭区间端点 (与调用方语义一致): 只取 <= end_date 的行,
+    不能再 +1 天, 否则结束日会多返回一根 K 线。
+    """
     out = df.copy()
     out["date"] = pd.to_datetime(out["date"]).dt.tz_localize(None)
     mask = out["date"] >= pd.Timestamp(start_date)
     if end_date:
-        mask &= out["date"] <= pd.Timestamp(end_date) + pd.Timedelta(days=1)
+        mask &= out["date"] <= pd.Timestamp(end_date)
     return out[mask].sort_values("date").reset_index(drop=True)
 
 

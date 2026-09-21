@@ -114,6 +114,12 @@ def _requests():
     return requests
 
 
+def _obb():
+    from openbb import obb
+
+    return obb
+
+
 def binance_pair(p: ParsedSymbol) -> str:
     """BTC-USD → BTCUSDT 形态的 Binance 交易对符号."""
     base, _, quote = p.yahoo.rpartition("-")

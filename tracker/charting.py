@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+import math
 from pathlib import Path
 
 import numpy as np
@@ -59,6 +60,8 @@ def clean_ohlc(df: pd.DataFrame) -> pd.DataFrame:
         out["volume"] = 0.0
     out["volume"] = pd.to_numeric(out["volume"], errors="coerce").fillna(0.0)
     out = out.dropna(subset=["date", "open", "high", "low", "close"])
+    # inf 与 NaN 一样会污染绘图/统计/JSON 序列化 (指标与畸形源数据均可产出)
+    out = out[np.isfinite(out[["open", "high", "low", "close"]]).all(axis=1)]
     body_hi = out[["open", "close"]].max(axis=1)
     body_lo = out[["open", "close"]].min(axis=1)
     ok = (
@@ -174,11 +177,15 @@ def calc_boll(df: pd.DataFrame, period: int = 20, std: float = 2.0) -> pd.DataFr
 
 
 def _to_line_data(dates: pd.Series, srs: pd.Series, precision: int = 6) -> list[dict]:
-    """将 pandas Series 转为 lightweight-charts line data [{time, value}, ...], 跳过 NaN."""
+    """将 pandas Series 转为 lightweight-charts line data [{time, value}, ...], 跳过 NaN/inf.
+
+    inf 不能被 pd.notna 拦下 (notna(inf) 为 True), 而 allow_nan=False 的 JSON
+    序列化会直接抛 TypeError, 故显式剔除。
+    """
     return [
         {"time": t, "value": round(float(v), precision)}
         for t, v in zip(dates, srs)
-        if pd.notna(v)
+        if pd.notna(v) and math.isfinite(float(v))
     ]
 
 

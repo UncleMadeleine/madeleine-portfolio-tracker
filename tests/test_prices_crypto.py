@@ -279,3 +279,29 @@ def test_crypto_quote_falls_back_to_hyperliquid(monkeypatch):
     quotes, errors, notes = get_quotes(["BTC-USD"])
     assert quotes["BTC-USD"].price == 61000.5
     assert errors == {}
+
+
+def test_crypto_yf_history_fallback_does_not_nameerror(monkeypatch):
+    """yfinance 历史降级: _obb 必须已定义 (缺失会让整条降级链 NameError 崩溃)."""
+    class FakeRes:
+        def to_dataframe(self):
+            return pd.DataFrame(
+                {
+                    "date": pd.to_datetime(["2026-01-01", "2026-01-02"]),
+                    "open": [1.0, 2.0], "high": [1.0, 2.0],
+                    "low": [1.0, 2.0], "close": [1.0, 2.0],
+                    "volume": [10.0, 20.0],
+                }
+            ).set_index("date")
+
+    class FakeObb:
+        class equity:
+            class price:
+                @staticmethod
+                def historical(**kw):
+                    return FakeRes()
+
+    monkeypatch.setattr(crypto_mod, "_obb", lambda: FakeObb)
+    df = crypto_mod._yf_history(parse("BTC-USD"), "2026-01-01", None)
+    assert list(df.columns) == ["date", "open", "high", "low", "close", "volume"]
+    assert len(df) == 2

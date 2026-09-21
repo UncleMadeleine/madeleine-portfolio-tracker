@@ -55,8 +55,8 @@ def cached_quotes(symbols: tuple[str, ...], prefer_akshare: bool, use_ibkr: bool
 
 
 @st.cache_data(ttl=600, show_spinner=False)
-def cached_fx(base: str, currencies: tuple[str, ...]):
-    return get_fx_rates(base, list(currencies))
+def cached_fx(base: str, currencies: tuple[str, ...], use_ibkr: bool = False):
+    return get_fx_rates(base, list(currencies), use_ibkr=use_ibkr)
 
 
 _PAGES = {
@@ -177,6 +177,13 @@ with st.sidebar:
                     }
                     for r in clean:
                         r.update(extra.get(r["symbol"], {}))
+                        # 手改过数量: 来源分量已与 quantity 不一致, 作废分量表
+                        # (否则下次钱包导入会把旧分量加回来, 数量虚增)
+                        q = r.get("quantity")
+                        q = float(q) if isinstance(q, (int, float)) else 0.0
+                        sq = r.pop("source_quantities", None)
+                        if isinstance(sq, dict) and sq and q != sum(float(v or 0) for v in sq.values()):
+                            r["import_source"] = r.get("import_source") or ""
                     storage.save_portfolio({"base_currency": base, "holdings": clean})
                     cached_quotes.clear()
                     cached_fx.clear()
@@ -307,7 +314,7 @@ if st.session_state.app_page == "portfolio":
             if key in quotes:
                 holding_currencies.add(quotes[key].currency)
         currencies = tuple(sorted(holding_currencies))
-        fx, fx_missing = cached_fx(base, currencies)
+        fx, fx_missing = cached_fx(base, currencies, use_ibkr)
         view, view_issues = build_view(holdings.to_dict("records"), quotes, fx)
         issues += view_issues + [f"汇率缺失: {c}" for c in fx_missing]
         summary = summarize(view)

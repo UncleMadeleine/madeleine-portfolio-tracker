@@ -124,6 +124,17 @@ def collect_wallet(
 # 合并与写入
 # ---------------------------------------------------------------------------
 
+def _source_quantities(row: dict) -> dict[str, float]:
+    """条目已有的各来源分量表; 兼容旧格式 (无 import_source → 记为空串来源)."""
+    sq = row.get("source_quantities")
+    if isinstance(sq, dict):
+        return {str(k): float(v or 0) for k, v in sq.items()}
+    src = str(row.get("import_source") or "")
+    if not src:
+        return {}
+    return {src: float(row.get("quantity") or 0)}
+
+
 def merge_holdings(
     existing: list[dict], rows: list[dict], mode: str = MODE_APPEND
 ) -> tuple[list[dict], dict[str, list[str]]]:
@@ -132,6 +143,10 @@ def merge_holdings(
     append:    已存在的代码更新 quantity (row 带 avg_cost 时一并更新, 否则保留原值),
                新代码追加到末尾
     overwrite: 忽略 existing, 全部由 rows 组成
+
+    多来源记账: 带 import_source 的行 (钱包导入) 在条目上维护
+    source_quantities {来源: 分量}, quantity 为各分量之和。同一来源重复导入
+    只替换该分量 (幂等, 不翻倍); 不同来源 (多链/多地址) 累加分量, 总量相加。
     """
     if mode not in IMPORT_MODES:
         raise ValueError(f"未知导入模式: {mode} (支持: {', '.join(IMPORT_MODES)})")
@@ -147,28 +162,41 @@ def merge_holdings(
     for r in normalized:
         sym = r["symbol"]
         key = _merge_key(r)
+        src = str(r.get("import_source") or "")
         if key in index:
             target = merged[index[key]]
-            target["quantity"] = r["quantity"]
             if "avg_cost" in r:
                 target["avg_cost"] = r["avg_cost"]
+            # 同来源幂等: 只替换该来源分量, 其它来源分量保留, 总量按分量重算
+            if src:
+                sq = _source_quantities(target)
+                sq[src] = float(r["quantity"] or 0)
+                target["source_quantities"] = sq
+                target["quantity"] = sum(sq.values())
+            else:
+                target["quantity"] = r["quantity"]
             stats["updated"].append(sym)
             continue
-        # 同代码但来源不同 (不同链/地址的钱包导入): 累加数量, 不覆盖
+        # 同代码但来源不同 (不同链/地址的钱包导入): 累加该来源分量, 不覆盖其它来源
         same = next(
             (
                 i for i, h in enumerate(merged)
-                if r.get("import_source") and _norm_sym(h.get("symbol", "")) == sym
+                if src and _norm_sym(h.get("symbol", "")) == sym
             ),
             None,
         )
         if same is not None:
-            merged[same]["quantity"] = (
-                float(merged[same].get("quantity") or 0) + float(r["quantity"] or 0)
-            )
+            target = merged[same]
+            sq = _source_quantities(target)
+            sq[src] = float(r["quantity"] or 0)
+            target["source_quantities"] = sq
+            target["quantity"] = sum(sq.values())
             stats["updated"].append(sym)
             continue
-        merged.append(r)
+        row = dict(r)
+        if src:
+            row["source_quantities"] = {src: float(r["quantity"] or 0)}
+        merged.append(row)
         index[key] = len(merged) - 1
         stats["added"].append(sym)
     return merged, stats

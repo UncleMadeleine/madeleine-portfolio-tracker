@@ -16,6 +16,8 @@ def cmd_index_kline(args) -> None:
 
     from .. import charting
 
+    if not args.symbol:
+        _finish_with_error("请指定指数代码 (IX.<KEY>), 如 index-kline IX.DXY; --list 查看目录")
     try:
         p = parse(args.symbol)
     except ValueError as e:

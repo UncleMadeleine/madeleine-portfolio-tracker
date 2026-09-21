@@ -50,6 +50,8 @@ def cmd_import_wallet(args: argparse.Namespace) -> None:
         _finish_with_error(str(e))
     except RuntimeError as e:
         _finish_with_error(f"RPC 查询失败: {e}")
+    except FileNotFoundError as e:
+        _finish_with_error(str(e))
 
     holdings = result.get("holdings", [])
     errors = result.get("errors", [])

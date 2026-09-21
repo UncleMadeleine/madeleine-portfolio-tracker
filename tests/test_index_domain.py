@@ -93,6 +93,24 @@ def test_get_quotes_routes_index_to_explicit_error(monkeypatch):
     assert all("无实时行情" in msg for msg in errors.values())
 
 
+def test_slice_range_end_date_is_inclusive_without_extra_day():
+    """end_date 为闭区间: 不许多返回结束日次日那根 K 线."""
+    from tracker.providers.index import _slice_range
+
+    df = pd.DataFrame(
+        {
+            "date": pd.date_range("2026-01-01", periods=5, freq="D"),
+            "open": [1.0] * 5, "high": [1.0] * 5,
+            "low": [1.0] * 5, "close": [1.0] * 5,
+        }
+    )
+    out = _slice_range(df, "2026-01-01", "2026-01-03")
+    assert [d.strftime("%Y-%m-%d") for d in out["date"]] == [
+        "2026-01-01", "2026-01-02", "2026-01-03",
+    ]
+    # 无 end_date: 取到最新
+    out2 = _slice_range(df, "2026-01-04", None)
+    assert len(out2) == 2
 
 
 # ---------- K线门面 ----------

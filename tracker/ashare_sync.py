@@ -21,6 +21,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import importer
+from .cli._common import _finish_with_error
 from .storage import PORTFOLIO_PATH as DEFAULT_PORTFOLIO
 from .symbols import type_for_symbol
 
@@ -154,7 +155,12 @@ def parse_positions_file(path: str | Path) -> tuple[list[dict], list[str]]:
 
 
 def run_sync(args) -> None:
-    rows, skipped = parse_positions_file(args.file)
+    try:
+        rows, skipped = parse_positions_file(args.file)
+    except FileNotFoundError as e:
+        _finish_with_error(str(e))
+    except (ValueError, RuntimeError) as e:
+        _finish_with_error(f"{args.file}: 解析失败 ({e})")
 
     mode = (
         importer.MODE_APPEND

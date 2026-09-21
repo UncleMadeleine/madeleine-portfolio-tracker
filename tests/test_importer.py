@@ -92,6 +92,42 @@ class TestMergeHoldings:
         merged, _ = importer.merge_holdings(existing, rows, mode="append")
         assert merged[0]["quantity"] == 100.0
 
+    def test_append_reimport_each_source_stays_idempotent(self):
+        """跨源累加后再导入任一来源: 只替换该来源分量, 总量不变 (不二次翻倍)."""
+        a = {"symbol": "USDT-USD", "quantity": 100.0, "type": "crypto",
+             "import_source": "wallet:eth:0xaaa"}
+        b = {"symbol": "USDT-USD", "quantity": 50.0, "type": "crypto",
+             "import_source": "wallet:bsc:0xbbb"}
+        merged, _ = importer.merge_holdings([dict(a)], [dict(b)], mode="append")
+        assert merged[0]["quantity"] == 150.0
+        # 重复导入 B: B 分量替换 50→50, 总量仍 150
+        merged, _ = importer.merge_holdings(merged, [dict(b)], mode="append")
+        assert merged[0]["quantity"] == 150.0
+        # 重复导入 A: A 分量替换 100→100, 总量仍 150
+        merged, _ = importer.merge_holdings(merged, [dict(a)], mode="append")
+        assert merged[0]["quantity"] == 150.0
+
+    def test_append_reimport_with_changed_balance_recomputes_total(self):
+        """来源余额变化 (链上转出) → 该分量更新, 其它来源分量保留."""
+        a = {"symbol": "USDT-USD", "quantity": 100.0, "type": "crypto",
+             "import_source": "wallet:eth:0xaaa"}
+        b = {"symbol": "USDT-USD", "quantity": 50.0, "type": "crypto",
+             "import_source": "wallet:bsc:0xbbb"}
+        merged, _ = importer.merge_holdings([dict(a)], [dict(b)], mode="append")
+        b_moved = dict(b, quantity=70.0)  # B 地址余额 50 → 70
+        merged, _ = importer.merge_holdings(merged, [b_moved], mode="append")
+        assert merged[0]["quantity"] == 170.0
+        # A 再导入不受 B 变化影响
+        merged, _ = importer.merge_holdings(merged, [dict(a)], mode="append")
+        assert merged[0]["quantity"] == 170.0
+
+    def test_append_plain_import_has_no_source_ledger(self):
+        """无 import_source 的普通导入 (IBKR/券商文件) 不写 source_quantities."""
+        merged, _ = importer.merge_holdings(
+            [], [{"symbol": "AAPL", "quantity": 10}], mode="append"
+        )
+        assert "source_quantities" not in merged[0]
+
 
 class TestApplyImport:
     def test_append_writes_and_backs_up(self, tmp_path):

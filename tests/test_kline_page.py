@@ -1,8 +1,8 @@
 """K线页面渲染门控测试 (AppTest, 不联网).
 
 自定义组件 (st.components.v2) 无法在 AppTest 中承载, 用桩替代 —— 这里验证的是
-「何时进入渲染分支」与双模式数据流: 滑动模式启动即渲染默认代码 + 拖到左缘自动
-向前扩展; 范围模式保持旧流程 (提交驱动)。
+「何时进入渲染分支」与双模式数据流: 滑动模式一次加载上市以来全量历史 (换代码
+重取, 参数只重绘); 范围模式保持旧流程 (提交驱动)。
 """
 from __future__ import annotations
 
@@ -69,60 +69,50 @@ def kline_app(monkeypatch):
 
     monkeypatch.setattr(prices, "get_ohlc", _fake_ohlc)
     monkeypatch.setattr(prices, "get_history", _fake_ohlc)
+    # 组件桩必须在 AppTest 首次 run 前打上: 滑动模式空代码不渲染, 但后续测试在
+    # run() 前已 patch 的话, from_string 的初始 run 就可能走到取数渲染路径。
     monkeypatch.setattr(kline_page, "_KLINE_CHART", lambda **kw: {"stub": True})
     kline_page.cached_kline.clear()
-    kline_page.cached_kline_years.clear()
+    kline_page.cached_kline_all.clear()
     app = AppTest.from_string(_SCRIPT, default_timeout=30).run()
     app._calls = calls  # 供断言取数次数
     return app
 
 
 def test_slide_mode_renders_default_symbol(kline_app):
-    """滑动模式 (默认): 输入代码即渲染深度历史, 无需点「查询」; 空代码只提示."""
+    """滑动模式 (默认): 输入代码即渲染上市以来历史, 无需点「查询」; 空代码只提示."""
     kline_app.text_input[1].set_value("AAPL").run()
     assert len(kline_app.metric) == 4
 
 
-def test_slide_mode_idle_rerun_keeps_chart(kline_app):
-    """滑动模式: need_more 空转 rerun 与参数变化都不清图表、不重取数."""
+def test_slide_mode_param_change_redraws_not_refetches(kline_app):
+    """滑动模式: 空转 rerun 与周期/均线变化都只重绘, 不清图表、不重取数."""
     kline_app.text_input[1].set_value("AAPL").run()
     assert len(kline_app.metric) == 4
-    kline_app.run()  # 组件 setValue(need_more) 触发的空转 rerun
+    kline_app.run()  # 无交互 rerun (如其他组件事件) 不重取数
     assert len(kline_app.metric) == 4
     assert kline_app._calls["n"] == 1
-    kline_app.selectbox[1].set_value("weekly").run()  # 切周期只重绘
+    kline_app.selectbox[0].set_value("weekly").run()  # 切周期只重绘
     assert len(kline_app.metric) == 4
     assert kline_app._calls["n"] == 1
 
 
-def test_slide_mode_depth_change_refetches(kline_app):
-    """滑动模式: 切换加载深度重新取数, 图表保持可见."""
+def test_slide_mode_symbol_change_refetches(kline_app):
+    """滑动模式: 换代码重新取数, 图表保持可见."""
     kline_app.text_input[1].set_value("AAPL").run()
     assert len(kline_app.metric) == 4
-    kline_app.selectbox[0].set_value(5).run()  # 加载深度: 近10年 → 近5年
+    kline_app.text_input[1].set_value("600519.SS").run()
     assert len(kline_app.metric) == 4
     assert kline_app._calls["n"] == 2
 
 
-def test_slide_mode_need_more_extends(kline_app):
-    """滑动模式: 组件 need_more (拖近左缘) → 向前补数据后仍渲染, 取数次数增加."""
+def test_slide_mode_full_history_single_fetch(kline_app):
+    """滑动模式: 全量语义 = 一次取数渲染, 无渐进补数 (need_more 机制已删)."""
     kline_app.text_input[1].set_value("AAPL").run()
-    kline_app.selectbox[0].set_value(2).run()  # 加载深度: 近2年 → fake 数据(2014起)更早可扩展
     assert len(kline_app.metric) == 4
-    base_calls = kline_app._calls["n"]
-    # 直接以组件视角模拟: 组件 setTriggerValue("need_more", {seq, qid}) →
-    # mount 返回 {"need_more": {seq, qid}} (AppTest 无法触发真实 JS 回调)
-    orig = kline_page.render_kline_view
-    kline_page.render_kline_view = (
-        lambda *a, **kw: {"need_more": {"seq": 1234.0, "qid": kw.get("query_id")}}
-    )
-    try:
-        kline_app.run()
-    finally:
-        kline_page.render_kline_view = orig
-    kline_app.run()  # 恢复渲染桩后重跑: AppTest 中 st.rerun 的重跑仍走 patch 函数
-    assert kline_app._calls["n"] > base_calls  # 触发了一次向前补数
-    assert len(kline_app.metric) == 4
+    assert kline_app._calls["n"] == 1
+    kline_app.run()
+    assert kline_app._calls["n"] == 1
 
 
 def test_range_mode_requires_query_or_symbol_change(kline_app):
@@ -144,7 +134,7 @@ def test_range_mode_param_change_redraws_not_refetches(kline_app):
     kline_app.multiselect[0].set_value([5, 10]).run()
     assert len(kline_app.metric) == 4
     assert kline_app._calls["n"] == base
-    kline_app.selectbox[1].set_value("weekly").run()
+    kline_app.selectbox[1].set_value("weekly").run()  # 周期切换只重绘 (selectbox[0]=范围)
     assert len(kline_app.metric) == 4
     assert kline_app._calls["n"] == base
     kline_app.selectbox[0].set_value(6).run()  # 范围: 12 → 6 个月

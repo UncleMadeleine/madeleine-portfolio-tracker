@@ -1,8 +1,7 @@
 """「K线」页面: 任意代码实时查询 (持仓/自选 + 自由输入).
 
 两种查询模式:
-- 滑动 (默认): 一次加载深度历史 (默认近10年, 可选上市以来), 图表内连续拖动 /
-  缩放全程纯前端; 拖近数据左缘自动向前补更早数据, 直到上市首日。
+- 滑动 (默认): 一次加载上市以来全量历史, 图表内连续拖动 / 缩放全程纯前端。
 - 范围: 先选范围再点「查询」的旧流程 (兜底, 与滑动模式同代码不同数据路径)。
 """
 from __future__ import annotations
@@ -19,8 +18,6 @@ from tracker.symbols import parse
 # 顶部快捷代码 (来自当前持仓与自选, 不预取任何行情数据, 仅展示代码名)
 KLINE_SYMBOLS_KEY = "kline_quick_symbols"
 
-# 滑动模式每次向前扩展的历史年数 (约 500 根日K, 一次网络请求可接受)
-_EXTEND_YEARS = 2
 # TradingView lightweight-charts 组件 (st.components.v2, JS 不过 DOMPurify):
 # 拖动平移 / 滚轮·捏合缩放 / 触控板双指手势, 券商 App 通用交互.
 _KLINE_CHART = st.components.v2.component(
@@ -46,10 +43,11 @@ def cached_kline(symbol: str, months: int, prefer_akshare: bool):
     return prices.get_ohlc(symbol, months=months, prefer_akshare=prefer_akshare)
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
-def cached_kline_years(symbol: str, years: int, prefer_akshare: bool):
-    """按年数取K线 (滑动模式深度加载): months=years*12, 缓存键独立于月份参数."""
-    return prices.get_ohlc(symbol, months=years * 12, prefer_akshare=prefer_akshare)
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_kline_all(symbol: str, prefer_akshare: bool):
+    """上市以来全量日K (滑动模式唯一取数路径, 缓存键独立于范围模式月份参数)."""
+    return prices.get_ohlc(symbol, months=1200, prefer_akshare=prefer_akshare)
+
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -85,13 +83,9 @@ def render_kline_view(
     green_up: bool,
     currency: str | None,
     indicators: dict | None = None,
-    has_more: bool = False,
     query_id: str | None = None,
 ) -> dict | None:
-    """K线图 + 摘要指标 (供 K线页面与 CLI 内嵌使用, 纯渲染无取数).
-
-    返回组件交互结果 (need_more / qid / seq), 供滑动模式扩展数据使用.
-    """
+    """K线图 + 摘要指标 (供 K线页面与 CLI 内嵌使用, 纯渲染无取数)."""
     if period != "daily":
         kdf = charting.resample_ohlc(kdf, period)
     # lightweight-charts (TradingView 内核): 拖动平移 / 滚轮·捏合缩放 /
@@ -102,7 +96,6 @@ def render_kline_view(
             kdf, symbol, currency=currency, mas=tuple(mas),
             show_volume=show_volume, green_up=green_up, period=period,
             indicators=indicators,
-            has_more=has_more,
             query_id=query_id,
         ),
         height=680,
@@ -259,14 +252,10 @@ def _render_symbol_search() -> None:
     )
 
 
-def _slide_query_id(yahoo: str, depth_years: int) -> str:
-    """滑动模式查询标识: 代码|深度. 变化时组件丢弃视口锚点回退初始区间."""
-    return f"{yahoo}|{depth_years}"
 
 
 def _render_slide_mode(
     yahoo: str,
-    kdepth: int,
     kperiod: str,
     kmas: list[int],
     kvol: bool,
@@ -274,34 +263,24 @@ def _render_slide_mode(
     indicators: dict,
     prefer_akshare: bool,
 ) -> None:
-    """滑动模式: 一次深度加载 + 组件内无限拖动 (拖近左缘自动补更早历史).
+    """滑动模式: 一次拉取上市以来全量历史, 图表内无限拖动 (纯前端, 不再取数).
 
-    - kdepth>0: 首次加载近 kdepth 年; kdepth==0 (上市以来): 一次拉全量, 不再扩展。
-    - 数据集存 session_state (kline_slide_df); 组件 need_more 时按最早日期向前
-      补 EXTEND_YEARS 年, 直到成功新增 0 根 (到上市首日, 置 has_more=False 收口)。
-    - 周期/均线/指标/成交量变化只重绘, 不重新取数。
+    - 数据集存 session_state (kline_slide_df); 周期/均线/指标/成交量变化只重绘。
     """
-    qid = _slide_query_id(yahoo, kdepth)
     state_key = "kline_slide_df"
     state_qid_key = "kline_slide_qid"
 
+    qid = yahoo
     qid_changed = st.session_state.get(state_qid_key) != qid
     if qid_changed:
         st.session_state[state_key] = None
         st.session_state[state_qid_key] = qid
-        st.session_state["kline_slide_exhausted"] = False
-        st.session_state["kline_slide_seq"] = None
 
     df_all: pd.DataFrame | None = st.session_state.get(state_key)
-    first_load = df_all is None  # 本轮是否刚拉过首次数据 (need_more 同轮到达也允许扩展)
-    if first_load:
+    if df_all is None:
         try:
-            with st.spinner(f"拉取 {yahoo} K线 ({'上市以来' if kdepth == 0 else f'近 {kdepth} 年'})..."):
-                kdf = (
-                    cached_kline_years(yahoo, 50, prefer_akshare)  # 50 年≈全历史兜底
-                    if kdepth == 0
-                    else cached_kline_years(yahoo, kdepth, prefer_akshare)
-                )
+            with st.spinner(f"拉取 {yahoo} 上市以来K线..."):
+                kdf = cached_kline_all(yahoo, prefer_akshare)
         except Exception as e:
             st.warning(f"{yahoo}: {e}")
             return
@@ -317,56 +296,14 @@ def _render_slide_mode(
     except ValueError:
         kcur = None
 
-    result = render_kline_view(
+    render_kline_view(
         df_all, yahoo, period=kperiod, mas=kmas,
         show_volume=kvol, green_up=kgreen, currency=kcur,
         indicators=indicators or None,
-        has_more=kdepth != 0,
         query_id=qid,
     )
 
-    # 拖近左缘 → 向前补数据 (rerun 进入本分支); 已到上市首日 (exhausted) 时不扩展。
-    # 组件用 setTriggerValue("need_more", {seq, qid}) 上报 → result.need_more = {seq, qid}
-    more = result if isinstance(result, dict) else None
-    trigger = more.get("need_more") if more else None
-    if not isinstance(trigger, dict):
-        return
-    if trigger.get("qid") != qid:
-        return
-    if st.session_state.get("kline_slide_exhausted"):
-        return
-    last_seq = st.session_state.get("kline_slide_seq")
-    seq = trigger.get("seq", 0)
-    if last_seq is not None and seq <= last_seq:
-        return
-    st.session_state["kline_slide_seq"] = seq
 
-    cur_first = df_all["date"].min()
-    before_date = (cur_first + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-    fetch_start = (cur_first - pd.Timedelta(days=365 * _EXTEND_YEARS)).strftime("%Y-%m-%d")
-    try:
-        with st.spinner(f"正在加载更早数据 ({fetch_start} 之前)..."):
-            older_df = prices.get_ohlc(
-                yahoo,
-                start_date=fetch_start,
-                end_date=before_date,
-                prefer_akshare=prefer_akshare,
-            )
-    except Exception as e:
-        st.warning(f"加载更早历史失败: {e}")
-        return
-    older_df = charting.clean_ohlc(older_df) if older_df is not None else older_df
-    if older_df is None or older_df.empty:
-        st.session_state["kline_slide_exhausted"] = True
-        st.toast("已加载到最早历史数据。")
-        return
-    combined = charting.clean_ohlc(pd.concat([older_df, df_all], ignore_index=True))
-    if len(combined) <= len(df_all):
-        st.session_state["kline_slide_exhausted"] = True
-        st.toast("已加载到最早历史数据。")
-        return
-    st.session_state[state_key] = combined
-    st.rerun()
 
 
 def render_kline_controls(prefer_akshare: bool) -> None:
@@ -386,16 +323,12 @@ def render_kline_controls(prefer_akshare: bool) -> None:
     )
     kmode = st.segmented_control(
         "查询模式", ["滑动", "范围"], default="滑动", key="kline_mode",
-        help="滑动: 一次加载深度历史, 图表内连续拖动, 拖到左缘自动补更早数据; "
+        help="滑动: 一次加载上市以来全量历史, 图表内连续拖动/缩放; "
         "范围: 先选范围再查询 (兜底模式)",
     )
     ksym = (ksym or "").strip().upper()
     if kmode == "滑动":
-        kdepth = c2.selectbox(
-            "加载深度", [2, 5, 10, 20, 0], index=2,
-            format_func=lambda y: "上市以来" if y == 0 else f"近 {y} 年",
-            key="kline_depth",
-        )
+        kdepth = None  # 滑动模式固定上市以来, 无范围选择
     else:
         kdepth = c2.selectbox(
             "范围", [3, 6, 12, 24, 36], index=2,
@@ -467,11 +400,9 @@ def render_kline_controls(prefer_akshare: bool) -> None:
     if yahoo is None:
         return
 
-    # 两种模式共享「已查询过」状态: 任一模式下渲染过图表 (kline_queried),
-    # 切换模式后用当前 ksym+kdepth 直接取数渲染, 不再要求重新提交。
     if kmode == "滑动":
         _render_slide_mode(
-            yahoo, kdepth, kperiod, kmas, kvol, kgreen, indicators, prefer_akshare,
+            yahoo, kperiod, kmas, kvol, kgreen, indicators, prefer_akshare,
         )
         return
     # ---- 范围模式 (旧流程兜底) ----

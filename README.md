@@ -24,7 +24,7 @@ OpenBB Portfolio Tracker 是一款**本地优先**的投资组合追踪工具，
 - **多币种持仓追踪** — 自动汇率换算，统一基础货币展示
 - **自选股价格阈值提醒** — 两级上限/下限，触发分级，距离预测
 - **IBKR 行情接入** — TWS / IB Gateway 实时快照，自动回退
-- **K 线蜡烛图** — 日K / 周K / 月K，MA 均线，成交量，MACD / RSI / KDJ / 布林带，无限拖动加载更早历史
+- **K 线蜡烛图** — 日K / 周K / 月K，MA 均线，成交量，MACD / RSI / KDJ / 布林带，滑动模式默认加载上市以来全量历史
 - **宏观/风险指数K线** — 独立 IX.<KEY> 代码规范（美元指数 / VIX 恐慌指数 / 沪深 300 等），独立页面与 `index-kline` 子命令，独立 provider 源链
 - **多股对比** — 任意代码同坐标系折线对比，归一化（起点=100）跨币种跨量级比较
 - **Streamlit 可视化页面** — 组合明细 / 资产配置 / 自选提醒 / K线查询（含多股走势对比）/ 指数K线 / 设置
@@ -202,7 +202,7 @@ K线页支持两种输入方式：
 - **蜡烛图 + 成交量副图 + MA 均线**（默认 MA5/20/60，可自定义），默认红涨绿跌（设置页可切国际配色）
 - **技术指标** — MACD / RSI / KDJ / 布林带，多选叠加，周期参数可调
 - **拖动 = 平移**（带惯性滚动），**滚轮/捏合 = 缩放时间轴**，触控板双指横滑平移、双指纵向/捏合缩放
-- **无限拖动** — 向左拖到头自动加载更早历史（按年分段拉取，视窗位置保持）
+- **滑动模式一次加载上市以来全量历史** — 图表内拖动/缩放全程纯前端，不触发取数；另有「范围」模式按月窗口兜底
 - 十字光标 + 顶部 OHLC/涨跌/量/均线信息栏；价格轴随可见区间自动缩放；副图分隔线可拖拽；双击轴复位
 - **非交易日断轴**：周末/节假日不出空隙，图形连续
 - **日K / 周K / 月K** 一键切换（周K 按 W-FRI 对齐）
@@ -262,7 +262,7 @@ python -m tracker.cli kline 0700.HK --period weekly --open  # 周K + 自动打�
 ```
 tracker/ui/           Streamlit 页面包（streamlit run tracker/ui/app.py）
 ├── app.py              主页（组合：持仓编辑/明细/配置/自选提醒）
-├── kline_page.py       「K线」页面（搜索框 + lightweight-charts 组件 + 无限拖动 + 多股走势对比）
+├── kline_page.py       「K线」页面（搜索框 + lightweight-charts 组件 + 上市以来全量滑动 + 多股走势对比）
 ├── index_page.py       「指数K线」页面（IX.<KEY> 分组下拉, 独立于股票 K线页）
 ├── import_page.py      「导入」页面（IBKR 账户 / 链上钱包 / 券商文件, 追加合并或覆盖）
 ├── settings_page.py    「设置」页面（配色 / 数据源 / 基础货币）
@@ -484,7 +484,7 @@ A **local-first** portfolio tracker supporting **A-shares / B-shares / Beijing S
 - **Multi-currency portfolio tracking** — automatic FX conversion, unified base currency
 - **Watchlist with price threshold alerts** — two-level upper/lower thresholds, severity levels, distance prediction
 - **IBKR integration** — TWS / IB Gateway snapshots + position sync, automatic fallback
-- **K-line charts** — daily/weekly/monthly, MA overlays, volume, MACD/RSI/KDJ/Bollinger, infinite drag-back loading
+- **K-line charts** — daily/weekly/monthly, MA overlays, volume, MACD/RSI/KDJ/Bollinger; slide mode loads full listing history by default
 - **Macro/risk index K-lines** — dedicated `IX.<KEY>` symbol space (USD index, VIX, CSI 300, ...), separate page & `index-kline` subcommand, dedicated provider source chain
 - **Multi-symbol comparison** — same-coordinate overlay, normalized to 100
 - **Unified import pipeline** — IBKR account / EVM wallet (5 chains) / A-share broker CSV-Excel file, each with append-merge or overwrite mode (auto .bak backup); same logic drives the Streamlit「导入」page

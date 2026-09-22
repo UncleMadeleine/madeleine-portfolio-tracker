@@ -1,262 +1,312 @@
 """股票搜索模块测试 (纯函数, 不依赖网络)."""
 import pytest
 
-from tracker.search import SymbolEntry, _cn_suffix, _match, _score, search_symbols
-
-
-# ---------- A股代码 → 交易所后缀 ----------
-
-
-@pytest.mark.parametrize(
-    "code, suffix",
-    [
-        ("600519", "SS"),  # 沪市主板
-        ("688981", "SS"),  # 科创板
-        ("000001", "SZ"),  # 深市主板
-        ("300750", "SZ"),  # 创业板
-        ("002594", "SZ"),  # 中小板
-        ("900902", "SS"),  # 沪市B股
-        ("200012", "SZ"),  # 深市B股
-        ("830799", "BJ"),  # 北交所
-        ("430047", "BJ"),  # 北交所
-    ],
+from tracker.providers.base import SymbolEntry
+from tracker.providers.em_suggest import (
+    em_code_to_yahoo,
+    normalize_suggest_row,
+    suggest_merged,
+    suggest_raw,
 )
-def test_cn_suffix(code, suffix):
-    assert _cn_suffix(code) == suffix
+from tracker.search import search_grouped, search_symbols
 
 
-# ---------- 评分函数 ----------
+# ---------- 东财 suggest 底层封装 ----------
 
 
-def test_score_exact_code():
-    assert _score("AAPL", "AAPL", "APPLE INC") == 1000
+def _em_row(code, name, stype):
+    return {"Code": code, "Name": name, "SecurityTypeName": stype}
 
 
-def test_score_prefix_code():
-    assert _score("AA", "AAPL", "APPLE INC") == 500
+def test_normalize_suggest_row_filters_junk():
+    assert normalize_suggest_row(_em_row("00700", "腾讯控股", "港股")) == ("00700", "港股")
+    # 只做形态校验; 域过滤 (债券/基金等) 是 provider 的职责
+    assert normalize_suggest_row(_em_row("109988", "22河南75", "债券")) == ("109988", "债券")
+    assert normalize_suggest_row({"Code": "", "Name": "x", "SecurityTypeName": "港股"}) is None
+    assert normalize_suggest_row({"Code": "60 01", "Name": "x", "SecurityTypeName": "沪A"}) is None
 
 
-def test_score_substring_code():
-    # 代码子串 (200) + 名称子串 (150): "pl" 同时在 "aapl" 和 "apple inc" 中
-    assert _score("PL", "AAPL", "APPLE INC") == 200 + 150
+def test_em_code_mapping():
+    assert em_code_to_yahoo("00700", "港股") == "0700.HK"
+    assert em_code_to_yahoo("600519", "沪A") == "600519.SS"
+    assert em_code_to_yahoo("920799", "京A") == "920799.BJ"
+    assert em_code_to_yahoo("200012", "深B") == "200012.SZ"
+    assert em_code_to_yahoo("AAPL", "美股") == "AAPL"
 
 
-def test_score_exact_name():
-    # 名称精确匹配 (800) 高于代码子串 (200+150)
-    assert _score("apple inc", "AAPL", "APPLE INC") == 800
+def test_suggest_merged_pads_digits(monkeypatch):
+    """纯数字查询补零二次请求 (700 → 00700), 行按内容去重。"""
+    import tracker.providers.em_suggest as em
+
+    def fake_raw(q):
+        if q == "700":
+            return [_em_row("600700", "*ST数码", "沪A")]
+        if q == "00700":
+            return [_em_row("00700", "腾讯控股", "港股")]
+        return None
+
+    monkeypatch.setattr(em, "suggest_raw", fake_raw)
+    res = suggest_merged("700")
+    assert res is not None
+    rows, failed = res
+    assert not failed
+    assert {r["Code"] for r in rows} == {"600700", "00700"}
 
 
-def test_score_combined_code_and_name():
-    # 代码精确匹配 (1000); "aapl" 不在 "apple inc" 中, 名称不加分
-    assert _score("aapl", "AAPL", "APPLE INC") == 1000
+def test_suggest_merged_none_on_total_failure(monkeypatch):
+    import tracker.providers.em_suggest as em
+
+    monkeypatch.setattr(em, "suggest_raw", lambda q: None)
+    assert suggest_merged("腾讯") is None
 
 
-def test_score_no_match():
-    assert _score("XYZ", "AAPL", "APPLE INC") == 0
-
-
-# ---------- 模糊匹配 ----------
+# ---------- GlobalStocksProvider.search (IBKR → yfinance → 代码直查/本地目录) ----------
 
 
 @pytest.fixture
-def sample_entries():
-    return [
-        SymbolEntry("AAPL", "苹果", "美股"),
-        SymbolEntry("600519.SS", "贵州茅台", "A股"),
-        SymbolEntry("000001.SZ", "平安银行", "A股"),
-        SymbolEntry("0700.HK", "腾讯控股", "港股"),
-        SymbolEntry("AAP", "苹果公司", "美股"),
-        SymbolEntry("601318.SS", "中国平安", "A股"),
-    ]
+def no_ibkr(monkeypatch):
+    """IBKR Gateway 不在线 (默认环境): search_matches 返回 None 触发降级。"""
+    import tracker.ibkr as ibkr_mod
+
+    monkeypatch.setattr(ibkr_mod, "search_matches", lambda q, cfg=None: None)
 
 
-def test_match_by_name_chinese(sample_entries):
-    res = _match(sample_entries, "茅台", limit=5)
-    assert len(res) == 1
-    assert res[0].code == "600519.SS"
-    assert res[0].name == "贵州茅台"
+def test_global_search_yf_english_name(monkeypatch, no_ibkr):
+    """yfinance 主源: 搜 Coinbase → COIN 美股第一。"""
+    import tracker.providers.global_stocks as gs
+    from tracker.providers import PROVIDERS
+
+    monkeypatch.setattr(
+        gs, "_yf_search",
+        lambda q: [
+            {"symbol": "COIN", "name": "Coinbase Global, Inc."},
+            {"symbol": "COIN.TO", "name": "COINBASE CDR (CAD HEDGED)"},
+        ],
+    )
+    res = PROVIDERS["global"].search("Coinbase", limit=5)
+    assert res[0].code == "COIN"
+    assert res[0].market == "美股" and res[0].type == "global"
+    assert any(e.code == "COIN.TO" for e in res)  # 加股也在 global 域
 
 
-def test_match_by_name_ambiguous(sample_entries):
-    res = _match(sample_entries, "苹果", limit=5)
-    # 精确名称匹配 (AAPL·苹果, 800) 排在包含匹配 (AAP·苹果公司, 150) 之前
-    assert res[0].code == "AAPL"
-    assert any(e.code == "AAP" for e in res)
+def test_global_search_ibkr_first_when_online(monkeypatch):
+    """IBKR 在线时作为第一源, 结果经 ibkr_to_yahoo 归一。"""
+    import tracker.ibkr as ibkr_mod
+    import tracker.providers.global_stocks as gs
+    from tracker.providers import PROVIDERS
 
-
-def test_match_by_code_prefix(sample_entries):
-    res = _match(sample_entries, "AAPL", limit=5)
-    assert res[0].code == "AAPL"  # 精确代码 (1000)
-
-
-def test_match_by_code_partial(sample_entries):
-    res = _match(sample_entries, "600", limit=5)
-    codes = [e.code for e in res]
-    assert "600519.SS" in codes  # "600" 是 "600519.SS" 的前缀
-
-
-def test_match_limit(sample_entries):
-    res = _match(sample_entries, "A", limit=2)
-    assert len(res) <= 2
-
-
-def test_match_empty_query(sample_entries):
-    assert _match(sample_entries, "", limit=5) == []
-
-
-def test_match_no_results(sample_entries):
-    assert _match(sample_entries, "不存在的股票XYZ", limit=5) == []
-
-
-def test_match_case_insensitive(sample_entries):
-    res = _match(sample_entries, "aapl", limit=5)
-    assert res[0].code == "AAPL"
-
-
-def test_match_ranking_exact_before_prefix(sample_entries):
-    # 精确代码 (1000) 应排在代码前缀 (500) 之前
-    res = _match(sample_entries, "AAPL", limit=5)
-    assert res[0].code == "AAPL"
-    # AAP 是前缀匹配, 应在 AAPL 之后
-    if len(res) > 1:
-        assert res[1].code == "AAP"
-
-
-# ---------- search_symbols (含降级) ----------
-
-
-def test_search_symbols_with_entries(sample_entries):
-    res = search_symbols("茅台", entries=sample_entries)
-    assert len(res) == 1
-    assert res[0]["code"] == "600519.SS"
-    assert res[0]["name"] == "贵州茅台"
-    assert res[0]["market"] == "A股"
-
-
-def test_search_symbols_empty_entries_fallback_valid_code():
-    # 无缓存时降级: 合法代码经 parse 校验后返回 (含市场标签)
-    res = search_symbols("AAPL", entries=[])
-    assert len(res) == 1
-    assert res[0]["code"] == "AAPL"
-    assert res[0]["market"] == "美股"
-
-
-def test_search_symbols_empty_entries_fallback_cn_code():
-    res = search_symbols("600519.SS", entries=[])
-    assert res[0]["code"] == "600519.SS"
-    assert res[0]["market"] == "A股"
-
-
-def test_search_symbols_empty_entries_fallback_sh_alias():
-    # SH 别名应被规范化为 SS
-    res = search_symbols("600519.SH", entries=[])
-    assert res[0]["code"] == "600519.SS"
-
-
-def test_search_symbols_empty_entries_invalid():
-    # 无缓存 + 未知后缀 → 空结果 (parse 校验失败)
-    assert search_symbols("FOO.ZZ", entries=[]) == []
-
-
-def test_search_symbols_empty_entries_us_no_suffix():
-    # 无缓存 + 无后缀代码 → 视为美股返回 (parse 对无后缀代码默认美股)
-    res = search_symbols("AAPL", entries=[])
-    assert res[0]["code"] == "AAPL"
-    assert res[0]["market"] == "美股"
-
-
-def test_search_symbols_empty_query():
-    assert search_symbols("", entries=[]) == []
-
-
-def test_search_symbols_returns_dicts(sample_entries):
-    res = search_symbols("平安", entries=sample_entries)
-    assert isinstance(res, list)
-    for item in res:
-        assert set(item.keys()) == {"code", "name", "market", "type"}
-
-
-# ---------- 本地目录缓存 ----------
-
-
-def test_fresh_cache_is_used_without_network(tmp_path, monkeypatch):
-    """新鲜缓存必须直接命中, 不得再走网络 (CACHE_TTL 缺失曾导致每次都重取)."""
-    import json
-    import time
-
-    from tracker import search
-
-    cache = tmp_path / "symbol_list.json"
-    cache.write_text(
-        json.dumps(
+    monkeypatch.setattr(
+        ibkr_mod, "search_matches",
+        lambda q, cfg=None: [
             {
-                "fetched_at": time.time(),
-                "entries": [
-                    {"code": "AAPL", "name": "苹果", "market": "美股", "type": "global"}
-                ],
+                "symbol": "TME", "exchange": "NYSE", "primary_exchange": "NYSE",
+                "currency": "USD", "long_name": "TENCENT MUSIC ENTERTAINMENT",
             }
-        ),
-        encoding="utf-8",
+        ],
     )
-    monkeypatch.setattr(search, "CACHE_FILE", cache)
-
-    def _boom():
-        raise AssertionError("新鲜缓存命中时不应请求网络")
-
-    monkeypatch.setattr(search, "_fetch_all", _boom)
-    entries = search.load_symbol_list()
-    assert [e.code for e in entries] == ["AAPL"]
+    monkeypatch.setattr(gs, "_yf_search", lambda q: [])
+    res = PROVIDERS["global"].search("TME", limit=5)
+    assert res[0].code == "TME"
+    assert res[0].name == "TENCENT MUSIC ENTERTAINMENT"
 
 
-def test_expired_cache_refetches(tmp_path, monkeypatch):
-    """过期缓存应触发刷新."""
-    import json
+def test_global_search_ibkr_offline_falls_to_yf(monkeypatch):
+    """IBKR 不可达 (None) → 自动落 yfinance, 不抛错。"""
+    import tracker.ibkr as ibkr_mod
+    import tracker.providers.global_stocks as gs
+    from tracker.providers import PROVIDERS
 
-    from tracker import search
-
-    cache = tmp_path / "symbol_list.json"
-    cache.write_text(
-        json.dumps({"fetched_at": 0, "entries": [{"code": "OLD", "name": "旧", "market": "美股"}]}),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(search, "CACHE_FILE", cache)
+    monkeypatch.setattr(ibkr_mod, "search_matches", lambda q, cfg=None: None)
     monkeypatch.setattr(
-        search, "_fetch_all",
-        lambda: [search.SymbolEntry("NEW", "新", "美股", "global")],
+        gs, "_yf_search",
+        lambda q: [{"symbol": "0700.HK", "name": "TENCENT"}],
     )
-    entries = search.load_symbol_list()
-    assert [e.code for e in entries] == ["NEW"]
+    res = PROVIDERS["global"].search("Tencent", limit=5)
+    assert res[0].code == "0700.HK"
+    assert res[0].market == "港股"
 
 
-# ---------- 加密货币目录 (Binance exchangeInfo) ----------
+def test_global_search_bare_code_does_not_claim_cn(monkeypatch, no_ibkr):
+    """纯 6 位数字属 cn 域: global 不认领, 也不进本地目录外兜底。"""
+    import tracker.providers.global_stocks as gs
+    from tracker.providers import PROVIDERS
+
+    monkeypatch.setattr(gs, "_yf_search", lambda q: [])
+    assert PROVIDERS["global"].search("600519", limit=5) == []
 
 
-def test_crypto_catalog_codes_are_parseable(monkeypatch):
-    """目录产出的每个代码都必须能被 parse 识别为 crypto (否则搜索结果不可用)."""
-    from tracker import search
-    from tracker.providers import crypto as crypto_mod
-    from tracker.symbols import Market, parse
+def test_global_search_code_pass_through(monkeypatch, no_ibkr):
+    """带后缀代码直查兜底 (SAP.DE, yf/ibkr 都无结果时)。"""
+    import tracker.providers.global_stocks as gs
+    from tracker.providers import PROVIDERS
 
-    pairs = [
-        ("BTC", "USDT"), ("ETH", "BTC"), ("ARKM", "BTC"),
-        ("WIF", "ETH"), ("PEPE", "BNB"), ("BTC", "FDUSD"),
+    monkeypatch.setattr(gs, "_yf_search", lambda q: [])
+    res = PROVIDERS["global"].search("SAP.DE", limit=5)
+    assert res[0].code == "SAP.DE"
+    assert res[0].type == "global"
+
+
+# ---------- CNStocksProvider.search (东财 suggest, A股/北交所) ----------
+
+
+def test_cn_search_maotai(monkeypatch):
+    """搜「茅台」→ cn 域出 600519.SS, 美股/港股结果不混入。"""
+    import tracker.providers.em_suggest as em
+    from tracker.providers import PROVIDERS
+
+    rows = [
+        _em_row("600519", "贵州茅台", "沪A"),
+        _em_row("00700", "腾讯控股", "港股"),
+        _em_row("AAPL", "苹果", "美股"),
     ]
+    monkeypatch.setattr(em, "suggest_raw", lambda q: rows)
+    res = PROVIDERS["cn"].search("茅台", limit=10)
+    assert [e.code for e in res] == ["600519.SS"]
+    assert res[0].type == "cn" and res[0].market == "A股"
+
+
+def test_cn_search_bj_and_filters(monkeypatch):
+    import tracker.providers.em_suggest as em
+    from tracker.providers import PROVIDERS
+
+    rows = [
+        _em_row("920799", "艾融软件", "京A"),
+        _em_row("109988", "22河南75", "债券"),
+    ]
+    monkeypatch.setattr(em, "suggest_raw", lambda q: rows)
+    res = PROVIDERS["cn"].search("艾融", limit=10)
+    assert [e.code for e in res] == ["920799.BJ"]
+    assert res[0].type == "cn"
+
+
+# ---------- CryptoProvider.search (yfinance Search) ----------
+
+
+def test_crypto_search_yf(monkeypatch):
+    """crypto 搜索 = yfinance Search 的 CRYPTOCURRENCY 过滤 (ETF 等不混入)。"""
+    import tracker.providers.crypto as cm
+    from tracker.providers import PROVIDERS
+
+    class _FakeSearch:
+        def __init__(self, query, **kw):
+            pass
+        quotes = [
+            {"symbol": "BTC-USD", "shortname": "Bitcoin USD", "quoteType": "CRYPTOCURRENCY"},
+            {"symbol": "BCH-USD", "shortname": "Bitcoin Cash USD", "quoteType": "CRYPTOCURRENCY"},
+            {"symbol": "IBIT", "shortname": "iShares Bitcoin Trust", "quoteType": "ETF"},
+            {"symbol": "BTC=F", "shortname": "Bitcoin Futures", "quoteType": "FUTURE"},
+        ]
+
+    monkeypatch.setattr("yfinance.Search", _FakeSearch)
+    res = PROVIDERS["crypto"].search("bitcoin", limit=5)
+    codes = [e.code for e in res]
+    assert codes == ["BTC-USD", "BCH-USD"]
+    assert all(e.market == "加密货币" and e.type == "crypto" for e in res)
+
+
+def test_crypto_search_exact_code(monkeypatch):
+    """BTC-USD 直查 → 精确命中排首位。"""
+    import tracker.providers.crypto as cm
+    from tracker.providers import PROVIDERS
+
+    class _FakeSearch:
+        def __init__(self, query, **kw):
+            pass
+        quotes = [
+            {"symbol": "BTC-USD", "shortname": "Bitcoin USD", "quoteType": "CRYPTOCURRENCY"},
+            {"symbol": "CBBTC-USD", "shortname": "Wrapped BTC", "quoteType": "CRYPTOCURRENCY"},
+        ]
+
+    monkeypatch.setattr("yfinance.Search", _FakeSearch)
+    res = PROVIDERS["crypto"].search("BTC-USD", limit=5)
+    assert res[0].code == "BTC-USD"
+
+
+def test_crypto_search_empty_on_network_fail(monkeypatch):
+    """yf 不可达 → 空结果 (无本地目录兜底)。"""
+    import tracker.providers.crypto as cm
+    from tracker.providers import PROVIDERS
+
+    def _boom(*a, **kw):
+        raise RuntimeError("down")
+
+    monkeypatch.setattr("yfinance.Search", _boom)
+    assert PROVIDERS["crypto"].search("bitcoin", limit=5) == []
+
+
+# ---------- 聚合层 (search_grouped / search_symbols) ----------
+
+
+def test_search_grouped_keeps_domains_separate(monkeypatch):
+    """分域聚合: cn (东财) / global (yf) / crypto (yf Search) 各自独立, 结果不混排。"""
+    import tracker.providers.em_suggest as em
+    import tracker.providers.global_stocks as gs
+    import tracker.ibkr as ibkr_mod
+
+    # cn 域: 东财 suggest
     monkeypatch.setattr(
-        crypto_mod, "_get",
-        lambda path, params=None: {
-            "symbols": [
-                {
-                    "symbol": f"{b}{q}", "baseAsset": b, "quoteAsset": q,
-                    "status": "TRADING", "isSpotTradingAllowed": True,
-                }
-                for b, q in pairs
-            ]
-        },
+        em, "suggest_raw",
+        lambda q: [_em_row("600519", "贵州茅台", "沪A")],
     )
-    entries = search.fetch_crypto_symbols()
-    assert [e.code for e in entries] == [f"{b}-{q}" for b, q in pairs]
-    for e in entries:
-        p = parse(e.code)
-        assert p.market is Market.CRYPTO, e.code
-        assert p.currency == e.code.split("-")[1], e.code
-        assert e.type == "crypto", e.code
+    # global 域: yfinance
+    monkeypatch.setattr(ibkr_mod, "search_matches", lambda q, cfg=None: None)
+    monkeypatch.setattr(
+        gs, "_yf_search", lambda q: [{"symbol": "AAPL", "name": "Apple Inc."}],
+    )
+    # crypto 域: yf Search mock — "苹果" 无 crypto 结果, "BTC" 返回 BTC-USD
+    class _FakeSearch:
+        def __init__(self, query, **kw):
+            self.quotes = (
+                [{"symbol": "BTC-USD", "shortname": "Bitcoin USD", "quoteType": "CRYPTOCURRENCY"}]
+                if query == "BTC"
+                else []
+            )
+
+    monkeypatch.setattr("yfinance.Search", _FakeSearch)
+    g = search_grouped("苹果", limit_per_domain=5)
+    assert [r["code"] for r in g["cn"]] == ["600519.SS"]
+    assert g["global"][0]["code"] == "AAPL"
+    assert g["crypto"] == []
+    g2 = search_grouped("BTC", limit_per_domain=5)
+    assert g2["crypto"][0]["code"] == "BTC-USD"
+    for items in g.values():
+        for item in items:
+            assert set(item.keys()) == {"code", "name", "market", "type"}
+
+
+def test_search_symbols_flattens_domains(monkeypatch):
+    """平铺聚合: cn 在前 global 在后 (固定域序), global 有命中即出。"""
+    import tracker.providers.em_suggest as em
+    import tracker.providers.global_stocks as gs
+    import tracker.ibkr as ibkr_mod
+
+    # cn 有命中 (贵州茅台), global 也有命中 (TENCENT)
+    monkeypatch.setattr(
+        em, "suggest_raw",
+        lambda q: [_em_row("600519", "贵州茅台", "沪A")],
+    )
+    monkeypatch.setattr(ibkr_mod, "search_matches", lambda q, cfg=None: None)
+    monkeypatch.setattr(
+        gs, "_yf_search",
+        lambda q: [{"symbol": "0700.HK", "name": "TENCENT"}],
+    )
+
+    class _EmptySearch:
+        def __init__(self, query, **kw):
+            pass
+        quotes = []
+
+    monkeypatch.setattr("yfinance.Search", _EmptySearch)
+    res = search_symbols("腾讯", limit=10)
+    codes = [r["code"] for r in res]
+    assert codes == ["600519.SS", "0700.HK"]  # 域序 cn → global → crypto
+    assert all(r["type"] in ("cn", "global", "crypto") for r in res)
+
+
+# ---------- 其它 ----------
+
+
+def test_search_empty_query():
+    assert search_symbols("", limit=5) == []
+
+

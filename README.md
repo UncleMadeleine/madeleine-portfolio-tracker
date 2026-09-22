@@ -195,7 +195,7 @@ B 股按**实际交易币种**填写（沪 B 美元 / 深 B 港币，与行情�
 K线页支持两种输入方式：
 
 - **代码直查** — `AAPL` / `600519.SS` / `0700.HK` / `SAP.DE` / `BP.L` / `BTC-USD`
-- **名称模糊搜索** — 输入代码或名称片段（如「茅台」「腾讯」），从本地缓存的代码目录（A股 akshare 全量 + 港股 akshare/新浪全量 + 加密货币 Binance 全量）模糊匹配，下拉选中自动填入代码；目录缓存 1 天自动刷新
+- **名称模糊搜索（分域）** — 输入代码或名称片段（如「茅台」「Tencent」「BTC」「bitcoin」），每个 provider 提供自己的搜索接口，UI 按「A股/北交所 · 美股/港股 · 加密货币」三块下拉分组展示，互不混排；美股/港股走 IBKR 合约匹配（Gateway 在线时优先）→ yfinance Search，A股/北交所走东财 suggest（中文名/拼音），加密货币走 yfinance Search（返回即 Yahoo 规范代码 BTC-USD）；纯在线搜索接口封装 + 归一化，无本地目录、无缓存快照，接口失败即空结果 + 合法代码直查
 
 页面端基于 TradingView 开源的 **lightweight-charts** 渲染（已 vendored，无新增依赖），券商 App 通用交互：
 
@@ -287,14 +287,15 @@ tracker/
 │   └── cache.py          磁盘缓存管理
 ├── symbols.py          自有代码规范、市场域识别、type_for_symbol() 权威域推导（唯一入口）
 ├── providers/          **数据 provider 层**（按权威 type 域隔离）
-│   ├── base.py         Provider 基类 + Quote 数据结构 + resolve(type) 域路由
+│   ├── base.py         Provider 基类 + Quote/SymbolEntry 数据结构 + resolve(type) 域路由
 │   ├── cn_stocks.py        A股/B股域（.SS/.SZ/.BJ）：akshare 固定优先, yfinance 兜底
-│   ├── global_stocks.py    全球股票域（美股/港股/欧股…）：yfinance 主源, 港股 akshare 兜底
+│   ├── global_stocks.py    全球股票域（美股/港股/欧股…）：yfinance 主源, 港股 akshare 兜底; 搜索走 IBKR → yfinance Search
 │   ├── crypto.py           加密货币域（BASE-QUOTE）：Binance → Hyperliquid(USD系) → yfinance
 │   ├── index.py            指数域（IX.<KEY>）：中国指数 akshare 优先, 其余 yfinance 主源 + 新浪兜底
-│   └── orchestration.py    批量编排：按域分组取数 → 聚合 quotes/errors/notes
+│   ├── orchestration.py    批量编排：按域分组取数 → 聚合 quotes/errors/notes
+│   └── em_suggest.py       东财 suggest 搜索客户端（cn 域搜索底层 HTTP 封装 + 代码归一）
 ├── prices.py           行情门面（历史 API 保持不变, 全部路由到 providers）
-├── search.py           代码搜索：聚合三域目录（A股/港股 akshare + 加密货币 Binance）, 模糊匹配
+├── search.py           搜索聚合层：search_grouped() 按域调 provider.search() 保持分组，本地目录（data/symbol_list.json）仅作各域离线兜底
 ├── fx.py               汇率：CFETS（akshare）优先，yfinance 货币对兜底（直对/逆对/USD 桥）
 ├── cache.py            行情 SQLite 磁盘缓存（实时 5 分钟 / K线 30 分钟）
 ├── charting.py         K线渲染（plotly CLI HTML + lightweight-charts 页面组件：蜡烛/均线/指标/对比）
@@ -436,7 +437,7 @@ python -m tracker.cli import wallet polygon 0x... --tokenlist my_tokens.json
 
 - 免费数据源：非美股行情普遍延迟 15–30 分钟；无 SLA，偶发限流（已内置批量请求 + 重试缓解）
 - akshare 东财 spot 接口对部分数据中心 IP 不友好（本项目所在机器即如此），此时自动回落 Yahoo
-- 美股**按名称**搜索暂未接入目录（akshare 美股全量接口过慢易超时），美股目前靠代码匹配兜底
+- 搜索全部为在线接口（美股/港股：IBKR→yfinance Search；A股/北交所：东财 suggest；crypto：yfinance Search）；中文查询仅东财支持，美股/港股/crypto 搜中文名无结果；接口失败即该域空结果 + 合法代码直查
 - CFETS 汇率为中间价，与离岸 CNH 有细微差异，组合展示场景可忽略
 - `今日估算` 按各持仓 `涨跌幅 × 当前市值` 近似，非精确日内盯市
 - IBKR 行情需本机运行 IB Gateway 且 API 已启用；A股/港股/B股数据若无市场数据订阅，`reqTickers` 可能返回空值，自动回退 Yahoo/akshare
@@ -455,7 +456,6 @@ python -m tracker.cli import wallet polygon 0x... --tokenlist my_tokens.json
 - [x] 多股 K 线对比（同坐标系 + 归一化）
 - [ ] **K 线比值模式** — 两标的收盘价比值画成 K 线（如腾讯 / 南非报业）
 - [ ] **新加坡股接入**（`.SI`，Yahoo 后缀即可覆盖行情，需补目录与测试）
-- [ ] 美股按名称搜索目录接入
 - [ ] Hyperliquid / A股券商实时**持仓**对接（当前 HL 仅为行情源）
 - [ ] 交易流水记录与分批成本（FIFO）
 - [ ] 分红/拆分事件跟踪

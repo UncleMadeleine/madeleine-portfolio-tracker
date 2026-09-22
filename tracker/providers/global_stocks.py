@@ -11,7 +11,49 @@ import pandas as pd
 
 from ..symbols import Market, ParsedSymbol, is_pence, normalize
 from ..util import with_timeout
-from .base import Provider, Quote
+from .base import Provider, Quote, SymbolEntry
+from .em_suggest import parse_symbol_safe
+
+_AK_TIMEOUT = 6.0
+# 按市场独立缓存: 某市场接口失败不影响其它市场, 且失败不占用 TTL (可重试)
+_ak_spot_cache: dict[Market, tuple[float, pd.DataFrame]] = {}
+_ak_spot_lock = threading.Lock()
+_AK_SPOT_TTL = 60
+
+
+def _market_label(yahoo: str) -> str:
+    """规范代码 → 市场标签 (港股/美股/德股…); 供搜索结果展示。"""
+    from ..symbols import MARKET_META, parse
+
+    try:
+        return MARKET_META[parse(yahoo).market]["label"]
+    except Exception:
+        return "美股"
+
+
+def _yf_search(query: str) -> list[dict]:
+    """yfinance Search 封装; 失败返回 [] (调用方降级下一源)。
+
+    仅保留股票形态 (EQUITY/ETF); 加密/期货/基金等属其他域或不可交易。
+    返回 [{symbol, name}]。
+    """
+    try:
+        import yfinance as yf
+
+        s = yf.Search(query.strip(), max_results=10, news_count=0, timeout=6)
+        quotes = s.quotes or []
+    except Exception:
+        return []
+    out: list[dict] = []
+    for row in quotes:
+        if row.get("quoteType") not in ("EQUITY", "ETF"):
+            continue
+        sym = str(row.get("symbol") or "").strip()
+        name = str(row.get("shortname") or row.get("longname") or "").strip()
+        if sym and name:
+            out.append({"symbol": sym, "name": name})
+    return out
+
 
 _AK_TIMEOUT = 6.0
 # 按市场独立缓存: 某市场接口失败不影响其它市场, 且失败不占用 TTL (可重试)
@@ -226,7 +268,10 @@ def _akshare_history(p: ParsedSymbol, start_date: str, end_date: str | None = No
 
 class GlobalStocksProvider(Provider):
     """美股/港股/全球股票域: IBKR 在批量层前置 (orchestration), 此处 yfinance 为主源,
-    港股附 akshare 兜底。A股 (.SS/.SZ/.BJ) 不属于本域。"""
+
+    港股附 akshare 兜底。A股 (.SS/.SZ/.BJ) 不属于本域。
+    搜索源链: IBKR reqMatchingSymbols (可选) → yfinance Search → 本地目录/代码直查。
+    """
 
     name = "global"
 
@@ -249,4 +294,52 @@ class GlobalStocksProvider(Provider):
                 lambda: _yahoo_history(p, start_date, end_date),
                 lambda: _akshare_history(p, start_date, end_date),
             ]
+        # 非港股 (美股/德英加澳): 仅 yfinance
         return [lambda: _yahoo_history(p, start_date, end_date)]
+
+    # -- 搜索: IBKR (可选) → yfinance Search → 合法代码直查 --
+
+    def search(self, query: str, limit: int = 10) -> list[SymbolEntry]:
+        """全球域搜索: 对齐本域行情源链 (IBKR → yf), 不依赖东财。"""
+        from ..ibkr import ibkr_to_yahoo, search_matches
+        from ..search import _fallback_match
+
+        q = query.strip()
+        if not q:
+            return []
+
+        out: list[SymbolEntry] = []
+        seen: set[str] = set()
+
+        def _add(yahoo: str, name: str, market: str) -> None:
+            p = parse_symbol_safe(yahoo)
+            if p is None or p.yahoo in seen or p.type != "global":
+                return
+            seen.add(p.yahoo)
+            out.append(SymbolEntry(p.yahoo, name or p.market_label, market, p.type))
+
+        # 源 1: IBKR 合约模糊匹配 (Gateway 在线时; 英文名/代码召回最好)
+        ibkr_rows = search_matches(q)
+        if ibkr_rows:
+            for row in ibkr_rows[: limit * 2]:
+                yahoo = ibkr_to_yahoo(
+                    row["symbol"], row["exchange"], row["primary_exchange"], row["currency"]
+                )
+                if yahoo:
+                    _add(yahoo, row["long_name"] or row["symbol"], _market_label(yahoo))
+
+        # 源 2: yfinance Search (中文名不支持, 英文名/代码; 本域行情主源同一家)
+        if len(out) < limit:
+            for row in _yf_search(q):
+                _add(row["symbol"], row["name"], _market_label(row["symbol"]))
+
+        # 源 3: 合法代码直查 (SAP.DE / BP.L 等带后缀代码; 非 ASCII/6位纯数字不认领)
+        if not out:
+            if q.isascii() and not (q.isdigit() and len(q) == 6):
+                fb = _fallback_match(q, limit)
+                return [
+                    SymbolEntry(r["code"], r["name"], r["market"], r["type"])
+                    for r in fb
+                    if r["type"] == "global"
+                ]
+        return out[:limit]

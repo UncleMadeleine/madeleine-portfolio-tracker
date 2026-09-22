@@ -49,13 +49,6 @@ def cached_kline_all(symbol: str, prefer_akshare: bool):
     return prices.get_ohlc(symbol, months=1200, prefer_akshare=prefer_akshare)
 
 
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def cached_symbol_entries() -> list[dict]:
-    """股票列表 (代码+名称+市场), 本地缓存 TTL 1 小时刷新一次, 避免每次输入请求网络."""
-    return [e.__dict__ for e in search.load_symbol_list()]
-
-
 def is_valid_symbol(s: str) -> bool:
     if not s or not s.strip():
         return False
@@ -207,49 +200,53 @@ def render_compare_controls(prefer_akshare: bool, quick_symbols: list[str]) -> N
 
 
 def _render_symbol_search() -> None:
-    """搜索框: 输入代码/名称片段 → 模糊匹配本地缓存 → 下拉选择自动填入代码.
+    """搜索框: 输入代码/名称片段 → 三域 provider 独立搜索 → 分域下拉自动填入代码.
 
-    本地缓存 TTL 1 小时 (cached_symbol_entries), 输入时不请求网络;
-    选中结果通过 session_state 同步到代码输入框 (kline_symbol)。
+    A股/美股港股/加密货币 各一个下拉, 结果不混排; 选中通过 session_state
+    同步到代码输入框 (kline_symbol) 并触发查询。
     """
     sq = st.text_input(
         "搜索股票 (代码或名称)",
         value="",
         key="kline_search_query",
-        placeholder="如: 苹果 · 茅台 · AAPL · 0700",
-        help="输入代码或名称片段, 从下拉结果中选择即可自动填入代码框",
+        placeholder="如: 苹果 · 腾讯 · 茅台 · AAPL · 0700 · BTC",
+        help="输入代码或名称片段, 各市场分组展示匹配结果, 选中即可自动填入代码框",
     )
     sq = (sq or "").strip()
     if not sq:
         return
-    # 本地缓存匹配 (不请求网络), 降级时仅做代码格式校验
-    entries = [search.SymbolEntry(**e) for e in cached_symbol_entries()]
-    results = search.search_symbols(sq, limit=15, entries=entries)
-    if not results:
+    grouped = search.search_grouped(sq, limit_per_domain=8)
+    labels = {"cn": "🇨🇳 A股/北交所", "global": "🌐 美股/港股", "crypto": "🪙 加密货币"}
+
+    def _on_pick(code: str):
+        st.session_state["kline_symbol"] = code
+        # 触发查询 (与手动回车等价)
+        st.session_state["kline_last_symbol"] = None
+
+    total = sum(len(v) for v in grouped.values())
+    if not total:
         st.caption("无匹配结果 —— 可直接在下方代码框输入完整代码")
         return
-    # 下拉选择: 展示「代码 · 名称 (市场)」, 选中后回填代码输入框
-    options_list = [
-        f"{r['code']} · {r['name']} ({r['market']})" for r in results
-    ]
-    # selectbox 在 session_state 里存的是选项值 (字符串), 不是索引 → 用值反查代码
-    code_by_option = {opt: r["code"] for opt, r in zip(options_list, results)}
+    for t, items in grouped.items():
+        if not items:
+            continue
+        options = [f"{r['code']} · {r['name']}" for r in items]
+        code_by_opt = dict(zip(options, [r["code"] for r in items]))
+        key = f"kline_search_select_{t}"
 
-    def _on_pick():
-        code = code_by_option.get(st.session_state.get("kline_search_select"))
-        if code:
-            st.session_state["kline_symbol"] = code
-            # 触发查询 (与手动回车等价)
-            st.session_state["kline_last_symbol"] = None
+        def _pick(t=t, code_by_opt=code_by_opt):
+            code = code_by_opt.get(st.session_state.get(key))
+            if code:
+                _on_pick(code)
 
-    st.selectbox(
-        f"匹配结果 ({len(results)} 条)",
-        options_list,
-        index=None,
-        key="kline_search_select",
-        on_change=_on_pick,
-        placeholder="选择以填入代码...",
-    )
+        st.selectbox(
+            labels[t],
+            options,
+            index=None,
+            key=key,
+            on_change=_pick,
+            placeholder=f"{len(options)} 条匹配, 选择以填入代码...",
+        )
 
 
 

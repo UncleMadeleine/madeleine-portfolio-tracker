@@ -1,4 +1,4 @@
-"""Provider 基础设施: Quote/ParsedSymbol 数据结构与 provider 注册解析."""
+"""Provider 基础设施: Quote/SymbolEntry 数据结构与 provider 注册解析."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -9,11 +9,22 @@ __all__ = [
     "Provider",
     "Quote",
     "ParsedSymbol",
+    "SymbolEntry",
     "get_history",
     "get_quote",
     "get_quotes",
     "resolve",
 ]
+
+
+@dataclass(frozen=True)
+class SymbolEntry:
+    """一条搜索结果 (规范代码 + 名称 + 市场标签 + 权威域标记)."""
+
+    code: str  # 规范代码, 如 600519.SS / 0700.HK / AAPL / BTC-USD
+    name: str  # 中文名/英文名/交易对
+    market: str  # 市场标签, 如 A股 / 港股 / 美股 / 加密货币
+    type: str  # 权威域标记: global / cn / crypto (系统推导)
 
 
 @dataclass
@@ -28,14 +39,23 @@ class Quote:
     currency: str
 
 
+
 class Provider:
     """单一市场域数据源: 行情 + 历史K线 + 代码目录.
 
     子类实现 fetch_quote / fetch_history / search_catalog;
     排序后的数据源链由 quote_sources / history_sources 给出。
     """
-
     name = "provider"
+
+    # -- 代码搜索 --
+
+    def search(self, query: str, limit: int = 10) -> list[SymbolEntry]:
+        """按代码或名称搜索本域代码; 网络不可达时返回本地目录兜底结果.
+
+        子类实现; 返回 [] 表示无结果, 降级链由子类自行负责。
+        """
+        raise NotImplementedError
 
     def quote_sources(self, p: ParsedSymbol, prefer_first: bool = False) -> list:
         """该 symbol 的行情数据源函数链 (按优先级, 依次尝试)."""

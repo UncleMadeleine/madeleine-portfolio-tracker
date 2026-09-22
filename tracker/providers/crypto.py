@@ -14,7 +14,7 @@ import pandas as pd
 
 from ..symbols import ParsedSymbol
 from ..util import with_timeout
-from .base import Provider, Quote
+from .base import Provider, Quote, SymbolEntry
 
 _BINANCE_HOSTS = ("https://api.binance.com", "https://data-api.binance.vision")
 _HTTP_TIMEOUT = 8.0
@@ -118,6 +118,7 @@ def _obb():
     from openbb import obb
 
     return obb
+
 
 
 def binance_pair(p: ParsedSymbol) -> str:
@@ -285,3 +286,34 @@ class CryptoProvider(Provider):
             lambda: _hl_history(p, start_date, end_date),
             lambda: _yf_history(p, start_date, end_date),
         ]
+
+    def search(self, query: str, limit: int = 10) -> list[SymbolEntry]:
+        """加密域搜索: yfinance Search (CRYPTOCURRENCY 结果), 代码与名称模糊均可。
+
+        返回的 symbol 本身就是 Yahoo 规范 (BTC-USD), 与本域行情链路一致;
+        无本地目录、无缓存快照 — 纯在线搜索接口的封装与归一化。
+        """
+        q = query.strip()
+        if not q:
+            return []
+        try:
+            import yfinance as yf
+
+            s = yf.Search(q, max_results=limit * 3, news_count=0, timeout=8)
+            quotes = s.quotes or []
+        except Exception:
+            return []
+        out: list[SymbolEntry] = []
+        seen: set[str] = set()
+        for row in quotes:
+            if row.get("quoteType") != "CRYPTOCURRENCY":
+                continue
+            code = str(row.get("symbol") or "").strip().upper()
+            name = str(row.get("shortname") or row.get("longname") or "").strip()
+            if not code or code in seen:
+                continue
+            seen.add(code)
+            out.append(SymbolEntry(code, name or code, "加密货币", "crypto"))
+            if len(out) >= limit:
+                break
+        return out

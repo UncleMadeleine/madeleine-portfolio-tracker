@@ -289,6 +289,40 @@ _A_SHARE_SH_PREFIX = ("5", "6", "9")
 _A_SHARE_BJ_PREFIX = ("4", "8")
 
 
+def search_matches(pattern: str, cfg: dict | None = None) -> list[dict] | None:
+    """IBKR 合约模糊搜索 (reqMatchingSymbols); 返回归一化行, 不可用返回 None.
+
+    行: {symbol, exchange, primary_exchange, currency, long_name}。
+    仅本机 Gateway 在线时可用; 调用方 (global provider search) 据此降级。
+    """
+    pat = (pattern or "").strip()
+    if not pat or len(pat) < 2 or not pat.isascii():
+        return []  # IBKR 只匹配 ASCII 代码/名称片段; 空参数直接无结果
+    cfg = cfg or load_config()
+    ib = _get_client(cfg)
+    if ib is None:
+        return None
+    try:
+        descs = ib.reqMatchingSymbols(pat)
+    except Exception:
+        return None
+    out: list[dict] = []
+    for d in descs or []:
+        c = getattr(d, "contract", None)
+        if c is None or getattr(c, "secType", "") != "STK":
+            continue
+        out.append(
+            {
+                "symbol": str(getattr(c, "symbol", "") or "").strip(),
+                "exchange": str(getattr(c, "exchange", "") or "").strip(),
+                "primary_exchange": str(getattr(c, "primaryExchange", "") or "").strip(),
+                "currency": str(getattr(c, "currency", "") or "").strip(),
+                "long_name": str(getattr(c, "longName", "") or "").strip(),
+            }
+        )
+    return out
+
+
 def ibkr_to_yahoo(
     symbol: str, exchange: str, primary_exchange: str, currency: str
 ) -> str | None:

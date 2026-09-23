@@ -47,10 +47,11 @@ def search_grouped(query: str, limit_per_domain: int = 5) -> dict[str, list[dict
 def search_symbols(
     query: str, limit: int = 10, entries: list[SymbolEntry] | None = None
 ) -> list[dict]:
-    """跨域聚合搜索 (平铺列表, 域间按 cn → global → crypto 排序).
+    """跨域聚合搜索 (平铺列表).
 
-    每域取 ceil(limit/2) 条保证三域都有露出; limit 较小时按序截断。
-    entries 参数仅为兼容保留 (忽略): 搜索完全走 provider.search()。
+    域间按 cn → global → crypto 排序, 每域先取 ceil(limit/2) 条,
+    最后整表截断到 limit (cn 域优先占用名额, 小 limit 时后两域可能无露出 ——
+    需要三域均衡露出时用 search_grouped)。
     """
     q = (query or "").strip()
     if not q:

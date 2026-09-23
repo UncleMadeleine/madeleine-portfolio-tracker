@@ -303,6 +303,62 @@ def test_search_symbols_flattens_domains(monkeypatch):
     assert all(r["type"] in ("cn", "global", "crypto") for r in res)
 
 
+def test_search_symbols_limit_truncates_in_domain_order(monkeypatch):
+    """limit 截断按域序分配名额: cn 域优先, 小 limit 时后两域可无露出
+    (钉住实现行为 —— 需要三域均衡露出应走 search_grouped)."""
+    import tracker.search as search_mod
+    from unittest.mock import patch
+
+    def mk(domain, n):
+        return lambda q, limit=10: [
+            SymbolEntry(f"{domain}{i}", "N", "M", domain) for i in range(n)
+        ]
+
+    fake = {
+        "cn": type("P", (), {"search": staticmethod(mk("cn", 5))})(),
+        "global": type("P", (), {"search": staticmethod(mk("gl", 5))})(),
+        "crypto": type("P", (), {"search": staticmethod(mk("cr", 5))})(),
+    }
+    with patch.dict(search_mod.PROVIDERS, fake):
+        res = search_symbols("x", limit=7)
+        assert len(res) == 7
+        domains = [r["type"] for r in res]
+        assert domains == ["cn"] * 5 + ["gl"] * 2  # 域序 + 截断
+        # 更小的 limit: 只剩 cn 域
+        res3 = search_symbols("x", limit=3)
+        assert [r["type"] for r in res3] == ["cn"] * 3
+
+
+# ---------- 兜底直查 (_fallback_match) ----------
+
+
+def test_fallback_match_passes_valid_code():
+    """合法代码直查: 经 parse 归一, 权威 type 由 parse 推导."""
+    from tracker.search import _fallback_match
+
+    res = _fallback_match("600519.SS", 5)
+    assert len(res) == 1
+    assert res[0]["code"] == "600519.SS"
+    assert res[0]["type"] == "cn"
+    assert res[0]["market"] == "A股"
+
+
+def test_fallback_match_normalizes_alias():
+    """别名归一: 00700.HK → 0700.HK."""
+    from tracker.search import _fallback_match
+
+    res = _fallback_match("00700.HK", 5)
+    assert res[0]["code"] == "0700.HK"
+    assert res[0]["type"] == "global"
+
+
+def test_fallback_match_rejects_invalid():
+    from tracker.search import _fallback_match
+
+    assert _fallback_match("NOT-ACODE!!", 5) == []
+    assert _fallback_match("   ", 5) == []
+
+
 # ---------- 其它 ----------
 
 

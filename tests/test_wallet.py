@@ -344,6 +344,23 @@ class TestImportWallet:
         with pytest.raises(ValueError, match="地址格式无效"):
             wallet_mod.import_wallet("eth", "not-an-address")
 
+    def test_chain_name_case_insensitive(self, monkeypatch):
+        """大写/混合大小写链名归一化为小写: _CHAIN_CONFIG 键全小写,
+        不归一会让 _erc20_balance 的 _CHAIN_CONFIG[chain] KeyError."""
+        seen_chains = []
+
+        def fake_erc20(addr, contract, chain, decimals, timeout):
+            seen_chains.append(chain)
+            return None  # 零余额 → 不产出持仓
+
+        monkeypatch.setattr(wallet_mod, "_native_balance", lambda *a: None)
+        monkeypatch.setattr(wallet_mod, "_erc20_balance", fake_erc20)
+        result = wallet_mod.import_wallet(
+            "ETH", "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
+        )
+        assert result["chain"] == "eth"
+        assert seen_chains and set(seen_chains) == {"eth"}
+
     def test_contract_field_set_for_erc20(self, monkeypatch):
         """ERC-20 条目含 contract 字段."""
 

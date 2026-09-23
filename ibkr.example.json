@@ -13,6 +13,8 @@
     "GB": "LSE",
     "CA": "TSE",
     "CA_V": "TSXV",
+    "CA_CN": "CSE",
+    "CA_NE": "NEOE",
     "AU": "ASX"
   }
 }

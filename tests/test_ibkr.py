@@ -134,6 +134,8 @@ def test_contract_spec_all_markets():
         ("BP.L", ContractSpec("BP", "LSE", "GBP")),
         ("RY.TO", ContractSpec("RY", "TSE", "CAD")),
         ("X.V", ContractSpec("X", "TSXV", "CAD")),
+        ("ABC.CN", ContractSpec("ABC", "CSE", "CAD")),
+        ("DEF.NE", ContractSpec("DEF", "NEOE", "CAD")),
         ("BHP.AX", ContractSpec("BHP", "ASX", "AUD")),
     ]
     for sym, expected in cases:
@@ -143,6 +145,14 @@ def test_contract_spec_all_markets():
 def test_contract_spec_exchange_override():
     spec = contract_spec(parse("600519.SS"), exchanges={"CN": "SHSE"})
     assert spec == ContractSpec("600519", "SHSE", "CNY", "600519")
+
+
+def test_contract_spec_ca_cse_neo_override():
+    """CA_CN / CA_NE 可用配置覆写 (与 CA_V 同一惯例)."""
+    spec = contract_spec(parse("ABC.CN"), exchanges={"CA_CN": "CSE"})
+    assert spec == ContractSpec("ABC", "CSE", "CAD")
+    spec = contract_spec(parse("DEF.NE"), exchanges={"CA_NE": "NEOE"})
+    assert spec == ContractSpec("DEF", "NEOE", "CAD")
 
 
 def test_quote_from_ticker_normal():
@@ -181,6 +191,12 @@ def test_ibkr_to_yahoo_mappings():
         (("688981", "SEHK", "", "CNY"), "688981.SS"),
         (("900902", "SHSE", "", "USD"), "900902.SS"),
         (("920100", "SEHK", "", "CNY"), "920100.BJ"),
+        (("X", "TSXV", "", "CAD"), "X.V"),
+        (("ABC", "CSE", "", "CAD"), "ABC.CN"),
+        (("ABC", "CXI", "", "CAD"), "ABC.CN"),
+        (("DEF", "NEOEX", "", "CAD"), "DEF.NE"),
+        # NEOE = Cboe Canada 现行代号; 缺失会让同步回来的代码被改写成 .TO
+        (("DEF", "NEOE", "", "CAD"), "DEF.NE"),
         (("430047", "SEHK", "", "CNY"), "430047.BJ"),
         (("200012", "SZSE", "", "HKD"), "200012.SZ"),
         (("SAP", "IBIS", "", "EUR"), "SAP.DE"),

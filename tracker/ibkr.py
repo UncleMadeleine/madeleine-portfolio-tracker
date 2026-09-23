@@ -189,8 +189,14 @@ def contract_spec(p: ParsedSymbol, exchanges: dict | None = None) -> ContractSpe
     if p.market is Market.GB:
         return ContractSpec(code, ex.get("GB", "LSE"), "GBP")
     if p.market is Market.CA:
+        # 加拿大三所: TSX(TSE) / TSXV(TSXV) / CSE(CSE) / NEO(Cboe Canada, NEOE);
+        # .CN/.NE 误入 TSE 会让 qualifyContracts 报无安全定义
         if suffix == "V":
             return ContractSpec(code, ex.get("CA_V", "TSXV"), "CAD")
+        if suffix == "CN":
+            return ContractSpec(code, ex.get("CA_CN", "CSE"), "CAD")
+        if suffix == "NE":
+            return ContractSpec(code, ex.get("CA_NE", "NEOE"), "CAD")
         return ContractSpec(code, ex.get("CA", "TSE"), "CAD")
     if p.market is Market.AU:
         return ContractSpec(code, ex.get("AU", "ASX"), "AUD")
@@ -359,9 +365,11 @@ def ibkr_to_yahoo(
         return f"{sym}.L"
     # 加拿大: Yahoo 后缀按交易所区分 (CSE=.CN, Cboe Canada/NEO=.NE, TSXV=.V, 其余=.TO);
     # 必须在 ccy == "CAD" 兜底之前判定, 否则所有加元持仓都会被当成 TSX
-    if exkey in ("CSE",):
+    # CXI = IBKR 部分行情链路对 CSE 的别名代号
+    if exkey in ("CSE", "CXI", "XCNQ"):
         return f"{sym}.CN"
-    if exkey in ("NEO", "NEOEX"):
+    # NEOE = Cboe Canada (NEO) 现行交易所代号, 与 contract_spec 的默认值对应
+    if exkey in ("NEO", "NEOEX", "NEOE"):
         return f"{sym}.NE"
     if ccy == "CAD" or exkey in ("TSE", "TSXV", "TSX", "CDGX"):
         return f"{sym}.V" if exkey == "TSXV" else f"{sym}.TO"

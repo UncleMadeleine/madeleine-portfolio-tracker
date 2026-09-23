@@ -354,11 +354,18 @@ def import_wallet(
             "errors": ["..."]
         }
     """
+    # 链名归一化: _CHAIN_CONFIG 键全小写, 大写/混合大小写链名 ("ETH") 会让
+    # _erc20_balance 的 _CHAIN_CONFIG[chain] KeyError; 入口统一 lower 一次
+    chain = str(chain).strip().lower()
+    if chain not in _SUPPORTED_CHAINS:
+        raise ValueError(
+            f"不支持的链: {chain}. 支持: {', '.join(sorted(_SUPPORTED_CHAINS))}"
+        )
     errors: list[str] = []
     addr = _validate_address(address, chain)
-    chain_cfg = _CHAIN_CONFIG[chain.lower()]
+    chain_cfg = _CHAIN_CONFIG[chain]
     token_data = _load_tokenlist(tokenlist)
-    chain_tokens = token_data.get(chain.lower(), {})
+    chain_tokens = token_data.get(chain, {})
 
     holdings: list[dict[str, Any]] = []
 

@@ -7,8 +7,12 @@ IX.CSI300 沪深 300 ...)。源链:
 
 指数无实时行情需求 (不参与持仓/自选聚合), 仅提供历史 K 线; 新增数据源 =
 追加一个 _xxx_history 函数并插入 history_sources 源链。
+中国水泥网 (IX.CEMPI 等, 目录条目带 ccement 字段): 前端 AJAX 接口免登录,
+仅全国口径; 区域分解与水泥大数据中心需会员, 不接入。
 """
 from __future__ import annotations
+
+import json
 
 import pandas as pd
 
@@ -47,6 +51,94 @@ def _slice_range(df: pd.DataFrame, start_date: str, end_date: str | None) -> pd.
     if end_date:
         mask &= out["date"] <= pd.Timestamp(end_date)
     return out[mask].sort_values("date").reset_index(drop=True)
+
+
+# ---------- 中国水泥网源 (index.ccement.com) ----------
+
+_CCEMENT_BASE = "https://index.ccement.com"
+_CCEMENT_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+    "X-Requested-With": "XMLHttpRequest",
+    "Referer": "https://index.ccement.com/",
+}
+_CCEMENT_TIMEOUT = 15.0
+
+
+def _ccement_session():
+    import requests
+
+    return requests
+
+
+def _ccement_post(path: str, data: dict) -> dict:
+    """POST 水泥网 AJAX 端点, Code==200 校验后返回 Data 字段."""
+    requests = _ccement_session()
+    r = requests.post(
+        f"{_CCEMENT_BASE}/index/{path}",
+        headers=_CCEMENT_HEADERS,
+        data=data,
+        timeout=_CCEMENT_TIMEOUT,
+    )
+    r.raise_for_status()
+    j = r.json()
+    if j.get("Code") != 200:
+        raise RuntimeError(f"水泥网接口返回异常: {j.get('Msg')} ({path})")
+    return j["Data"]
+
+
+def _ccement_points(d: dict) -> pd.DataFrame:
+    """dynamicIndexDate + dynamicIndex(All) 点位序列 → 日线 DataFrame (volume=0).
+
+    独立端点用 dynamicIndex; getPriceIndex 聚合载荷用 dynamicIndexAll。
+    """
+    dates = d.get("dynamicIndexDate") or []
+    vals = d.get("dynamicIndexAll") or d.get("dynamicIndex") or []
+    if isinstance(vals, str):
+        vals = json.loads(vals)
+    if not dates or not vals:
+        raise RuntimeError("水泥网接口返回空序列")
+    df = pd.DataFrame({"date": pd.to_datetime(dates), "close": [float(v) for v in vals]})
+    df["open"] = df["high"] = df["low"] = df["close"]
+    df["volume"] = 0.0
+    return df
+
+
+def _ccement_kline(d: dict | str) -> pd.DataFrame:
+    """cementkline 周K 行 [ts, open, high, low, close, prev_close, chg, chg_pct] → DataFrame."""
+    rows = json.loads(d) if isinstance(d, str) else d
+    if not rows:
+        raise RuntimeError("水泥网接口返回空K线")
+    df = pd.DataFrame(
+        rows,
+        columns=["ts", "open", "high", "low", "close", "prev_close", "chg", "chg_pct"],
+    )
+    df["date"] = pd.to_datetime(df["ts"], unit="ms")
+    df["volume"] = 0.0
+    return df[["date", "open", "high", "low", "close", "volume"]]
+
+
+
+def _ccement_history(p: ParsedSymbol, start_date: str, end_date: str | None = None) -> pd.DataFrame:
+    """目录条目 ccement 字段路由到对应端点; timeType=5 取全部历史, 本地过滤."""
+    kind = _catalog(p)["ccement"]
+    if kind == "kline":
+        # CEMPI 主指数: 周K OHLC (日线无 OHLC, 蜡烛图用周K)。
+        # timeType=5 会忽略 start/end 参数返回全部历史, 本地按窗口切片。
+        d = _ccement_post(
+            "priceindex/cementkline",
+            {"start_time": start_date, "end_time": end_date or "", "areaV": "country", "timeType": "5"},
+        )
+        return _slice_range(_ccement_kline(d), start_date, end_date)
+    if kind == "coal":
+        # CCPDI 煤价差: getPriceIndex 中 coal_price 序列
+        d = _ccement_post("priceindex/getPriceIndex", {"timeType": "5"})
+        return _slice_range(_ccement_points(d["coal_price"]), start_date, end_date)
+    if kind == "priceindex/po425zsline":
+        d = _ccement_post(kind, {"areaV": "country", "timeType": "5"})
+        return _slice_range(_ccement_points(d), start_date, end_date)
+    # 熟料/混凝土/碎石/机制砂/砂浆: 各自端点, areaV=country + indexSign=1
+    d = _ccement_post(kind, {"areaV": "country", "indexSign": "1", "timeType": "5"})
+    return _slice_range(_ccement_points(d), start_date, end_date)
 
 
 # ---------- yfinance (OpenBB) 源 ----------
@@ -111,6 +203,12 @@ class IndexProvider(Provider):
         def yf():
             return _yf_history(p, start_date, end_date)
 
+        def cc():
+            return _ccement_history(p, start_date, end_date)
+
+        # 水泥网指数: 目录带 ccement 字段, 专属源 (无第二数据源)
+        if _catalog(p).get("ccement"):
+            return [cc]
         ak_supported = bool(_catalog(p).get("ak")) or index_key(p.yahoo) in _AK_US_SINA
         if not ak_supported:
             return [yf]

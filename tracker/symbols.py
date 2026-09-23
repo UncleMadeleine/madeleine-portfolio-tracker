@@ -84,6 +84,15 @@ INDEX_CATALOG: dict[str, dict[str, str]] = {
     "SZSE":  {"name": "深证成指", "ak": "sz399001", "currency": "点"},
     "CYB":   {"name": "创业板指", "ak": "sz399006", "currency": "点"},
     "KECHUANG50": {"name": "科创 50", "ak": "sh000688", "currency": "点"},
+    # -- 中国水泥网 (index.ccement.com, 免登录前端接口; 见 providers/index.py) --
+    "CEMPI":  {"name": "水泥价格指数 CEMPI", "ccement": "kline", "currency": "点"},
+    "CEMPIPO": {"name": "P.O 42.5 水泥价格指数", "ccement": "priceindex/po425zsline", "currency": "元/吨"},
+    "CCPDI":  {"name": "水泥煤价差指数 CCPDI", "ccement": "coal", "currency": "点"},
+    "CLINKER": {"name": "熟料价格指数", "ccement": "clinker/ClinkerPrice", "currency": "元/吨"},
+    "CONCRETE": {"name": "混凝土价格指数", "ccement": "concrete/ConcretePrice", "currency": "元/方"},
+    "CSPI":   {"name": "碎石价格指数 CSPI", "ccement": "stone/stoneZSLine", "currency": "元/吨"},
+    "MSPI":   {"name": "机制砂价格指数 MSPI", "ccement": "manufactured/manufacturedZSLine", "currency": "元/吨"},
+    "MORPI":  {"name": "预拌砂浆价格指数 MORPI", "ccement": "mortar/mortarZSLine", "currency": "元/吨"},
 }
 
 def index_key(symbol: str) -> str | None:

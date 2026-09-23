@@ -72,6 +72,60 @@ def test_index_provider_source_chains():
     assert len(provider.history_sources(vix, "2025-01-01", None)) == 1
 
 
+def test_ccement_catalog_entries_parse_to_index_domain():
+    """水泥网 8 指数: 目录合法 + 统一带 ccement 路由字段 (无 ak/yf 源)."""
+    ccement_keys = [k for k, e in INDEX_CATALOG.items() if "ccement" in e]
+    assert len(ccement_keys) == 8
+    for key in ccement_keys:
+        p = parse(f"IX.{key}")
+        assert p.type == "index"
+        assert p.market is Market.INDEX
+        e = INDEX_CATALOG[key]
+        assert "ak" not in e and "yf" not in e
+
+
+def test_ccement_source_chain_is_exclusive():
+    """水泥网指数源链只有专属 cc 源, 不落入 yfinance/akshare 误查."""
+    provider = IndexProvider()
+    chains = provider.history_sources(parse("IX.CEMPI"), "2025-01-01", None)
+    assert [f.__name__ for f in chains] == ["cc"]
+
+
+def test_ccement_points_parses_dynamic_index_all(monkeypatch):
+    """getPriceIndex 聚合载荷用 dynamicIndexAll (独立端点用 dynamicIndex), 都要能解析."""
+    from tracker.providers import index as idx_mod
+
+    d = {"dynamicIndexDate": ["2026-09-22", "2026-09-23"], "dynamicIndexAll": [95.77, 95.95]}
+    df = idx_mod._ccement_points(d)
+    assert list(df.columns) == ["date", "close", "open", "high", "low", "volume"]
+    assert df.iloc[-1]["close"] == pytest.approx(95.95)
+    assert (df["volume"] == 0.0).all()
+    # 独立端点键名: dynamicIndex (可能是 JSON 字符串)
+    d2 = {"dynamicIndexDate": ["2026-09-23"], "dynamicIndex": "[291.28]"}
+    df2 = idx_mod._ccement_points(d2)
+    assert df2.iloc[-1]["close"] == pytest.approx(291.28)
+
+
+def test_ccement_kline_parses_weekly_rows(monkeypatch):
+    """cementkline 行结构 → date/open/high/low/close/volume, 涨跌列丢弃."""
+    from tracker.providers import index as idx_mod
+
+    rows = [[1789948800000, 95.77, 95.95, 95.77, 95.95, 95.77, 0.18, 0.19]]
+    df = idx_mod._ccement_kline(rows)
+    assert list(df.columns) == ["date", "open", "high", "low", "close", "volume"]
+    assert df.iloc[0]["close"] == pytest.approx(95.95)
+    assert df.iloc[0]["date"] == pd.Timestamp("2026-09-21")
+
+
+def test_ccement_history_rejects_empty_series(monkeypatch):
+    """接口返回空序列必须报错, 不能产出空 DataFrame 静默通过."""
+    from tracker.providers import index as idx_mod
+
+    monkeypatch.setattr(idx_mod, "_ccement_post", lambda path, data: {"dynamicIndexDate": [], "dynamicIndex": []})
+    with pytest.raises(RuntimeError, match="空序列"):
+        idx_mod._ccement_history(parse("IX.CSPI"), "2025-01-01", None)
+
+
 def test_index_provider_rejects_quote():
     with pytest.raises(NotImplementedError):
         IndexProvider().fetch_quote(parse("IX.DXY"), prefer_first=False)

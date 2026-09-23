@@ -31,6 +31,7 @@ def render_index_page() -> None:
         "美股": ["SPX", "NDX", "DJI", "RUT"],
         "全球": ["DAX", "FTSE", "N225", "HSI"],
         "中国": ["CSI300", "CSI500", "CSI1000", "SSE", "SZSE", "CYB", "KECHUANG50"],
+        "水泥网": ["CEMPI", "CEMPIPO", "CCPDI", "CLINKER", "CONCRETE", "CSPI", "MSPI", "MORPI"],
     }
     labels = {}
     for g, keys in groups.items():

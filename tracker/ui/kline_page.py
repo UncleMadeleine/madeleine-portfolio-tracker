@@ -130,9 +130,15 @@ def render_compare_chart(data: dict, *, height: int = 560) -> None:
 def render_compare_controls(prefer_akshare: bool, quick_symbols: list[str]) -> None:
     """多股走势对比 (K线子功能): 任意代码同坐标系折线对比, 输入驱动无提交也拉取.
 
-    代码候选 = 持仓/自选 (quick_symbols) + 自由输入; 数据复用 cached_kline。
+    代码候选 = 持仓/自选 (quick_symbols) + 搜索接口结果 + 自由输入; 数据复用 cached_kline。
     """
     chart_symbols = list(dict.fromkeys(quick_symbols))
+    # 搜索框: 名称/片段在线匹配, 选中追加进对比代码 (复用单只查询的搜索接口)
+    _render_symbol_search(prefix="cmp", on_pick=_append_compare_symbol)
+    # 搜索/手输过的代码持久注入候选 (multiselect options 为纯展示, 不做状态源)
+    chart_symbols = list(
+        dict.fromkeys(chart_symbols + list(st.session_state.get("compare_extra", [])))
+    )
     c1, c2, c3, c4 = st.columns([4, 1, 1, 1], vertical_alignment="bottom")
     sel_raw = c1.multiselect(
         "对比代码",
@@ -199,18 +205,31 @@ def render_compare_controls(prefer_akshare: bool, quick_symbols: list[str]) -> N
             )
 
 
-def _render_symbol_search() -> None:
-    """搜索框: 输入代码/名称片段 → 三域 provider 独立搜索 → 分域下拉自动填入代码.
+def _append_compare_symbol(code: str) -> None:
+    """搜索选中 → 追加进对比代码 (multiselect 状态须在本轮该 widget 实例化前写入)."""
+    extra = st.session_state.get("compare_extra") or []
+    if code not in extra:
+        extra = extra + [code]
+    st.session_state["compare_extra"] = extra
+    cur = list(st.session_state.get("compare_sel") or [])
+    if code not in cur:
+        cur.append(code)
+    st.session_state["compare_sel"] = cur
 
-    A股/美股港股/加密货币 各一个下拉, 结果不混排; 选中通过 session_state
-    同步到代码输入框 (kline_symbol) 并触发查询。
+
+def _render_symbol_search(*, prefix: str = "kline", on_pick=None) -> None:
+    """搜索框: 输入代码/名称片段 → 三域 provider 独立搜索 → 分域下拉展示.
+
+    prefix 区分多入口 widget key (单只查询/走势对比); on_pick(code) 在
+    on_change 回调里执行 (本轮后续 widget 实例化前, 可安全写其状态)。
+    prefix=kline 时保持旧行为: 选中回填代码输入框并触发查询。
     """
     sq = st.text_input(
         "搜索股票 (代码或名称)",
         value="",
-        key="kline_search_query",
+        key=f"{prefix}_search_query",
         placeholder="如: 苹果 · 腾讯 · 茅台 · AAPL · 0700 · BTC",
-        help="输入代码或名称片段, 各市场分组展示匹配结果, 选中即可自动填入代码框",
+        help="输入代码或名称片段, 各市场分组展示匹配结果, 选中即可填入",
     )
     sq = (sq or "").strip()
     if not sq:
@@ -218,11 +237,13 @@ def _render_symbol_search() -> None:
     grouped = search.search_grouped(sq, limit_per_domain=8)
     labels = {"cn": "🇨🇳 A股/北交所", "global": "🌐 美股/港股", "crypto": "🪙 加密货币"}
 
-    def _on_pick(code: str):
+    def _pick_legacy(code: str):
         st.session_state["kline_symbol"] = code
         # 触发查询 (与手动回车等价)
         st.session_state["kline_last_symbol"] = None
 
+    if on_pick is None:
+        on_pick = _pick_legacy
     total = sum(len(v) for v in grouped.values())
     if not total:
         st.caption("无匹配结果 —— 可直接在下方代码框输入完整代码")
@@ -232,12 +253,14 @@ def _render_symbol_search() -> None:
             continue
         options = [f"{r['code']} · {r['name']}" for r in items]
         code_by_opt = dict(zip(options, [r["code"] for r in items]))
-        key = f"kline_search_select_{t}"
+        key = f"{prefix}_search_select_{t}"
 
         def _pick(t=t, code_by_opt=code_by_opt):
             code = code_by_opt.get(st.session_state.get(key))
             if code:
-                _on_pick(code)
+                on_pick(code)
+            if st.session_state.get(key) is not None:
+                del st.session_state[key]  # 复位下拉, 同一结果可重复选
 
         st.selectbox(
             labels[t],

@@ -146,6 +146,38 @@ def test_global_search_code_pass_through(monkeypatch, no_ibkr):
     assert res[0].type == "global"
 
 
+def test_global_search_numeric_hits_hk(monkeypatch, no_ibkr):
+    """纯数字查询走东财 suggest 补零命中港股: 700/00700 → 0700.HK 腾讯控股。"""
+    import tracker.providers.em_suggest as em
+    import tracker.providers.global_stocks as gs
+    from tracker.providers import PROVIDERS
+
+    def fake_merged(q):
+        if q in ("700", "00700", "0700"):
+            rows = [_em_row("00700", "腾讯控股", "港股"), _em_row("000700", "模塑科技", "深A")]
+            return rows, False
+        return None
+
+    monkeypatch.setattr(em, "suggest_merged", fake_merged)
+    monkeypatch.setattr(gs, "_yf_search", lambda q: [])
+    for q in ("700", "00700", "0700"):
+        res = PROVIDERS["global"].search(q, limit=5)
+        assert res[0].code == "0700.HK"
+        assert res[0].name == "腾讯控股"
+        assert res[0].market == "港股" and res[0].type == "global"
+
+
+def test_global_search_numeric_no_em_results_no_us_fallback(monkeypatch, no_ibkr):
+    """纯数字但东财无港股命中时不落美股直查 (裸数字非规范美股代码)。"""
+    import tracker.providers.em_suggest as em
+    import tracker.providers.global_stocks as gs
+    from tracker.providers import PROVIDERS
+
+    monkeypatch.setattr(em, "suggest_merged", lambda q: ([], False))
+    monkeypatch.setattr(gs, "_yf_search", lambda q: [])
+    assert PROVIDERS["global"].search("700", limit=5) == []
+
+
 # ---------- CNStocksProvider.search (东财 suggest, A股/北交所) ----------
 
 

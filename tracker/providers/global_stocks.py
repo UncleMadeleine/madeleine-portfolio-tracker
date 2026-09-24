@@ -297,10 +297,16 @@ class GlobalStocksProvider(Provider):
         # 非港股 (美股/德英加澳): 仅 yfinance
         return [lambda: _yahoo_history(p, start_date, end_date)]
 
-    # -- 搜索: IBKR (可选) → yfinance Search → 合法代码直查 --
+    # -- 搜索: IBKR (可选) → 东财 suggest (纯数字, 补零命中港股) → yfinance Search → 合法代码直查 --
 
     def search(self, query: str, limit: int = 10) -> list[SymbolEntry]:
-        """全球域搜索: 对齐本域行情源链 (IBKR → yf), 不依赖东财。"""
+        """全球域搜索: IBKR → 东财 suggest (纯数字) → yf → 代码直查。
+
+        东财 suggest 仅在纯数字查询时使用 (含补零二次请求, 700 → 00700 命中
+        腾讯控股 0700.HK), 只取港股行 —— 纯数字在美股域几乎必是港股/没戏,
+        且避免把 6 位 A股代码误当美股; 其余查询不走东财 (中文名/代码召回由
+        IBKR/yf/直查覆盖)。
+        """
         from ..ibkr import ibkr_to_yahoo, search_matches
         from ..search import _fallback_match
 
@@ -328,14 +334,31 @@ class GlobalStocksProvider(Provider):
                 if yahoo:
                     _add(yahoo, row["long_name"] or row["symbol"], _market_label(yahoo))
 
-        # 源 2: yfinance Search (中文名不支持, 英文名/代码; 本域行情主源同一家)
+        # 源 2: 东财 suggest (仅纯数字查询): 700/0700 补零命中港股 00700 → 0700.HK
+        if q.isdigit():
+            from .em_suggest import em_code_to_yahoo, normalize_suggest_row, suggest_merged
+
+            merged = suggest_merged(q)
+            if merged is not None:
+                rows, _failed = merged
+                for row in rows:
+                    norm = normalize_suggest_row(row)
+                    if norm is None or norm[1] != "港股":
+                        continue
+                    yahoo = em_code_to_yahoo(*norm)
+                    _add(yahoo, row.get("Name") or yahoo, _market_label(yahoo))
+                    if len(out) >= limit:
+                        break
+
+        # 源 3: yfinance Search (中文名不支持, 英文名/代码; 本域行情主源同一家)
         if len(out) < limit:
             for row in _yf_search(q):
                 _add(row["symbol"], row["name"], _market_label(row["symbol"]))
 
-        # 源 3: 合法代码直查 (SAP.DE / BP.L 等带后缀代码; 非 ASCII/6位纯数字不认领)
+        # 源 4: 合法代码直查 (SAP.DE / BP.L 等带后缀代码; 非 ASCII 不认领;
+        # 裸纯数字不认领 —— 纯数字在美股域无规范形态, 上面已按港股处理)
         if not out:
-            if q.isascii() and not (q.isdigit() and len(q) == 6):
+            if q.isascii() and not q.isdigit():
                 fb = _fallback_match(q, limit)
                 return [
                     SymbolEntry(r["code"], r["name"], r["market"], r["type"])

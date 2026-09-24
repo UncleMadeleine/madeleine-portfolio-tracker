@@ -319,7 +319,6 @@ settings.json           显示与数据源设置（配色 / prefer_akshare / use
 *.example.json          各配置模板（随仓库提交: 首次使用 cp <名>.example.json <名>.json）
 ibkr.example.json       IBKR 配置模板（随仓库提交）
 ibkr.json               IBKR 真实配置（已 gitignore，不随仓库提交）
-data/                   git 跟踪的静态数据（如钱包内置 tokenlist.json 数据副本）
 var/                    运行时生成产物（行情缓存 quotes_cache.db、kline/compare 图表 HTML）,
                         已 gitignore, 可随时整目录删除（重建即自动再生成）
 docs/                   研究笔记（如 A股券商导入方案调研）

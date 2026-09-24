@@ -300,12 +300,12 @@ class GlobalStocksProvider(Provider):
     # -- 搜索: IBKR (可选) → 东财 suggest (纯数字, 补零命中港股) → yfinance Search → 合法代码直查 --
 
     def search(self, query: str, limit: int = 10) -> list[SymbolEntry]:
-        """全球域搜索: IBKR → 东财 suggest (纯数字) → yf → 代码直查。
+        """全球域搜索: IBKR → 东财 suggest (纯数字/非 ASCII) → yf → 代码直查。
 
-        东财 suggest 仅在纯数字查询时使用 (含补零二次请求, 700 → 00700 命中
-        腾讯控股 0700.HK), 只取港股行 —— 纯数字在美股域几乎必是港股/没戏,
-        且避免把 6 位 A股代码误当美股; 其余查询不走东财 (中文名/代码召回由
-        IBKR/yf/直查覆盖)。
+        东财 suggest 用于两类查询 (含补零二次请求, 700 → 00700 命中
+        腾讯控股 0700.HK): 纯数字 (港股 4-5 位代码) 与非 ASCII (中文命中
+        港股/中概英文名, yf 对中文无召回)。其余查询 (ASCII) 不走东财 ——
+        英文名/代码召回由 IBKR/yf/直查覆盖。
         """
         from ..ibkr import ibkr_to_yahoo, search_matches
         from ..search import _fallback_match
@@ -334,8 +334,9 @@ class GlobalStocksProvider(Provider):
                 if yahoo:
                     _add(yahoo, row["long_name"] or row["symbol"], _market_label(yahoo))
 
-        # 源 2: 东财 suggest (仅纯数字查询): 700/0700 补零命中港股 00700 → 0700.HK
-        if q.isdigit():
+        # 源 2: 东财 suggest (纯数字 / 非 ASCII 查询): 700 补零命中 00700 腾讯控股,
+        # 中文名命中港股/中概 (东财 suggest 支持中文, yf 不支持); 只取港股行
+        if q.isdigit() or not q.isascii():
             from .em_suggest import em_code_to_yahoo, normalize_suggest_row, suggest_merged
 
             merged = suggest_merged(q)

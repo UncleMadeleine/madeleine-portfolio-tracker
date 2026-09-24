@@ -10,6 +10,8 @@
   fx        汇率查询
   history   历史价格 (近 N 个月)
   kline     K线蜡烛图 (交互式 HTML + 摘要, 含成交量/均线/周月K)
+  search    代码/名称搜索 → 规范代码 (结果可直接喂 kline/compare/quote)
+  compare   多股走势对比 (归一化折线; --json 出序列, 默认出交互式 HTML)
   import    统一持仓导入 (ibkr / wallet / file, 追加合并或 --overwrite 覆盖)
   sync      从 IB Gateway 账户同步持仓 (已并入 import ibkr, 保留兼容)
   index-kline 宏观/风险指数K线 (IX.<KEY>, 独立于股票 kline)
@@ -27,6 +29,8 @@ from ..watchlist import DEFAULT_WATCHLIST  # storage 门面 (watchlist.json 常�
 from ._common import VERSION, _finish_with_error
 from .cache import cmd_cache
 from .export import cmd_export
+from .compare import cmd_compare
+from .search import cmd_search
 from .fx import cmd_fx
 from .history import cmd_history
 from .kline import cmd_kline
@@ -242,7 +246,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  tracker kline AAPL --no-volume --open            # 无成交量 + 浏览器打开\n"
         ),
     )
-    p_k.add_argument("symbol", help="Yahoo 代码, 如 AAPL 600519.SS BTC-USD")
+    p_k.add_argument("symbol", help="Yahoo 代码或名称片段 (非法代码自动搜索回退), 如 AAPL 0700.HK 腾讯")
     p_k.add_argument("--months", type=int, default=12, help="拉取近 N 个月日线")
     p_k.add_argument("--period", choices=["daily", "weekly", "monthly"], default="daily",
                      help="K线周期 (默认日K)")
@@ -257,6 +261,50 @@ def build_parser() -> argparse.ArgumentParser:
                      help="生成后自动在浏览器打开")
     p_k.add_argument("--json", action="store_true", help="输出 JSON 数据 (不生成图表)")
     p_k.set_defaults(func=cmd_kline)
+
+    # ---- search ----
+    p_s = sub.add_parser(
+        "search", help="代码/名称搜索 → 规范代码 (可直接喂 kline/compare/quote)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "示例:\n"
+            "  tracker search 700                    # 纯数字: 补零命中港股 0700.HK\n"
+            "  tracker search 茅台 --json            # 中文名, JSON 输出\n"
+            "  tracker search AAPL --exact           # 宽松输入→唯一最佳匹配\n"
+            "  tracker search 腾讯 | jq -r '.results[0].code'  # 结果直接喂 kline\n"
+        ),
+    )
+    p_s.add_argument("query", help="代码片段 / 中文名 / 英文名, 如 700 腾讯 maotai")
+    p_s.add_argument("--limit", type=int, default=10, help="最多返回条数 (默认 10)")
+    p_s.add_argument("--exact", action="store_true",
+                     help="宽松解析: 合法代码直接归一, 其余取最佳匹配 (≤1 条/次)")
+    p_s.add_argument("--json", action="store_true", help="输出 JSON (results[].code 可直接喂取数命令)")
+    p_s.set_defaults(func=cmd_search)
+
+    # ---- compare ----
+    p_cmp = sub.add_parser(
+        "compare", help="多股走势对比 (归一化折线; --json 出序列, 默认出交互式 HTML)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "示例:\n"
+            "  tracker compare AAPL 0700.HK 600519.SS          # 归一化对比 (起点=100)\n"
+            "  tracker compare AAPL NVDA --months 6 --period weekly\n"
+            "  tracker compare AAPL 0700.HK --raw               # 不归一化 (各代码原币种)\n"
+            "  tracker compare AAPL NVDA --json                 # JSON: 每代码归一化序列+涨跌\n"
+        ),
+    )
+    p_cmp.add_argument("symbols", nargs="+", help="2+ 个代码/名称片段 (宽松输入, 自动搜索回退)")
+    p_cmp.add_argument("--months", type=int, default=12, help="对比近 N 个月 (默认 12)")
+    p_cmp.add_argument("--period", choices=["daily", "weekly", "monthly"], default="daily",
+                       help="周期 (默认日K)")
+    p_cmp.add_argument("--raw", action="store_true", help="不归一化, 直接画各代码原币种收盘价")
+    p_cmp.add_argument("--akshare", action="store_true")
+    p_cmp.add_argument("--output", "-o", default=None,
+                       help="HTML 输出路径 (默认 data/compare_<代码>.html)")
+    p_cmp.add_argument("--open", dest="open_browser", action="store_true",
+                       help="生成后自动在浏览器打开")
+    p_cmp.add_argument("--json", action="store_true", help="输出 JSON (每代码归一化序列 + 区间涨跌)")
+    p_cmp.set_defaults(func=cmd_compare)
 
     # ---- index-kline ----
     p_ik = sub.add_parser(

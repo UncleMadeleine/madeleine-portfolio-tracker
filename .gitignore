@@ -6,10 +6,12 @@ __pycache__/
 venv/
 .pytest_cache/
 
+# 生成产物 (var/ = 运行时缓存与图表): 一律不入库, 与 data/ (git 跟踪数据) 分离
+/var/
+
 # Data & secrets
 data/*.sqlite
 data/*.db
-data/*.html
 data/symbol_list.json
 *.sqlite
 *.db

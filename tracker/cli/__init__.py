@@ -256,7 +256,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_k.add_argument("--akshare", action="store_true")
     p_k.add_argument("--ibkr", action="store_true", help="优先使用 IBKR 行情 (需 IB Gateway)")
     p_k.add_argument("--output", "-o", default=None,
-                     help="HTML 输出路径 (默认 data/kline_<代码>.html)")
+                     help="HTML 输出路径 (默认 var/kline_<代码>.html)")
     p_k.add_argument("--open", dest="open_browser", action="store_true",
                      help="生成后自动在浏览器打开")
     p_k.add_argument("--json", action="store_true", help="输出 JSON 数据 (不生成图表)")
@@ -300,7 +300,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_cmp.add_argument("--raw", action="store_true", help="不归一化, 直接画各代码原币种收盘价")
     p_cmp.add_argument("--akshare", action="store_true")
     p_cmp.add_argument("--output", "-o", default=None,
-                       help="HTML 输出路径 (默认 data/compare_<代码>.html)")
+                       help="HTML 输出路径 (默认 var/compare_<代码>.html)")
     p_cmp.add_argument("--open", dest="open_browser", action="store_true",
                        help="生成后自动在浏览器打开")
     p_cmp.add_argument("--json", action="store_true", help="输出 JSON (每代码归一化序列 + 区间涨跌)")
@@ -327,7 +327,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_ik.add_argument("--volume", action="store_true", help="显示成交量副图 (指数一般无意义)")
     p_ik.add_argument("--refresh", action="store_true", help="忽略缓存强制刷新")
     p_ik.add_argument("--output", "-o", default=None,
-                      help="HTML 输出路径 (默认 data/index_kline_<代码>.html)")
+                      help="HTML 输出路径 (默认 var/index_kline_<代码>.html)")
     p_ik.add_argument("--open", dest="open_browser", action="store_true",
                       help="生成后自动在浏览器打开")
     p_ik.add_argument("--json", action="store_true", help="输出 JSON 数据 (不生成图表)")

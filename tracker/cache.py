@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from .prices import Quote
 
 
-CACHE_DB = Path(__file__).resolve().parent.parent / "data" / "quotes_cache.db"
+CACHE_DB = Path(__file__).resolve().parent.parent / "var" / "quotes_cache.db"
 CACHE_TTL = 300  # 秒, 实时行情缓存有效期
 OHLC_TTL = 1800  # 秒, 日线K线缓存有效期 (30 分钟; 收盘后数据不变, TTL 过期重取也准)
 

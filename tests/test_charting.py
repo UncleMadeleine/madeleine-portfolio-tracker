@@ -411,10 +411,10 @@ class TestKlineCli:
     def test_kline_default_output_path(self, capsys, monkeypatch, tmp_path):
         from tracker.cli import kline as kline_mod
 
-        monkeypatch.setattr(kline_mod, "DATA_DIR", tmp_path / "data")
+        monkeypatch.setattr(kline_mod, "VAR_DIR", tmp_path / "var")
         out = self._run(capsys, "kline", "600519.SS")
         assert "K线图已生成" in out
-        assert (tmp_path / "data" / "kline_600519_SS.html").exists()
+        assert (tmp_path / "var" / "kline_600519_SS.html").exists()
 
 
 class TestMacd:

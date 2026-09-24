@@ -9,7 +9,7 @@ from .. import prices
 from ..symbols import parse
 from ._common import _finish_with_error, _print_json
 
-DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+VAR_DIR = Path(__file__).resolve().parent.parent.parent / "var"
 
 
 def _fmt_vol(v) -> str:
@@ -122,7 +122,7 @@ def cmd_kline(args) -> None:
         df, p.yahoo, currency=p.currency, mas=mas,
         show_volume=not args.no_volume, period=args.period,
     )
-    out = Path(args.output) if args.output else DATA_DIR / f"kline_{p.yahoo.replace('.', '_')}.html"
+    out = Path(args.output) if args.output else VAR_DIR / f"kline_{p.yahoo.replace('.', '_')}.html"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(charting.fig_to_html(fig), encoding="utf-8")
     print(f"\n✅ K线图已生成: {out}")

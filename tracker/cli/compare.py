@@ -7,7 +7,7 @@ from .. import prices
 from ..search import resolve_symbol
 from ._common import _finish_with_error, _print_json
 
-DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+VAR_DIR = Path(__file__).resolve().parent.parent.parent / "var"
 
 
 def resolve_inputs(symbols: list[str]) -> tuple[list[str], list[str]]:
@@ -123,7 +123,7 @@ def cmd_compare(args) -> None:
         yaxis_title="收盘价 (各代码原币种)" if args.raw else "归一化 (起点=100)",
         hovermode="x unified", height=560,
     )
-    out = Path(args.output) if args.output else DATA_DIR / f"compare_{'-'.join(c[:6] for c in codes)}.html"
+    out = Path(args.output) if args.output else VAR_DIR / f"compare_{'-'.join(c[:6] for c in codes)}.html"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(charting.fig_to_html(fig), encoding="utf-8")
     # 终端摘要: 区间涨跌

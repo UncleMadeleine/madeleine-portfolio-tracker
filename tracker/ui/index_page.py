@@ -12,7 +12,7 @@ from . import settings
 from .kline_page import render_kline_view
 
 from tracker import charting, prices
-from tracker.symbols import INDEX_CATALOG, index_label
+from tracker.symbols import INDEX_CATALOG, index_groups, index_label
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -25,19 +25,11 @@ def render_index_page() -> None:
     """指数K线查询页: 分组选择指数 → 切换即拉取渲染 (无按钮, 选择驱动)."""
     st.markdown("### :material/insights: 指数K线")
 
-    groups = {
-        "风险/波动": ["VIX", "VIX3M", "MOVE"],
-        "美元/利率": ["DXY", "US10Y", "US02Y"],
-        "美股": ["SPX", "NDX", "DJI", "RUT"],
-        "全球": ["DAX", "FTSE", "N225", "HSI"],
-        "中国": ["CSI300", "CSI500", "CSI1000", "SSE", "SZSE", "CYB", "KECHUANG50"],
-        "水泥网": ["CEMPI", "CEMPIPO", "CCPDI", "CLINKER", "CONCRETE", "CSPI", "MSPI", "MORPI"],
-    }
     labels = {}
-    for g, keys in groups.items():
+    for group, keys in index_groups().items():
         for k in keys:
             if k in INDEX_CATALOG:
-                labels[f"{INDEX_CATALOG[k]['name']} ({g})"] = k
+                labels[f"{index_label(k)} ({group})"] = k
     extra = [k for k in INDEX_CATALOG if k not in labels.values()]
     for k in extra:
         labels[index_label(k)] = k

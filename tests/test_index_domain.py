@@ -228,3 +228,57 @@ def test_kline_payload_keeps_real_volume_with_positive_volume():
     df["volume"] = 100.0
     payload = kline_payload(df, "AAPL", show_volume=True)
     assert len(payload["volume"]) == len(clean_ohlc(df))
+
+
+# ---------- 目录分组 (CLI --list / UI 下拉的唯一数据源) ----------
+
+
+def test_index_groups_cover_whole_catalog():
+    """分组必须覆盖全部目录条目且无重复: 新增指数只允许经 INDEX_GROUPS 加入."""
+    from tracker.symbols import INDEX_GROUPS, index_groups
+
+    grouped = [k for keys in index_groups().values() for k in keys]
+    assert sorted(grouped) == sorted(INDEX_CATALOG)
+    assert len(grouped) == len(set(grouped))
+    assert set(INDEX_GROUPS) == set(index_groups())
+
+
+def test_index_catalog_flattening_preserves_entries():
+    """平铺目录条目与分组定义完全一致 (派生不丢字段)."""
+    from tracker.symbols import INDEX_GROUPS
+
+    for group, entries in INDEX_GROUPS.items():
+        for key, entry in entries.items():
+            assert INDEX_CATALOG[key] == entry
+            assert index_label(key) == entry["name"]
+
+
+def test_index_kline_list_prints_groups(capsys):
+    """--list 按分组输出, 每组含组名与全部成员."""
+    from tracker.symbols import index_groups
+    from tracker.cli.index_kline import print_index_catalog
+
+    print_index_catalog()
+    out = capsys.readouterr().out
+    for group, keys in index_groups().items():
+        assert f"[{group}]" in out
+        for key in keys:
+            assert f"IX.{key}" in out
+
+
+def test_index_kline_list_json_machine_readable(capsys):
+    """--list --json 输出可解析 JSON: total 与逐条 code/name/group 对得上."""
+    import json as _json
+
+    from tracker.cli.index_kline import print_index_catalog
+
+    print_index_catalog(as_json=True)
+    data = _json.loads(capsys.readouterr().out)
+    assert data["total"] == len(INDEX_CATALOG)
+    assert len(data["indices"]) == len(INDEX_CATALOG)
+    by_code = {e["code"]: e for e in data["indices"]}
+    assert by_code["IX.DXY"]["group"] == "美元/利率"
+    assert by_code["IX.CEMPI"]["group"] == "水泥网"
+    for e in data["indices"]:
+        assert e["code"].startswith("IX.")
+        assert e["name"] == index_label(e["key"])

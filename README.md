@@ -25,10 +25,10 @@ OpenBB Portfolio Tracker 是一款**本地优先**的投资组合追踪工具，
 - **自选股价格阈值提醒** — 两级上限/下限，触发分级，距离预测
 - **IBKR 行情接入** — TWS / IB Gateway 实时快照，自动回退
 - **K 线蜡烛图** — 日K / 周K / 月K，MA 均线，成交量，MACD / RSI / KDJ / 布林带，滑动模式默认加载上市以来全量历史
-- **宏观/风险指数K线** — 独立 IX.<KEY> 代码规范（美元指数 / VIX 恐慌指数 / 沪深 300 等），独立页面与 `index-kline` 子命令，独立 provider 源链
+- **宏观/风险指数K线** — 独立 IX.<KEY> 代码规范（美元指数 / VIX / 沪深 300 / 水泥网建材指数 等），独立页面与 `index-kline` 子命令，独立 provider 源链
 - **多股对比** — 任意代码同坐标系折线对比，归一化（起点=100）跨币种跨量级比较
 - **Streamlit 可视化页面** — 组合明细 / 资产配置 / 自选提醒 / K线查询（含多股走势对比）/ 指数K线 / 设置
-- **统一 CLI** — 13 个子命令（快照、报价、持仓、自选、汇率、历史、K线、指数K线、导入、同步、缓存…），全部 `--json` 输出
+- **统一 CLI** — 16 个子命令（快照、报价、持仓、自选、汇率、历史、K线、搜索、对比、指数K线、导入、同步、缓存…），全部 `--json` 输出
 - **链上钱包导入** — EVM 五链地址余额只读查询，一键写入持仓
 - **A股券商持仓导入** — 解析券商客户端导出的 CSV/Excel 持仓文件
 
@@ -64,7 +64,7 @@ streamlit run tracker/ui/app.py
 
 - **组合** — 持仓编辑、明细表、资产配置饼图、自选提醒
 - **K线** — 任意代码 K 线查询（支持按代码或名称模糊搜索）+ 多股走势对比（K线子功能）
-- **指数K线** — 宏观/风险指数查询（IX.<KEY> 分组下拉：风险波动 / 美元利率 / 美股 / 全球 / 中国）
+- **指数K线** — 宏观/风险指数查询（IX.<KEY> 分组下拉，分组随目录维护；CLI `index-kline --list` 可查全部已收录指数）
 - **导入** — IBKR 账户 / 链上钱包 / A股券商文件导入
 - **设置** — 涨跌配色（红涨绿跌/绿涨红跌）、数据源偏好（akshare / IBKR）、基础货币
 
@@ -93,14 +93,21 @@ python -m tracker.cli fx USD CNY EUR
 python -m tracker.cli history AAPL --months 12
 
 # 生成 K 线蜡烛图（交互式 HTML）
-
-# 生成宏观/风险指数K线（独立于股票 K 线）
-python -m tracker.cli index-kline IX.DXY --months 12      # 美元指数
-python -m tracker.cli index-kline IX.VIX --period weekly  # 恐慌指数 周K
-python -m tracker.cli index-kline IX.CSI300 --list        # 查看全部已收录指数
 python -m tracker.cli kline AAPL --months 12
 python -m tracker.cli kline 600519.SS --ma 5,10,20,60
 python -m tracker.cli kline 0700.HK --period weekly --open
+
+# 宏观/风险指数K线（独立于股票 K 线）
+python -m tracker.cli index-kline IX.DXY --months 12      # 美元指数
+python -m tracker.cli index-kline IX.VIX --period weekly  # 恐慌指数 周K
+python -m tracker.cli index-kline --list                 # 全部已收录指数（按分组）
+python -m tracker.cli index-kline --list --json          # 机器可读目录（code/name/group）
+
+# 代码/名称搜索 → 规范代码（结果可直接喂 quote/kline/compare）
+python -m tracker.cli search 腾讯 --json
+
+# 多股走势对比（归一化起点=100）
+python -m tracker.cli compare AAPL 0700.HK 600519.SS
 
 # 持仓管理
 python -m tracker.cli portfolio list
@@ -269,7 +276,7 @@ tracker/ui/           Streamlit 页面包（streamlit run tracker/ui/app.py）
 └── settings.py         settings.json 读写（涨跌配色 / prefer_akshare / use_ibkr）+ portfolio 读写助手
 tracker/
 ├── __main__.py         python -m tracker 入口（转发到 cli）
-├── cli/                CLI 包（python -m tracker.cli，13 个子命令各一个模块）
+├── cli/                CLI 包（python -m tracker.cli，16 个子命令各一个模块）
 │   ├── __init__.py       argparse 注册与分发
 │   ├── snapshot.py       快照（持仓 + 自选 + 阈值触发）
 │   ├── index_kline.py    指数K线 HTML + 摘要（IX.<KEY>, --json / --list）
@@ -295,7 +302,7 @@ tracker/
 │   ├── orchestration.py    批量编排：按域分组取数 → 聚合 quotes/errors/notes
 │   └── em_suggest.py       东财 suggest 搜索客户端（cn 域搜索底层 HTTP 封装 + 代码归一）
 ├── prices.py           行情门面（历史 API 保持不变, 全部路由到 providers）
-├── search.py           搜索聚合层：search_grouped() 按域调 provider.search() 保持分组，本地目录（data/symbol_list.json）仅作各域离线兜底
+├── search.py           搜索聚合层：search_grouped() 按域调 provider.search() 保持分组；纯在线接口，失败即该域空结果 + 合法代码直查兜底
 ├── fx.py               汇率：CFETS（akshare）优先，yfinance 货币对兜底（直对/逆对/USD 桥）
 ├── cache.py            行情 SQLite 磁盘缓存（实时 5 分钟 / K线 30 分钟）
 ├── charting.py         K线渲染（plotly CLI HTML + lightweight-charts 页面组件：蜡烛/均线/指标/对比）
@@ -329,7 +336,7 @@ tests/                  单元测试（离线, mock）
 
 ## 数据源与降级策略 (provider 层)
 
-数据层按市场域拆分为三个 provider（`tracker/providers/`），只在组合/watchlist 聚合。
+数据层按市场域拆分为四个 provider（`tracker/providers/`），只在组合/watchlist 聚合。
 路由依据是系统内部维护的权威 `type` 字段（用户不可见），后缀规范仅用于推导 type：
 
 | type | 覆盖代码 | 实时行情优先级 | 历史K线优先级 |
@@ -470,7 +477,7 @@ python -m tracker.cli import wallet polygon 0x... --tokenlist my_tokens.json
 
 > **Local-first multi-market portfolio tracker. Human-facing Streamlit UI + agent-facing CLI (`--json`). Zero API keys. Completely free.**
 
-A **local-first** portfolio tracker supporting **A-shares / B-shares / Beijing SE / HK / US / DE / GB / CA / AU** and **crypto** (SGX planned). Data layer is split into three isolated **providers** (global stocks / CN stocks / crypto) that only meet at the portfolio & watchlist aggregation level.
+A **local-first** portfolio tracker supporting **A-shares / B-shares / Beijing SE / HK / US / DE / GB / CA / AU** and **crypto** (SGX planned). Data layer is split into four isolated **providers** (global stocks / CN stocks / crypto / macro-risk indices) that only meet at the portfolio & watchlist aggregation level.
 
 ### Goals
 
@@ -489,8 +496,9 @@ A **local-first** portfolio tracker supporting **A-shares / B-shares / Beijing S
 - **K-line charts** — daily/weekly/monthly, MA overlays, volume, MACD/RSI/KDJ/Bollinger; slide mode loads full listing history by default
 - **Macro/risk index K-lines** — dedicated `IX.<KEY>` symbol space (USD index, VIX, CSI 300, ...), separate page & `index-kline` subcommand, dedicated provider source chain
 - **Multi-symbol comparison** — same-coordinate overlay, normalized to 100
+- **Symbol / name search** — per-domain online search (IBKR → yfinance Search for US/HK, EastMoney suggest for CN, yfinance Search for crypto); loose input in `kline` / `compare` auto-resolves via search
 - **Unified import pipeline** — IBKR account / EVM wallet (5 chains) / A-share broker CSV-Excel file, each with append-merge or overwrite mode (auto .bak backup); same logic drives the Streamlit「导入」page
-- **Unified CLI** — 13 subcommands (snapshot, quote, portfolio, watchlist, report, export, fx, history, kline, import, sync, import-wallet, cache); all support `--json`
+- **Unified CLI** — 16 subcommands (snapshot, quote, watchlist, portfolio, report, export, fx, history, kline, search, compare, index-kline, import, cache; `sync` / `import-wallet` kept as compat aliases); all support `--json`
 
 ### Quick Start
 
@@ -519,6 +527,7 @@ Quotes are fetched with a priority chain:
 3. **akshare** (East Money) — A-shares / HK spot + history (CN domain: akshare first)
 4. **FX** — CFETS for full XXX/CNY table, direct/inverse/USD bridge fallback
 5. **Indices** — `IX.<KEY>` historical only: CN indices via akshare (Sina), global via yfinance with Sina fallback
+6. **Crypto** — Binance klines → Hyperliquid perpetuals (USD-quoted only) → yfinance
 
 IBKR disconnects silently fall back to the next source; the page continues running without interruption.
 
@@ -527,7 +536,7 @@ IBKR disconnects silently fall back to the next source; the page continues runni
 ```
 tracker/ui/        Streamlit dashboard (app.py + kline/index/import/settings pages + settings)
 tracker/           Core package: cli/ subcommands, providers/, symbols, prices, fx,
-                   search, cache, charting, analytics, watchlist, snapshot,
+                   search, cache, charting, analytics, watchlist, services/,
                    importer, ibkr, ibkr_sync, ashare_sync, wallet
 portfolio.json     Holdings config (editable via page)
 watchlist.json     Watchlist config (editable via page)

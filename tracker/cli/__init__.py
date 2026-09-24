@@ -481,7 +481,7 @@ def main(argv=None) -> None:
         if getattr(args, "list", False) and args.command == "index-kline":
             from .index_kline import print_index_catalog
 
-            print_index_catalog()
+            print_index_catalog(as_json=args.json)
             return
         args.func(args)
     except CorruptDataError as e:

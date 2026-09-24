@@ -55,45 +55,67 @@ _SUFFIX_MARKET: dict[str, Market] = {
 }
 
 # 宏观/风险指数目录: 与股票域完全隔离的独立代码规范 (IX.<KEY>).
+# 分组是唯一数据源: 新增指数必须归入 INDEX_GROUPS 某组, 平铺目录 INDEX_CATALOG 由此派生
+# (单一定义点, CLI --list 与 UI 下拉均从 index_groups() 读取, 不会再出现"目录有、分组无").
 # yf: Yahoo Finance 全球指数代码; ak: akshare 新浪指数代码 (stock_zh_index_daily /
 # index_us_stock_sina, 缺省 = key 本身). currency 仅作展示 (指数无交割货币).
-INDEX_CATALOG: dict[str, dict[str, str]] = {
-    # -- 风险/波动率 --
-    "VIX":  {"name": "恐慌指数 VIX", "yf": "^VIX", "currency": "USD"},
-    "VIX3M": {"name": "VIX 3个月", "yf": "^VIX3M", "currency": "USD"},
-    "MOVE": {"name": "美债波动率 MOVE", "yf": "^MOVE", "currency": "USD"},
-    # -- 美元与利率 --
-    "DXY":  {"name": "美元指数", "yf": "DX-Y.NYB", "currency": "USD"},
-    "US10Y": {"name": "美债 10 年收益率", "yf": "^TNX", "currency": "%"},
-    "US02Y": {"name": "美债 2 年收益率", "yf": "^IRX", "currency": "%"},
-    # -- 美股指数 --
-    "SPX":  {"name": "标普 500", "yf": "^GSPC", "currency": "点"},
-    "NDX":  {"name": "纳斯达克 100", "yf": "^NDX", "currency": "点"},
-    "DJI":  {"name": "道琼斯工业", "yf": "^DJI", "currency": "点"},
-    "RUT":  {"name": "罗素 2000", "yf": "^RUT", "currency": "点"},
-    # -- 全球指数 --
-    "DAX":  {"name": "德国 DAX", "yf": "^GDAXI", "currency": "点"},
-    "FTSE": {"name": "英国富时 100", "yf": "^FTSE", "currency": "点"},
-    "N225": {"name": "日经 225", "yf": "^N225", "currency": "点"},
-    "HSI":  {"name": "恒生指数", "yf": "^HSI", "currency": "点"},
-    # -- 中国指数 (akshare 新浪源, 与 A 股域数据源惯例一致) --
-    "CSI300": {"name": "沪深 300", "ak": "sh000300", "currency": "点"},
-    "CSI500": {"name": "中证 500", "ak": "sh000905", "currency": "点"},
-    "CSI1000": {"name": "中证 1000", "ak": "sh000852", "currency": "点"},
-    "SSE":   {"name": "上证指数", "ak": "sh000001", "currency": "点"},
-    "SZSE":  {"name": "深证成指", "ak": "sz399001", "currency": "点"},
-    "CYB":   {"name": "创业板指", "ak": "sz399006", "currency": "点"},
-    "KECHUANG50": {"name": "科创 50", "ak": "sh000688", "currency": "点"},
-    # -- 中国水泥网 (index.ccement.com, 免登录前端接口; 见 providers/index.py) --
-    "CEMPI":  {"name": "水泥价格指数 CEMPI", "ccement": "kline", "currency": "点"},
-    "CEMPIPO": {"name": "P.O 42.5 水泥价格指数", "ccement": "priceindex/po425zsline", "currency": "元/吨"},
-    "CCPDI":  {"name": "水泥煤价差指数 CCPDI", "ccement": "coal", "currency": "点"},
-    "CLINKER": {"name": "熟料价格指数", "ccement": "clinker/ClinkerPrice", "currency": "元/吨"},
-    "CONCRETE": {"name": "混凝土价格指数", "ccement": "concrete/ConcretePrice", "currency": "元/方"},
-    "CSPI":   {"name": "碎石价格指数 CSPI", "ccement": "stone/stoneZSLine", "currency": "元/吨"},
-    "MSPI":   {"name": "机制砂价格指数 MSPI", "ccement": "manufactured/manufacturedZSLine", "currency": "元/吨"},
-    "MORPI":  {"name": "预拌砂浆价格指数 MORPI", "ccement": "mortar/mortarZSLine", "currency": "元/吨"},
+INDEX_GROUPS: dict[str, dict[str, dict[str, str]]] = {
+    "风险/波动": {
+        "VIX":  {"name": "恐慌指数 VIX", "yf": "^VIX", "currency": "USD"},
+        "VIX3M": {"name": "VIX 3个月", "yf": "^VIX3M", "currency": "USD"},
+        "MOVE": {"name": "美债波动率 MOVE", "yf": "^MOVE", "currency": "USD"},
+    },
+    "美元/利率": {
+        "DXY":  {"name": "美元指数", "yf": "DX-Y.NYB", "currency": "USD"},
+        "US10Y": {"name": "美债 10 年收益率", "yf": "^TNX", "currency": "%"},
+        "US02Y": {"name": "美债 2 年收益率", "yf": "^IRX", "currency": "%"},
+    },
+    "美股": {
+        "SPX":  {"name": "标普 500", "yf": "^GSPC", "currency": "点"},
+        "NDX":  {"name": "纳斯达克 100", "yf": "^NDX", "currency": "点"},
+        "DJI":  {"name": "道琼斯工业", "yf": "^DJI", "currency": "点"},
+        "RUT":  {"name": "罗素 2000", "yf": "^RUT", "currency": "点"},
+    },
+    "全球": {
+        "DAX":  {"name": "德国 DAX", "yf": "^GDAXI", "currency": "点"},
+        "FTSE": {"name": "英国富时 100", "yf": "^FTSE", "currency": "点"},
+        "N225": {"name": "日经 225", "yf": "^N225", "currency": "点"},
+        "HSI":  {"name": "恒生指数", "yf": "^HSI", "currency": "点"},
+    },
+    "中国": {
+        "CSI300": {"name": "沪深 300", "ak": "sh000300", "currency": "点"},
+        "CSI500": {"name": "中证 500", "ak": "sh000905", "currency": "点"},
+        "CSI1000": {"name": "中证 1000", "ak": "sh000852", "currency": "点"},
+        "SSE":   {"name": "上证指数", "ak": "sh000001", "currency": "点"},
+        "SZSE":  {"name": "深证成指", "ak": "sz399001", "currency": "点"},
+        "CYB":   {"name": "创业板指", "ak": "sz399006", "currency": "点"},
+        "KECHUANG50": {"name": "科创 50", "ak": "sh000688", "currency": "点"},
+    },
+    # 中国水泥网 (index.ccement.com, 免登录前端接口; 见 providers/index.py)
+    "水泥网": {
+        "CEMPI":  {"name": "水泥价格指数 CEMPI", "ccement": "kline", "currency": "点"},
+        "CEMPIPO": {"name": "P.O 42.5 水泥价格指数", "ccement": "priceindex/po425zsline", "currency": "元/吨"},
+        "CCPDI":  {"name": "水泥煤价差指数 CCPDI", "ccement": "coal", "currency": "点"},
+        "CLINKER": {"name": "熟料价格指数", "ccement": "clinker/ClinkerPrice", "currency": "元/吨"},
+        "CONCRETE": {"name": "混凝土价格指数", "ccement": "concrete/ConcretePrice", "currency": "元/方"},
+        "CSPI":   {"name": "碎石价格指数 CSPI", "ccement": "stone/stoneZSLine", "currency": "元/吨"},
+        "MSPI":   {"name": "机制砂价格指数 MSPI", "ccement": "manufactured/manufacturedZSLine", "currency": "元/吨"},
+        "MORPI":  {"name": "预拌砂浆价格指数 MORPI", "ccement": "mortar/mortarZSLine", "currency": "元/吨"},
+    },
 }
+
+# 平铺目录 (派生): {key: 条目}, 保分组定义顺序
+INDEX_CATALOG: dict[str, dict[str, str]] = {
+    key: dict(entry)
+    for entries in INDEX_GROUPS.values()
+    for key, entry in entries.items()
+}
+
+
+def index_groups() -> dict[str, list[str]]:
+    """指数分组视图: {组名: [key, ...]}, 供 CLI --list 与 UI 下拉共用."""
+    return {group: list(entries) for group, entries in INDEX_GROUPS.items()}
+
 
 def index_key(symbol: str) -> str | None:
     """IX.<KEY> → 指数 key; 非指数代码返回 None (供 type 推导提前短路)."""

@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .. import prices
-from ..symbols import INDEX_CATALOG, index_label, parse
+from ..symbols import INDEX_CATALOG, index_groups, index_label, parse
 from ._common import _finish_with_error, _print_json
 
 VAR_DIR = Path(__file__).resolve().parent.parent.parent / "var"
@@ -93,8 +93,21 @@ def cmd_index_kline(args) -> None:
         print("已在浏览器中打开。")
 
 
-def print_index_catalog() -> None:
-    """打印指数目录 (IX.<KEY> 全表)."""
-    print("已收录指数 (代码规范 IX.<KEY>):")
-    for key, e in INDEX_CATALOG.items():
-        print(f"  IX.{key:<12} {e['name']}")
+def print_index_catalog(as_json: bool = False) -> None:
+    """打印指数目录 (IX.<KEY> 全表, 按分组)."""
+    groups = index_groups()
+    if as_json:
+        _print_json({
+            "total": len(INDEX_CATALOG),
+            "indices": [
+                {"code": f"IX.{key}", "key": key, "name": index_label(key),
+                 "group": group, **INDEX_CATALOG[key]}
+                for group, keys in groups.items() for key in keys
+            ],
+        })
+        return
+    print(f"已收录指数 ({len(INDEX_CATALOG)} 个, 代码规范 IX.<KEY>):")
+    for group, keys in groups.items():
+        print(f"\n[{group}]")
+        for key in keys:
+            print(f"  IX.{key:<12} {INDEX_CATALOG[key]['name']}")

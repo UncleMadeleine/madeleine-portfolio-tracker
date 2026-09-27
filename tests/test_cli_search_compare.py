@@ -238,7 +238,13 @@ def test_compare_needs_two_valid_codes(compare_env, capsys):
     assert e.value.code == 2
 
 
-def test_resolve_inputs_dedupes_and_warns():
+def test_resolve_inputs_dedupes_and_warns(monkeypatch):
+    """去重 + 无法识别的输入进 warnings (不中断其余代码).
+
+    "不存在的股" 是非 ASCII → 走在线搜索; 必须打桩, 否则测试打真实网络,
+    快则数秒、慢则无限挂起 (曾把整套测试拖死)。
+    """
+    _fake_grouped(monkeypatch, {})
     codes, warnings = resolve_inputs(["AAPL", "AAPL", "不存在的股"])
     assert codes == ["AAPL"]
     assert any("无法识别" in w for w in warnings)

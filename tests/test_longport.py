@@ -369,6 +369,7 @@ def test_longport_oauth_module_success_flow(tmp_path, monkeypatch):
         Config=SimpleNamespace(from_oauth=lambda oauth, **kw: object()),
     )
     monkeypatch.setattr(longport_oauth.longport, "_sdk", lambda: fake_api)
+    monkeypatch.setattr("webbrowser.open", lambda *a, **kw: True)  # 防测试弹浏览器
     rc = longport_oauth.main()
     assert rc == 0
     data = json.loads(state_file.read_text(encoding="utf-8"))

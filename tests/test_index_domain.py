@@ -298,3 +298,39 @@ def test_index_kline_list_json_machine_readable(capsys):
     for e in data["indices"]:
         assert e["code"].startswith("IX.")
         assert e["name"] == index_label(e["key"])
+
+
+def test_infer_native_period_and_available_periods():
+    """数据驱动粒度推断: 日频→三级可选, 周K原生数据→日K不可选 (通用兜底)."""
+    from tracker import charting
+
+    daily = _fake_index_history_df(freq="D", n=30)
+    weekly = _fake_index_history_df(freq="7D", n=12)
+    assert charting.infer_native_period(daily) == "daily"
+    assert charting.infer_native_period(weekly) == "weekly"
+    # 重采样只能单向变粗: 细于原生粒度的周期不可选
+    assert charting.available_periods("daily") == ["daily", "weekly", "monthly"]
+    assert charting.available_periods("weekly") == ["weekly", "monthly"]
+    assert charting.available_periods("monthly") == ["monthly"]
+    # 请求细于原生 → 降级; 匹配或更粗 → 保持请求
+    assert charting.resolve_period(weekly, "daily") == "weekly"
+    assert charting.resolve_period(weekly, "weekly") == "weekly"
+    assert charting.resolve_period(weekly, "monthly") == "monthly"
+    assert charting.resolve_period(daily, "daily") == "daily"
+    # 样本不足 (无法推断) 按 daily 放行, 不虚构降级
+    tiny = _fake_index_history_df(freq="D", n=2)
+    assert charting.resolve_period(tiny, "daily") == "daily"
+
+
+def _fake_index_history_df(freq: str, n: int) -> pd.DataFrame:
+    idx = pd.date_range("2024-01-01", periods=n, freq=freq)
+    return pd.DataFrame(
+        {
+            "date": idx,
+            "open": 1.0,
+            "high": 1.2,
+            "low": 0.9,
+            "close": [1.0 + i * 0.01 for i in range(n)],
+            "volume": 0.0,
+        }
+    )

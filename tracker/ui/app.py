@@ -114,7 +114,7 @@ if not watch.get("watchlist"):
 with st.sidebar:
     st.markdown(
         ":material/candlestick_chart: **组合追踪**",
-        help="多市场持仓 + 自选提醒 · 数据源 Yahoo/akshare",
+        help="多市场持仓 + 自选提醒 · 数据源 Yahoo/akshare/Binance",
     )
     settings = storage.load_settings()
     portfolio = storage.load_portfolio(storage.PORTFOLIO_PATH)
@@ -324,7 +324,8 @@ with st.sidebar:
 
     st.divider()
     st.caption(
-        "数据源: Yahoo Finance (OpenBB) + akshare 兜底; 汇率 CFETS + yfinance。"
+        "数据源: 美股/港股/全球 Yahoo Finance; A股/北交所 akshare 优先 (港股 akshare 兜底); "
+        "加密货币 Binance; 汇率 CFETS + yfinance。可选前置源: 长桥 / IBKR (设置页开启)。"
         "非美股行情一般延迟 15-30 分钟, 仅供个人参考。"
     )
 

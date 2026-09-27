@@ -94,7 +94,11 @@ INDEX_GROUPS: dict[str, dict[str, dict[str, str]]] = {
     },
     # 中国水泥网 (index.ccement.com, 免登录前端接口; 见 providers/index.py)
     "水泥网": {
-        "CEMPI": {"name": "水泥价格指数 CEMPI", "ccement": "kline", "currency": "点"},
+        "CEMPI": {
+            "name": "水泥价格指数 CEMPI",
+            "ccement": "kline",
+            "currency": "点",
+        },
         "CEMPIPO": {
             "name": "P.O 42.5 水泥价格指数",
             "ccement": "priceindex/po425zsline",
@@ -160,6 +164,8 @@ def index_label(key: str) -> str:
 # 便士计价符号: LSE 以 GBp/GBX 报价 (1 GBP = 100 便士), 实际数据源大小写混用。
 # 判定规则: 代码形如 <G><B><p|X> (任意大小写) 即便士; 精确的 "GBP" 是英镑本体,
 # 若把它当便士会在 GBP 报价上再除 100, 结果偏小 100 倍。
+
+
 def is_pence(currency: str) -> bool:
     """该币种代码是否为 LSE 便士计价 (GBp/GBX 任意大小写; 精确 "GBP" 不算)."""
     s = str(currency).strip()

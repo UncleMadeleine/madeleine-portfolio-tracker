@@ -103,6 +103,9 @@ def render_kline_view(
     query_id: str | None = None,
 ) -> dict | None:
     """K线图 + 摘要指标 (供 K线页面与 CLI 内嵌使用, 纯渲染无取数)."""
+    # 数据驱动兜底: 请求周期细于数据原生粒度 (周K源请求日K等) 时降级到原生粒度,
+    # 防止细粒度周期把粗粒度数据伪装成日K展示 (标题/payload 用生效周期标注)
+    period = charting.resolve_period(kdf, period)
     if period != "daily":
         kdf = charting.resample_ohlc(kdf, period)
     # lightweight-charts (TradingView 内核): 拖动平移 / 滚轮·捏合缩放 /

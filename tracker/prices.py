@@ -92,10 +92,13 @@ def get_index_history(
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> pd.DataFrame:
-    """指数日线 K 线 (IX.<KEY>): 独立于股票 get_ohlc, 缓存键加 index: 前缀隔离.
+    """指数历史K线 (IX.<KEY>): 独立于股票 get_ohlc, 缓存键加 index: 前缀隔离.
 
-    指数域不参与 IBKR 批量行情, 故无 use_ibkr / prefer_akshare 参数;
-    中国指数固定 akshare 优先, 其余 yfinance 主源 (源链见 providers/index.py).
+    返回数据的**原生粒度**由数据源决定 (水泥网 CEMPI 端点为周K, 其余日K),
+    调用方用 charting.infer_native_period / resolve_period 兜底判定,
+    不得假设恒为日K。指数域不参与 IBKR 批量行情, 故无 use_ibkr /
+    prefer_akshare 参数; 中国指数固定 akshare 优先, 其余 yfinance 主源
+    (源链见 providers/index.py)。
     """
     from .charting import clean_ohlc
 

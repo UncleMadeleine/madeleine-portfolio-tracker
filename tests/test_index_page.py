@@ -17,14 +17,18 @@ ip.render_index_page()
 def _fake_index_history(symbol, months=12, **kw):
     import pandas as pd
 
-    idx = pd.date_range("2024-01-01", periods=30, freq="D")
+    # CEMPI 水泥网端点为周K原生数据, 其余指数日频 (与真实数据源一致)
+    if "CEMPI" in symbol.upper() and "CEMPIPO" not in symbol.upper():
+        idx = pd.date_range("2024-01-01", periods=12, freq="7D")
+    else:
+        idx = pd.date_range("2024-01-01", periods=30, freq="D")
     return pd.DataFrame(
         {
             "date": idx,
             "open": 1.0,
             "high": 1.2,
             "low": 0.9,
-            "close": [1.0 + i * 0.01 for i in range(30)],
+            "close": [1.0 + i * 0.01 for i in range(len(idx))],
             "volume": 0.0,
         }
     )
@@ -60,4 +64,35 @@ def test_switch_symbol_refetches(index_app):
 
     index_app.selectbox[0].select(index_app.selectbox[0].options[1]).run()  # 指数
     assert len(index_app.metric) == 4
-    assert index_app.info == []
+
+
+def test_weekly_only_index_hides_daily_option(index_app):
+    """CEMPI (周K原生数据): 周期下拉无日K选项, 默认周K, 提示数据源粒度."""
+    app = index_app
+    symbol_box = app.selectbox[0]
+    cempi_label = next(
+        o for o in symbol_box.options if "CEMPI" in o and "42.5" not in o
+    )
+    symbol_box.select(cempi_label).run()
+    period_box = app.selectbox(key="index_period")
+    assert "日K" not in period_box.options
+    assert "周K" in period_box.options
+    assert period_box.value == "weekly"
+    assert period_box.help == "该指数数据源为周K, 更细周期不可用"
+    assert len(app.metric) == 4  # 图表摘要照常渲染
+
+
+def test_daily_ok_index_keeps_daily_default(monkeypatch):
+    """普通指数 (DXY): 日K选项仍在且默认日K, 不受仅周K逻辑影响 (独立会话)."""
+    from tracker.ui import kline_page
+
+    monkeypatch.setattr(prices, "get_index_history", _fake_index_history)
+    monkeypatch.setattr(kline_page, "_KLINE_CHART", lambda **kw: None)
+    index_page.cached_index_kline.clear()
+    app = AppTest.from_string(_SCRIPT, default_timeout=30).run()
+    symbol_box = app.selectbox[0]
+    dxy_label = next(o for o in symbol_box.options if "美元指数" in o)
+    symbol_box.select(dxy_label).run()
+    period_box = app.selectbox(key="index_period")
+    assert "日K" in period_box.options
+    assert not period_box.help  # 普通指数无「仅周K」提示

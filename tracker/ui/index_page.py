@@ -51,13 +51,6 @@ def render_index_page() -> None:
         format_func=lambda m: f"近 {m} 个月",
         key="index_months",
     )
-    iperiod = r2_col.selectbox(
-        "周期",
-        ["daily", "weekly", "monthly"],
-        index=0,
-        format_func=lambda v: charting.PERIOD_LABELS[v],
-        key="index_period",
-    )
     imas = st.multiselect(
         "均线",
         [5, 10, 20, 30, 60, 120, 250],
@@ -84,6 +77,21 @@ def render_index_page() -> None:
         st.warning(f"{yahoo}: 无有效K线数据。")
         return
 
+    # 数据驱动兜底: 目录/源标注缺失或漂移时, 以实际数据原生粒度为准
+    # (重采样只能日→周→月单向变粗, 细于原生粒度的周期一律禁用)
+    native = charting.infer_native_period(kdf)
+    periods = charting.available_periods(native)
+    if st.session_state.get("index_period") not in periods:
+        st.session_state["index_period"] = periods[0]
+    iperiod = r2_col.selectbox(
+        "周期",
+        periods,
+        format_func=lambda v: charting.PERIOD_LABELS[v],
+        help=None
+        if native == "daily"
+        else f"该指数数据源为{charting.PERIOD_LABELS[native]}, 更细周期不可用",
+        key="index_period",
+    )
     render_kline_view(
         kdf,
         f"{index_label(key)} ({yahoo})",

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 from pathlib import Path
 
 from .. import prices
@@ -31,8 +33,18 @@ def cmd_index_kline(args) -> None:
         df = prices.get_index_history(p.yahoo, months=args.months, refresh=args.refresh)
     except Exception as e:
         _finish_with_error(f"{p.yahoo}: 指数K线数据获取失败 ({e})")
-    if args.period != "daily":
-        df = charting.resample_ohlc(df, args.period)
+    # 数据驱动兜底: 请求周期细于数据原生粒度 (如周K源请求日K) 时降级并明示
+    period = charting.resolve_period(df, args.period)
+    if period != args.period:
+        print(
+            f"ℹ {p.yahoo} ({index_label(p.yahoo[3:])}): 数据源为"
+            f"{charting.PERIOD_LABELS[period]}, "
+            f"{charting.PERIOD_LABELS[args.period]}不可用 — 已按"
+            f"{charting.PERIOD_LABELS[period]}展示",
+            file=sys.stderr,
+        )
+    if period != "daily":
+        df = charting.resample_ohlc(df, period)
     if df.empty:
         _finish_with_error(f"{p.yahoo}: 无有效K线数据")
 
@@ -47,7 +59,7 @@ def cmd_index_kline(args) -> None:
                 "symbol": p.yahoo,
                 "name": label,
                 "currency": p.currency,
-                "period": args.period,
+                "period": period,
                 "months": args.months,
                 "bars": len(df),
                 "summary": s,
@@ -56,7 +68,7 @@ def cmd_index_kline(args) -> None:
         )
         return
 
-    period_label = charting.PERIOD_LABELS.get(args.period, args.period)
+    period_label = charting.PERIOD_LABELS.get(period, period)
     print(
         f"\n=== 指数K线 {label} ({p.yahoo}) · {period_label} · 近 {args.months} 个月"
         f" ({s['bars']} 根) ==="
@@ -87,7 +99,7 @@ def cmd_index_kline(args) -> None:
         currency=None,
         mas=mas,
         show_volume=args.volume,
-        period=args.period,
+        period=period,
     )
     out = (
         Path(args.output)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 from pathlib import Path
 
 import pandas as pd
@@ -72,10 +74,17 @@ def cmd_kline(args) -> None:
         )
     except Exception as e:
         _finish_with_error(f"{p.yahoo}: K线数据获取失败 ({e})")
-    if args.period != "daily":
-        df = charting.resample_ohlc(df, args.period)
-    if df.empty:
-        _finish_with_error(f"{p.yahoo}: 无有效K线数据")
+    # 数据驱动兜底: 请求周期细于数据原生粒度 (周K源请求日K等) 时降级并明示
+    period = charting.resolve_period(df, args.period)
+    if period != args.period:
+        print(
+            f"ℹ {p.yahoo}: 数据源为{charting.PERIOD_LABELS[period]}, "
+            f"{charting.PERIOD_LABELS[args.period]}不可用 — 已按"
+            f"{charting.PERIOD_LABELS[period]}展示",
+            file=sys.stderr,
+        )
+    if period != "daily":
+        df = charting.resample_ohlc(df, period)
 
     mas = charting.parse_ma_periods(args.ma)
     s = charting.summarize_ohlc(df, mas)
@@ -86,7 +95,7 @@ def cmd_kline(args) -> None:
             {
                 "symbol": p.yahoo,
                 "currency": p.currency,
-                "period": args.period,
+                "period": period,
                 "months": args.months,
                 "bars": len(df),
                 "summary": s,
@@ -95,7 +104,7 @@ def cmd_kline(args) -> None:
         )
         return
 
-    period_label = charting.PERIOD_LABELS.get(args.period, args.period)
+    period_label = charting.PERIOD_LABELS.get(period, period)
     print(
         f"\n=== K线 {p.yahoo} · {period_label} · 近 {args.months} 个月"
         f" ({s['bars']} 根) ==="
@@ -126,7 +135,7 @@ def cmd_kline(args) -> None:
         currency=p.currency,
         mas=mas,
         show_volume=not args.no_volume,
-        period=args.period,
+        period=period,
     )
     out = (
         Path(args.output)

@@ -238,6 +238,46 @@ def resample_ohlc(df: pd.DataFrame, period: str) -> pd.DataFrame:
     return out[list(OHLC_COLUMNS)]
 
 
+PERIOD_ORDER = ("daily", "weekly", "monthly")
+
+
+def infer_native_period(df: pd.DataFrame) -> str:
+    """从K线数据推断原生粒度 (相邻bar日期中位间隔): 日/周/月.
+
+    数据源只给周K (如水泥网 CEMPI 周K端点) 时中位间隔 ~7 天 → "weekly"。
+    样本不足 (<3 根) 无法推断, 按最细粒度 "daily" 放行 (不虚构降级)。
+    """
+    if df is None or df.empty or "date" not in df:
+        return "daily"
+    d = pd.to_datetime(df["date"], errors="coerce").dropna().sort_values()
+    if len(d) < 3:
+        return "daily"
+    med = float(d.diff().dt.days.median())
+    if med <= 2:
+        return "daily"
+    if med <= 10:
+        return "weekly"
+    return "monthly"
+
+
+def available_periods(native: str) -> list[str]:
+    """原生粒度下可选的周期: 细于原生的一律不可选 (重采样只会日→周→月单向变粗)."""
+    return list(PERIOD_ORDER[PERIOD_ORDER.index(native) :])
+
+
+def resolve_period(df: pd.DataFrame, requested: str) -> str:
+    """请求周期细于数据原生粒度时降级到原生粒度, 返回生效周期.
+
+    数据层兜底: 目录/源标注缺失或漂移时, 周K数据请求日K不再伪装成日K。
+    """
+    if requested not in PERIOD_ORDER:
+        return requested
+    native = infer_native_period(df)
+    if PERIOD_ORDER.index(requested) >= PERIOD_ORDER.index(native):
+        return requested
+    return native
+
+
 def _non_trading_days(dates: pd.Series) -> list[pd.Timestamp]:
     """区间内不在数据中的日历日 (周末+节假日), 用于 rangebreaks 消除图表空隙."""
     if len(dates) < 2:

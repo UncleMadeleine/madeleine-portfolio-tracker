@@ -26,6 +26,9 @@ settings.json
 # IBKR 真实配置 (含敏感连接信息), 模板见 ibkr.example.json
 ibkr.json
 
+# 长桥真实配置 (含 client_id/app_key 等凭据), 模板见 longport.example.json
+longport.json
+
 # OpenBB
 .openbb_platform/
 

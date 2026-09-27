@@ -497,7 +497,7 @@ class TestReportCli:
         )
         return f
 
-    def _fake_quotes(self, symbols, prefer_akshare=False, use_ibkr=False):
+    def _fake_quotes(self, symbols, prefer_akshare=False, use_ibkr=False, use_longport=False):
         data = {
             "TSLA": Quote("TSLA", "Tesla", 500.0, 480.0, 4.17, "USD"),
             "NVDA": Quote("NVDA", "NVIDIA", 120.0, 118.0, 1.69, "USD"),
@@ -627,7 +627,7 @@ class TestExportCli:
         f.write_text(json.dumps({"watchlist": []}), encoding="utf-8")
         return f
 
-    def _fake_quotes(self, symbols, prefer_akshare=False, use_ibkr=False):
+    def _fake_quotes(self, symbols, prefer_akshare=False, use_ibkr=False, use_longport=False):
         data = {
             "AAPL": Quote("AAPL", "Apple", 200.0, 195.0, 2.56, "USD"),
             "600519.SS": Quote("600519.SS", "贵州茅台", 1600.0, 1580.0, 1.27, "CNY"),
@@ -641,6 +641,8 @@ class TestExportCli:
 
     def _patch(self, monkeypatch):
         monkeypatch.setattr(cli.prices, "get_quotes", self._fake_quotes)
+        monkeypatch.setattr("tracker.services.snapshot.get_fx_rates", self._fake_fx)
+
 
     def test_export_json(self, tmp_path, capsys, monkeypatch):
         self._patch(monkeypatch)
@@ -737,7 +739,7 @@ class TestSnapshotCryptoMixed:
         )
         return f
 
-    def _fake_quotes(self, symbols, prefer_akshare=False, use_ibkr=False):
+    def _fake_quotes(self, symbols, prefer_akshare=False, use_ibkr=False, use_longport=False):
         data = {
             "AAPL": Quote("AAPL", "Apple", 200.0, 195.0, 2.56, "USD"),
             "BTC-USD": Quote("BTC-USD", None, 60000.0, 58000.0, 3.45, "USD"),

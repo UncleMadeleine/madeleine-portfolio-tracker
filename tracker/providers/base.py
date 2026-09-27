@@ -117,16 +117,16 @@ def get_quote(symbol: str, prefer_akshare: bool = False) -> Quote:
 
 
 def get_quotes(
-    symbols, prefer_akshare: bool = False, use_ibkr: bool = False
+    symbols, prefer_akshare: bool = False, use_ibkr: bool = False, use_longport: bool = False
 ) -> tuple[dict[str, Quote], dict[str, str], list[str]]:
     """多代码批量行情 (按 provider 分域聚合). 见 orchestration.get_quotes."""
     from .orchestration import get_quotes as _impl
 
-    return _impl(symbols, prefer_akshare=prefer_akshare, use_ibkr=use_ibkr)
+    return _impl(symbols, prefer_akshare=prefer_akshare, use_ibkr=use_ibkr, use_longport=use_longport)
 
 
-def get_history(symbol: str, months: int = 12, start_date: str | None = None, end_date: str | None = None, prefer_akshare: bool = False, use_ibkr: bool = False):
+def get_history(symbol: str, months: int = 12, start_date: str | None = None, end_date: str | None = None, prefer_akshare: bool = False, use_ibkr: bool = False, use_longport: bool = False):
     """单代码历史K线: 自动路由到所属 provider. 见 orchestration.get_history."""
     from .orchestration import get_history as _impl
 
-    return _impl(symbol, months=months, start_date=start_date, end_date=end_date, prefer_akshare=prefer_akshare, use_ibkr=use_ibkr)
+    return _impl(symbol, months=months, start_date=start_date, end_date=end_date, prefer_akshare=prefer_akshare, use_ibkr=use_ibkr, use_longport=use_longport)

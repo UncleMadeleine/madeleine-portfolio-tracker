@@ -61,7 +61,8 @@ def cmd_compare(args) -> None:
     frames: dict[str, object] = {}
     for code in codes:
         try:
-            df = prices.get_ohlc(code, months=args.months, prefer_akshare=args.akshare)
+            df = prices.get_ohlc(code, months=args.months, prefer_akshare=args.akshare,
+                                 use_longport=getattr(args, "longport", False))
             if df is None or df.empty:
                 print(f"⚠ {code}: 无有效K线数据, 已跳过", file=sys.stderr)
             else:

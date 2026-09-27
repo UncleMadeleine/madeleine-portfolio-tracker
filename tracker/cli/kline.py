@@ -66,7 +66,7 @@ def cmd_kline(args) -> None:
         df = prices.get_ohlc(
             p.yahoo, months=args.months,
             prefer_akshare=args.akshare, refresh=args.refresh,
-            use_ibkr=args.ibkr,
+            use_ibkr=args.ibkr, use_longport=getattr(args, "longport", False),
         )
     except Exception as e:
         _finish_with_error(f"{p.yahoo}: K线数据获取失败 ({e})")

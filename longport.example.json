@@ -1,0 +1,16 @@
+{
+  "_说明": "示例配置: 复制为 longport.json 后修改。长桥 (LongPort) OpenAPI 接入, 需 pip install longport。",
+  "_获取凭据": "开发者中心 https://open.longportapp.com/ → User Center; OAuth 客户端注册: curl -X POST https://open.longportapp.com/oauth2/register -H 'Content-Type: application/json' -d '{\"redirect_uris\": [\"http://localhost:60355/callback\"], \"token_endpoint_auth_method\": \"none\", \"grant_types\": [\"authorization_code\",\"refresh_token\"], \"response_types\": [\"code\"], \"client_name\": \"My Tracker\"}'",
+  "_认证方式": "auth: oauth (推荐, 浏览器授权, token 自动刷新, UI 登录引导走此路径) / apikey (开发者中心 app_key + app_secret + access_token, token 90 天过期需手动更新)",
+
+  "auth": "oauth",
+  "client_id": "在此填入 OAuth 客户端注册返回的 client_id",
+  "callback_port": 60355,
+
+  "_apikey示例": "auth 改为 apikey 时启用下面三项 (删除下划线前缀即可):",
+  "_app_key": "YOUR_APP_KEY",
+  "_app_secret": "YOUR_APP_SECRET",
+  "_access_token": "YOUR_ACCESS_TOKEN",
+
+  "language": "zh-CN"
+}

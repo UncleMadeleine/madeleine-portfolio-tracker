@@ -72,6 +72,14 @@ def collect_ibkr(mode: str | None = None) -> tuple[list[dict], list[str]]:
     return ibkr.positions_to_rows(positions)
 
 
+def collect_longport() -> tuple[list[dict], list[str]]:
+    """从长桥账户读取股票持仓 (需先完成 OAuth 登录 / 配置 API Key)."""
+    from . import longport
+
+    positions = longport.fetch_stock_positions()
+    return longport.positions_to_rows(positions)
+
+
 def collect_ashare_file(path: str | Path) -> tuple[list[dict], list[str]]:
     """解析 A股券商客户端导出的持仓文件 (CSV/Excel)."""
     from .ashare_sync import parse_positions_file

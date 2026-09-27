@@ -225,7 +225,12 @@ def save_watchlist(data: dict, path: str | Path = WATCHLIST_PATH) -> None:
 # 涨跌配色: cn = 红涨绿跌 (A股软件习惯, 默认) / intl = 绿涨红跌 (国际配色)
 SCHEME_CN = "cn"
 SCHEME_INTL = "intl"
-DEFAULT_SETTINGS = {"color_scheme": SCHEME_CN, "prefer_akshare": False, "use_ibkr": False}
+DEFAULT_SETTINGS = {
+    "color_scheme": SCHEME_CN,
+    "prefer_akshare": False,
+    "use_ibkr": False,
+    "use_longport": False,
+}
 
 
 def load_settings(path: str | Path = SETTINGS_PATH) -> dict:
@@ -243,6 +248,7 @@ def load_settings(path: str | Path = SETTINGS_PATH) -> dict:
         data["color_scheme"] = SCHEME_CN
     data["prefer_akshare"] = bool(data["prefer_akshare"])
     data["use_ibkr"] = bool(data["use_ibkr"])
+    data["use_longport"] = bool(data.get("use_longport"))
     return data
 
 

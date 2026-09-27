@@ -132,11 +132,12 @@ def fetch_watchlist_view(
     entries: list[dict],
     prefer_akshare: bool = False,
     use_ibkr: bool = False,
+    use_longport: bool = False,
 ) -> tuple[pd.DataFrame, list[str]]:
     """用例: 取数 (providers) → 阈值规则 → 视图. watchlist list / report 复用."""
     symbols = [str(e["symbol"]) for e in entries]
     quotes, errors, notes = prices.get_quotes(
-        symbols, prefer_akshare=prefer_akshare, use_ibkr=use_ibkr
+        symbols, prefer_akshare=prefer_akshare, use_ibkr=use_ibkr, use_longport=use_longport
     )
     wview, wissues = build_watchlist_view(entries, quotes)
     issues = [f"{k}: {v}" for k, v in errors.items()] + wissues + notes

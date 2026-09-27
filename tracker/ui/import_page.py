@@ -55,15 +55,18 @@ def render_import_page(on_saved=None) -> None:
             icon=":material/warning:",
         )
 
-    tab_ibkr, tab_wallet, tab_file = st.tabs(
+    tab_ibkr, tab_lp, tab_wallet, tab_file = st.tabs(
         [
             ":material/account_balance: IBKR 账户",
+            ":material/candlestick_chart: 长桥账户",
             ":material/account_balance_wallet: 链上钱包",
             ":material/description: 券商文件",
         ]
     )
     with tab_ibkr:
         _ibkr_section(mode, on_saved)
+    with tab_lp:
+        _longport_section(mode, on_saved)
     with tab_wallet:
         _wallet_section(mode, on_saved)
     with tab_file:
@@ -100,9 +103,29 @@ def _ibkr_section(mode: str, on_saved) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# 链上钱包
-# ---------------------------------------------------------------------------
+def _longport_section(mode: str, on_saved) -> None:
+    st.caption(
+        "从长桥 (LongPort) 账户读取证券持仓 (港股/美股/A股)。首次使用需登录长桥账户"
+        " (OAuth 浏览器授权, token 本地保存并自动刷新); 连接配置见 longport.json。"
+    )
+    from .longport_login import render_login_section
+
+    render_login_section(key_prefix="imp_lp")
+    st.divider()
+    if st.button("获取账户持仓", icon=":material/sync:", key="imp_lp_fetch"):
+        with st.spinner("正在读取长桥账户..."):
+            try:
+                rows, skipped = importer.collect_longport()
+            except Exception as e:
+                st.session_state.pop("imp_longport", None)
+                st.error(f"{e} — 请先完成上方登录, 或检查 longport.json 配置。")
+            else:
+                st.session_state["imp_longport"] = {"rows": rows, "skipped": skipped}
+    _preview_and_confirm(
+        "imp_longport", mode, on_saved,
+        note="avg_cost 为长桥报告的合约货币成本价 (按账户设置的平均/摊薄口径), 仅供估算。",
+    )
+
 
 def _wallet_section(mode: str, on_saved) -> None:
     st.caption(

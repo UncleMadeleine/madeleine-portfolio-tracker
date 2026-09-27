@@ -51,6 +51,7 @@ def get_ohlc(
     prefer_akshare: bool = False,
     refresh: bool = False,
     use_ibkr: bool = False,
+    use_longport: bool = False,
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> pd.DataFrame:
@@ -68,7 +69,7 @@ def get_ohlc(
         cached = cache_mod.get_ohlc_cached(p.yahoo, months)
         if cached is not None:
             return cached
-    df = clean_ohlc(get_history(symbol, months=months, start_date=start_date, end_date=end_date, prefer_akshare=prefer_akshare, use_ibkr=use_ibkr))
+    df = clean_ohlc(get_history(symbol, months=months, start_date=start_date, end_date=end_date, prefer_akshare=prefer_akshare, use_ibkr=use_ibkr, use_longport=use_longport))
     if not df.empty and not is_range:
         cache_mod.set_ohlc_cached(p.yahoo, months, df)
     return df

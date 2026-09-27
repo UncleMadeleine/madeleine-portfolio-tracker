@@ -40,7 +40,8 @@ def _build_report(args) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, list[str]
     data = load_watchlist(args.file)
     entries = entries_for(data, args.watchlist)
     wview, issues = fetch_watchlist_view(
-        entries, prefer_akshare=args.akshare, use_ibkr=args.ibkr
+        entries, prefer_akshare=args.akshare, use_ibkr=args.ibkr,
+        use_longport=getattr(args, "longport", False),
     )
     wview = sort_watchlist(wview, args.sort)
     trig = triggered_entries(wview)

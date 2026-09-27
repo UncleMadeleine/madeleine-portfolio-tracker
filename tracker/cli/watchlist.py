@@ -138,7 +138,8 @@ def watchlist_list(args) -> None:
 
     symbols = [str(e["symbol"]) for e in entries]
     quotes, errors, notes = prices.get_quotes(
-        symbols, prefer_akshare=args.akshare, use_ibkr=args.ibkr
+        symbols, prefer_akshare=args.akshare, use_ibkr=args.ibkr,
+        use_longport=getattr(args, "longport", False),
     )
     wview, wissues = build_watchlist_view(entries, quotes)
     trig = triggered_entries(wview)

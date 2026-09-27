@@ -1,8 +1,9 @@
 """import 子命令: 统一持仓导入入口 (ibkr / wallet / file).
 
-    tracker import ibkr   从 IB Gateway 账户导入持仓
-    tracker import wallet 从链上地址导入加密资产
-    tracker import file   从券商导出文件 (CSV/Excel) 导入
+    tracker import ibkr     从 IB Gateway 账户导入持仓
+    tracker import longport 从长桥账户导入持仓 (OAuth 登录引导见 UI 导入页)
+    tracker import wallet   从链上地址导入加密资产
+    tracker import file     从券商导出文件 (CSV/Excel) 导入
 
 三个来源共用: --overwrite 覆盖(默认追加合并) / --dry-run / --portfolio / --json.
 """
@@ -26,6 +27,15 @@ def _collect(args: argparse.Namespace) -> tuple[list[dict], list[str], str]:
         except Exception as e:
             _finish_with_error(f"{e} (请确认 IB Gateway 已登录运行, 且 API 连接已启用)")
         return rows, skipped, "IBKR 账户持仓"
+    if source == "longport":
+        try:
+            rows, skipped = importer.collect_longport()
+        except Exception as e:
+            _finish_with_error(
+                f"{e} (请先完成登录: 运行 tracker longport-login, 或在 UI 导入页长桥标签登录;"
+                " 或在 longport.json 配置 auth=apikey 与应用凭据)"
+            )
+        return rows, skipped, "长桥账户持仓"
     if source == "wallet":
         try:
             rows, skipped, raw = importer.collect_wallet(

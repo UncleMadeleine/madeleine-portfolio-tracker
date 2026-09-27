@@ -18,6 +18,7 @@ def cmd_history(args) -> None:
         df = prices.get_history(
             args.symbol, months=args.months,
             prefer_akshare=args.akshare, use_ibkr=args.ibkr,
+            use_longport=getattr(args, "longport", False),
         )
     except Exception as e:
         _finish_with_error(f"{args.symbol}: 历史数据获取失败 ({e})")

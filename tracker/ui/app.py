@@ -50,8 +50,8 @@ if "app_page" not in st.session_state:
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def cached_quotes(symbols: tuple[str, ...], prefer_akshare: bool, use_ibkr: bool):
-    return prices.get_quotes(list(symbols), prefer_akshare=prefer_akshare, use_ibkr=use_ibkr)
+def cached_quotes(symbols: tuple[str, ...], prefer_akshare: bool, use_ibkr: bool, use_longport: bool = False):
+    return prices.get_quotes(list(symbols), prefer_akshare=prefer_akshare, use_ibkr=use_ibkr, use_longport=use_longport)
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -120,6 +120,7 @@ with st.sidebar:
     base = portfolio.get("base_currency", "CNY")
     prefer_akshare = settings["prefer_akshare"]
     use_ibkr = settings["use_ibkr"]
+    use_longport = bool(settings.get("use_longport"))
 
     if st.session_state.app_page == "portfolio":
         with st.expander(":material/edit_note: 持仓管理", expanded=True):
@@ -292,7 +293,7 @@ if st.session_state.app_page == "portfolio":
     set_quick_symbols(list(all_symbols))
 
     with st.spinner("拉取行情 (首次加载需初始化数据引擎)..."):
-        quotes, errors, notes = cached_quotes(all_symbols, prefer_akshare, use_ibkr)
+        quotes, errors, notes = cached_quotes(all_symbols, prefer_akshare, use_ibkr, use_longport)
     if not quotes:
         st.error(
             "未能获取任何行情。请检查网络: Yahoo 需可访问 finance.yahoo.com; "

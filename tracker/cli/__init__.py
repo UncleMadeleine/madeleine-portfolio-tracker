@@ -12,7 +12,8 @@
   kline     K线蜡烛图 (交互式 HTML + 摘要, 含成交量/均线/周月K)
   search    代码/名称搜索 → 规范代码 (结果可直接喂 kline/compare/quote)
   compare   多股走势对比 (归一化折线; --json 出序列, 默认出交互式 HTML)
-  import    统一持仓导入 (ibkr / wallet / file, 追加合并或 --overwrite 覆盖)
+  import    统一持仓导入 (ibkr / longport / wallet / file, 追加合并或 --overwrite 覆盖)
+  longport-login 长桥 OAuth 登录 (浏览器授权, token 自动缓存刷新)
   sync      从 IB Gateway 账户同步持仓 (已并入 import ibkr, 保留兼容)
   index-kline 宏观/风险指数K线 (IX.<KEY>, 独立于股票 kline)
 
@@ -43,6 +44,7 @@ from .sync import cmd_sync
 from .importer import cmd_import
 from .wallet import cmd_import_wallet
 from .watchlist import cmd_watchlist
+from .longport_login import cmd_longport_login
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -81,6 +83,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_snap.add_argument("--base", default=None, help="覆盖基础货币, 如 USD")
     p_snap.add_argument("--akshare", action="store_true", help="A股/港股优先走 akshare")
     p_snap.add_argument("--ibkr", action="store_true", help="优先使用 IBKR 行情 (需 IB Gateway)")
+    p_snap.add_argument("--longport", action="store_true", help="优先使用长桥行情 (需 longport.json)")
     p_snap.add_argument("--json", action="store_true", help="输出 JSON")
     p_snap.set_defaults(func=cmd_snapshot)
 
@@ -98,6 +101,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_q.add_argument("symbols", nargs="+", help="Yahoo 代码, 如 AAPL 600519.SS BTC-USD")
     p_q.add_argument("--akshare", action="store_true")
     p_q.add_argument("--ibkr", action="store_true")
+    p_q.add_argument("--longport", action="store_true")
     p_q.add_argument("--json", action="store_true")
     p_q.set_defaults(func=cmd_quote)
 
@@ -125,6 +129,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_w.add_argument("--note", help="备注")
     p_w.add_argument("--akshare", action="store_true")
     p_w.add_argument("--ibkr", action="store_true")
+    p_w.add_argument("--longport", action="store_true")
     p_w.add_argument("--json", action="store_true", help="输出 JSON")
     p_w.add_argument("--no-quotes", action="store_true", help="list 时不拉行情, 仅展示配置")
     p_w.set_defaults(func=cmd_watchlist)
@@ -172,6 +177,7 @@ def build_parser() -> argparse.ArgumentParser:
                      default="default", help="列表内排序方式")
     p_r.add_argument("--akshare", action="store_true")
     p_r.add_argument("--ibkr", action="store_true")
+    p_r.add_argument("--longport", action="store_true")
     p_r.add_argument("--output", "-o", default=None, help="输出文件路径 (缺省打印到终端)")
     p_r.set_defaults(func=cmd_report)
 
@@ -195,6 +201,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_e.add_argument("--base", default=None, help="覆盖基础货币, 如 USD")
     p_e.add_argument("--akshare", action="store_true", help="A股/港股优先走 akshare")
     p_e.add_argument("--ibkr", action="store_true", help="优先使用 IBKR 行情 (需 IB Gateway)")
+    p_e.add_argument("--longport", action="store_true", help="优先使用长桥行情 (需 longport.json)")
     p_e.add_argument("--output", "-o", default=None, help="输出文件路径 (缺省打印到终端)")
     p_e.set_defaults(func=cmd_export)
 
@@ -212,6 +219,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_fx.add_argument("base", help="基础货币, 如 USD")
     p_fx.add_argument("currencies", nargs="*", help="目标货币, 缺省常用币种")
     p_fx.add_argument("--ibkr", action="store_true", help="优先使用 IBKR 汇率")
+    p_fx.add_argument("--longport", action="store_true", help="预留: 长桥暂不支持汇率")
     p_fx.add_argument("--json", action="store_true")
     p_fx.set_defaults(func=cmd_fx)
 
@@ -231,6 +239,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_h.add_argument("--rows", type=int, default=10, help="表格模式打印最近 N 行")
     p_h.add_argument("--akshare", action="store_true")
     p_h.add_argument("--ibkr", action="store_true", help="优先使用 IBKR 行情 (需 IB Gateway)")
+    p_h.add_argument("--longport", action="store_true", help="优先使用长桥行情 (需 longport.json)")
     p_h.add_argument("--json", action="store_true")
     p_h.set_defaults(func=cmd_history)
 
@@ -255,6 +264,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_k.add_argument("--refresh", action="store_true", help="忽略缓存强制刷新")
     p_k.add_argument("--akshare", action="store_true")
     p_k.add_argument("--ibkr", action="store_true", help="优先使用 IBKR 行情 (需 IB Gateway)")
+    p_k.add_argument("--longport", action="store_true", help="优先使用长桥行情 (需 longport.json)")
     p_k.add_argument("--output", "-o", default=None,
                      help="HTML 输出路径 (默认 var/kline_<代码>.html)")
     p_k.add_argument("--open", dest="open_browser", action="store_true",
@@ -299,6 +309,7 @@ def build_parser() -> argparse.ArgumentParser:
                        help="周期 (默认日K)")
     p_cmp.add_argument("--raw", action="store_true", help="不归一化, 直接画各代码原币种收盘价")
     p_cmp.add_argument("--akshare", action="store_true")
+    p_cmp.add_argument("--longport", action="store_true", help="优先使用长桥行情 (需 longport.json)")
     p_cmp.add_argument("--output", "-o", default=None,
                        help="HTML 输出路径 (默认 var/compare_<代码>.html)")
     p_cmp.add_argument("--open", dest="open_browser", action="store_true",
@@ -347,6 +358,9 @@ def build_parser() -> argparse.ArgumentParser:
             "  tracker import wallet bsc 0x... --base-currency USDT\n"
             "  tracker import file 持仓.csv                       # 券商导出文件追加导入\n"
             "  tracker import file 持仓.xlsx --overwrite --json\n"
+            "  tracker import ibkr --dry-run                     # 预览 IBKR 账户持仓\n"
+            "  tracker import ibkr --mode live --overwrite       # 实盘账户, 覆盖写入\n"
+            "  tracker import longport --dry-run                 # 预览长桥账户持仓\n"
         ),
     )
     imp_sub = p_imp.add_subparsers(dest="source", metavar="<来源>", required=True)
@@ -369,6 +383,24 @@ def build_parser() -> argparse.ArgumentParser:
     p_i_ibkr.add_argument("--dry-run", action="store_true", help="仅预览, 不写入")
     p_i_ibkr.add_argument("--json", action="store_true", help="输出 JSON")
     p_i_ibkr.set_defaults(func=cmd_import)
+
+    p_i_lp = imp_sub.add_parser(
+        "longport", help="从长桥账户导入持仓 (OAuth 登录或 API Key)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "示例:\n"
+            "  tracker import longport --dry-run       # 仅预览\n"
+            "  tracker import longport --overwrite     # 覆盖全部持仓\n"
+            "登录方式: tracker longport-login 发起 OAuth 浏览器授权 (token 自动缓存刷新);\n"
+            "或 longport.json 配置 auth=apikey 与 app_key/app_secret/access_token。"
+        ),
+    )
+    p_i_lp.add_argument("--portfolio", default=str(DEFAULT_PORTFOLIO), help="portfolio.json 路径")
+    p_i_lp.add_argument("--overwrite", action="store_true",
+                        help="覆盖全部持仓 (缺省追加合并)")
+    p_i_lp.add_argument("--dry-run", action="store_true", help="仅预览, 不写入")
+    p_i_lp.add_argument("--json", action="store_true", help="输出 JSON")
+    p_i_lp.set_defaults(func=cmd_import)
 
     p_i_wallet = imp_sub.add_parser(
         "wallet", help="从链上地址导入加密资产 (轻钱包: tokenlist + balanceOf)",
@@ -430,6 +462,18 @@ def build_parser() -> argparse.ArgumentParser:
                         help="追加合并 (按代码更新/新增); 缺省覆盖全部持仓")
     p_sync.add_argument("--json", action="store_true")
     p_sync.set_defaults(func=cmd_sync)
+
+    # ---- longport-login (长桥 OAuth 登录引导) ----
+    p_lp = sub.add_parser(
+        "longport-login", help="发起长桥 OAuth 登录 (浏览器授权, token 自动缓存与刷新)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "前置: longport.json 已配置有效 client_id (OAuth 客户端注册见 longport.example.json)。\n"
+            "授权成功后 token 缓存于 ~/.longport/openapi/tokens/<client_id>, 自动刷新,\n"
+            "之后 import longport / --longport 行情即可用, 无需重复登录。"
+        ),
+    )
+    p_lp.set_defaults(func=cmd_longport_login)
 
     # ---- import-wallet (兼容入口, 已并入 import wallet) ----
     p_wallet = sub.add_parser(

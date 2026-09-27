@@ -37,9 +37,9 @@ def _route_provider(p: ParsedSymbol):
 
 
 def get_quotes(
-    symbols, prefer_akshare: bool = False, use_ibkr: bool = False
+    symbols, prefer_akshare: bool = False, use_ibkr: bool = False, use_longport: bool = False
 ) -> tuple[dict[str, Quote], dict[str, str], list[str]]:
-    """多代码实时行情: 缓存 → IBKR 批量 (可选) → 按域 provider 取数 → 回写缓存."""
+    """多代码实时行情: 缓存 → 长桥/IBKR 批量 (可选, IBKR 优先) → 按域 provider 取数 → 回写缓存."""
     quotes: dict[str, Quote] = {}
     notes: list[str] = []
     by_yahoo, errors = _parse_all(symbols)
@@ -53,6 +53,17 @@ def get_quotes(
     if len(quotes) == len(by_yahoo):
         return quotes, errors, notes
 
+    # 可选批量前置: 长桥先取, IBKR 后取并覆盖 —— 两源都启用时 IBKR 优先级更高
+    if use_longport:
+        try:
+            from .. import longport as lp_mod
+
+            lp_quotes, reason = lp_mod.get_quotes_longport(list(by_yahoo.values()))
+            quotes.update(lp_quotes)
+            if reason:
+                notes.append(f"长桥不可用: {reason} (已回退默认数据源)")
+        except Exception as e:  # noqa: BLE001 - 长桥属可选增强
+            notes.append(f"长桥接入异常: {e}")
     if use_ibkr:
         try:
             from .. import ibkr as ibkr_mod
@@ -63,8 +74,6 @@ def get_quotes(
                 notes.append(f"IBKR 不可用: {reason} (已回退默认数据源)")
         except Exception as e:  # noqa: BLE001 - IBKR 属可选增强
             notes.append(f"IBKR 接入异常: {e}")
-
-    # 按域分组, 各域独立取数
     groups: dict[str, list[ParsedSymbol]] = {}
     for p in by_yahoo.values():
         if p.yahoo in quotes:
@@ -121,8 +130,9 @@ def get_history(
     end_date: str | None = None,
     prefer_akshare: bool = False,
     use_ibkr: bool = False,
+    use_longport: bool = False,
 ) -> pd.DataFrame:
-    """单代码历史K线: IBKR (可选) → 所属 provider 源链."""
+    """单代码历史K线: 长桥/IBKR (可选) → 所属 provider 源链."""
     from datetime import date, timedelta
 
     p = _parse_symbol(symbol)
@@ -145,5 +155,16 @@ def get_history(
             import warnings
 
             warnings.warn(f"IBKR 历史数据异常: {e}")
+    if use_longport:
+        try:
+            from .. import longport as lp_mod
+
+            lp_hist = lp_mod.get_history_longport(p, start_date, end_date)
+            if lp_hist is not None:
+                return lp_hist
+        except Exception as e:  # noqa: BLE001 - 长桥属可选增强
+            import warnings
+
+            warnings.warn(f"长桥历史数据异常: {e}")
     provider = _route_provider(p)
     return provider.fetch_history(p, start_date, end_date, prefer_first=prefer_akshare)

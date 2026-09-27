@@ -50,6 +50,7 @@ def take_snapshot(
     watch_name: str | None = None,
     prefer_akshare: bool = False,
     use_ibkr: bool = False,
+    use_longport: bool = False,
 ) -> tuple[str, pd.DataFrame, dict, pd.DataFrame, list[str]]:
     holdings = [h for h in portfolio.get("holdings", []) if h.get("symbol")]
     wentries = [
@@ -58,7 +59,7 @@ def take_snapshot(
     base = str(portfolio.get("base_currency") or "CNY").upper()
     symbols = [h["symbol"] for h in holdings] + [w["symbol"] for w in wentries]
     quotes, errors, notes = prices.get_quotes(
-        symbols, prefer_akshare=prefer_akshare, use_ibkr=use_ibkr
+        symbols, prefer_akshare=prefer_akshare, use_ibkr=use_ibkr, use_longport=use_longport
     )
     if holdings:
         # 只对持仓实际涉及的币种取汇率; 自选股不做换算,

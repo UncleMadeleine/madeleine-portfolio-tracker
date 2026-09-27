@@ -48,6 +48,19 @@ def render_settings_page() -> None:
         help="启用后优先从 IBKR 获取行情 (有订阅则为实时), 失败自动回退 Yahoo/akshare。"
         "连接参数见 ibkr.json (mode: paper=4002 / live=4001)",
     )
+    st.toggle(
+        "长桥行情 (需长桥账户)",
+        value=bool(settings.get("use_longport")),
+        key="set_use_longport",
+        on_change=_save_display,
+        help="启用后优先从长桥 OpenAPI 获取美股/港股/沪深行情与历史K线, 失败自动回退默认源。"
+        "需先登录: 在「导入」页长桥标签完成 OAuth 授权; 连接配置见 longport.json。",
+    )
+    with st.expander("长桥账户登录", expanded=bool(settings.get("use_longport")) and not settings.get("use_ibkr")):
+        from .longport_login import login_state_label, render_login_section
+
+        st.caption(f"当前状态: {login_state_label()}")
+        render_login_section(key_prefix="set_lp")
 
     # ---- 基础货币 ----
     st.markdown("#### 基础货币")
@@ -72,6 +85,7 @@ def _save_display() -> None:
             "color_scheme": st.session_state.get("set_color_scheme", S.SCHEME_CN),
             "prefer_akshare": bool(st.session_state.get("set_prefer_akshare")),
             "use_ibkr": bool(st.session_state.get("set_use_ibkr")),
+            "use_longport": bool(st.session_state.get("set_use_longport")),
         }
     )
     st.toast("设置已保存")

@@ -1,6 +1,7 @@
 openbb>=4.7.0
 akshare>=1.14.0
 ib_async>=1.0.0
+longport>=4.3.0
 streamlit>=1.40.0
 plotly>=5.24.0
 pandas>=2.0.0

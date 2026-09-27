@@ -125,6 +125,7 @@ def cmd_export(args) -> None:
     base, view, summary, wview, issues = take_snapshot(
         portfolio, watchlist, watch_name=args.watchlist,
         prefer_akshare=args.akshare, use_ibkr=args.ibkr,
+        use_longport=getattr(args, "longport", False),
     )
     if args.format == "json":
         payload = snapshot_json(base, view, summary, wview, issues)

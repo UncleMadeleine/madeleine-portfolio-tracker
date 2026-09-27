@@ -9,7 +9,8 @@ from ._common import _print_json
 def cmd_quote(args) -> None:
     """查询实时行情, 支持 --json 机器可读输出."""
     quotes, errors, notes = prices.get_quotes(
-        args.symbols, prefer_akshare=args.akshare, use_ibkr=args.ibkr
+        args.symbols, prefer_akshare=args.akshare, use_ibkr=args.ibkr,
+        use_longport=getattr(args, "longport", False),
     )
     rows: list[dict] = []
     for s in args.symbols:

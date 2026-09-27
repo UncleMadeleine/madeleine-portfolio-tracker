@@ -1,9 +1,10 @@
 """Provider 基础设施: Quote/SymbolEntry 数据结构与 provider 注册解析."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..symbols import Market, ParsedSymbol, parse as _parse_symbol
+from ..symbols import ParsedSymbol, parse as _parse_symbol
 
 __all__ = [
     "Provider",
@@ -39,13 +40,13 @@ class Quote:
     currency: str
 
 
-
 class Provider:
     """单一市场域数据源: 行情 + 历史K线 + 代码目录.
 
     子类实现 fetch_quote / fetch_history / search_catalog;
     排序后的数据源链由 quote_sources / history_sources 给出。
     """
+
     name = "provider"
 
     # -- 代码搜索 --
@@ -61,7 +62,13 @@ class Provider:
         """该 symbol 的行情数据源函数链 (按优先级, 依次尝试)."""
         raise NotImplementedError
 
-    def history_sources(self, p: ParsedSymbol, start_date: str, end_date: str | None, prefer_first: bool = False) -> list:
+    def history_sources(
+        self,
+        p: ParsedSymbol,
+        start_date: str,
+        end_date: str | None,
+        prefer_first: bool = False,
+    ) -> list:
         """该 symbol 的历史数据源函数链 (按优先级, 依次尝试)."""
         raise NotImplementedError
 
@@ -76,7 +83,13 @@ class Provider:
                 last_err = e
         raise RuntimeError(f"{self.name} 行情获取失败 ({last_err})")
 
-    def fetch_history(self, p: ParsedSymbol, start_date: str, end_date: str | None, prefer_first: bool = False):
+    def fetch_history(
+        self,
+        p: ParsedSymbol,
+        start_date: str,
+        end_date: str | None,
+        prefer_first: bool = False,
+    ):
         """返回 DataFrame (date/open/high/low/close/volume); 全部源失败抛 RuntimeError."""
         last_err: Exception | None = None
         for fn in self.history_sources(p, start_date, end_date, prefer_first):
@@ -117,16 +130,40 @@ def get_quote(symbol: str, prefer_akshare: bool = False) -> Quote:
 
 
 def get_quotes(
-    symbols, prefer_akshare: bool = False, use_ibkr: bool = False, use_longport: bool = False
+    symbols,
+    prefer_akshare: bool = False,
+    use_ibkr: bool = False,
+    use_longport: bool = False,
 ) -> tuple[dict[str, Quote], dict[str, str], list[str]]:
     """多代码批量行情 (按 provider 分域聚合). 见 orchestration.get_quotes."""
     from .orchestration import get_quotes as _impl
 
-    return _impl(symbols, prefer_akshare=prefer_akshare, use_ibkr=use_ibkr, use_longport=use_longport)
+    return _impl(
+        symbols,
+        prefer_akshare=prefer_akshare,
+        use_ibkr=use_ibkr,
+        use_longport=use_longport,
+    )
 
 
-def get_history(symbol: str, months: int = 12, start_date: str | None = None, end_date: str | None = None, prefer_akshare: bool = False, use_ibkr: bool = False, use_longport: bool = False):
+def get_history(
+    symbol: str,
+    months: int = 12,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    prefer_akshare: bool = False,
+    use_ibkr: bool = False,
+    use_longport: bool = False,
+):
     """单代码历史K线: 自动路由到所属 provider. 见 orchestration.get_history."""
     from .orchestration import get_history as _impl
 
-    return _impl(symbol, months=months, start_date=start_date, end_date=end_date, prefer_akshare=prefer_akshare, use_ibkr=use_ibkr, use_longport=use_longport)
+    return _impl(
+        symbol,
+        months=months,
+        start_date=start_date,
+        end_date=end_date,
+        prefer_akshare=prefer_akshare,
+        use_ibkr=use_ibkr,
+        use_longport=use_longport,
+    )

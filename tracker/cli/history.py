@@ -1,4 +1,5 @@
 """history 子命令: 历史价格 (近 N 个月)."""
+
 from __future__ import annotations
 
 import pandas as pd
@@ -16,8 +17,10 @@ def cmd_history(args) -> None:
         _finish_with_error(str(e))
     try:
         df = prices.get_history(
-            args.symbol, months=args.months,
-            prefer_akshare=args.akshare, use_ibkr=args.ibkr,
+            args.symbol,
+            months=args.months,
+            prefer_akshare=args.akshare,
+            use_ibkr=args.ibkr,
             use_longport=getattr(args, "longport", False),
         )
     except Exception as e:
@@ -33,7 +36,9 @@ def cmd_history(args) -> None:
         return
     close = df["close"].astype(float)
     change = (close.iloc[-1] / close.iloc[0] - 1) * 100 if len(close) >= 2 else None
-    print(f"\n=== 历史行情 {args.symbol} (近 {args.months} 个月, 共 {len(df)} 个交易日) ===")
+    print(
+        f"\n=== 历史行情 {args.symbol} (近 {args.months} 个月, 共 {len(df)} 个交易日) ==="
+    )
     print(
         f"区间: {df['date'].iloc[0]:%Y-%m-%d} → {df['date'].iloc[-1]:%Y-%m-%d}"
         f"  · 收 {close.iloc[0]:,.3f} → {close.iloc[-1]:,.3f}"

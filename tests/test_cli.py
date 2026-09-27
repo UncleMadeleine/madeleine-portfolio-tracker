@@ -1,4 +1,5 @@
 """CLI 测试: 离线部分 (watchlist 增删改查 / 缓存管理 / JSON 快照)."""
+
 import json
 
 import pandas as pd
@@ -24,13 +25,29 @@ class TestWatchlistCli:
         f = tmp_path / "w.json"
         f.write_text(json.dumps({"watchlist": []}), encoding="utf-8")
         out = _run(
-            capsys, "watchlist", "add", "AAPL", "--file", str(f),
-            "--list", "科技", "--upper1", "250", "--note", "苹果",
+            capsys,
+            "watchlist",
+            "add",
+            "AAPL",
+            "--file",
+            str(f),
+            "--list",
+            "科技",
+            "--upper1",
+            "250",
+            "--note",
+            "苹果",
         )
         assert "新增 AAPL" in out
         data = _load(f)
         assert data["watchlist"] == [
-            {"symbol": "AAPL", "lists": ["科技"], "upper_1": 250.0, "note": "苹果", "type": "global"}
+            {
+                "symbol": "AAPL",
+                "lists": ["科技"],
+                "upper_1": 250.0,
+                "note": "苹果",
+                "type": "global",
+            }
         ]
 
     def test_add_merges_existing(self, tmp_path, capsys):
@@ -42,8 +59,16 @@ class TestWatchlistCli:
             encoding="utf-8",
         )
         out = _run(
-            capsys, "watchlist", "add", "TSLA", "--file", str(f),
-            "--list", "美股", "--upper1", "500",
+            capsys,
+            "watchlist",
+            "add",
+            "TSLA",
+            "--file",
+            str(f),
+            "--list",
+            "美股",
+            "--upper1",
+            "500",
         )
         assert "更新 TSLA" in out
         data = _load(f)
@@ -85,7 +110,9 @@ class TestWatchlistCli:
             capsys, "watchlist", "remove", "AAPL", "--file", str(f), "--list", "科技"
         )
         assert "已删除" in out
-        assert _load(f)["watchlist"] == [{"symbol": "AAPL", "lists": ["美股"], "type": "global"}]
+        assert _load(f)["watchlist"] == [
+            {"symbol": "AAPL", "lists": ["美股"], "type": "global"}
+        ]
 
     def test_remove_from_last_list_deletes_entry(self, tmp_path, capsys):
         f = tmp_path / "w.json"
@@ -106,7 +133,9 @@ class TestWatchlistCli:
             capsys, "watchlist", "remove", "AAPL", "--file", str(f), "--list", "科技"
         )
         assert "未找到" in out
-        assert _load(f)["watchlist"] == [{"symbol": "AAPL", "lists": ["默认"], "type": "global"}]
+        assert _load(f)["watchlist"] == [
+            {"symbol": "AAPL", "lists": ["默认"], "type": "global"}
+        ]
 
     def test_list_no_quotes(self, tmp_path, capsys):
         f = tmp_path / "w.json"
@@ -131,7 +160,14 @@ class TestWatchlistCli:
             encoding="utf-8",
         )
         out = _run(
-            capsys, "watchlist", "remove", "AAPL", "--file", str(f), "--list", "科技,美股"
+            capsys,
+            "watchlist",
+            "remove",
+            "AAPL",
+            "--file",
+            str(f),
+            "--list",
+            "科技,美股",
         )
         assert "已删除" in out
         # 仅移除指定两个列表, 仍保留「核心」
@@ -143,8 +179,15 @@ class TestWatchlistCli:
         f = tmp_path / "w.json"
         f.write_text(json.dumps({"watchlist": []}), encoding="utf-8")
         out = _run(
-            capsys, "watchlist", "add", "AAPL", "--file", str(f),
-            "--list", "科技", "--json",
+            capsys,
+            "watchlist",
+            "add",
+            "AAPL",
+            "--file",
+            str(f),
+            "--list",
+            "科技",
+            "--json",
         )
         data = json.loads(out)
         assert data["changed"] == ["新增 AAPL"]
@@ -154,10 +197,20 @@ class TestWatchlistCli:
 class TestPortfolioCli:
     def test_add_new_holding(self, tmp_path, capsys):
         f = tmp_path / "p.json"
-        f.write_text(json.dumps({"base_currency": "CNY", "holdings": []}), encoding="utf-8")
+        f.write_text(
+            json.dumps({"base_currency": "CNY", "holdings": []}), encoding="utf-8"
+        )
         out = _run(
-            capsys, "portfolio", "add", "AAPL", "--portfolio", str(f),
-            "--quantity", "10", "--avg-cost", "180",
+            capsys,
+            "portfolio",
+            "add",
+            "AAPL",
+            "--portfolio",
+            str(f),
+            "--quantity",
+            "10",
+            "--avg-cost",
+            "180",
         )
         assert "新增 AAPL" in out
         data = _load(f)
@@ -169,13 +222,24 @@ class TestPortfolioCli:
         f = tmp_path / "p.json"
         f.write_text(
             json.dumps(
-                {"base_currency": "CNY", "holdings": [{"symbol": "AAPL", "quantity": 5, "avg_cost": 150}]}
+                {
+                    "base_currency": "CNY",
+                    "holdings": [{"symbol": "AAPL", "quantity": 5, "avg_cost": 150}],
+                }
             ),
             encoding="utf-8",
         )
         out = _run(
-            capsys, "portfolio", "add", "AAPL", "--portfolio", str(f),
-            "--quantity", "10", "--avg-cost", "180",
+            capsys,
+            "portfolio",
+            "add",
+            "AAPL",
+            "--portfolio",
+            str(f),
+            "--quantity",
+            "10",
+            "--avg-cost",
+            "180",
         )
         assert "更新 AAPL" in out
         h = _load(f)["holdings"][0]
@@ -184,25 +248,42 @@ class TestPortfolioCli:
 
     def test_add_without_quantity_errors(self, tmp_path, capsys):
         f = tmp_path / "p.json"
-        f.write_text(json.dumps({"base_currency": "CNY", "holdings": []}), encoding="utf-8")
+        f.write_text(
+            json.dumps({"base_currency": "CNY", "holdings": []}), encoding="utf-8"
+        )
         with pytest.raises(SystemExit):
             _run(capsys, "portfolio", "add", "AAPL", "--portfolio", str(f))
 
     def test_add_normalizes_hk(self, tmp_path, capsys):
         f = tmp_path / "p.json"
-        f.write_text(json.dumps({"base_currency": "CNY", "holdings": []}), encoding="utf-8")
-        _run(capsys, "portfolio", "add", "00700.HK", "--portfolio", str(f),
-              "--quantity", "100", "--avg-cost", "330")
+        f.write_text(
+            json.dumps({"base_currency": "CNY", "holdings": []}), encoding="utf-8"
+        )
+        _run(
+            capsys,
+            "portfolio",
+            "add",
+            "00700.HK",
+            "--portfolio",
+            str(f),
+            "--quantity",
+            "100",
+            "--avg-cost",
+            "330",
+        )
         assert _load(f)["holdings"][0]["symbol"] == "0700.HK"
 
     def test_remove(self, tmp_path, capsys):
         f = tmp_path / "p.json"
         f.write_text(
             json.dumps(
-                {"base_currency": "CNY", "holdings": [
-                    {"symbol": "AAPL", "quantity": 10, "avg_cost": 180},
-                    {"symbol": "NVDA", "quantity": 5, "avg_cost": 90},
-                ]}
+                {
+                    "base_currency": "CNY",
+                    "holdings": [
+                        {"symbol": "AAPL", "quantity": 10, "avg_cost": 180},
+                        {"symbol": "NVDA", "quantity": 5, "avg_cost": 90},
+                    ],
+                }
             ),
             encoding="utf-8",
         )
@@ -216,7 +297,10 @@ class TestPortfolioCli:
         f = tmp_path / "p.json"
         f.write_text(
             json.dumps(
-                {"base_currency": "CNY", "holdings": [{"symbol": "AAPL", "quantity": 10}]}
+                {
+                    "base_currency": "CNY",
+                    "holdings": [{"symbol": "AAPL", "quantity": 10}],
+                }
             ),
             encoding="utf-8",
         )
@@ -228,7 +312,10 @@ class TestPortfolioCli:
         f = tmp_path / "p.json"
         f.write_text(
             json.dumps(
-                {"base_currency": "USD", "holdings": [{"symbol": "AAPL", "quantity": 10, "avg_cost": 180}]}
+                {
+                    "base_currency": "USD",
+                    "holdings": [{"symbol": "AAPL", "quantity": 10, "avg_cost": 180}],
+                }
             ),
             encoding="utf-8",
         )
@@ -241,7 +328,10 @@ class TestPortfolioCli:
         f = tmp_path / "p.json"
         f.write_text(
             json.dumps(
-                {"base_currency": "CNY", "holdings": [{"symbol": "AAPL", "quantity": 10}]}
+                {
+                    "base_currency": "CNY",
+                    "holdings": [{"symbol": "AAPL", "quantity": 10}],
+                }
             ),
             encoding="utf-8",
         )
@@ -264,11 +354,22 @@ class TestHistoryCli:
         """缺 open/high/low/volume 的行必须输出 null, 不能是裸 NaN (非法 JSON)."""
         df = pd.DataFrame(
             [
-                {"date": pd.Timestamp("2024-01-02"), "open": float("nan"),
-                 "high": float("nan"), "low": float("nan"), "close": 1.5,
-                 "volume": float("nan")},
-                {"date": pd.Timestamp("2024-01-03"), "open": 1.6, "high": 1.7,
-                 "low": 1.5, "close": 1.65, "volume": 100.0},
+                {
+                    "date": pd.Timestamp("2024-01-02"),
+                    "open": float("nan"),
+                    "high": float("nan"),
+                    "low": float("nan"),
+                    "close": 1.5,
+                    "volume": float("nan"),
+                },
+                {
+                    "date": pd.Timestamp("2024-01-03"),
+                    "open": 1.6,
+                    "high": 1.7,
+                    "low": 1.5,
+                    "close": 1.65,
+                    "volume": 100.0,
+                },
             ]
         )
         monkeypatch.setattr("tracker.prices.get_history", lambda *a, **k: df)
@@ -325,13 +426,21 @@ class TestImportWalletCli:
         f = tmp_path / "p.json"
         f.write_text(
             json.dumps(
-                {"base_currency": "CNY", "holdings": [{"symbol": "AAPL", "quantity": 10}]}
+                {
+                    "base_currency": "CNY",
+                    "holdings": [{"symbol": "AAPL", "quantity": 10}],
+                }
             ),
             encoding="utf-8",
         )
         out = _run(
-            capsys, "import-wallet", "eth", self.ADDR,
-            "--portfolio", str(f), "--add",
+            capsys,
+            "import-wallet",
+            "eth",
+            self.ADDR,
+            "--portfolio",
+            str(f),
+            "--add",
         )
         assert "已写入 1 个代币" in out
         assert "ETH-USD" in out
@@ -346,7 +455,9 @@ class TestImportWalletCli:
         assert exc.value.code == 2
         assert "不支持的链" in capsys.readouterr().err
 
-    def test_import_wallet_json_add_emits_single_object(self, tmp_path, capsys, monkeypatch):
+    def test_import_wallet_json_add_emits_single_object(
+        self, tmp_path, capsys, monkeypatch
+    ):
         """--json 与 --add 同用时只能输出一个 JSON 对象 (两个拼接会解析失败)."""
         self._mock_rpc(monkeypatch, 2 * 10**18)
         f = tmp_path / "p.json"
@@ -354,8 +465,14 @@ class TestImportWalletCli:
             json.dumps({"base_currency": "CNY", "holdings": []}), encoding="utf-8"
         )
         out = _run(
-            capsys, "import-wallet", "eth", self.ADDR,
-            "--portfolio", str(f), "--add", "--json",
+            capsys,
+            "import-wallet",
+            "eth",
+            self.ADDR,
+            "--portfolio",
+            str(f),
+            "--add",
+            "--json",
         )
         payload = json.loads(out)
         assert payload["chain"] == "eth"
@@ -378,7 +495,10 @@ class TestImportCli:
         f = tmp_path / "p.json"
         f.write_text(
             json.dumps(
-                {"base_currency": "CNY", "holdings": [{"symbol": "AAPL", "quantity": 10}]}
+                {
+                    "base_currency": "CNY",
+                    "holdings": [{"symbol": "AAPL", "quantity": 10}],
+                }
             ),
             encoding="utf-8",
         )
@@ -406,16 +526,24 @@ class TestImportCli:
 
     def test_import_file_append(self, tmp_path, capsys):
         pf = self._portfolio(tmp_path)
-        out = _run(capsys, "import", "file", str(self._csv(tmp_path)),
-                   "--portfolio", str(pf))
+        out = _run(
+            capsys, "import", "file", str(self._csv(tmp_path)), "--portfolio", str(pf)
+        )
         assert "已写入" in out and "新增 1" in out
         data = _load(pf)
         assert [h["symbol"] for h in data["holdings"]] == ["AAPL", "600519.SS"]
 
     def test_import_file_overwrite(self, tmp_path, capsys):
         pf = self._portfolio(tmp_path)
-        out = _run(capsys, "import", "file", str(self._csv(tmp_path)),
-                   "--portfolio", str(pf), "--overwrite")
+        out = _run(
+            capsys,
+            "import",
+            "file",
+            str(self._csv(tmp_path)),
+            "--portfolio",
+            str(pf),
+            "--overwrite",
+        )
         assert "覆盖" in out
         data = _load(pf)
         assert [h["symbol"] for h in data["holdings"]] == ["600519.SS"]
@@ -423,8 +551,16 @@ class TestImportCli:
 
     def test_import_file_dry_run_json(self, tmp_path, capsys):
         pf = self._portfolio(tmp_path)
-        out = _run(capsys, "import", "file", str(self._csv(tmp_path)),
-                   "--portfolio", str(pf), "--dry-run", "--json")
+        out = _run(
+            capsys,
+            "import",
+            "file",
+            str(self._csv(tmp_path)),
+            "--portfolio",
+            str(pf),
+            "--dry-run",
+            "--json",
+        )
         payload = json.loads(out)
         assert payload["source"] == "file"
         assert payload["mode"] == "append"
@@ -434,14 +570,19 @@ class TestImportCli:
 
     def test_import_file_missing(self, tmp_path, capsys):
         with pytest.raises(SystemExit):
-            _run(capsys, "import", "file", str(tmp_path / "nope.csv"),
-                 "--portfolio", str(self._portfolio(tmp_path)))
+            _run(
+                capsys,
+                "import",
+                "file",
+                str(tmp_path / "nope.csv"),
+                "--portfolio",
+                str(self._portfolio(tmp_path)),
+            )
 
     def test_import_wallet_append(self, tmp_path, capsys, monkeypatch):
         self._mock_rpc(monkeypatch, 2 * 10**18)
         pf = self._portfolio(tmp_path)
-        out = _run(capsys, "import", "wallet", "eth", self.ADDR,
-                   "--portfolio", str(pf))
+        out = _run(capsys, "import", "wallet", "eth", self.ADDR, "--portfolio", str(pf))
         assert "已写入" in out
         data = _load(pf)
         assert [h["symbol"] for h in data["holdings"]] == ["AAPL", "ETH-USD"]
@@ -449,8 +590,17 @@ class TestImportCli:
     def test_import_wallet_dry_run(self, tmp_path, capsys, monkeypatch):
         self._mock_rpc(monkeypatch, 2 * 10**18)
         pf = self._portfolio(tmp_path)
-        out = _run(capsys, "import", "wallet", "eth", self.ADDR,
-                   "--portfolio", str(pf), "--dry-run", "--json")
+        out = _run(
+            capsys,
+            "import",
+            "wallet",
+            "eth",
+            self.ADDR,
+            "--portfolio",
+            str(pf),
+            "--dry-run",
+            "--json",
+        )
         payload = json.loads(out)
         assert payload["source"] == "wallet"
         assert payload["written"] is False
@@ -465,8 +615,12 @@ class TestCacheCli:
         set_cached(
             {
                 "AAPL": Quote(
-                    symbol="AAPL", name="Apple", price=150.0, prev_close=148.0,
-                    change_pct=1.35, currency="USD",
+                    symbol="AAPL",
+                    name="Apple",
+                    price=150.0,
+                    prev_close=148.0,
+                    change_pct=1.35,
+                    currency="USD",
                 )
             }
         )
@@ -488,7 +642,13 @@ class TestReportCli:
             json.dumps(
                 {
                     "watchlist": [
-                        {"symbol": "TSLA", "lists": ["科技", "美股"], "upper_1": 420, "upper_2": 450, "note": "两级提醒"},
+                        {
+                            "symbol": "TSLA",
+                            "lists": ["科技", "美股"],
+                            "upper_1": 420,
+                            "upper_2": 450,
+                            "note": "两级提醒",
+                        },
                         {"symbol": "NVDA", "lists": ["科技"], "upper_1": 260},
                     ]
                 }
@@ -497,7 +657,9 @@ class TestReportCli:
         )
         return f
 
-    def _fake_quotes(self, symbols, prefer_akshare=False, use_ibkr=False, use_longport=False):
+    def _fake_quotes(
+        self, symbols, prefer_akshare=False, use_ibkr=False, use_longport=False
+    ):
         data = {
             "TSLA": Quote("TSLA", "Tesla", 500.0, 480.0, 4.17, "USD"),
             "NVDA": Quote("NVDA", "NVIDIA", 120.0, 118.0, 1.69, "USD"),
@@ -506,7 +668,9 @@ class TestReportCli:
 
     def test_report_md(self, tmp_path, capsys, monkeypatch):
         monkeypatch.setattr(cli.prices, "get_quotes", self._fake_quotes)
-        out = _run(capsys, "report", "--file", str(self._watchlist(tmp_path)), "-f", "md")
+        out = _run(
+            capsys, "report", "--file", str(self._watchlist(tmp_path)), "-f", "md"
+        )
         assert "# 自选监控阈值报告" in out
         assert "触发 1" in out
         assert "### 科技" in out
@@ -516,7 +680,9 @@ class TestReportCli:
 
     def test_report_json(self, tmp_path, capsys, monkeypatch):
         monkeypatch.setattr(cli.prices, "get_quotes", self._fake_quotes)
-        out = _run(capsys, "report", "--file", str(self._watchlist(tmp_path)), "-f", "json")
+        out = _run(
+            capsys, "report", "--file", str(self._watchlist(tmp_path)), "-f", "json"
+        )
         data = json.loads(out)
         assert data["summary"]["total"] == 2
         assert data["summary"]["triggered"] == 1
@@ -526,7 +692,9 @@ class TestReportCli:
 
     def test_report_csv(self, tmp_path, capsys, monkeypatch):
         monkeypatch.setattr(cli.prices, "get_quotes", self._fake_quotes)
-        out = _run(capsys, "report", "--file", str(self._watchlist(tmp_path)), "-f", "csv")
+        out = _run(
+            capsys, "report", "--file", str(self._watchlist(tmp_path)), "-f", "csv"
+        )
         assert out.startswith("\ufefflists,")
         assert "TSLA" in out
         assert "科技、美股" in out
@@ -535,8 +703,14 @@ class TestReportCli:
         monkeypatch.setattr(cli.prices, "get_quotes", self._fake_quotes)
         out_f = tmp_path / "report.md"
         out = _run(
-            capsys, "report", "--file", str(self._watchlist(tmp_path)),
-            "-f", "md", "-o", str(out_f),
+            capsys,
+            "report",
+            "--file",
+            str(self._watchlist(tmp_path)),
+            "-f",
+            "md",
+            "-o",
+            str(out_f),
         )
         assert "报告已写入" in out
         assert "# 自选监控阈值报告" in out_f.read_text(encoding="utf-8")
@@ -544,8 +718,14 @@ class TestReportCli:
     def test_report_scope_filter(self, tmp_path, capsys, monkeypatch):
         monkeypatch.setattr(cli.prices, "get_quotes", self._fake_quotes)
         out = _run(
-            capsys, "report", "--file", str(self._watchlist(tmp_path)),
-            "-f", "json", "-w", "美股",
+            capsys,
+            "report",
+            "--file",
+            str(self._watchlist(tmp_path)),
+            "-f",
+            "json",
+            "-w",
+            "美股",
         )
         data = json.loads(out)
         assert data["scope"] == "美股"
@@ -557,8 +737,14 @@ class TestReportCli:
         """-w 支持逗号分隔多个列表; 不得把它们当成一个假列表名."""
         monkeypatch.setattr(cli.prices, "get_quotes", self._fake_quotes)
         out = _run(
-            capsys, "report", "--file", str(self._watchlist(tmp_path)),
-            "-f", "json", "-w", "科技,美股",
+            capsys,
+            "report",
+            "--file",
+            str(self._watchlist(tmp_path)),
+            "-f",
+            "json",
+            "-w",
+            "科技,美股",
         )
         data = json.loads(out)
         assert data["summary"]["total"] == 2
@@ -566,29 +752,46 @@ class TestReportCli:
         assert set(data["summary"]["by_list"]) == {"科技", "美股"}
         assert set(data["by_list"]) == {"科技", "美股"}
 
+
 class TestSnapshotJson:
     def test_snapshot_json_serializable(self):
         view = pd.DataFrame(
             [
                 {
-                    "symbol": "AAPL", "name": "Apple", "market": "美股", "currency": "USD",
-                    "price": 150.0, "change_pct": 1.35, "quantity": 10.0,
-                    "avg_cost": 120.0, "market_value": 1500.0, "cost": 1200.0,
-                    "pnl": 300.0, "pnl_pct": 0.25, "today_pnl": None,
+                    "symbol": "AAPL",
+                    "name": "Apple",
+                    "market": "美股",
+                    "currency": "USD",
+                    "price": 150.0,
+                    "change_pct": 1.35,
+                    "quantity": 10.0,
+                    "avg_cost": 120.0,
+                    "market_value": 1500.0,
+                    "cost": 1200.0,
+                    "pnl": 300.0,
+                    "pnl_pct": 0.25,
+                    "today_pnl": None,
                 }
             ]
         )
         wview = pd.DataFrame(
             [
                 {
-                    "symbol": "TSLA", "price": 500.0, "upper_1": 420.0,
-                    "status": "🟠 突破上限 I", "triggered": True,
+                    "symbol": "TSLA",
+                    "price": 500.0,
+                    "upper_1": 420.0,
+                    "status": "🟠 突破上限 I",
+                    "triggered": True,
                 }
             ]
         )
         summary = {
-            "total_value": 1500.0, "total_cost": 1200.0, "total_pnl": 300.0,
-            "total_pnl_pct": 0.25, "cost_coverage": 1.0, "today_pnl": None,
+            "total_value": 1500.0,
+            "total_cost": 1200.0,
+            "total_pnl": 300.0,
+            "total_pnl_pct": 0.25,
+            "cost_coverage": 1.0,
+            "today_pnl": None,
             "by_market": pd.Series({"美股": 1500.0}),
             "by_currency": pd.Series({"USD": 1500.0}),
         }
@@ -627,7 +830,9 @@ class TestExportCli:
         f.write_text(json.dumps({"watchlist": []}), encoding="utf-8")
         return f
 
-    def _fake_quotes(self, symbols, prefer_akshare=False, use_ibkr=False, use_longport=False):
+    def _fake_quotes(
+        self, symbols, prefer_akshare=False, use_ibkr=False, use_longport=False
+    ):
         data = {
             "AAPL": Quote("AAPL", "Apple", 200.0, 195.0, 2.56, "USD"),
             "600519.SS": Quote("600519.SS", "贵州茅台", 1600.0, 1580.0, 1.27, "CNY"),
@@ -643,13 +848,17 @@ class TestExportCli:
         monkeypatch.setattr(cli.prices, "get_quotes", self._fake_quotes)
         monkeypatch.setattr("tracker.services.snapshot.get_fx_rates", self._fake_fx)
 
-
     def test_export_json(self, tmp_path, capsys, monkeypatch):
         self._patch(monkeypatch)
         out = _run(
-            capsys, "export", "-f", "json",
-            "--portfolio", str(self._portfolio(tmp_path)),
-            "--watchlist-file", str(self._watchlist(tmp_path)),
+            capsys,
+            "export",
+            "-f",
+            "json",
+            "--portfolio",
+            str(self._portfolio(tmp_path)),
+            "--watchlist-file",
+            str(self._watchlist(tmp_path)),
         )
         data = json.loads(out)
         assert data["base_currency"] == "CNY"
@@ -660,9 +869,14 @@ class TestExportCli:
     def test_export_csv(self, tmp_path, capsys, monkeypatch):
         self._patch(monkeypatch)
         out = _run(
-            capsys, "export", "-f", "csv",
-            "--portfolio", str(self._portfolio(tmp_path)),
-            "--watchlist-file", str(self._watchlist(tmp_path)),
+            capsys,
+            "export",
+            "-f",
+            "csv",
+            "--portfolio",
+            str(self._portfolio(tmp_path)),
+            "--watchlist-file",
+            str(self._watchlist(tmp_path)),
         )
         assert out.startswith("\ufeffsymbol,")
         assert "AAPL" in out
@@ -671,9 +885,14 @@ class TestExportCli:
     def test_export_md(self, tmp_path, capsys, monkeypatch):
         self._patch(monkeypatch)
         out = _run(
-            capsys, "export", "-f", "md",
-            "--portfolio", str(self._portfolio(tmp_path)),
-            "--watchlist-file", str(self._watchlist(tmp_path)),
+            capsys,
+            "export",
+            "-f",
+            "md",
+            "--portfolio",
+            str(self._portfolio(tmp_path)),
+            "--watchlist-file",
+            str(self._watchlist(tmp_path)),
         )
         assert "# 投资组合快照" in out
         assert "## 持仓明细" in out
@@ -684,9 +903,16 @@ class TestExportCli:
         self._patch(monkeypatch)
         out_f = tmp_path / "snapshot.json"
         out = _run(
-            capsys, "export", "-f", "json", "-o", str(out_f),
-            "--portfolio", str(self._portfolio(tmp_path)),
-            "--watchlist-file", str(self._watchlist(tmp_path)),
+            capsys,
+            "export",
+            "-f",
+            "json",
+            "-o",
+            str(out_f),
+            "--portfolio",
+            str(self._portfolio(tmp_path)),
+            "--watchlist-file",
+            str(self._watchlist(tmp_path)),
         )
         assert "快照已导出" in out
         data = json.loads(out_f.read_text(encoding="utf-8"))
@@ -695,9 +921,16 @@ class TestExportCli:
     def test_export_base_override(self, tmp_path, capsys, monkeypatch):
         self._patch(monkeypatch)
         out = _run(
-            capsys, "export", "-f", "json", "--base", "USD",
-            "--portfolio", str(self._portfolio(tmp_path)),
-            "--watchlist-file", str(self._watchlist(tmp_path)),
+            capsys,
+            "export",
+            "-f",
+            "json",
+            "--base",
+            "USD",
+            "--portfolio",
+            str(self._portfolio(tmp_path)),
+            "--watchlist-file",
+            str(self._watchlist(tmp_path)),
         )
         data = json.loads(out)
         assert data["base_currency"] == "USD"
@@ -729,8 +962,10 @@ class TestSnapshotCryptoMixed:
                 {
                     "watchlist": [
                         {
-                            "symbol": "ETH-USD", "lists": ["加密货币"],
-                            "upper_1": 3000, "upper_2": 3500,
+                            "symbol": "ETH-USD",
+                            "lists": ["加密货币"],
+                            "upper_1": 3000,
+                            "upper_2": 3500,
                         }
                     ]
                 }
@@ -739,7 +974,9 @@ class TestSnapshotCryptoMixed:
         )
         return f
 
-    def _fake_quotes(self, symbols, prefer_akshare=False, use_ibkr=False, use_longport=False):
+    def _fake_quotes(
+        self, symbols, prefer_akshare=False, use_ibkr=False, use_longport=False
+    ):
         data = {
             "AAPL": Quote("AAPL", "Apple", 200.0, 195.0, 2.56, "USD"),
             "BTC-USD": Quote("BTC-USD", None, 60000.0, 58000.0, 3.45, "USD"),
@@ -758,9 +995,13 @@ class TestSnapshotCryptoMixed:
     def test_snapshot_json_mixed_crypto_stock(self, tmp_path, capsys, monkeypatch):
         self._patch(monkeypatch)
         out = _run(
-            capsys, "snapshot", "--json",
-            "--portfolio", str(self._portfolio(tmp_path)),
-            "--watchlist-file", str(self._watchlist(tmp_path)),
+            capsys,
+            "snapshot",
+            "--json",
+            "--portfolio",
+            str(self._portfolio(tmp_path)),
+            "--watchlist-file",
+            str(self._watchlist(tmp_path)),
         )
         data = json.loads(out)
         # 序列化干净: 无 NaN 字面量
@@ -776,25 +1017,36 @@ class TestSnapshotCryptoMixed:
         assert data["summary"]["by_currency"] == {"USD": 230400.0}
         assert data["issues"] == []
 
-    def test_snapshot_mixed_crypto_watchlist_trigger(self, tmp_path, capsys, monkeypatch):
+    def test_snapshot_mixed_crypto_watchlist_trigger(
+        self, tmp_path, capsys, monkeypatch
+    ):
         """ETH 现价 3200 介于 upper_1 (3000) 与 upper_2 (3500) 之间 → 触发上限 I."""
         self._patch(monkeypatch)
         out = _run(
-            capsys, "snapshot", "--json",
-            "--portfolio", str(self._portfolio(tmp_path)),
-            "--watchlist-file", str(self._watchlist(tmp_path)),
+            capsys,
+            "snapshot",
+            "--json",
+            "--portfolio",
+            str(self._portfolio(tmp_path)),
+            "--watchlist-file",
+            str(self._watchlist(tmp_path)),
         )
         data = json.loads(out)
         assert data["triggered"][0]["symbol"] == "ETH-USD"
         assert "上限 I" in data["triggered"][0]["status"]
 
-    def test_snapshot_text_mixed_outputs_crypto_rows(self, tmp_path, capsys, monkeypatch):
+    def test_snapshot_text_mixed_outputs_crypto_rows(
+        self, tmp_path, capsys, monkeypatch
+    ):
         """文本快照: 持仓表含 BTC-USD, 市场分布含「加密货币」."""
         self._patch(monkeypatch)
         out = _run(
-            capsys, "snapshot",
-            "--portfolio", str(self._portfolio(tmp_path)),
-            "--watchlist-file", str(self._watchlist(tmp_path)),
+            capsys,
+            "snapshot",
+            "--portfolio",
+            str(self._portfolio(tmp_path)),
+            "--watchlist-file",
+            str(self._watchlist(tmp_path)),
         )
         assert "BTC-USD" in out
         assert "加密货币" in out
@@ -804,9 +1056,14 @@ class TestSnapshotCryptoMixed:
         """混合组合导出 Markdown: 市场分布与加密货币行都在."""
         self._patch(monkeypatch)
         out = _run(
-            capsys, "export", "-f", "md",
-            "--portfolio", str(self._portfolio(tmp_path)),
-            "--watchlist-file", str(self._watchlist(tmp_path)),
+            capsys,
+            "export",
+            "-f",
+            "md",
+            "--portfolio",
+            str(self._portfolio(tmp_path)),
+            "--watchlist-file",
+            str(self._watchlist(tmp_path)),
         )
         assert "BTC-USD" in out
         assert "加密货币" in out
@@ -814,11 +1071,33 @@ class TestSnapshotCryptoMixed:
     def test_portfolio_add_crypto_normalizes_input(self, tmp_path, capsys, monkeypatch):
         """portfolio add BTCUSD → 存储为 Yahoo 规范格式 BTC-USD, 且组合里股票共存."""
         f = tmp_path / "p2.json"
-        f.write_text(json.dumps({"base_currency": "CNY", "holdings": []}), encoding="utf-8")
-        _run(capsys, "portfolio", "add", "BTCUSD", "--portfolio", str(f),
-             "--quantity", "0.5", "--avg-cost", "30000")
-        _run(capsys, "portfolio", "add", "600519.SS", "--portfolio", str(f),
-             "--quantity", "100", "--avg-cost", "1500")
+        f.write_text(
+            json.dumps({"base_currency": "CNY", "holdings": []}), encoding="utf-8"
+        )
+        _run(
+            capsys,
+            "portfolio",
+            "add",
+            "BTCUSD",
+            "--portfolio",
+            str(f),
+            "--quantity",
+            "0.5",
+            "--avg-cost",
+            "30000",
+        )
+        _run(
+            capsys,
+            "portfolio",
+            "add",
+            "600519.SS",
+            "--portfolio",
+            str(f),
+            "--quantity",
+            "100",
+            "--avg-cost",
+            "1500",
+        )
         holdings = _load(f)["holdings"]
         assert {h["symbol"] for h in holdings} == {"BTC-USD", "600519.SS"}
         assert holdings[0]["quantity"] == 0.5
@@ -827,8 +1106,20 @@ class TestSnapshotCryptoMixed:
         """watchlist add 无分隔符 ETHUSD → 归一为 ETH-USD 并保存两级阈值."""
         f = tmp_path / "w2.json"
         f.write_text(json.dumps({"watchlist": []}), encoding="utf-8")
-        _run(capsys, "watchlist", "add", "ETHUSD", "--file", str(f),
-             "--list", "加密货币", "--upper1", "3000", "--upper2", "3500")
+        _run(
+            capsys,
+            "watchlist",
+            "add",
+            "ETHUSD",
+            "--file",
+            str(f),
+            "--list",
+            "加密货币",
+            "--upper1",
+            "3000",
+            "--upper2",
+            "3500",
+        )
         e = _load(f)["watchlist"][0]
         assert e["symbol"] == "ETH-USD"
         assert e["upper_1"] == 3000.0

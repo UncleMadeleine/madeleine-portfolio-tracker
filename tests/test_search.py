@@ -1,4 +1,5 @@
 """股票搜索模块测试 (纯函数, 不依赖网络)."""
+
 import pytest
 
 from tracker.providers.base import SymbolEntry
@@ -6,7 +7,6 @@ from tracker.providers.em_suggest import (
     em_code_to_yahoo,
     normalize_suggest_row,
     suggest_merged,
-    suggest_raw,
 )
 from tracker.search import search_grouped, search_symbols
 
@@ -19,11 +19,23 @@ def _em_row(code, name, stype):
 
 
 def test_normalize_suggest_row_filters_junk():
-    assert normalize_suggest_row(_em_row("00700", "腾讯控股", "港股")) == ("00700", "港股")
+    assert normalize_suggest_row(_em_row("00700", "腾讯控股", "港股")) == (
+        "00700",
+        "港股",
+    )
     # 只做形态校验; 域过滤 (债券/基金等) 是 provider 的职责
-    assert normalize_suggest_row(_em_row("109988", "22河南75", "债券")) == ("109988", "债券")
-    assert normalize_suggest_row({"Code": "", "Name": "x", "SecurityTypeName": "港股"}) is None
-    assert normalize_suggest_row({"Code": "60 01", "Name": "x", "SecurityTypeName": "沪A"}) is None
+    assert normalize_suggest_row(_em_row("109988", "22河南75", "债券")) == (
+        "109988",
+        "债券",
+    )
+    assert (
+        normalize_suggest_row({"Code": "", "Name": "x", "SecurityTypeName": "港股"})
+        is None
+    )
+    assert (
+        normalize_suggest_row({"Code": "60 01", "Name": "x", "SecurityTypeName": "沪A"})
+        is None
+    )
 
 
 def test_em_code_mapping():
@@ -77,7 +89,8 @@ def test_global_search_yf_english_name(monkeypatch, no_ibkr):
     from tracker.providers import PROVIDERS
 
     monkeypatch.setattr(
-        gs, "_yf_search",
+        gs,
+        "_yf_search",
         lambda q: [
             {"symbol": "COIN", "name": "Coinbase Global, Inc."},
             {"symbol": "COIN.TO", "name": "COINBASE CDR (CAD HEDGED)"},
@@ -96,11 +109,15 @@ def test_global_search_ibkr_first_when_online(monkeypatch):
     from tracker.providers import PROVIDERS
 
     monkeypatch.setattr(
-        ibkr_mod, "search_matches",
+        ibkr_mod,
+        "search_matches",
         lambda q, cfg=None: [
             {
-                "symbol": "TME", "exchange": "NYSE", "primary_exchange": "NYSE",
-                "currency": "USD", "long_name": "TENCENT MUSIC ENTERTAINMENT",
+                "symbol": "TME",
+                "exchange": "NYSE",
+                "primary_exchange": "NYSE",
+                "currency": "USD",
+                "long_name": "TENCENT MUSIC ENTERTAINMENT",
             }
         ],
     )
@@ -118,7 +135,8 @@ def test_global_search_ibkr_offline_falls_to_yf(monkeypatch):
 
     monkeypatch.setattr(ibkr_mod, "search_matches", lambda q, cfg=None: None)
     monkeypatch.setattr(
-        gs, "_yf_search",
+        gs,
+        "_yf_search",
         lambda q: [{"symbol": "0700.HK", "name": "TENCENT"}],
     )
     res = PROVIDERS["global"].search("Tencent", limit=5)
@@ -154,7 +172,10 @@ def test_global_search_numeric_hits_hk(monkeypatch, no_ibkr):
 
     def fake_merged(q):
         if q in ("700", "00700", "0700"):
-            rows = [_em_row("00700", "腾讯控股", "港股"), _em_row("000700", "模塑科技", "深A")]
+            rows = [
+                _em_row("00700", "腾讯控股", "港股"),
+                _em_row("000700", "模塑科技", "深A"),
+            ]
             return rows, False
         return None
 
@@ -216,16 +237,28 @@ def test_cn_search_bj_and_filters(monkeypatch):
 
 def test_crypto_search_yf(monkeypatch):
     """crypto 搜索 = yfinance Search 的 CRYPTOCURRENCY 过滤 (ETF 等不混入)。"""
-    import tracker.providers.crypto as cm
     from tracker.providers import PROVIDERS
 
     class _FakeSearch:
         def __init__(self, query, **kw):
             pass
+
         quotes = [
-            {"symbol": "BTC-USD", "shortname": "Bitcoin USD", "quoteType": "CRYPTOCURRENCY"},
-            {"symbol": "BCH-USD", "shortname": "Bitcoin Cash USD", "quoteType": "CRYPTOCURRENCY"},
-            {"symbol": "IBIT", "shortname": "iShares Bitcoin Trust", "quoteType": "ETF"},
+            {
+                "symbol": "BTC-USD",
+                "shortname": "Bitcoin USD",
+                "quoteType": "CRYPTOCURRENCY",
+            },
+            {
+                "symbol": "BCH-USD",
+                "shortname": "Bitcoin Cash USD",
+                "quoteType": "CRYPTOCURRENCY",
+            },
+            {
+                "symbol": "IBIT",
+                "shortname": "iShares Bitcoin Trust",
+                "quoteType": "ETF",
+            },
             {"symbol": "BTC=F", "shortname": "Bitcoin Futures", "quoteType": "FUTURE"},
         ]
 
@@ -238,15 +271,23 @@ def test_crypto_search_yf(monkeypatch):
 
 def test_crypto_search_exact_code(monkeypatch):
     """BTC-USD 直查 → 精确命中排首位。"""
-    import tracker.providers.crypto as cm
     from tracker.providers import PROVIDERS
 
     class _FakeSearch:
         def __init__(self, query, **kw):
             pass
+
         quotes = [
-            {"symbol": "BTC-USD", "shortname": "Bitcoin USD", "quoteType": "CRYPTOCURRENCY"},
-            {"symbol": "CBBTC-USD", "shortname": "Wrapped BTC", "quoteType": "CRYPTOCURRENCY"},
+            {
+                "symbol": "BTC-USD",
+                "shortname": "Bitcoin USD",
+                "quoteType": "CRYPTOCURRENCY",
+            },
+            {
+                "symbol": "CBBTC-USD",
+                "shortname": "Wrapped BTC",
+                "quoteType": "CRYPTOCURRENCY",
+            },
         ]
 
     monkeypatch.setattr("yfinance.Search", _FakeSearch)
@@ -256,7 +297,6 @@ def test_crypto_search_exact_code(monkeypatch):
 
 def test_crypto_search_empty_on_network_fail(monkeypatch):
     """yf 不可达 → 空结果 (无本地目录兜底)。"""
-    import tracker.providers.crypto as cm
     from tracker.providers import PROVIDERS
 
     def _boom(*a, **kw):
@@ -277,19 +317,29 @@ def test_search_grouped_keeps_domains_separate(monkeypatch):
 
     # cn 域: 东财 suggest
     monkeypatch.setattr(
-        em, "suggest_raw",
+        em,
+        "suggest_raw",
         lambda q: [_em_row("600519", "贵州茅台", "沪A")],
     )
     # global 域: yfinance
     monkeypatch.setattr(ibkr_mod, "search_matches", lambda q, cfg=None: None)
     monkeypatch.setattr(
-        gs, "_yf_search", lambda q: [{"symbol": "AAPL", "name": "Apple Inc."}],
+        gs,
+        "_yf_search",
+        lambda q: [{"symbol": "AAPL", "name": "Apple Inc."}],
     )
+
     # crypto 域: yf Search mock — "苹果" 无 crypto 结果, "BTC" 返回 BTC-USD
     class _FakeSearch:
         def __init__(self, query, **kw):
             self.quotes = (
-                [{"symbol": "BTC-USD", "shortname": "Bitcoin USD", "quoteType": "CRYPTOCURRENCY"}]
+                [
+                    {
+                        "symbol": "BTC-USD",
+                        "shortname": "Bitcoin USD",
+                        "quoteType": "CRYPTOCURRENCY",
+                    }
+                ]
                 if query == "BTC"
                 else []
             )
@@ -314,18 +364,21 @@ def test_search_symbols_flattens_domains(monkeypatch):
 
     # cn 有命中 (贵州茅台), global 也有命中 (TENCENT)
     monkeypatch.setattr(
-        em, "suggest_raw",
+        em,
+        "suggest_raw",
         lambda q: [_em_row("600519", "贵州茅台", "沪A")],
     )
     monkeypatch.setattr(ibkr_mod, "search_matches", lambda q, cfg=None: None)
     monkeypatch.setattr(
-        gs, "_yf_search",
+        gs,
+        "_yf_search",
         lambda q: [{"symbol": "0700.HK", "name": "TENCENT"}],
     )
 
     class _EmptySearch:
         def __init__(self, query, **kw):
             pass
+
         quotes = []
 
     monkeypatch.setattr("yfinance.Search", _EmptySearch)
@@ -396,5 +449,3 @@ def test_fallback_match_rejects_invalid():
 
 def test_search_empty_query():
     assert search_symbols("", limit=5) == []
-
-

@@ -1,4 +1,5 @@
 """CLI 子命令共享工具 (JSON 序列化 / 代码归一化 / 错误退出)."""
+
 from __future__ import annotations
 
 import json

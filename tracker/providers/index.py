@@ -10,6 +10,7 @@ IX.CSI300 沪深 300 ...)。源链:
 中国水泥网 (IX.CEMPI 等, 目录条目带 ccement 字段): 前端 AJAX 接口免登录,
 仅全国口径; 区域分解与水泥大数据中心需会员, 不接入。
 """
+
 from __future__ import annotations
 
 import json
@@ -17,7 +18,7 @@ import json
 import pandas as pd
 
 from ..symbols import INDEX_CATALOG, ParsedSymbol, index_key
-from .base import Provider, Quote
+from .base import Provider
 
 __all__ = ["IndexProvider"]
 
@@ -39,7 +40,9 @@ def _catalog(p: ParsedSymbol) -> dict:
     return INDEX_CATALOG[index_key(p.yahoo)]
 
 
-def _slice_range(df: pd.DataFrame, start_date: str, end_date: str | None) -> pd.DataFrame:
+def _slice_range(
+    df: pd.DataFrame, start_date: str, end_date: str | None
+) -> pd.DataFrame:
     """akshare 返回全量历史, 本地按 start/end 过滤 (升序).
 
     end_date 为闭区间端点 (与调用方语义一致): 只取 <= end_date 的行,
@@ -97,7 +100,9 @@ def _ccement_points(d: dict) -> pd.DataFrame:
         vals = json.loads(vals)
     if not dates or not vals:
         raise RuntimeError("水泥网接口返回空序列")
-    df = pd.DataFrame({"date": pd.to_datetime(dates), "close": [float(v) for v in vals]})
+    df = pd.DataFrame(
+        {"date": pd.to_datetime(dates), "close": [float(v) for v in vals]}
+    )
     df["open"] = df["high"] = df["low"] = df["close"]
     df["volume"] = 0.0
     return df
@@ -117,8 +122,9 @@ def _ccement_kline(d: dict | str) -> pd.DataFrame:
     return df[["date", "open", "high", "low", "close", "volume"]]
 
 
-
-def _ccement_history(p: ParsedSymbol, start_date: str, end_date: str | None = None) -> pd.DataFrame:
+def _ccement_history(
+    p: ParsedSymbol, start_date: str, end_date: str | None = None
+) -> pd.DataFrame:
     """目录条目 ccement 字段路由到对应端点; timeType=5 取全部历史, 本地过滤."""
     kind = _catalog(p)["ccement"]
     if kind == "kline":
@@ -126,7 +132,12 @@ def _ccement_history(p: ParsedSymbol, start_date: str, end_date: str | None = No
         # timeType=5 会忽略 start/end 参数返回全部历史, 本地按窗口切片。
         d = _ccement_post(
             "priceindex/cementkline",
-            {"start_time": start_date, "end_time": end_date or "", "areaV": "country", "timeType": "5"},
+            {
+                "start_time": start_date,
+                "end_time": end_date or "",
+                "areaV": "country",
+                "timeType": "5",
+            },
         )
         return _slice_range(_ccement_kline(d), start_date, end_date)
     if kind == "coal":
@@ -144,7 +155,9 @@ def _ccement_history(p: ParsedSymbol, start_date: str, end_date: str | None = No
 # ---------- yfinance (OpenBB) 源 ----------
 
 
-def _yf_history(p: ParsedSymbol, start_date: str, end_date: str | None = None) -> pd.DataFrame:
+def _yf_history(
+    p: ParsedSymbol, start_date: str, end_date: str | None = None
+) -> pd.DataFrame:
     yf_symbol = _catalog(p)["yf"]
     kwargs = {"symbol": yf_symbol, "provider": "yfinance", "start_date": start_date}
     if end_date:
@@ -152,7 +165,9 @@ def _yf_history(p: ParsedSymbol, start_date: str, end_date: str | None = None) -
     df = _obb().equity.price.historical(**kwargs).to_dataframe().reset_index()
     df = df.rename(columns={df.columns[0]: "date"})
     df = df.dropna(subset=["close"])
-    keep = [c for c in ("date", "open", "high", "low", "close", "volume") if c in df.columns]
+    keep = [
+        c for c in ("date", "open", "high", "low", "close", "volume") if c in df.columns
+    ]
     if "volume" not in keep:
         df["volume"] = 0.0
         keep.append("volume")
@@ -162,7 +177,9 @@ def _yf_history(p: ParsedSymbol, start_date: str, end_date: str | None = None) -
 # ---------- akshare 源 (新浪指数) ----------
 
 
-def _ak_index_history(p: ParsedSymbol, start_date: str, end_date: str | None = None) -> pd.DataFrame:
+def _ak_index_history(
+    p: ParsedSymbol, start_date: str, end_date: str | None = None
+) -> pd.DataFrame:
     entry = _catalog(p)
     ak_code = entry.get("ak") or _AK_US_SINA.get(index_key(p.yahoo))
     if not ak_code:
@@ -172,7 +189,9 @@ def _ak_index_history(p: ParsedSymbol, start_date: str, end_date: str | None = N
     else:
         raw = _ak().index_us_stock_sina(symbol=ak_code)
     df = raw.rename(columns={raw.columns[0]: "date"})
-    keep = [c for c in ("date", "open", "high", "low", "close", "volume") if c in df.columns]
+    keep = [
+        c for c in ("date", "open", "high", "low", "close", "volume") if c in df.columns
+    ]
     if "volume" not in keep:
         df["volume"] = 0.0
         keep.append("volume")
@@ -196,7 +215,13 @@ class IndexProvider(Provider):
     def quote_sources(self, p: ParsedSymbol, prefer_first: bool = False) -> list:
         raise NotImplementedError("指数域仅提供历史K线, 无实时行情")
 
-    def history_sources(self, p: ParsedSymbol, start_date: str, end_date: str | None, prefer_first: bool = False) -> list:
+    def history_sources(
+        self,
+        p: ParsedSymbol,
+        start_date: str,
+        end_date: str | None,
+        prefer_first: bool = False,
+    ) -> list:
         def ak():
             return _ak_index_history(p, start_date, end_date)
 

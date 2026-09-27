@@ -123,6 +123,7 @@ def test_summarize_no_cost_at_all():
     assert m["total_pnl_pct"] is None
     assert m["cost_coverage"] == 0.0
 
+
 def test_summarize():
     holdings = [
         {"symbol": "AAPL", "quantity": 10, "avg_cost": 100.0},

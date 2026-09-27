@@ -1,4 +1,5 @@
 """走势对比搜索接口集成验证 (AppTest, 不联网): 搜索 → 选中 → 追加进对比代码."""
+
 from __future__ import annotations
 
 import pandas as pd
@@ -33,7 +34,9 @@ def _fake_ohlc(symbol, months=12, prefer_akshare=False, **kw):
 def _fake_grouped(query, limit_per_domain=8):
     return {
         "cn": [{"code": "600519.SS", "name": "贵州茅台", "market": "A", "type": "cn"}],
-        "global": [{"code": "NVDA", "name": "NVIDIA", "market": "US", "type": "global"}],
+        "global": [
+            {"code": "NVDA", "name": "NVIDIA", "market": "US", "type": "global"}
+        ],
         "crypto": [],
     }
 

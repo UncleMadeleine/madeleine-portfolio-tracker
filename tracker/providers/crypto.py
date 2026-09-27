@@ -5,6 +5,7 @@
 (OpenBB equity.quote 对 crypto 缺 last_price, 必须直连).
 代码规范: BASE-QUOTE (BTC-USD / ETH-USDT), 计价货币见 symbols._CRYPTO_QUOTES。
 """
+
 from __future__ import annotations
 
 import json
@@ -13,7 +14,6 @@ import time
 import pandas as pd
 
 from ..symbols import ParsedSymbol
-from ..util import with_timeout
 from .base import Provider, Quote, SymbolEntry
 
 _BINANCE_HOSTS = ("https://api.binance.com", "https://data-api.binance.vision")
@@ -89,7 +89,17 @@ def _hl_history(p: ParsedSymbol, start_date: str, end_date: str | None) -> pd.Da
         if end_date
         else int(time.time() * 1000)
     )
-    bars = _hl_post({"type": "candleSnapshot", "req": {"coin": coin, "interval": "1d", "startTime": start_ms, "endTime": end_ms}})
+    bars = _hl_post(
+        {
+            "type": "candleSnapshot",
+            "req": {
+                "coin": coin,
+                "interval": "1d",
+                "startTime": start_ms,
+                "endTime": end_ms,
+            },
+        }
+    )
     rows = [
         {
             "date": pd.Timestamp(int(b["t"]), unit="ms", tz="UTC").date(),
@@ -120,13 +130,14 @@ def _obb():
     return obb
 
 
-
 def binance_pair(p: ParsedSymbol) -> str:
     """BTC-USD → BTCUSDT 形态的 Binance 交易对符号."""
     base, _, quote = p.yahoo.rpartition("-")
     if not base:
         raise ValueError(f"无效加密货币代码: {p.yahoo}")
-    q = {"USD": "USDT", "USDT": "USDT", "USDC": "USDC", "BUSD": "BUSD"}.get(quote.upper(), quote.upper())
+    q = {"USD": "USDT", "USDT": "USDT", "USDC": "USDC", "BUSD": "BUSD"}.get(
+        quote.upper(), quote.upper()
+    )
     return f"{base.upper()}{q}"
 
 
@@ -140,7 +151,9 @@ def _get(path: str, params: dict | None = None):
                 try:
                     return r.json()
                 except (json.JSONDecodeError, ValueError):
-                    last_err = RuntimeError(f"Binance {host} 返回非 JSON (状态码 200 但内容异常)")
+                    last_err = RuntimeError(
+                        f"Binance {host} 返回非 JSON (状态码 200 但内容异常)"
+                    )
                     continue
             last_err = RuntimeError(f"Binance {r.status_code}: {r.text[:120]}")
         except Exception as e:  # noqa: BLE001 - 尝试下一个域名
@@ -175,7 +188,11 @@ def _binance_quote(p: ParsedSymbol) -> Quote:
         prev = None
     chg = None
     try:
-        chg = float(d["priceChangePercent"]) if d.get("priceChangePercent") not in (None, "") else None
+        chg = (
+            float(d["priceChangePercent"])
+            if d.get("priceChangePercent") not in (None, "")
+            else None
+        )
     except (TypeError, ValueError):
         chg = None
     if chg is None and prev:
@@ -220,7 +237,9 @@ def _yf_quote(p: ParsedSymbol) -> Quote:
 # ---------- 历史K线 ----------
 
 
-def _binance_history(p: ParsedSymbol, start_date: str, end_date: str | None) -> pd.DataFrame:
+def _binance_history(
+    p: ParsedSymbol, start_date: str, end_date: str | None
+) -> pd.DataFrame:
     """Binance 1d klines → date/open/high/low/close/volume (升序)."""
     pair = binance_pair(p)
     start_ms = int(pd.Timestamp(start_date, tz="UTC").timestamp() * 1000)
@@ -234,7 +253,13 @@ def _binance_history(p: ParsedSymbol, start_date: str, end_date: str | None) -> 
     while cursor < end_ms:
         batch = _get(
             "/api/v3/klines",
-            {"symbol": pair, "interval": "1d", "startTime": cursor, "endTime": end_ms, "limit": _KLINES_LIMIT},
+            {
+                "symbol": pair,
+                "interval": "1d",
+                "startTime": cursor,
+                "endTime": end_ms,
+                "limit": _KLINES_LIMIT,
+            },
         )
         if not batch:
             break
@@ -269,18 +294,27 @@ def _yf_history(p: ParsedSymbol, start_date: str, end_date: str | None) -> pd.Da
     df = res.to_dataframe().reset_index()
     df = df.rename(columns={df.columns[0]: "date"})
     df = df.dropna(subset=["close"])
-    keep = [c for c in ("date", "open", "high", "low", "close", "volume") if c in df.columns]
+    keep = [
+        c for c in ("date", "open", "high", "low", "close", "volume") if c in df.columns
+    ]
     return df[keep]
 
 
 class CryptoProvider(Provider):
     """加密货币域: Binance 优先, Hyperliquid 永续次之 (仅USD系计价), yfinance 兜底; 与股票数据源完全隔离."""
+
     name = "crypto"
 
     def quote_sources(self, p: ParsedSymbol, prefer_first: bool = False) -> list:
         return [_binance_quote, _hl_quote, _yf_quote]
 
-    def history_sources(self, p: ParsedSymbol, start_date: str, end_date: str | None, prefer_first: bool = False) -> list:
+    def history_sources(
+        self,
+        p: ParsedSymbol,
+        start_date: str,
+        end_date: str | None,
+        prefer_first: bool = False,
+    ) -> list:
         return [
             lambda: _binance_history(p, start_date, end_date),
             lambda: _hl_history(p, start_date, end_date),

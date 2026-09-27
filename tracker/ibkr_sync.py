@@ -4,6 +4,7 @@
 本模块保留 python -m tracker.ibkr_sync 与 `tracker sync` 调用路径。
 默认覆盖写入 (历史 sync 语义); --append 切换为追加合并。
 """
+
 from __future__ import annotations
 
 import argparse
@@ -28,7 +29,9 @@ def run_sync(args) -> None:
         if getattr(args, "append", False)
         else importer.MODE_OVERWRITE
     )
-    result = importer.apply_import(rows, args.portfolio, mode=mode, dry_run=args.dry_run)
+    result = importer.apply_import(
+        rows, args.portfolio, mode=mode, dry_run=args.dry_run
+    )
 
     if getattr(args, "json", False):
         print(
@@ -74,13 +77,22 @@ def run_sync(args) -> None:
 
 
 def main(argv=None) -> None:
-    ap = argparse.ArgumentParser(description="IBKR 账户持仓同步 (等价 tracker import ibkr)")
+    ap = argparse.ArgumentParser(
+        description="IBKR 账户持仓同步 (等价 tracker import ibkr)"
+    )
     ap.add_argument("--portfolio", default=str(DEFAULT_PORTFOLIO))
     ap.add_argument("--dry-run", action="store_true", help="仅打印, 不写入")
-    ap.add_argument("--mode", choices=["paper", "live"], default=None,
-                    help="Gateway API 模式: paper 模拟(4002) / live 实盘(4001); 缺省用配置")
-    ap.add_argument("--append", action="store_true",
-                    help="追加合并 (按代码更新/新增); 缺省覆盖全部持仓")
+    ap.add_argument(
+        "--mode",
+        choices=["paper", "live"],
+        default=None,
+        help="Gateway API 模式: paper 模拟(4002) / live 实盘(4001); 缺省用配置",
+    )
+    ap.add_argument(
+        "--append",
+        action="store_true",
+        help="追加合并 (按代码更新/新增); 缺省覆盖全部持仓",
+    )
     ap.add_argument("--json", action="store_true", help="输出 JSON 而非表格")
     args = ap.parse_args(argv)
     run_sync(args)

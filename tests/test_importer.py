@@ -1,4 +1,5 @@
 """统一导入管道测试: merge_holdings / apply_import / wallet_rows (纯离线)."""
+
 import json
 
 import pytest
@@ -37,6 +38,21 @@ class TestMergeHoldings:
             importer.MODE_APPEND,
         )
         assert merged == [{"symbol": "AAPL", "quantity": 20.0, "avg_cost": 150}]
+        # 无台账条目保持裸数量; 已迁入来源记账后 plain 行替换 "" 分量, 不打平总量
+        merged, _ = importer.merge_holdings(
+            [
+                {
+                    "symbol": "AAPL",
+                    "quantity": 10,
+                    "avg_cost": 150,
+                    "source_quantities": {"": 10.0, "w:eth:0x1": 2.0},
+                }
+            ],
+            [{"symbol": "AAPL", "quantity": 20}],
+            importer.MODE_APPEND,
+        )
+        assert merged[0]["quantity"] == 22.0
+        assert merged[0]["source_quantities"] == {"": 20.0, "w:eth:0x1": 2.0}
         assert stats["updated"] == ["AAPL"]
         assert stats["added"] == []
 
@@ -74,10 +90,22 @@ class TestMergeHoldings:
 
     def test_append_sums_same_symbol_from_different_wallet_sources(self):
         """不同链/地址的钱包导入同名代币 (eth 与 bsc 的 USDT-USD) 累加, 不互相覆盖."""
-        existing = [{"symbol": "USDT-USD", "quantity": 100.0, "type": "crypto",
-                     "import_source": "wallet:eth:0xaaa"}]
-        rows = [{"symbol": "USDT-USD", "quantity": 50.0, "type": "crypto",
-                 "import_source": "wallet:bsc:0xbbb"}]
+        existing = [
+            {
+                "symbol": "USDT-USD",
+                "quantity": 100.0,
+                "type": "crypto",
+                "import_source": "wallet:eth:0xaaa",
+            }
+        ]
+        rows = [
+            {
+                "symbol": "USDT-USD",
+                "quantity": 50.0,
+                "type": "crypto",
+                "import_source": "wallet:bsc:0xbbb",
+            }
+        ]
         merged, stats = importer.merge_holdings(existing, rows, mode="append")
         assert len(merged) == 1
         assert merged[0]["quantity"] == 150.0
@@ -85,19 +113,39 @@ class TestMergeHoldings:
 
     def test_append_same_wallet_source_is_idempotent(self):
         """同一地址重复导入按代码覆盖, 不累加 (重复执行不翻倍)."""
-        existing = [{"symbol": "USDT-USD", "quantity": 100.0, "type": "crypto",
-                     "import_source": "wallet:eth:0xaaa"}]
-        rows = [{"symbol": "USDT-USD", "quantity": 100.0, "type": "crypto",
-                 "import_source": "wallet:eth:0xaaa"}]
+        existing = [
+            {
+                "symbol": "USDT-USD",
+                "quantity": 100.0,
+                "type": "crypto",
+                "import_source": "wallet:eth:0xaaa",
+            }
+        ]
+        rows = [
+            {
+                "symbol": "USDT-USD",
+                "quantity": 100.0,
+                "type": "crypto",
+                "import_source": "wallet:eth:0xaaa",
+            }
+        ]
         merged, _ = importer.merge_holdings(existing, rows, mode="append")
         assert merged[0]["quantity"] == 100.0
 
     def test_append_reimport_each_source_stays_idempotent(self):
         """跨源累加后再导入任一来源: 只替换该来源分量, 总量不变 (不二次翻倍)."""
-        a = {"symbol": "USDT-USD", "quantity": 100.0, "type": "crypto",
-             "import_source": "wallet:eth:0xaaa"}
-        b = {"symbol": "USDT-USD", "quantity": 50.0, "type": "crypto",
-             "import_source": "wallet:bsc:0xbbb"}
+        a = {
+            "symbol": "USDT-USD",
+            "quantity": 100.0,
+            "type": "crypto",
+            "import_source": "wallet:eth:0xaaa",
+        }
+        b = {
+            "symbol": "USDT-USD",
+            "quantity": 50.0,
+            "type": "crypto",
+            "import_source": "wallet:bsc:0xbbb",
+        }
         merged, _ = importer.merge_holdings([dict(a)], [dict(b)], mode="append")
         assert merged[0]["quantity"] == 150.0
         # 重复导入 B: B 分量替换 50→50, 总量仍 150
@@ -109,10 +157,18 @@ class TestMergeHoldings:
 
     def test_append_reimport_with_changed_balance_recomputes_total(self):
         """来源余额变化 (链上转出) → 该分量更新, 其它来源分量保留."""
-        a = {"symbol": "USDT-USD", "quantity": 100.0, "type": "crypto",
-             "import_source": "wallet:eth:0xaaa"}
-        b = {"symbol": "USDT-USD", "quantity": 50.0, "type": "crypto",
-             "import_source": "wallet:bsc:0xbbb"}
+        a = {
+            "symbol": "USDT-USD",
+            "quantity": 100.0,
+            "type": "crypto",
+            "import_source": "wallet:eth:0xaaa",
+        }
+        b = {
+            "symbol": "USDT-USD",
+            "quantity": 50.0,
+            "type": "crypto",
+            "import_source": "wallet:bsc:0xbbb",
+        }
         merged, _ = importer.merge_holdings([dict(a)], [dict(b)], mode="append")
         b_moved = dict(b, quantity=70.0)  # B 地址余额 50 → 70
         merged, _ = importer.merge_holdings(merged, [b_moved], mode="append")
@@ -120,6 +176,66 @@ class TestMergeHoldings:
         # A 再导入不受 B 变化影响
         merged, _ = importer.merge_holdings(merged, [dict(a)], mode="append")
         assert merged[0]["quantity"] == 170.0
+
+    def test_wallet_import_over_manual_holding_accumulates(self):
+        """钱包导入遇到手动/IBKR 无来源持仓: 原数量记为 "" 分量, 与钱包分量累加.
+
+        回归: 曾把手动 0.5 直接覆盖成钱包 0.3 (静默丢 0.2)。反向 plain 再导入
+        曾产生同代码重复条目。台账条目上 plain 行替换 "" 分量, 不打平总量。
+        """
+        existing = [{"symbol": "BTC-USD", "quantity": 0.5, "type": "crypto"}]
+        rows = [
+            {
+                "symbol": "BTC-USD",
+                "quantity": 0.3,
+                "type": "crypto",
+                "import_source": "wallet:eth:0xabc",
+            }
+        ]
+        merged, stats = importer.merge_holdings(existing, rows, importer.MODE_APPEND)
+        assert len(merged) == 1
+        assert merged[0]["quantity"] == pytest.approx(0.8)
+        assert merged[0]["source_quantities"] == {"": 0.5, "wallet:eth:0xabc": 0.3}
+        assert stats == {"added": [], "updated": ["BTC-USD"]}
+
+        # 反向: 手动行再导入已带台账的条目 → 替换 "" 分量, 钱包分量保留
+        merged, _ = importer.merge_holdings(
+            merged,
+            [{"symbol": "BTC-USD", "quantity": 0.6}],
+            importer.MODE_APPEND,
+        )
+        assert merged[0]["quantity"] == pytest.approx(0.9)
+        assert merged[0]["source_quantities"] == {"": 0.6, "wallet:eth:0xabc": 0.3}
+
+        # 钱包分量再导入幂等
+        merged, _ = importer.merge_holdings(
+            merged,
+            [dict(rows[0])],
+            importer.MODE_APPEND,
+        )
+        assert merged[0]["quantity"] == pytest.approx(0.9)
+
+    def test_plain_reimport_never_duplicates_ledgered_entry(self):
+        """plain (IBKR) 行对已带台账条目不产生同代码重复条目."""
+        existing = [
+            {
+                "symbol": "BTC-USD",
+                "quantity": 0.3,
+                "type": "crypto",
+                "import_source": "wallet:eth:0xabc",
+                "source_quantities": {"wallet:eth:0xabc": 0.3},
+            }
+        ]
+        merged, stats = importer.merge_holdings(
+            existing,
+            [{"symbol": "BTC-USD", "quantity": 0.5}],
+            importer.MODE_APPEND,
+        )
+        assert len(merged) == 1
+        assert stats["updated"] == ["BTC-USD"]
+        assert stats["added"] == []
+        assert merged[0]["quantity"] == pytest.approx(0.8)
+        assert merged[0]["source_quantities"] == {"wallet:eth:0xabc": 0.3, "": 0.5}
 
     def test_append_plain_import_has_no_source_ledger(self):
         """无 import_source 的普通导入 (IBKR/券商文件) 不写 source_quantities."""
@@ -145,11 +261,16 @@ class TestApplyImport:
 
     def test_overwrite_preserves_other_keys(self, tmp_path):
         """覆盖只替换 holdings, 文件中的文档键与 base_currency 保留."""
-        p = _pf(tmp_path, [{"symbol": "AAPL", "quantity": 10}],
-                base="USD", extra={"_说明": "文档"})
+        p = _pf(
+            tmp_path,
+            [{"symbol": "AAPL", "quantity": 10}],
+            base="USD",
+            extra={"_说明": "文档"},
+        )
         res = importer.apply_import(
             [{"symbol": "600519.SS", "quantity": 5}],
-            p, mode=importer.MODE_OVERWRITE,
+            p,
+            mode=importer.MODE_OVERWRITE,
         )
         assert res["written"] is True
         data = _load(p)
@@ -186,10 +307,20 @@ class TestWalletRows:
             "chain": "eth",
             "address": "0xabc",
             "holdings": [
-                {"symbol": "ETH-USD", "quantity": 2.0, "contract": None,
-                 "source": "native", "chain": "eth"},
-                {"symbol": "USDT-USD", "quantity": 100.0,
-                 "contract": "0xdac17f...", "source": "erc20", "chain": "eth"},
+                {
+                    "symbol": "ETH-USD",
+                    "quantity": 2.0,
+                    "contract": None,
+                    "source": "native",
+                    "chain": "eth",
+                },
+                {
+                    "symbol": "USDT-USD",
+                    "quantity": 100.0,
+                    "contract": "0xdac17f...",
+                    "source": "erc20",
+                    "chain": "eth",
+                },
             ],
         }
         rows = importer.wallet_rows(raw)

@@ -6,6 +6,7 @@ SDK 的 OAuthBuilder.build() 会持有 GIL 阻塞整个解释器, 不能在 UI �
   - 轮询: 每次 rerun 读 var/longport_oauth_state.json 渲染对应界面
   - token 由 SDK 持久化到 ~/.longport/openapi/tokens/<client_id> 并自动刷新
 """
+
 from __future__ import annotations
 
 import json
@@ -18,7 +19,9 @@ import streamlit as st
 
 from tracker import longport
 
-_STATE_PATH = Path(__file__).resolve().parent.parent.parent / "var" / "longport_oauth_state.json"
+_STATE_PATH = (
+    Path(__file__).resolve().parent.parent.parent / "var" / "longport_oauth_state.json"
+)
 _STALE_SECONDS = 600.0  # 状态文件超过 10 分钟视为过期流程
 
 
@@ -102,8 +105,10 @@ def render_login_section(key_prefix: str = "lp") -> None:
             icon=":material/open_in_new:",
         )
         st.link_button(
-            "打开长桥授权页", (state or {}).get("url") or "",
-            icon=":material/link:", use_container_width=True,
+            "打开长桥授权页",
+            (state or {}).get("url") or "",
+            icon=":material/link:",
+            use_container_width=True,
         )
         if st.button("取消", icon=":material/close:", key=f"{key_prefix}_cancel"):
             _cancel()
@@ -120,7 +125,10 @@ def render_login_section(key_prefix: str = "lp") -> None:
         return
 
     if status == "error":
-        st.error(f"登录失败: {(state or {}).get('message', '未知错误')}", icon=":material/error:")
+        st.error(
+            f"登录失败: {(state or {}).get('message', '未知错误')}",
+            icon=":material/error:",
+        )
 
     if st.button(
         "登录长桥账户" if status != "error" else "重试登录",

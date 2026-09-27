@@ -3,6 +3,7 @@
 任何测试中调用 webbrowser.open 一律 no-op —— CLI 的 --open 分支、长桥 OAuth
 引导等路径即使未被 mock 也不会弹出浏览器标签页。
 """
+
 from __future__ import annotations
 
 import pytest

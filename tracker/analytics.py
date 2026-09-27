@@ -1,4 +1,5 @@
 """组合视图与指标计算 (纯函数, 便于离线测试)."""
+
 from __future__ import annotations
 
 import math
@@ -69,8 +70,14 @@ def build_view(
     df = pd.DataFrame(rows)
     if not df.empty:
         df = df.sort_values("market_value", ascending=False).reset_index(drop=True)
-        df["weight"] = df["market_value"] / df["market_value"].sum()
-        df["weight_pct"] = df["weight"] * 100
+        total_mv = df["market_value"].sum()
+        if total_mv > 0:
+            df["weight"] = df["market_value"] / total_mv
+            df["weight_pct"] = df["weight"] * 100
+        else:
+            # 全部持仓市值为 0 (数量全 0 等): 权重无定义, 置 0 避免 NaN 扩散到 UI/JSON
+            df["weight"] = 0.0
+            df["weight_pct"] = 0.0
     return df, issues
 
 
@@ -102,6 +109,10 @@ def summarize(view: pd.DataFrame) -> dict:
         "total_pnl_pct": (total_pnl / total_cost) if total_cost else None,
         "cost_coverage": cost_coverage,
         "today_pnl": today,
-        "by_market": view.groupby("market")["market_value"].sum().sort_values(ascending=False),
-        "by_currency": view.groupby("currency")["market_value"].sum().sort_values(ascending=False),
+        "by_market": view.groupby("market")["market_value"]
+        .sum()
+        .sort_values(ascending=False),
+        "by_currency": view.groupby("currency")["market_value"]
+        .sum()
+        .sort_values(ascending=False),
     }

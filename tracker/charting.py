@@ -5,6 +5,7 @@
 自包含 HTML (Streamlit 页面内嵌, TradingView 同款拖拽/触控板交互).
 不做任何网络请求.
 """
+
 from __future__ import annotations
 
 from functools import lru_cache
@@ -24,18 +25,26 @@ DEFAULT_MA: tuple[int, ...] = (5, 20, 60)
 CN_UP_COLOR, CN_DOWN_COLOR = "#ef232a", "#14b143"
 INTL_UP_COLOR, INTL_DOWN_COLOR = "#089981", "#f23648"
 VOLUME_OPACITY = 0.75
-MA_PALETTE = ("#f7d774", "#4ea1f3", "#c883f0", "#ff9f43", "#e15b64", "#2ccbc3", "#8d9db6")
+MA_PALETTE = (
+    "#f7d774",
+    "#4ea1f3",
+    "#c883f0",
+    "#ff9f43",
+    "#e15b64",
+    "#2ccbc3",
+    "#8d9db6",
+)
 
 # 技术指标配色 (与 MA 调色板区分, 便于辨识)
-BOLL_UPPER_COLOR = "#e15b64"   # 布林带上轨 - 红
+BOLL_UPPER_COLOR = "#e15b64"  # 布林带上轨 - 红
 BOLL_MIDDLE_COLOR = "#f7d774"  # 布林带中轨 - 黄
-BOLL_LOWER_COLOR = "#2ccbc3"   # 布林带下轨 - 青
-MACD_DIF_COLOR = "#f7d774"     # MACD DIF 线 - 黄
-MACD_DEA_COLOR = "#4ea1f3"     # MACD DEA 线 - 蓝
-RSI_COLOR = "#c883f0"          # RSI 线 - 紫
-KDJ_K_COLOR = "#f7d774"        # KDJ K 线 - 黄
-KDJ_D_COLOR = "#4ea1f3"        # KDJ D 线 - 蓝
-KDJ_J_COLOR = "#e15b64"        # KDJ J 线 - 红
+BOLL_LOWER_COLOR = "#2ccbc3"  # 布林带下轨 - 青
+MACD_DIF_COLOR = "#f7d774"  # MACD DIF 线 - 黄
+MACD_DEA_COLOR = "#4ea1f3"  # MACD DEA 线 - 蓝
+RSI_COLOR = "#c883f0"  # RSI 线 - 紫
+KDJ_K_COLOR = "#f7d774"  # KDJ K 线 - 黄
+KDJ_D_COLOR = "#4ea1f3"  # KDJ D 线 - 蓝
+KDJ_J_COLOR = "#e15b64"  # KDJ J 线 - 红
 
 PERIOD_LABELS = {"daily": "日K", "weekly": "周K", "monthly": "月K"}
 
@@ -73,7 +82,9 @@ def clean_ohlc(df: pd.DataFrame) -> pd.DataFrame:
     )
     out = out[ok]
     # 稳定排序: 重复日期保留输入中最后一条 (来源覆盖顺序有意义)
-    out = out.sort_values("date", kind="stable").drop_duplicates(subset="date", keep="last")
+    out = out.sort_values("date", kind="stable").drop_duplicates(
+        subset="date", keep="last"
+    )
     return out.reset_index(drop=True)[list(OHLC_COLUMNS)]
 
 
@@ -108,7 +119,10 @@ def compute_ma(df: pd.DataFrame, periods) -> dict[int, pd.Series]:
 
 # ---------- 技术指标计算 (纯函数, 便于测试) ----------
 
-def calc_macd(df: pd.DataFrame, fast: int = 12, slow: int = 26, signal: int = 9) -> pd.DataFrame:
+
+def calc_macd(
+    df: pd.DataFrame, fast: int = 12, slow: int = 26, signal: int = 9
+) -> pd.DataFrame:
     """MACD 指标 (指数平滑异同移动平均线).
 
     DIF = 快线EMA - 慢线EMA; DEA = DIF 的 signal 周期EMA; MACD柱 = 2×(DIF-DEA).
@@ -209,7 +223,15 @@ def resample_ohlc(df: pd.DataFrame, period: str) -> pd.DataFrame:
         clean_ohlc(df)
         .set_index("date")
         .resample(rule)
-        .agg({"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"})
+        .agg(
+            {
+                "open": "first",
+                "high": "max",
+                "low": "min",
+                "close": "last",
+                "volume": "sum",
+            }
+        )
         .dropna(subset=["open", "high", "low", "close"])
         .reset_index()
     )
@@ -240,13 +262,18 @@ def build_candlestick_fig(
     df = clean_ohlc(df)
     if df.empty:
         raise ValueError(f"{symbol}: 无有效K线数据")
-    up, down = (INTL_UP_COLOR, INTL_DOWN_COLOR) if green_up else (CN_UP_COLOR, CN_DOWN_COLOR)
+    up, down = (
+        (INTL_UP_COLOR, INTL_DOWN_COLOR) if green_up else (CN_UP_COLOR, CN_DOWN_COLOR)
+    )
     dates = df["date"]
 
     if show_volume:
         fig = make_subplots(
-            rows=2, cols=1, shared_xaxes=True,
-            row_heights=[0.74, 0.26], vertical_spacing=0.03,
+            rows=2,
+            cols=1,
+            shared_xaxes=True,
+            row_heights=[0.74, 0.26],
+            vertical_spacing=0.03,
         )
         price_row, vol_row = 1, 2
     else:
@@ -254,7 +281,11 @@ def build_candlestick_fig(
         price_row, vol_row = 1, None
 
     candle = go.Candlestick(
-        x=dates, open=df["open"], high=df["high"], low=df["low"], close=df["close"],
+        x=dates,
+        open=df["open"],
+        high=df["high"],
+        low=df["low"],
+        close=df["close"],
         name=PERIOD_LABELS.get(period, "日K"),
         increasing=dict(line=dict(color=up, width=1.5), fillcolor=up),
         decreasing=dict(line=dict(color=down, width=1.5), fillcolor=down),
@@ -269,23 +300,33 @@ def build_candlestick_fig(
     for i, (n, srs) in enumerate(compute_ma(df, mas).items()):
         fig.add_trace(
             go.Scatter(
-                x=dates, y=srs, mode="lines", name=f"MA{n}",
-                line=dict(color=MA_PALETTE[i % len(MA_PALETTE)], width=1.6, shape="spline"),
+                x=dates,
+                y=srs,
+                mode="lines",
+                name=f"MA{n}",
+                line=dict(
+                    color=MA_PALETTE[i % len(MA_PALETTE)], width=1.6, shape="spline"
+                ),
                 connectgaps=False,
                 hovertemplate=f"MA{n} %{{y:.2f}}<extra></extra>",
             ),
-            row=price_row, col=1,
+            row=price_row,
+            col=1,
         )
     if vol_row is not None:
         vol_colors = np.where(df["close"] >= df["open"], up, down)
         fig.add_trace(
             go.Bar(
-                x=dates, y=df["volume"], name="成交量",
+                x=dates,
+                y=df["volume"],
+                name="成交量",
                 marker_color=vol_colors,
-                opacity=0.5, showlegend=False,
+                opacity=0.5,
+                showlegend=False,
                 hovertemplate="量 %{y:,.0f}<extra></extra>",
             ),
-            row=vol_row, col=1,
+            row=vol_row,
+            col=1,
         )
 
     breaks = [dict(values=_non_trading_days(dates))]
@@ -310,46 +351,75 @@ def build_candlestick_fig(
         height=height,
         margin=dict(l=8, r=64, t=48, b=12),
         hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0, bgcolor="rgba(0,0,0,0)"),
-        font=dict(family="system-ui, -apple-system, sans-serif", size=12, color="#d1d5db"),
+        legend=dict(
+            orientation="h", yanchor="bottom", y=1.0, x=0, bgcolor="rgba(0,0,0,0)"
+        ),
+        font=dict(
+            family="system-ui, -apple-system, sans-serif", size=12, color="#d1d5db"
+        ),
         dragmode="pan",
         xaxis=dict(
-            showspikes=True, spikemode="across", spikethickness=1,
-            spikecolor="rgba(120,140,180,0.4)", spikesnap="cursor",
+            showspikes=True,
+            spikemode="across",
+            spikethickness=1,
+            spikecolor="rgba(120,140,180,0.4)",
+            spikesnap="cursor",
         ),
         yaxis=dict(
-            showspikes=True, spikemode="across", spikethickness=1,
-            spikecolor="rgba(120,140,180,0.4)", spikesnap="cursor",
+            showspikes=True,
+            spikemode="across",
+            spikethickness=1,
+            spikecolor="rgba(120,140,180,0.4)",
+            spikesnap="cursor",
         ),
         shapes=[
             dict(
-                type="line", xref="paper", x0=0, x1=1,
-                yref="y", y0=last_close, y1=last_close,
+                type="line",
+                xref="paper",
+                x0=0,
+                x1=1,
+                yref="y",
+                y0=last_close,
+                y1=last_close,
                 line=dict(color="rgba(200,210,230,0.5)", width=1, dash="dot"),
             ),
         ],
         annotations=[
             dict(
-                x=1.0, y=last_close, xref="paper", yref="y",
-                xanchor="left", yanchor="middle",
+                x=1.0,
+                y=last_close,
+                xref="paper",
+                yref="y",
+                xanchor="left",
+                yanchor="middle",
                 text=f"{up_marker} {last_close:.2f}",
                 showarrow=False,
                 font=dict(size=11, color="#e8eaed"),
                 bgcolor="rgba(40,44,52,0.85)",
                 bordercolor="rgba(120,140,180,0.3)",
-                borderwidth=1, borderpad=3,
+                borderwidth=1,
+                borderpad=3,
             ),
         ],
     )
     fig.update_xaxes(
-        rangeslider_visible=False, showgrid=False,
+        rangeslider_visible=False,
+        showgrid=False,
         rangebreaks=breaks,
-        showline=True, linecolor="rgba(120,140,180,0.2)",
+        showline=True,
+        linecolor="rgba(120,140,180,0.2)",
     )
-    fig.update_xaxes(rangeselector=dict(buttons=buttons, bgcolor="rgba(30,34,40,0.8)"), row=price_row, col=1)
+    fig.update_xaxes(
+        rangeselector=dict(buttons=buttons, bgcolor="rgba(30,34,40,0.8)"),
+        row=price_row,
+        col=1,
+    )
     fig.update_yaxes(
-        side="right", showgrid=True, gridcolor="rgba(120,140,180,0.06)",
-        showline=True, linecolor="rgba(120,140,180,0.2)",
+        side="right",
+        showgrid=True,
+        gridcolor="rgba(120,140,180,0.06)",
+        showline=True,
+        linecolor="rgba(120,140,180,0.2)",
         tickfont=dict(size=11),
     )
     if vol_row is not None:
@@ -684,27 +754,38 @@ def _lwc_options() -> dict:
         "crosshair": {
             "mode": 0,
             "vertLine": {
-                "color": "rgba(150,170,200,0.55)", "width": 1,
-                "style": 2, "labelBackgroundColor": "#2a2e39",
+                "color": "rgba(150,170,200,0.55)",
+                "width": 1,
+                "style": 2,
+                "labelBackgroundColor": "#2a2e39",
             },
             "horzLine": {
-                "color": "rgba(150,170,200,0.55)", "width": 1,
-                "style": 2, "labelBackgroundColor": "#2a2e39",
+                "color": "rgba(150,170,200,0.55)",
+                "width": 1,
+                "style": 2,
+                "labelBackgroundColor": "#2a2e39",
             },
         },
         "rightPriceScale": {"borderColor": "rgba(120,140,180,0.25)"},
         "timeScale": {
             "borderColor": "rgba(120,140,180,0.25)",
-            "rightOffset": 4, "barSpacing": 9, "minBarSpacing": 1.2,
-            "timeVisible": False, "secondsVisible": False,
+            "rightOffset": 4,
+            "barSpacing": 9,
+            "minBarSpacing": 1.2,
+            "timeVisible": False,
+            "secondsVisible": False,
         },
         "handleScroll": {
-            "pressedMouseMove": True, "mouseWheel": True,
-            "horzTouchDrag": True, "vertTouchDrag": False,
+            "pressedMouseMove": True,
+            "mouseWheel": True,
+            "horzTouchDrag": True,
+            "vertTouchDrag": False,
         },
         "handleScale": {
-            "mouseWheel": True, "pinch": True,
-            "axisPressedMouseMove": True, "axisDoubleClickReset": True,
+            "mouseWheel": True,
+            "pinch": True,
+            "axisPressedMouseMove": True,
+            "axisDoubleClickReset": True,
         },
         "kineticScroll": {"touch": True, "mouse": True},
         "localization": {"locale": "zh-CN"},
@@ -741,13 +822,17 @@ def kline_payload(
     df = clean_ohlc(df)
     if df.empty:
         raise ValueError(f"{symbol}: 无有效K线数据")
-    up, down = (INTL_UP_COLOR, INTL_DOWN_COLOR) if green_up else (CN_UP_COLOR, CN_DOWN_COLOR)
+    up, down = (
+        (INTL_UP_COLOR, INTL_DOWN_COLOR) if green_up else (CN_UP_COLOR, CN_DOWN_COLOR)
+    )
     dates = df["date"].dt.strftime("%Y-%m-%d")
     candles = [
         {
             "time": t,
-            "open": round(float(o), 6), "high": round(float(h), 6),
-            "low": round(float(lo), 6), "close": round(float(c), 6),
+            "open": round(float(o), 6),
+            "high": round(float(h), 6),
+            "low": round(float(lo), 6),
+            "close": round(float(c), 6),
         }
         for t, o, h, lo, c in zip(dates, df["open"], df["high"], df["low"], df["close"])
     ]
@@ -771,7 +856,11 @@ def kline_payload(
         ]
         if data:
             ma_series.append(
-                {"name": f"MA{n}", "color": MA_PALETTE[i % len(MA_PALETTE)], "data": data}
+                {
+                    "name": f"MA{n}",
+                    "color": MA_PALETTE[i % len(MA_PALETTE)],
+                    "data": data,
+                }
             )
     med = float(df["close"].median())
     precision = 2 if med >= 20 else (3 if med >= 1 else 4)
@@ -800,7 +889,10 @@ def kline_payload(
         if "macd" in indicators:
             mp = indicators["macd"]
             macd = calc_macd(
-                df, fast=mp.get("fast", 12), slow=mp.get("slow", 26), signal=mp.get("signal", 9),
+                df,
+                fast=mp.get("fast", 12),
+                slow=mp.get("slow", 26),
+                signal=mp.get("signal", 9),
             )
             macd_data = {
                 "dif": _to_line_data(dates, macd["dif"]),
@@ -838,7 +930,7 @@ def kline_payload(
         "up": up,
         "down": down,
         "precision": precision,
-        "minMove": 10 ** -precision,
+        "minMove": 10**-precision,
         "initBars": init_bars,
         "height": height,
         "candles": candles,
@@ -850,13 +942,18 @@ def kline_payload(
         "kdj": kdj_data,
         "options": _lwc_options(),
         "candleOpts": {
-            "upColor": up, "downColor": down,
-            "wickUpColor": up, "wickDownColor": down,
+            "upColor": up,
+            "downColor": down,
+            "wickUpColor": up,
+            "wickDownColor": down,
             "borderVisible": False,
-            "priceLineVisible": True, "priceLineStyle": 2,
+            "priceLineVisible": True,
+            "priceLineStyle": 2,
             "priceLineColor": _rgba(up if last["close"] >= last["open"] else down, 0.7),
             "priceFormat": {
-                "type": "price", "precision": precision, "minMove": 10 ** -precision,
+                "type": "price",
+                "precision": precision,
+                "minMove": 10**-precision,
             },
         },
     }
@@ -866,7 +963,15 @@ def kline_payload(
 
 
 # 多股对比折线配色 (与 MA 调色板区分, 首色取蓝便于与红绿涨跌色区分)
-COMPARE_PALETTE = ("#4ea1f3", "#f7d774", "#c883f0", "#ff9f43", "#2ccbc3", "#e15b64", "#8d9db6")
+COMPARE_PALETTE = (
+    "#4ea1f3",
+    "#f7d774",
+    "#c883f0",
+    "#ff9f43",
+    "#2ccbc3",
+    "#e15b64",
+    "#8d9db6",
+)
 
 
 def compare_payload(
@@ -898,12 +1003,20 @@ def compare_payload(
         ]
         if data:
             lines.append(
-                {"name": sym, "color": COMPARE_PALETTE[i % len(COMPARE_PALETTE)], "data": data}
+                {
+                    "name": sym,
+                    "color": COMPARE_PALETTE[i % len(COMPARE_PALETTE)],
+                    "data": data,
+                }
             )
     if not lines:
         raise ValueError("无有效对比数据")
-    names = " vs ".join(ln["name"] for ln in lines[:4]) + (" …" if len(lines) > 4 else "")
-    up, down = (INTL_UP_COLOR, INTL_DOWN_COLOR) if green_up else (CN_UP_COLOR, CN_DOWN_COLOR)
+    names = " vs ".join(ln["name"] for ln in lines[:4]) + (
+        " …" if len(lines) > 4 else ""
+    )
+    up, down = (
+        (INTL_UP_COLOR, INTL_DOWN_COLOR) if green_up else (CN_UP_COLOR, CN_DOWN_COLOR)
+    )
     return {
         "mode": "compare",
         "title": f"{names} · {PERIOD_LABELS.get(period, '日K')}"

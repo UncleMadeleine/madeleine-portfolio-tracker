@@ -7,6 +7,7 @@
 - fetch_watchlist_view 是用例: 取数 (providers) → 规则 → 视图,
   被 cli/watchlist (list) 与 cli/report 复用。
 """
+
 from __future__ import annotations
 
 import math
@@ -37,9 +38,9 @@ def list_names(data: dict) -> list[str]:
 def merge_entries(data: dict) -> list[dict]:
     """全部条目 (扁平, 一个代码一条, 天然去重)."""
     return [
-        e for e in (data or {}).get("watchlist", [])
-        if str(e.get("symbol", "")).strip()
+        e for e in (data or {}).get("watchlist", []) if str(e.get("symbol", "")).strip()
     ]
+
 
 def entries_for(data: dict, name: str | None = None) -> list[dict]:
     """按所属列表过滤条目; name 为空返回全部.
@@ -52,7 +53,8 @@ def entries_for(data: dict, name: str | None = None) -> list[dict]:
     if not names:
         return merge_entries(data)
     return [
-        e for e in (data or {}).get("watchlist", [])
+        e
+        for e in (data or {}).get("watchlist", [])
         if names & set(e.get("lists", []) or [])
     ]
 
@@ -120,7 +122,9 @@ def sort_watchlist(view: pd.DataFrame, mode: str = "default") -> pd.DataFrame:
     if mode == "severity":
         ranked = view.copy()
         ranked["status_rank"] = ranked["status"].map(STATUS_RANK)
-        return ranked.sort_values(["status_rank", "symbol"], ascending=[True, True]).drop(columns=["status_rank"])
+        return ranked.sort_values(
+            ["status_rank", "symbol"], ascending=[True, True]
+        ).drop(columns=["status_rank"])
     if mode == "change_desc":
         return view.sort_values(["change_pct", "symbol"], ascending=[False, True])
     if mode == "change_asc":
@@ -137,7 +141,10 @@ def fetch_watchlist_view(
     """用例: 取数 (providers) → 阈值规则 → 视图. watchlist list / report 复用."""
     symbols = [str(e["symbol"]) for e in entries]
     quotes, errors, notes = prices.get_quotes(
-        symbols, prefer_akshare=prefer_akshare, use_ibkr=use_ibkr, use_longport=use_longport
+        symbols,
+        prefer_akshare=prefer_akshare,
+        use_ibkr=use_ibkr,
+        use_longport=use_longport,
     )
     wview, wissues = build_watchlist_view(entries, quotes)
     issues = [f"{k}: {v}" for k, v in errors.items()] + wissues + notes

@@ -2,6 +2,7 @@
 
 兼容入口 — 写盘已统一到 tracker.importer (推荐: tracker import wallet).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -82,8 +83,10 @@ def cmd_import_wallet(args: argparse.Namespace) -> None:
         print("\n⏭ 未发现非零余额, 跳过写入 portfolio.json")
         return
     n = len(res["added"]) + len(res["updated"])
-    print(f"\n✅ 已写入 {n} 个代币 → {args.portfolio} "
-          f"(新增 {len(res['added'])} · 更新 {len(res['updated'])})")
+    print(
+        f"\n✅ 已写入 {n} 个代币 → {args.portfolio} "
+        f"(新增 {len(res['added'])} · 更新 {len(res['updated'])})"
+    )
     if res["added"]:
         print(f"   新增: {', '.join(res['added'])}")
     print("   (avg_cost 未设置, 请在组合页补填)")

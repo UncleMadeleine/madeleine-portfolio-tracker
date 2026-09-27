@@ -6,9 +6,9 @@ Quote 数据结构), 供 CLI/页面/测试使用; 路由、降级与市场域隔
   - CNStocksProvider: A股/B股 (.SS/.SZ/.BJ) 固定 akshare 优先 → yfinance
   - CryptoProvider: 加密货币 (BASE-QUOTE) 走 Binance → yfinance
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass
 
 import pandas as pd
 
@@ -24,7 +24,7 @@ from .providers.global_stocks import (  # noqa: F401 - 供测试 monkeypatch
     _yahoo_quote,
 )
 from .providers.orchestration import get_history, get_quotes
-from .symbols import ParsedSymbol, parse
+from .symbols import parse
 from . import cache as cache_mod
 
 __all__ = [
@@ -69,7 +69,17 @@ def get_ohlc(
         cached = cache_mod.get_ohlc_cached(p.yahoo, months)
         if cached is not None:
             return cached
-    df = clean_ohlc(get_history(symbol, months=months, start_date=start_date, end_date=end_date, prefer_akshare=prefer_akshare, use_ibkr=use_ibkr, use_longport=use_longport))
+    df = clean_ohlc(
+        get_history(
+            symbol,
+            months=months,
+            start_date=start_date,
+            end_date=end_date,
+            prefer_akshare=prefer_akshare,
+            use_ibkr=use_ibkr,
+            use_longport=use_longport,
+        )
+    )
     if not df.empty and not is_range:
         cache_mod.set_ohlc_cached(p.yahoo, months, df)
     return df
@@ -98,7 +108,9 @@ def get_index_history(
         cached = cache_mod.get_ohlc_cached(key, months)
         if cached is not None:
             return cached
-    df = clean_ohlc(get_history(symbol, months=months, start_date=start_date, end_date=end_date))
+    df = clean_ohlc(
+        get_history(symbol, months=months, start_date=start_date, end_date=end_date)
+    )
     if not df.empty and not is_range:
         cache_mod.set_ohlc_cached(key, months, df)
     return df

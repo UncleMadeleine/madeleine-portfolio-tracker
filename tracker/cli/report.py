@@ -1,4 +1,5 @@
 """report 子命令: 导出自选监控阈值报告 (md / csv / json)."""
+
 from __future__ import annotations
 
 import csv
@@ -19,28 +20,53 @@ from ..watchlist import load_watchlist, parse_lists
 from ._common import _fmt_num, _fmt_pct, _records, _sanitize, _sym
 
 _MD_COLS = [
-    ("symbol", "代码"), ("price", "现价"), ("change_pct", "涨跌%"),
-    ("upper_1", "上限I"), ("upper_2", "上限II"),
-    ("lower_1", "下限I"), ("lower_2", "下限II"),
-    ("dist_upper_1_pct", "距上限I%"), ("dist_upper_2_pct", "距上限II%"),
-    ("dist_lower_1_pct", "距下限I%"), ("dist_lower_2_pct", "距下限II%"),
-    ("status", "状态"), ("note", "备注"),
+    ("symbol", "代码"),
+    ("price", "现价"),
+    ("change_pct", "涨跌%"),
+    ("upper_1", "上限I"),
+    ("upper_2", "上限II"),
+    ("lower_1", "下限I"),
+    ("lower_2", "下限II"),
+    ("dist_upper_1_pct", "距上限I%"),
+    ("dist_upper_2_pct", "距上限II%"),
+    ("dist_lower_1_pct", "距下限I%"),
+    ("dist_lower_2_pct", "距下限II%"),
+    ("status", "状态"),
+    ("note", "备注"),
 ]
 
 _CSV_COLS = [
-    "lists", "symbol", "name", "market", "currency", "price", "change_pct",
-    "upper_1", "upper_2", "lower_1", "lower_2", "status",
-    "dist_upper_1_pct", "dist_upper_2_pct", "dist_lower_1_pct", "dist_lower_2_pct",
-    "note", "triggered",
+    "lists",
+    "symbol",
+    "name",
+    "market",
+    "currency",
+    "price",
+    "change_pct",
+    "upper_1",
+    "upper_2",
+    "lower_1",
+    "lower_2",
+    "status",
+    "dist_upper_1_pct",
+    "dist_upper_2_pct",
+    "dist_lower_1_pct",
+    "dist_lower_2_pct",
+    "note",
+    "triggered",
 ]
 
 
-def _build_report(args) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, list[str]], list[str]]:
+def _build_report(
+    args,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, list[str]], list[str]]:
     """拉取行情并构建自选视图 / 触发条目 / 列表映射 / 问题清单."""
     data = load_watchlist(args.file)
     entries = entries_for(data, args.watchlist)
     wview, issues = fetch_watchlist_view(
-        entries, prefer_akshare=args.akshare, use_ibkr=args.ibkr,
+        entries,
+        prefer_akshare=args.akshare,
+        use_ibkr=args.ibkr,
         use_longport=getattr(args, "longport", False),
     )
     wview = sort_watchlist(wview, args.sort)
@@ -167,14 +193,19 @@ def cmd_report(args) -> None:
     """导出自选监控阈值报告 (md / csv / json)."""
     wview, trig, sym_lists, issues = _build_report(args)
     if args.format == "json":
-        text = json.dumps(_report_payload(args, wview, trig, sym_lists, issues),
-                          ensure_ascii=False, indent=2)
+        text = json.dumps(
+            _report_payload(args, wview, trig, sym_lists, issues),
+            ensure_ascii=False,
+            indent=2,
+        )
     elif args.format == "csv":
         text = _report_csv(wview, sym_lists)
     else:
         text = _report_md(
             _report_payload(args, wview, trig, sym_lists, issues),
-            wview, sym_lists, issues,
+            wview,
+            sym_lists,
+            issues,
         )
     if args.output:
         Path(args.output).write_text(text, encoding="utf-8")

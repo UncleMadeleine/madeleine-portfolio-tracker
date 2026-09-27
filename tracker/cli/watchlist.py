@@ -1,4 +1,5 @@
 """watchlist 子命令: 自选股管理 (list / add / remove) 与阈值提醒."""
+
 from __future__ import annotations
 
 import pandas as pd
@@ -119,7 +120,12 @@ def watchlist_list(args) -> None:
     entries = entries_for(data, args.wl_list)
     if args.no_quotes:
         if args.json:
-            _print_json({"entries": entries, "lists": sorted({n for e in entries for n in e.get("lists", [])})})
+            _print_json(
+                {
+                    "entries": entries,
+                    "lists": sorted({n for e in entries for n in e.get("lists", [])}),
+                }
+            )
             return
         print(f"\n=== 自选配置 ({args.wl_list or '全部'}) ===")
         if not entries:
@@ -138,7 +144,9 @@ def watchlist_list(args) -> None:
 
     symbols = [str(e["symbol"]) for e in entries]
     quotes, errors, notes = prices.get_quotes(
-        symbols, prefer_akshare=args.akshare, use_ibkr=args.ibkr,
+        symbols,
+        prefer_akshare=args.akshare,
+        use_ibkr=args.ibkr,
         use_longport=getattr(args, "longport", False),
     )
     wview, wissues = build_watchlist_view(entries, quotes)
@@ -160,20 +168,36 @@ def watchlist_list(args) -> None:
         print("(空)")
     else:
         cols = [
-            c for c in
-            ("symbol", "name", "price", "change_pct", "status",
-             "upper_1", "upper_2", "lower_1", "lower_2", "note")
+            c
+            for c in (
+                "symbol",
+                "name",
+                "price",
+                "change_pct",
+                "status",
+                "upper_1",
+                "upper_2",
+                "lower_1",
+                "lower_2",
+                "note",
+            )
             if c in wview.columns
         ]
         with pd.option_context(
-            "display.float_format", "{:,.2f}".format,
-            "display.width", 200, "display.max_columns", None,
+            "display.float_format",
+            "{:,.2f}".format,
+            "display.width",
+            200,
+            "display.max_columns",
+            None,
         ):
             print(wview[cols].to_string(index=False))
     if not trig.empty:
         print(f"\n🔔 阈值提醒 ({len(trig)}):")
         for _, r in trig.iterrows():
-            print(f"  {r['symbol']} {r['status']} 现价 {r['price']:,.2f} {r['currency']}")
+            print(
+                f"  {r['symbol']} {r['status']} 现价 {r['price']:,.2f} {r['currency']}"
+            )
     else:
         print("\n自选中暂无阈值触发。")
     for i in issues:

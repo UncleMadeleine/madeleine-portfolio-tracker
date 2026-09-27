@@ -8,12 +8,14 @@
 Gateway 模式: "mode" 字段 paper(模拟, 4002) / live(实盘, 4001),
 env IBKR_MODE > 文件 mode > 默认 paper; 文件里显式 "port" 优先于模式端口。
 """
+
 from __future__ import annotations
 
 import json
 import math
 import os
 import time
+from datetime import date, datetime
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -173,14 +175,21 @@ class ContractSpec:
 def contract_spec(p: ParsedSymbol, exchanges: dict | None = None) -> ContractSpec:
     ex = exchanges if exchanges is not None else load_config().get("exchanges") or {}
     if p.market is Market.US:
-        return ContractSpec(p.yahoo, ex.get("US", "SMART"), "USD")
+        # 美股类别股 Yahoo 用连字符 (BRK-B), IBKR 合约库用空格 (BRK B):
+        # 连字符直传 qualifyContracts 会查无合约
+        symbol = p.yahoo.replace("-", " ")
+        return ContractSpec(symbol, ex.get("US", "SMART"), "USD")
     code, _, suffix = p.yahoo.rpartition(".")
     if p.market in (Market.CN, Market.BJ):
         if p.is_b_share:
             if code.startswith("900"):
-                return ContractSpec(code, ex.get("SHSE", "SHSE"), "USD", trading_class=code)
+                return ContractSpec(
+                    code, ex.get("SHSE", "SHSE"), "USD", trading_class=code
+                )
             if code.startswith("200"):
-                return ContractSpec(code, ex.get("SZSE", "SZSE"), "HKD", trading_class=code)
+                return ContractSpec(
+                    code, ex.get("SZSE", "SZSE"), "HKD", trading_class=code
+                )
         return ContractSpec(code, ex.get("CN", "SEHK"), "CNY", trading_class=code)
     if p.market is Market.HK:
         return ContractSpec(code.lstrip("0") or code, ex.get("HK", "SEHK"), "HKD")
@@ -321,7 +330,9 @@ def search_matches(pattern: str, cfg: dict | None = None) -> list[dict] | None:
             {
                 "symbol": str(getattr(c, "symbol", "") or "").strip(),
                 "exchange": str(getattr(c, "exchange", "") or "").strip(),
-                "primary_exchange": str(getattr(c, "primaryExchange", "") or "").strip(),
+                "primary_exchange": str(
+                    getattr(c, "primaryExchange", "") or ""
+                ).strip(),
                 "currency": str(getattr(c, "currency", "") or "").strip(),
                 "long_name": str(getattr(c, "longName", "") or "").strip(),
             }
@@ -376,7 +387,15 @@ def ibkr_to_yahoo(
     if ccy == "AUD" or exkey == "ASX":
         return f"{sym}.AX"
     if ccy == "USD" or exkey in (
-        "SMART", "NYSE", "NASDAQ", "AMEX", "ARCA", "BATS", "ISLAND", "PSX", "DRCTEDGE",
+        "SMART",
+        "NYSE",
+        "NASDAQ",
+        "AMEX",
+        "ARCA",
+        "BATS",
+        "ISLAND",
+        "PSX",
+        "DRCTEDGE",
     ):
         if exkey == "SHSE":
             return f"{sym}.SS"
@@ -385,7 +404,11 @@ def ibkr_to_yahoo(
 
 
 def get_history_ibkr(
-    parsed: list[ParsedSymbol], months: int, cfg: dict | None = None
+    parsed: list[ParsedSymbol],
+    months: int,
+    cfg: dict | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
 ) -> tuple[dict[str, pd.DataFrame], str | None]:
     import pandas as pd
 
@@ -409,14 +432,28 @@ def get_history_ibkr(
             qualified = ib.qualifyContracts(c)
             if not qualified:
                 continue
+            # 显式区间优先 (endDateTime 为 IBKR 时区本地时间; 区间截断在调用方
+            # 之外的 orchestration 不做, 必须在此完成), 否则按 months 回看至今
+            if start_date:
+                end_dt = end_date or date.today().isoformat()
+                end_tm = datetime.fromisoformat(end_dt + "T23:59:59")
+                # 闭区间天数: end-start 差 1, 补 +1 (2024-01-01→2024-01-31 = 31 D)
+                days = (end_tm.date() - date.fromisoformat(start_date)).days + 1
+                duration = f"{max(days, 1)} D"
+            else:
+                end_tm = None
+                duration = f"{months} M"
             bars = ib.reqHistoricalData(
                 qualified[0],
-                endDateTime="",
-                durationStr=f"{months} M",
+                endDateTime=end_tm or "",
+                durationStr=duration,
                 barSizeSetting="1 day",
                 whatToShow="TRADES",
                 useRTH=True,
             )
+            if bars and start_date:
+                # IBKR 的 endDateTime 含当日: 过滤到 [start, end] 闭区间
+                bars = [b for b in bars if start_date <= b.date.isoformat() <= end_dt]
             if not bars:
                 continue
             rows = []
@@ -485,7 +522,9 @@ def fetch_positions(cfg: dict | None = None) -> list:
     if ib is None:
         reason = _unavailable[0] if _unavailable else "不可用"
         raise RuntimeError(f"IBKR 不可用: {reason}")
-    return [pos for pos in ib.positions() if getattr(pos.contract, "secType", "") == "STK"]
+    return [
+        pos for pos in ib.positions() if getattr(pos.contract, "secType", "") == "STK"
+    ]
 
 
 def positions_to_rows(positions) -> tuple[list[dict], list[str]]:

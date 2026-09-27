@@ -2,6 +2,7 @@
 
 运行: python -m streamlit run tracker/ui/app.py (仓库根执行)。
 """
+
 from __future__ import annotations
 
 import sys
@@ -50,8 +51,18 @@ if "app_page" not in st.session_state:
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def cached_quotes(symbols: tuple[str, ...], prefer_akshare: bool, use_ibkr: bool, use_longport: bool = False):
-    return prices.get_quotes(list(symbols), prefer_akshare=prefer_akshare, use_ibkr=use_ibkr, use_longport=use_longport)
+def cached_quotes(
+    symbols: tuple[str, ...],
+    prefer_akshare: bool,
+    use_ibkr: bool,
+    use_longport: bool = False,
+):
+    return prices.get_quotes(
+        list(symbols),
+        prefer_akshare=prefer_akshare,
+        use_ibkr=use_ibkr,
+        use_longport=use_longport,
+    )
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -124,22 +135,31 @@ with st.sidebar:
 
     if st.session_state.app_page == "portfolio":
         with st.expander(":material/edit_note: 持仓管理", expanded=True):
-            st.caption("代码规范: AAPL · SAP.DE · BP.L · RY.TO · BHP.AX · 0700.HK · 600519.SS · BTC-USD")
+            st.caption(
+                "代码规范: AAPL · SAP.DE · BP.L · RY.TO · BHP.AX · 0700.HK · 600519.SS · BTC-USD"
+            )
             df_h = pd.DataFrame(
-                portfolio.get("holdings", []), columns=["symbol", "quantity", "avg_cost"]
+                portfolio.get("holdings", []),
+                columns=["symbol", "quantity", "avg_cost"],
             )
             edited = st.data_editor(
                 df_h,
                 num_rows="dynamic",
                 key="holdings_editor",
                 column_config={
-                    "symbol": st.column_config.TextColumn("代码", help="Yahoo 规范代码"),
+                    "symbol": st.column_config.TextColumn(
+                        "代码", help="Yahoo 规范代码"
+                    ),
                     "quantity": st.column_config.NumberColumn("数量", min_value=0.0),
-                    "avg_cost": st.column_config.NumberColumn("成本 (当地货币)", min_value=0.0),
+                    "avg_cost": st.column_config.NumberColumn(
+                        "成本 (当地货币)", min_value=0.0
+                    ),
                 },
             )
             c1, c2 = st.columns(2)
-            if c1.button("保存", icon=":material/save:", width="stretch", key="save_holdings"):
+            if c1.button(
+                "保存", icon=":material/save:", width="stretch", key="save_holdings"
+            ):
                 rows = edited.dropna(subset=["symbol"]).to_dict("records")
                 bad, dups = [], []
                 seen = set()
@@ -171,7 +191,8 @@ with st.sidebar:
                     # 保存一次就丢掉, 后续多钱包导入会退化成同代码互相覆盖
                     extra = {
                         _norm_sym(h.get("symbol", "")): {
-                            k: v for k, v in h.items()
+                            k: v
+                            for k, v in h.items()
                             if k not in ("symbol", "quantity", "avg_cost", "type")
                         }
                         for h in portfolio.get("holdings", [])
@@ -183,7 +204,11 @@ with st.sidebar:
                         q = r.get("quantity")
                         q = float(q) if isinstance(q, (int, float)) else 0.0
                         sq = r.pop("source_quantities", None)
-                        if isinstance(sq, dict) and sq and q != sum(float(v or 0) for v in sq.values()):
+                        if (
+                            isinstance(sq, dict)
+                            and sq
+                            and q != sum(float(v or 0) for v in sq.values())
+                        ):
                             r["import_source"] = r.get("import_source") or ""
                     storage.save_portfolio({"base_currency": base, "holdings": clean})
                     cached_quotes.clear()
@@ -192,7 +217,12 @@ with st.sidebar:
                         st.toast("持仓已保存 (重复行已移除)")
                     else:
                         st.toast("持仓已保存")
-            if c2.button("重载", icon=":material/refresh:", width="stretch", key="reload_holdings"):
+            if c2.button(
+                "重载",
+                icon=":material/refresh:",
+                width="stretch",
+                key="reload_holdings",
+            ):
                 st.session_state.pop("holdings_editor", None)
                 st.rerun()
 
@@ -208,18 +238,30 @@ with st.sidebar:
             entries = watch.get("watchlist", [])
             df_w = pd.DataFrame(
                 entries,
-                columns=["symbol", "lists", "upper_1", "upper_2", "lower_1", "lower_2", "note"],
+                columns=[
+                    "symbol",
+                    "lists",
+                    "upper_1",
+                    "upper_2",
+                    "lower_1",
+                    "lower_2",
+                    "note",
+                ],
             )
             if not df_w.empty and "lists" in df_w:
                 df_w["lists"] = df_w["lists"].apply(
-                    lambda v: ", ".join(v) if isinstance(v, list) else (str(v) if v else "")
+                    lambda v: (
+                        ", ".join(v) if isinstance(v, list) else (str(v) if v else "")
+                    )
                 )
             edited_w = st.data_editor(
                 df_w,
                 num_rows="dynamic",
                 key="watchlist_editor",
                 column_config={
-                    "symbol": st.column_config.TextColumn("代码", help="Yahoo 规范代码"),
+                    "symbol": st.column_config.TextColumn(
+                        "代码", help="Yahoo 规范代码"
+                    ),
                     "lists": st.column_config.TextColumn("所属列表 (逗号分隔)"),
                     "upper_1": st.column_config.NumberColumn("上限 I", format="%.2f"),
                     "upper_2": st.column_config.NumberColumn("上限 II", format="%.2f"),
@@ -229,7 +271,9 @@ with st.sidebar:
                 },
             )
             c3, c4 = st.columns(2)
-            if c3.button("保存", icon=":material/save:", width="stretch", key="save_watchlist"):
+            if c3.button(
+                "保存", icon=":material/save:", width="stretch", key="save_watchlist"
+            ):
                 rows = []
                 bad, dups = [], []
                 seen = set()
@@ -269,7 +313,12 @@ with st.sidebar:
                         st.toast("自选已保存 (重复行已移除)")
                     else:
                         st.toast("自选已保存")
-            if c4.button("重载", icon=":material/refresh:", width="stretch", key="reload_watchlist"):
+            if c4.button(
+                "重载",
+                icon=":material/refresh:",
+                width="stretch",
+                key="reload_watchlist",
+            ):
                 st.session_state.pop("watchlist_editor", None)
                 st.rerun()
 
@@ -283,17 +332,23 @@ if st.session_state.app_page == "portfolio":
     holdings = edited.dropna(subset=["symbol"]) if not edited.empty else edited
     all_watch_entries = merge_entries(watch)
     if holdings.empty and not all_watch_entries:
-        st.info("在左侧添加持仓或自选股并保存。支持 A股/港股/美股/德股/英股/加股/澳股/加密货币。")
+        st.info(
+            "在左侧添加持仓或自选股并保存。支持 A股/港股/美股/德股/英股/加股/澳股/加密货币。"
+        )
         st.stop()
 
-    holding_symbols = [str(s) for s in holdings["symbol"].tolist()] if not holdings.empty else []
+    holding_symbols = (
+        [str(s) for s in holdings["symbol"].tolist()] if not holdings.empty else []
+    )
     watch_symbols = [str(e["symbol"]) for e in all_watch_entries]
     all_symbols = tuple(dict.fromkeys(holding_symbols + watch_symbols))
 
     set_quick_symbols(list(all_symbols))
 
     with st.spinner("拉取行情 (首次加载需初始化数据引擎)..."):
-        quotes, errors, notes = cached_quotes(all_symbols, prefer_akshare, use_ibkr, use_longport)
+        quotes, errors, notes = cached_quotes(
+            all_symbols, prefer_akshare, use_ibkr, use_longport
+        )
     if not quotes:
         st.error(
             "未能获取任何行情。请检查网络: Yahoo 需可访问 finance.yahoo.com; "
@@ -343,7 +398,8 @@ if st.session_state.app_page == "portfolio":
         pnl_delta = (
             f"{m['total_pnl_pct']:+.2%} (覆盖 {cov:.0%})"
             if m["total_pnl_pct"] is not None and cov is not None and cov < 1.0
-            else f"{m['total_pnl_pct']:+.2%}" if m["total_pnl_pct"] is not None
+            else f"{m['total_pnl_pct']:+.2%}"
+            if m["total_pnl_pct"] is not None
             else None
         )
         with st.container(horizontal=True):
@@ -387,9 +443,11 @@ if st.session_state.app_page == "portfolio":
                         + (f" · {r['note']}" if r["note"] else "")
                     )
 
-
     if errors or issues:
-        with st.expander(f":material/warning: 数据问题 ({len(errors) + len(issues)})", icon=":material/warning:"):
+        with st.expander(
+            f":material/warning: 数据问题 ({len(errors) + len(issues)})",
+            icon=":material/warning:",
+        ):
             for k, v in errors.items():
                 st.write(f"- {k}: {v}")
             for i in issues:
@@ -406,32 +464,52 @@ if st.session_state.app_page == "portfolio":
         if view.empty:
             st.info("暂无持仓数据。")
         else:
-            styled = view.style.map(_pnl_color, subset=["change_pct", "pnl", "pnl_pct", "today_pnl"])
+            styled = view.style.map(
+                _pnl_color, subset=["change_pct", "pnl", "pnl_pct", "today_pnl"]
+            )
             st.dataframe(
                 styled,
                 width="stretch",
                 height=min(120 + 35 * len(view), 560),
                 hide_index=True,
                 column_config={
-                    "symbol": st.column_config.TextColumn("代码", pinned=True, width="small"),
+                    "symbol": st.column_config.TextColumn(
+                        "代码", pinned=True, width="small"
+                    ),
                     "name": st.column_config.TextColumn("名称", width="medium"),
                     "market": st.column_config.TextColumn("市场", width="small"),
                     "currency": st.column_config.TextColumn("币种", width="small"),
-                    "price": st.column_config.NumberColumn("现价", format="%.3f", width="small"),
+                    "price": st.column_config.NumberColumn(
+                        "现价", format="%.3f", width="small"
+                    ),
                     "change_pct": st.column_config.NumberColumn(
                         "涨跌%", format="%+.2f%%", width="small"
                     ),
-                    "quantity": st.column_config.NumberColumn("数量", format="%,!.6f", width="small"),
-                    "avg_cost": st.column_config.NumberColumn("成本(当地)", format="%.4f", width="small"),
+                    "quantity": st.column_config.NumberColumn(
+                        "数量", format="%,!.6f", width="small"
+                    ),
+                    "avg_cost": st.column_config.NumberColumn(
+                        "成本(当地)", format="%.4f", width="small"
+                    ),
                     "market_value": st.column_config.NumberColumn(
                         f"市值({base})", format="%,.0f", width="small"
                     ),
-                    "cost": st.column_config.NumberColumn(f"成本({base})", format="%,.0f", width="small"),
-                    "pnl": st.column_config.NumberColumn(f"盈亏({base})", format="%+,.0f", width="small"),
-                    "pnl_pct": st.column_config.NumberColumn("盈亏%", format="%+.2f%%", width="small"),
+                    "cost": st.column_config.NumberColumn(
+                        f"成本({base})", format="%,.0f", width="small"
+                    ),
+                    "pnl": st.column_config.NumberColumn(
+                        f"盈亏({base})", format="%+,.0f", width="small"
+                    ),
+                    "pnl_pct": st.column_config.NumberColumn(
+                        "盈亏%", format="%+.2f%%", width="small"
+                    ),
                     "weight": None,
                     "weight_pct": st.column_config.ProgressColumn(
-                        "权重", min_value=0, max_value=100, format="%.1f%%", width="small"
+                        "权重",
+                        min_value=0,
+                        max_value=100,
+                        format="%.1f%%",
+                        width="small",
                     ),
                     "today_pnl": st.column_config.NumberColumn(
                         f"今日({base})", format="%+,.0f", width="small"
@@ -459,7 +537,9 @@ if st.session_state.app_page == "portfolio":
                 )
             with c2:
                 st.plotly_chart(
-                    px.pie(view, names="currency", values="market_value", title="按币种"),
+                    px.pie(
+                        view, names="currency", values="market_value", title="按币种"
+                    ),
                     width="stretch",
                 )
             st.plotly_chart(
@@ -480,7 +560,9 @@ if st.session_state.app_page == "portfolio":
             names = list_names(watch)
             fl1, fl2 = st.columns([3, 2])
             scope = fl1.selectbox(
-                "查看范围", ["全部"] + names, help="按所属列表过滤 (在左侧自选提醒中维护)",
+                "查看范围",
+                ["全部"] + names,
+                help="按所属列表过滤 (在左侧自选提醒中维护)",
             )
             sort_mode = fl2.selectbox(
                 "排序",
@@ -513,43 +595,72 @@ if st.session_state.app_page == "portfolio":
                     "当日涨跌幅 ↑": "change_asc",
                 }
                 wview = sort_watchlist(wview, mode_map.get(sort_mode, "default"))
-            styled_w = wview.style.map(
-                _pnl_color, subset=["change_pct"]
-            ).map(
-                lambda v: f"color: {S.up_down_colors()[0]}; font-weight: 600" if str(v).startswith(("🟠", "🔴")) else (
-                    "color: #f0a30a; font-weight: 600" if str(v).startswith("🟡") else (
-                        f"color: {S.up_down_colors()[1]}; font-weight: 600" if str(v).startswith("🟢") else ""
-                    )
-                ),
-                subset=["status"],
-            )
-            st.dataframe(
-                styled_w,
-                width="stretch",
-                height=min(120 + 35 * len(wview), 560) if not wview.empty else None,
-                hide_index=True,
-                column_config={
-                    "symbol": st.column_config.TextColumn("代码", pinned=True, width="small"),
-                    "name": st.column_config.TextColumn("名称", width="medium"),
-                    "market": st.column_config.TextColumn("市场", width="small"),
-                    "currency": st.column_config.TextColumn("币种", width="small"),
-                    "price": st.column_config.NumberColumn("现价", format="%.3f", width="small"),
-                    "change_pct": st.column_config.NumberColumn(
-                        "涨跌%", format="%+.2f%%", width="small"
+            if wview.empty:
+                st.info("自选行情全部缺失 (行情源失败或代码无效), 详情见上方数据问题。")
+            else:
+                styled_w = wview.style.map(_pnl_color, subset=["change_pct"]).map(
+                    lambda v: (
+                        f"color: {S.up_down_colors()[0]}; font-weight: 600"
+                        if str(v).startswith(("🟠", "🔴"))
+                        else (
+                            "color: #f0a30a; font-weight: 600"
+                            if str(v).startswith("🟡")
+                            else (
+                                f"color: {S.up_down_colors()[1]}; font-weight: 600"
+                                if str(v).startswith("🟢")
+                                else ""
+                            )
+                        )
                     ),
-                    "upper_1": st.column_config.NumberColumn("上限 I", format="%.2f", width="small"),
-                    "upper_2": st.column_config.NumberColumn("上限 II", format="%.2f", width="small"),
-                    "lower_1": st.column_config.NumberColumn("下限 I", format="%.2f", width="small"),
-                    "lower_2": st.column_config.NumberColumn("下限 II", format="%.2f", width="small"),
-                    "status": st.column_config.TextColumn("状态", width="small"),
-                    "dist_upper_1_pct": st.column_config.NumberColumn("距上限 I %", format="%.1f", width="small"),
-                    "dist_upper_2_pct": st.column_config.NumberColumn("距上限 II %", format="%.1f", width="small"),
-                    "dist_lower_1_pct": st.column_config.NumberColumn("距下限 I %", format="%.1f", width="small"),
-                    "dist_lower_2_pct": st.column_config.NumberColumn("距下限 II %", format="%.1f", width="small"),
-                    "note": st.column_config.TextColumn("备注", width="medium"),
-                    "triggered": None,
-                },
-            )
+                    subset=["status"],
+                )
+                st.dataframe(
+                    styled_w,
+                    width="stretch",
+                    height=min(120 + 35 * len(wview), 560),
+                    hide_index=True,
+                    column_config={
+                        "symbol": st.column_config.TextColumn(
+                            "代码", pinned=True, width="small"
+                        ),
+                        "name": st.column_config.TextColumn("名称", width="medium"),
+                        "market": st.column_config.TextColumn("市场", width="small"),
+                        "currency": st.column_config.TextColumn("币种", width="small"),
+                        "price": st.column_config.NumberColumn(
+                            "现价", format="%.3f", width="small"
+                        ),
+                        "change_pct": st.column_config.NumberColumn(
+                            "涨跌%", format="%+.2f%%", width="small"
+                        ),
+                        "upper_1": st.column_config.NumberColumn(
+                            "上限 I", format="%.2f", width="small"
+                        ),
+                        "upper_2": st.column_config.NumberColumn(
+                            "上限 II", format="%.2f", width="small"
+                        ),
+                        "lower_1": st.column_config.NumberColumn(
+                            "下限 I", format="%.2f", width="small"
+                        ),
+                        "lower_2": st.column_config.NumberColumn(
+                            "下限 II", format="%.2f", width="small"
+                        ),
+                        "status": st.column_config.TextColumn("状态", width="small"),
+                        "dist_upper_1_pct": st.column_config.NumberColumn(
+                            "距上限 I %", format="%.1f", width="small"
+                        ),
+                        "dist_upper_2_pct": st.column_config.NumberColumn(
+                            "距上限 II %", format="%.1f", width="small"
+                        ),
+                        "dist_lower_1_pct": st.column_config.NumberColumn(
+                            "距下限 I %", format="%.1f", width="small"
+                        ),
+                        "dist_lower_2_pct": st.column_config.NumberColumn(
+                            "距下限 II %", format="%.1f", width="small"
+                        ),
+                        "note": st.column_config.TextColumn("备注", width="medium"),
+                        "triggered": None,
+                    },
+                )
 
 elif st.session_state.app_page == "import":
     render_import_page(on_saved=_post_import)
@@ -558,6 +669,6 @@ elif st.session_state.app_page == "settings":
     render_settings_page()
 
 elif st.session_state.app_page == "kline":
-    render_kline_page(prefer_akshare)
+    render_kline_page(prefer_akshare, use_ibkr, use_longport)
 elif st.session_state.app_page == "index":
     render_index_page()

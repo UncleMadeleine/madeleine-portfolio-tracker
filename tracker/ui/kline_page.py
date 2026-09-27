@@ -4,6 +4,7 @@
 - 滑动 (默认): 一次加载上市以来全量历史, 图表内连续拖动 / 缩放全程纯前端。
 - 范围: 先选范围再点「查询」的旧流程 (兜底, 与滑动模式同代码不同数据路径)。
 """
+
 from __future__ import annotations
 
 
@@ -38,15 +39,38 @@ def set_quick_symbols(symbols: list[str]) -> None:
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def cached_kline(symbol: str, months: int, prefer_akshare: bool):
+def cached_kline(
+    symbol: str,
+    months: int,
+    prefer_akshare: bool,
+    use_ibkr: bool = False,
+    use_longport: bool = False,
+):
     """K线日线 (磁盘缓存 + 内存缓存双层, TTL 内切换参数不重复请求网络)."""
-    return prices.get_ohlc(symbol, months=months, prefer_akshare=prefer_akshare)
+    return prices.get_ohlc(
+        symbol,
+        months=months,
+        prefer_akshare=prefer_akshare,
+        use_ibkr=use_ibkr,
+        use_longport=use_longport,
+    )
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def cached_kline_all(symbol: str, prefer_akshare: bool):
+def cached_kline_all(
+    symbol: str,
+    prefer_akshare: bool,
+    use_ibkr: bool = False,
+    use_longport: bool = False,
+):
     """上市以来全量日K (滑动模式唯一取数路径, 缓存键独立于范围模式月份参数)."""
-    return prices.get_ohlc(symbol, months=1200, prefer_akshare=prefer_akshare)
+    return prices.get_ohlc(
+        symbol,
+        months=1200,
+        prefer_akshare=prefer_akshare,
+        use_ibkr=use_ibkr,
+        use_longport=use_longport,
+    )
 
 
 def is_valid_symbol(s: str) -> bool:
@@ -86,8 +110,13 @@ def render_kline_view(
     result = _KLINE_CHART(
         key="kline_chart",
         data=charting.kline_payload(
-            kdf, symbol, currency=currency, mas=tuple(mas),
-            show_volume=show_volume, green_up=green_up, period=period,
+            kdf,
+            symbol,
+            currency=currency,
+            mas=tuple(mas),
+            show_volume=show_volume,
+            green_up=green_up,
+            period=period,
             indicators=indicators,
             query_id=query_id,
         ),
@@ -104,7 +133,8 @@ def render_kline_view(
         f"{s['change_pct']:+.2f}%" if s["change_pct"] is not None else "—",
         delta=None if s["change_pct"] is None else round(s["change_pct"], 2),
         delta_color=(
-            "off" if s["change_pct"] is None
+            "off"
+            if s["change_pct"] is None
             else ("normal" if green_up else "inverse")  # 跟随全局涨跌配色
         ),
     )
@@ -127,7 +157,12 @@ def render_compare_chart(data: dict, *, height: int = 560) -> None:
     _KLINE_CHART(key="compare_chart", data=data, height=height)
 
 
-def render_compare_controls(prefer_akshare: bool, quick_symbols: list[str]) -> None:
+def render_compare_controls(
+    prefer_akshare: bool,
+    quick_symbols: list[str],
+    use_ibkr: bool = False,
+    use_longport: bool = False,
+) -> None:
     """多股走势对比 (K线子功能): 任意代码同坐标系折线对比, 输入驱动无提交也拉取.
 
     代码候选 = 持仓/自选 (quick_symbols) + 搜索接口结果 + 自由输入; 数据复用 cached_kline。
@@ -149,12 +184,18 @@ def render_compare_controls(prefer_akshare: bool, quick_symbols: list[str]) -> N
         placeholder="选择持仓/自选, 或直接输入任意代码 (如 NVDA)",
     )
     cmp_months = c2.selectbox(
-        "范围", [3, 6, 12, 24, 36], index=2,
-        format_func=lambda m: f"近 {m} 个月", key="compare_months",
+        "范围",
+        [3, 6, 12, 24, 36],
+        index=2,
+        format_func=lambda m: f"近 {m} 个月",
+        key="compare_months",
     )
     cmp_period = c3.selectbox(
-        "周期", ["daily", "weekly", "monthly"], index=0,
-        format_func=lambda v: charting.PERIOD_LABELS[v], key="compare_period",
+        "周期",
+        ["daily", "weekly", "monthly"],
+        index=0,
+        format_func=lambda v: charting.PERIOD_LABELS[v],
+        key="compare_period",
     )
     norm = c4.toggle("归一化 (起点=100)", value=True, key="compare_norm")
 
@@ -166,13 +207,15 @@ def render_compare_controls(prefer_akshare: bool, quick_symbols: list[str]) -> N
     if bad:
         st.error(f"无法识别: {', '.join(bad)}")
     if not sel:
-        st.info("选择持仓/自选代码, 或直接输入任意代码 (如 NVDA · 600519.SS) 开始对比。")
+        st.info(
+            "选择持仓/自选代码, 或直接输入任意代码 (如 NVDA · 600519.SS) 开始对比。"
+        )
         return
     frames = {}
     with st.spinner(f"拉取 {len(sel)} 只代码近 {cmp_months} 个月 K线..."):
         for s in sel:
             try:
-                d = cached_kline(s, cmp_months, prefer_akshare)
+                d = cached_kline(s, cmp_months, prefer_akshare, use_ibkr, use_longport)
                 if d.empty:
                     st.warning(f"{s}: 无有效K线数据")
                 else:
@@ -182,7 +225,9 @@ def render_compare_controls(prefer_akshare: bool, quick_symbols: list[str]) -> N
     if frames:
         render_compare_chart(
             charting.compare_payload(
-                frames, normalize=norm, period=cmp_period,
+                frames,
+                normalize=norm,
+                period=cmp_period,
                 green_up=settings.green_up(),
             ),
             height=560,
@@ -194,7 +239,9 @@ def render_compare_controls(prefer_akshare: bool, quick_symbols: list[str]) -> N
                 pct = float(dd["close"].iloc[-1]) / float(dd["close"].iloc[0]) - 1
                 up_tag, down_tag = settings.up_down_tags()
                 chg.append(
-                    f"{sym} :{up_tag}[{pct:+.2%}]" if pct >= 0 else f"{sym} :{down_tag}[{pct:+.2%}]"
+                    f"{sym} :{up_tag}[{pct:+.2%}]"
+                    if pct >= 0
+                    else f"{sym} :{down_tag}[{pct:+.2%}]"
                 )
         if chg:
             st.markdown("区间涨跌: " + " · ".join(chg))
@@ -272,8 +319,6 @@ def _render_symbol_search(*, prefix: str = "kline", on_pick=None) -> None:
         )
 
 
-
-
 def _render_slide_mode(
     yahoo: str,
     kperiod: str,
@@ -282,6 +327,8 @@ def _render_slide_mode(
     kgreen: bool,
     indicators: dict,
     prefer_akshare: bool,
+    use_ibkr: bool = False,
+    use_longport: bool = False,
 ) -> None:
     """滑动模式: 一次拉取上市以来全量历史, 图表内无限拖动 (纯前端, 不再取数).
 
@@ -300,7 +347,7 @@ def _render_slide_mode(
     if df_all is None:
         try:
             with st.spinner(f"拉取 {yahoo} 上市以来K线..."):
-                kdf = cached_kline_all(yahoo, prefer_akshare)
+                kdf = cached_kline_all(yahoo, prefer_akshare, use_ibkr, use_longport)
         except Exception as e:
             st.warning(f"{yahoo}: {e}")
             return
@@ -317,16 +364,23 @@ def _render_slide_mode(
         kcur = None
 
     render_kline_view(
-        df_all, yahoo, period=kperiod, mas=kmas,
-        show_volume=kvol, green_up=kgreen, currency=kcur,
+        df_all,
+        yahoo,
+        period=kperiod,
+        mas=kmas,
+        show_volume=kvol,
+        green_up=kgreen,
+        currency=kcur,
         indicators=indicators or None,
         query_id=qid,
     )
 
 
-
-
-def render_kline_controls(prefer_akshare: bool) -> None:
+def render_kline_controls(
+    prefer_akshare: bool,
+    use_ibkr: bool = False,
+    use_longport: bool = False,
+) -> None:
     """查询控件 + 拉取/渲染 (滑动 / 范围双模式, 输入驱动)."""
     qs = quick_symbols()
     st.markdown("### :material/candlestick_chart: K线查询")
@@ -342,7 +396,10 @@ def render_kline_controls(prefer_akshare: bool) -> None:
         placeholder="如: AAPL · 600519.SS · 0700.HK · SAP.DE · BP.L · BTC-USD",
     )
     kmode = st.segmented_control(
-        "查询模式", ["滑动", "范围"], default="滑动", key="kline_mode",
+        "查询模式",
+        ["滑动", "范围"],
+        default="滑动",
+        key="kline_mode",
         help="滑动: 一次加载上市以来全量历史, 图表内连续拖动/缩放; "
         "范围: 先选范围再查询 (兜底模式)",
     )
@@ -351,12 +408,18 @@ def render_kline_controls(prefer_akshare: bool) -> None:
         kdepth = None  # 滑动模式固定上市以来, 无范围选择
     else:
         kdepth = c2.selectbox(
-            "范围", [3, 6, 12, 24, 36], index=2,
-            format_func=lambda m: f"近 {m} 个月", key="kline_months",
+            "范围",
+            [3, 6, 12, 24, 36],
+            index=2,
+            format_func=lambda m: f"近 {m} 个月",
+            key="kline_months",
         )
     kperiod = c3.selectbox(
-        "周期", ["daily", "weekly", "monthly"], index=0,
-        format_func=lambda v: charting.PERIOD_LABELS[v], key="kline_period",
+        "周期",
+        ["daily", "weekly", "monthly"],
+        index=0,
+        format_func=lambda v: charting.PERIOD_LABELS[v],
+        key="kline_period",
     )
     # 范围模式提交判定: 代码变化 (回车/快捷 pill/搜索选择) 或点「查询」;
     # 首次渲染只记录输入框当前值, 不视为提交 (页面启动不预加载任何 K线)
@@ -368,14 +431,20 @@ def render_kline_controls(prefer_akshare: bool) -> None:
 
     opt1, opt2 = st.columns([1, 1])
     kmas = opt1.multiselect(
-        "均线", [5, 10, 20, 30, 60, 120, 250], default=[5, 20, 60], key="kline_ma",
+        "均线",
+        [5, 10, 20, 30, 60, 120, 250],
+        default=[5, 20, 60],
+        key="kline_ma",
     )
     kvol = opt2.toggle("成交量", value=True, key="kline_vol")
     kgreen = settings.green_up()  # 涨跌配色全局统一, 在「设置」页切换
 
     # 技术指标选择 (多选 + 可调参数)
     ind_sel = st.multiselect(
-        "技术指标", ["MACD", "RSI", "KDJ", "布林带"], default=[], key="kline_indicators",
+        "技术指标",
+        ["MACD", "RSI", "KDJ", "布林带"],
+        default=[],
+        key="kline_indicators",
     )
     indicators: dict = {}
     if ind_sel:
@@ -385,7 +454,9 @@ def render_kline_controls(prefer_akshare: bool) -> None:
             indicators["rsi"] = {"period": rsi_period}
         if "布林带" in ind_sel:
             boll_period = ic2.slider("布林带周期", 5, 60, 20, key="kline_boll_period")
-            boll_std = ic3.slider("标准差倍数", 1.0, 4.0, 2.0, 0.5, key="kline_boll_std")
+            boll_std = ic3.slider(
+                "标准差倍数", 1.0, 4.0, 2.0, 0.5, key="kline_boll_std"
+            )
             indicators["boll"] = {"period": boll_period, "std": boll_std}
         if "MACD" in ind_sel:
             indicators["macd"] = {}  # 使用默认参数 12/26/9
@@ -396,6 +467,7 @@ def render_kline_controls(prefer_akshare: bool) -> None:
         "代码规范: 美股 AAPL · A股 600519.SS · 港股 0700.HK · 德股 SAP.DE · "
         "英股 BP.L · 加股 RY.TO · 澳股 BHP.AX · 加密货币 BTC-USD"
     )
+
     def _pick_quick():
         v = st.session_state.get("kline_quick")
         if isinstance(v, (list, tuple)):
@@ -422,7 +494,15 @@ def render_kline_controls(prefer_akshare: bool) -> None:
 
     if kmode == "滑动":
         _render_slide_mode(
-            yahoo, kperiod, kmas, kvol, kgreen, indicators, prefer_akshare,
+            yahoo,
+            kperiod,
+            kmas,
+            kvol,
+            kgreen,
+            indicators,
+            prefer_akshare,
+            use_ibkr,
+            use_longport,
         )
         return
     # ---- 范围模式 (旧流程兜底) ----
@@ -440,7 +520,9 @@ def render_kline_controls(prefer_akshare: bool) -> None:
     if data_changed or st.session_state.get("kline_current_df") is None:
         try:
             with st.spinner(f"拉取 {yahoo} K线..."):
-                kdf = cached_kline(yahoo, kdepth, prefer_akshare)
+                kdf = cached_kline(
+                    yahoo, kdepth, prefer_akshare, use_ibkr, use_longport
+                )
         except Exception as e:
             st.warning(f"{yahoo}: {e}")
             return
@@ -456,18 +538,32 @@ def render_kline_controls(prefer_akshare: bool) -> None:
     except ValueError:
         kcur = None
     render_kline_view(
-        kdf, yahoo, period=kperiod, mas=kmas,
-        show_volume=kvol, green_up=kgreen, currency=kcur,
+        kdf,
+        yahoo,
+        period=kperiod,
+        mas=kmas,
+        show_volume=kvol,
+        green_up=kgreen,
+        currency=kcur,
         indicators=indicators or None,
     )
 
 
-def render_kline_page(prefer_akshare: bool) -> None:
+def render_kline_page(
+    prefer_akshare: bool,
+    use_ibkr: bool = False,
+    use_longport: bool = False,
+) -> None:
     """「K线」页入口: 单只查询 + 多股对比 两个子功能 (st.tabs)."""
     tab_single, tab_compare = st.tabs(
         [":material/candlestick_chart: 单只查询", ":material/show_chart: 走势对比"]
     )
     with tab_compare:
-        render_compare_controls(prefer_akshare, quick_symbols())
+        render_compare_controls(
+            prefer_akshare,
+            quick_symbols(),
+            use_ibkr,
+            use_longport,
+        )
     with tab_single:
-        render_kline_controls(prefer_akshare)
+        render_kline_controls(prefer_akshare, use_ibkr, use_longport)

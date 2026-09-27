@@ -1,4 +1,5 @@
 """指数域 (IX.<KEY>) 测试: 代码解析/路由隔离/provider 源链/K线门面 (不联网)."""
+
 from __future__ import annotations
 
 import pandas as pd
@@ -8,7 +9,7 @@ from tracker import prices
 from tracker.providers import PROVIDERS, provider_for
 from tracker.providers.base import resolve
 from tracker.providers.index import IndexProvider
-from tracker.symbols import INDEX_CATALOG, Market, index_key, index_label, parse, type_for_symbol
+from tracker.symbols import INDEX_CATALOG, Market, index_label, parse, type_for_symbol
 
 
 # ---------- 代码解析 ----------
@@ -28,7 +29,10 @@ def test_index_parse_case_insensitive():
 
 
 def test_index_cn_entries_expose_akshare_code():
-    assert parse("IX.CSI300").ak_code == "000300" or INDEX_CATALOG["CSI300"]["ak"] == "sh000300"
+    assert (
+        parse("IX.CSI300").ak_code == "000300"
+        or INDEX_CATALOG["CSI300"]["ak"] == "sh000300"
+    )
 
 
 def test_unknown_index_key_rejected():
@@ -65,7 +69,7 @@ def test_index_provider_source_chains():
     # 中国指数: akshare 优先 (与 A 股域数据源惯例一致)
     cn = parse("IX.SSE")
     chains = provider.history_sources(cn, "2025-01-01", None)
-    assert chains[0].__name__ == "ak"      # akshare 新浪源优先
+    assert chains[0].__name__ == "ak"  # akshare 新浪源优先
     assert chains[1].__name__ == "yf"
     # 目录中无 ak 代码且不在美股新浪表的指数: 仅 yfinance
     vix = parse("IX.VIX")
@@ -95,7 +99,10 @@ def test_ccement_points_parses_dynamic_index_all(monkeypatch):
     """getPriceIndex 聚合载荷用 dynamicIndexAll (独立端点用 dynamicIndex), 都要能解析."""
     from tracker.providers import index as idx_mod
 
-    d = {"dynamicIndexDate": ["2026-09-22", "2026-09-23"], "dynamicIndexAll": [95.77, 95.95]}
+    d = {
+        "dynamicIndexDate": ["2026-09-22", "2026-09-23"],
+        "dynamicIndexAll": [95.77, 95.95],
+    }
     df = idx_mod._ccement_points(d)
     assert list(df.columns) == ["date", "close", "open", "high", "low", "volume"]
     assert df.iloc[-1]["close"] == pytest.approx(95.95)
@@ -121,7 +128,11 @@ def test_ccement_history_rejects_empty_series(monkeypatch):
     """接口返回空序列必须报错, 不能产出空 DataFrame 静默通过."""
     from tracker.providers import index as idx_mod
 
-    monkeypatch.setattr(idx_mod, "_ccement_post", lambda path, data: {"dynamicIndexDate": [], "dynamicIndex": []})
+    monkeypatch.setattr(
+        idx_mod,
+        "_ccement_post",
+        lambda path, data: {"dynamicIndexDate": [], "dynamicIndex": []},
+    )
     with pytest.raises(RuntimeError, match="空序列"):
         idx_mod._ccement_history(parse("IX.CSPI"), "2025-01-01", None)
 
@@ -129,6 +140,7 @@ def test_ccement_history_rejects_empty_series(monkeypatch):
 def test_index_provider_rejects_quote():
     with pytest.raises(NotImplementedError):
         IndexProvider().fetch_quote(parse("IX.DXY"), prefer_first=False)
+
 
 def test_get_quotes_routes_index_to_explicit_error(monkeypatch):
     """IX.* 混入实时行情查询: 记入明确 errors, 不落入 global 域误查 yfinance."""
@@ -154,13 +166,17 @@ def test_slice_range_end_date_is_inclusive_without_extra_day():
     df = pd.DataFrame(
         {
             "date": pd.date_range("2026-01-01", periods=5, freq="D"),
-            "open": [1.0] * 5, "high": [1.0] * 5,
-            "low": [1.0] * 5, "close": [1.0] * 5,
+            "open": [1.0] * 5,
+            "high": [1.0] * 5,
+            "low": [1.0] * 5,
+            "close": [1.0] * 5,
         }
     )
     out = _slice_range(df, "2026-01-01", "2026-01-03")
     assert [d.strftime("%Y-%m-%d") for d in out["date"]] == [
-        "2026-01-01", "2026-01-02", "2026-01-03",
+        "2026-01-01",
+        "2026-01-02",
+        "2026-01-03",
     ]
     # 无 end_date: 取到最新
     out2 = _slice_range(df, "2026-01-04", None)

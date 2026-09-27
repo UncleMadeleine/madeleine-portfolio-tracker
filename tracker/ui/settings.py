@@ -3,6 +3,7 @@
 settings.json / portfolio.json 的读写统一在 tracker.storage;
 本模块只保留 Streamlit 展示层辅助 (配色常量与配色映射)。
 """
+
 from __future__ import annotations
 
 from tracker.charting import (
@@ -31,7 +32,11 @@ def green_up(settings: dict | None = None) -> bool:
 
 def up_down_colors(settings: dict | None = None) -> tuple[str, str]:
     """(涨色, 跌色) 十六进制, 与 K线组件配色一致."""
-    return (INTL_UP_COLOR, INTL_DOWN_COLOR) if green_up(settings) else (CN_UP_COLOR, CN_DOWN_COLOR)
+    return (
+        (INTL_UP_COLOR, INTL_DOWN_COLOR)
+        if green_up(settings)
+        else (CN_UP_COLOR, CN_DOWN_COLOR)
+    )
 
 
 def up_down_tags(settings: dict | None = None) -> tuple[str, str]:
@@ -42,5 +47,3 @@ def up_down_tags(settings: dict | None = None) -> tuple[str, str]:
 def delta_color(settings: dict | None = None) -> str:
     """st.metric 的 delta_color: 让正 delta 显示为涨色."""
     return "normal" if green_up(settings) else "inverse"
-
-

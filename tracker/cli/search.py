@@ -1,4 +1,5 @@
 """search 子命令: 代码/名称搜索 → 规范代码 (可直接喂 kline/compare/quote)."""
+
 from __future__ import annotations
 
 from .. import search
@@ -10,7 +11,9 @@ def cmd_search(args) -> None:
     """搜索代码/名称, 输出规范代码 + 名称 + 市场 (代码可直接用于取数命令)."""
     q = (args.query or "").strip()
     if not q:
-        _finish_with_error("请输入搜索关键词 (代码片段/中文名/英文名), 如 700 / 腾讯 / maotai")
+        _finish_with_error(
+            "请输入搜索关键词 (代码片段/中文名/英文名), 如 700 / 腾讯 / maotai"
+        )
     if args.exact:
         hits = resolve_symbol(q)
     else:

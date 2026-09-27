@@ -1,4 +1,5 @@
 """存储层 (portfolio.json / watchlist.json / settings.json) 读写测试 (纯文件操作)."""
+
 from __future__ import annotations
 
 import json
@@ -54,7 +55,9 @@ def test_load_watchlist_stamps_type(tmp_path):
     """读取侧同样补写权威 type (手改 JSON 无效)."""
     path = tmp_path / "watchlist.json"
     path.write_text(
-        json.dumps({"watchlist": [{"symbol": "TSLA", "lists": ["科技"], "type": "cn"}]}),
+        json.dumps(
+            {"watchlist": [{"symbol": "TSLA", "lists": ["科技"], "type": "cn"}]}
+        ),
         encoding="utf-8",
     )
     data = storage.load_watchlist(path)
@@ -63,9 +66,7 @@ def test_load_watchlist_stamps_type(tmp_path):
 
 def test_save_watchlist_stamps_type_and_migrates_keys(tmp_path):
     path = tmp_path / "watchlist.json"
-    storage.save_watchlist(
-        {"watchlist": [{"symbol": "0700.HK", "upper": 300}]}, path
-    )
+    storage.save_watchlist({"watchlist": [{"symbol": "0700.HK", "upper": 300}]}, path)
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["watchlist"] == [
         {"symbol": "0700.HK", "upper_1": 300, "type": "global"}
@@ -94,7 +95,9 @@ def test_load_portfolio_recovers_from_backup_when_corrupt(tmp_path):
     path = tmp_path / "portfolio.json"
     path.write_text("{ truncated", encoding="utf-8")
     (tmp_path / "portfolio.json.bak").write_text(
-        json.dumps({"base_currency": "USD", "holdings": [{"symbol": "AAPL", "quantity": 3}]}),
+        json.dumps(
+            {"base_currency": "USD", "holdings": [{"symbol": "AAPL", "quantity": 3}]}
+        ),
         encoding="utf-8",
     )
     data = storage.load_portfolio(path)

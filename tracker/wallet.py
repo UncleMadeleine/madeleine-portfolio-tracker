@@ -8,11 +8,11 @@
 不依赖 web3.py, 直接 HTTP JSON-RPC (requests); 无需 API key.
 公钥/地址只读查询, 不涉及私钥操作.
 """
+
 from __future__ import annotations
 
 import json
 import re
-import time
 from pathlib import Path
 from typing import Any
 
@@ -28,53 +28,92 @@ _BUILTIN_TOKENLIST: dict[str, dict[str, dict[str, Any]]] = {
     "eth": {
         "0xdAC17F958D2ee523a2206206994597C13D831ec7": {"symbol": "USDT", "decimals": 6},
         "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48": {"symbol": "USDC", "decimals": 6},
-        "0x6B175474E89094C44Da98b954EedeAC495271d0F": {"symbol": "DAI",  "decimals": 18},
+        "0x6B175474E89094C44Da98b954EedeAC495271d0F": {"symbol": "DAI", "decimals": 18},
         "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599": {"symbol": "WBTC", "decimals": 8},
-        "0x514910771AF9Ca656af840dff83E8264EcF986CA": {"symbol": "LINK", "decimals": 18},
-        "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984": {"symbol": "UNI",  "decimals": 18},
-        "0x7fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9": {"symbol": "AAVE", "decimals": 18},
-        "0x95aD61b0a150d79219dCF64E1E6Cc01f0B64C4cE": {"symbol": "SHIB", "decimals": 18},
-        "0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84": {"symbol": "stETH","decimals": 18},
-        "0xaea46A60368A7bD060eec7DF8CBa43b7EF41Ad85": {"symbol": "FET",  "decimals": 18},
-        "0x5A98FcBEA516Cf06857215779Fd812CA3beF1B32": {"symbol": "LDO",  "decimals": 18},
-        "0xBBbbCA6A901c926F240b89EacB641d8Aec7AEafD": {"symbol": "LRC",  "decimals": 18},
-        "0xfB7B4564402E5500dB5bB6d63Ae671302777C75a": {"symbol": "DEXT", "decimals": 18},
+        "0x514910771AF9Ca656af840dff83E8264EcF986CA": {
+            "symbol": "LINK",
+            "decimals": 18,
+        },
+        "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984": {"symbol": "UNI", "decimals": 18},
+        "0x7fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9": {
+            "symbol": "AAVE",
+            "decimals": 18,
+        },
+        "0x95aD61b0a150d79219dCF64E1E6Cc01f0B64C4cE": {
+            "symbol": "SHIB",
+            "decimals": 18,
+        },
+        "0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84": {
+            "symbol": "stETH",
+            "decimals": 18,
+        },
+        "0xaea46A60368A7bD060eec7DF8CBa43b7EF41Ad85": {"symbol": "FET", "decimals": 18},
+        "0x5A98FcBEA516Cf06857215779Fd812CA3beF1B32": {"symbol": "LDO", "decimals": 18},
+        "0xBBbbCA6A901c926F240b89EacB641d8Aec7AEafD": {"symbol": "LRC", "decimals": 18},
+        "0xfB7B4564402E5500dB5bB6d63Ae671302777C75a": {
+            "symbol": "DEXT",
+            "decimals": 18,
+        },
     },
     "bsc": {
-        "0x55d398326f99059fF775485246999027B3197955": {"symbol": "USDT", "decimals": 18},
-        "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d": {"symbol": "USDC", "decimals": 18},
-        "0x1AF3F329e8BE154074D8769D1FFa4eE058B1DBc3": {"symbol": "DAI",  "decimals": 18},
-        "0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c": {"symbol": "BTCB", "decimals": 18},
-        "0x2170Ed0880ac9A755fd29B2688956BD959F933F8": {"symbol": "ETH",  "decimals": 18},
-        "0x2dfF88A56767223A5529eA5960Da7A3F5f766406": {"symbol": "ID",   "decimals": 18},
-        "0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82": {"symbol": "CAKE", "decimals": 18},
+        "0x55d398326f99059fF775485246999027B3197955": {
+            "symbol": "USDT",
+            "decimals": 18,
+        },
+        "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d": {
+            "symbol": "USDC",
+            "decimals": 18,
+        },
+        "0x1AF3F329e8BE154074D8769D1FFa4eE058B1DBc3": {"symbol": "DAI", "decimals": 18},
+        "0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c": {
+            "symbol": "BTCB",
+            "decimals": 18,
+        },
+        "0x2170Ed0880ac9A755fd29B2688956BD959F933F8": {"symbol": "ETH", "decimals": 18},
+        "0x2dfF88A56767223A5529eA5960Da7A3F5f766406": {"symbol": "ID", "decimals": 18},
+        "0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82": {
+            "symbol": "CAKE",
+            "decimals": 18,
+        },
     },
     "polygon": {
         "0xc2132D05D31c914a87C6611C10748AEb04B58e8F": {"symbol": "USDT", "decimals": 6},
         "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174": {"symbol": "USDC", "decimals": 6},
-        "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063": {"symbol": "DAI",  "decimals": 18},
+        "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063": {"symbol": "DAI", "decimals": 18},
         "0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6": {"symbol": "WBTC", "decimals": 8},
-        "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619": {"symbol": "ETH",  "decimals": 18},
-        "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270": {"symbol": "WMATIC","decimals": 18},
-        "0xb33EaAd8d922B1083446DC23f610c2567fB5180F": {"symbol": "UNI",  "decimals": 18},
+        "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619": {"symbol": "ETH", "decimals": 18},
+        "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270": {
+            "symbol": "WMATIC",
+            "decimals": 18,
+        },
+        "0xb33EaAd8d922B1083446DC23f610c2567fB5180F": {"symbol": "UNI", "decimals": 18},
     },
     "arbitrum": {
         "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9": {"symbol": "USDT", "decimals": 6},
         "0xaf88d065e77c8cC2239327C5EDb3A432268e5831": {"symbol": "USDC", "decimals": 6},
-        "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1": {"symbol": "DAI",  "decimals": 18},
+        "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1": {"symbol": "DAI", "decimals": 18},
         "0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f": {"symbol": "WBTC", "decimals": 8},
-        "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1": {"symbol": "WETH", "decimals": 18},
-        "0x5979D7b546E38E414F7E9822514be443A4800529": {"symbol": "wstETH","decimals": 18},
-        "0x912CE59144191C1204E64559FE8253a0e49E6548": {"symbol": "ARB",  "decimals": 18},
-        "0xB766039cc6DB368759C1E56B79AFfE831d0Cc507": {"symbol": "RPL",  "decimals": 18},
+        "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1": {
+            "symbol": "WETH",
+            "decimals": 18,
+        },
+        "0x5979D7b546E38E414F7E9822514be443A4800529": {
+            "symbol": "wstETH",
+            "decimals": 18,
+        },
+        "0x912CE59144191C1204E64559FE8253a0e49E6548": {"symbol": "ARB", "decimals": 18},
+        "0xB766039cc6DB368759C1E56B79AFfE831d0Cc507": {"symbol": "RPL", "decimals": 18},
     },
     "avalanche": {
         "0x9702230A8Ea53601f5cD2dc00fDBc13d4dF4A8c7": {"symbol": "USDT", "decimals": 6},
         "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E": {"symbol": "USDC", "decimals": 6},
-        "0xd586E7F844cEa2F87f50152665BCbc2C279D8d70": {"symbol": "DAI",  "decimals": 18},
+        "0xd586E7F844cEa2F87f50152665BCbc2C279D8d70": {"symbol": "DAI", "decimals": 18},
         "0x0555E30da8f98308EdB960aa94C0Db47230d2B9c": {"symbol": "WBTC", "decimals": 8},
-        "0x49D5c2BdFfac6CE2BFdB6640F4F80f226bc10bAB": {"symbol": "WETH", "decimals": 18},
-        "0x6e84a6216eA6dACC71eE8E6b0a5B7322EEbC0fDd": {"symbol": "JOE",  "decimals": 18},
+        "0x49D5c2BdFfac6CE2BFdB6640F4F80f226bc10bAB": {
+            "symbol": "WETH",
+            "decimals": 18,
+        },
+        "0x6e84a6216eA6dACC71eE8E6b0a5B7322EEbC0fDd": {"symbol": "JOE", "decimals": 18},
     },
 }
 
@@ -150,8 +189,10 @@ _ERC20_BALANCE_TOPIC = "0x" + _ERC20_BALANCE_SIG.hex()
 # HTTP helpers
 # ---------------------------------------------------------------------------
 
+
 def _requests():
     import requests
+
     return requests
 
 
@@ -160,13 +201,20 @@ def _rpc_post(url: str, payload: dict, timeout: float = 10.0) -> Any:
     req = _requests()
     last_err: Exception | None = None
     try:
-        r = req.post(url, json=payload, timeout=timeout, headers={"Content-Type": "application/json"})
+        r = req.post(
+            url,
+            json=payload,
+            timeout=timeout,
+            headers={"Content-Type": "application/json"},
+        )
         if r.status_code == 200:
             body = r.json()
             if "result" in body:
                 return body["result"]
             err = body.get("error", {})
-            raise RuntimeError(f"RPC 错误 [{err.get('code')}]: {err.get('message', body)}")
+            raise RuntimeError(
+                f"RPC 错误 [{err.get('code')}]: {err.get('message', body)}"
+            )
         last_err = RuntimeError(f"HTTP {r.status_code}: {r.text[:200]}")
     except Exception as e:
         last_err = e
@@ -188,6 +236,7 @@ def _try_rpc_hosts(hosts: list[str], payload: dict, timeout: float = 10.0) -> An
 # 地址校验
 # ---------------------------------------------------------------------------
 
+
 def _validate_address(address: str, chain: str) -> str:
     """校验地址格式, 返回规范化后的地址."""
     addr = address.strip()
@@ -199,15 +248,14 @@ def _validate_address(address: str, chain: str) -> str:
             f"不支持的链 '{chain}', 支持: {', '.join(sorted(_SUPPORTED_CHAINS))}"
         )
     if not re.fullmatch(r"0x[0-9a-fA-F]{40}", addr):
-        raise ValueError(
-            f"地址格式无效 (需 0x + 40 位十六进制字符): {addr[:10]}..."
-        )
+        raise ValueError(f"地址格式无效 (需 0x + 40 位十六进制字符): {addr[:10]}...")
     return addr.lower()
 
 
 # ---------------------------------------------------------------------------
 # 余额查询
 # ---------------------------------------------------------------------------
+
 
 def _native_balance(
     address: str, chain: str, chain_cfg: dict[str, Any], timeout: float
@@ -227,7 +275,7 @@ def _native_balance(
     except (ValueError, TypeError):
         return None
     decimals = chain_cfg["native_decimals"]
-    amount = raw_wei / (10 ** decimals)
+    amount = raw_wei / (10**decimals)
     return {
         "symbol": chain_cfg["native_symbol"],
         "contract": None,
@@ -258,9 +306,9 @@ def _erc20_balance(
         return None
     if raw == 0:
         return None
-    amount = raw / (10 ** decimals)
+    amount = raw / (10**decimals)
     return {
-        "symbol": None,   # 由调用方从 tokenlist 填入
+        "symbol": None,  # 由调用方从 tokenlist 填入
         "contract": contract,
         "amount": amount,
         "decimals": decimals,
@@ -272,6 +320,7 @@ def _erc20_balance(
 # ---------------------------------------------------------------------------
 # Tokenlist 加载
 # ---------------------------------------------------------------------------
+
 
 def _load_tokenlist(tokenlist_path: str | None) -> dict[str, dict[str, dict[str, Any]]]:
     """加载 tokenlist: 优先外部文件, 否则内置列表."""
@@ -304,9 +353,8 @@ def _load_tokenlist(tokenlist_path: str | None) -> dict[str, dict[str, dict[str,
 # 符号推导 (contract address → BASE-QUOTE)
 # ---------------------------------------------------------------------------
 
-def _symbol_for_token(
-    symbol: str, chain: str, base_currency: str = "USD"
-) -> str:
+
+def _symbol_for_token(symbol: str, chain: str, base_currency: str = "USD") -> str:
     """将代币符号映射为 Yahoo Finance 风格代码 (BASE-QUOTE)."""
     base = symbol.upper()
     quote = base_currency.upper()
@@ -316,6 +364,7 @@ def _symbol_for_token(
 # ---------------------------------------------------------------------------
 # 核心: import_wallet
 # ---------------------------------------------------------------------------
+
 
 def import_wallet(
     chain: str,
@@ -377,13 +426,15 @@ def import_wallet(
         errors.append(f"原生代币余额查询失败: {e}")
 
     if native and native["amount"] > 0:
-        holdings.append({
-            "symbol": _symbol_for_token(native["symbol"], chain, base_currency),
-            "quantity": native["amount"],
-            "contract": None,
-            "source": "native",
-            "chain": chain,
-        })
+        holdings.append(
+            {
+                "symbol": _symbol_for_token(native["symbol"], chain, base_currency),
+                "quantity": native["amount"],
+                "contract": None,
+                "source": "native",
+                "chain": chain,
+            }
+        )
 
     # 2. ERC-20 代币 (单个失败不阻断其余)
     seen: set[str] = set()
@@ -392,19 +443,23 @@ def import_wallet(
             continue
         seen.add(contract)
         try:
-            token_balance = _erc20_balance(addr, contract, chain, info["decimals"], rpc_timeout)
+            token_balance = _erc20_balance(
+                addr, contract, chain, info["decimals"], rpc_timeout
+            )
         except RuntimeError as e:
             errors.append(f"{info['symbol']} ({contract[:10]}…) 查询失败: {e}")
             continue
         if token_balance and token_balance["amount"] > 0:
             token_balance["symbol"] = info["symbol"]
-            holdings.append({
-                "symbol": _symbol_for_token(info["symbol"], chain, base_currency),
-                "quantity": token_balance["amount"],
-                "contract": contract,
-                "source": "erc20",
-                "chain": chain,
-            })
+            holdings.append(
+                {
+                    "symbol": _symbol_for_token(info["symbol"], chain, base_currency),
+                    "quantity": token_balance["amount"],
+                    "contract": contract,
+                    "source": "erc20",
+                    "chain": chain,
+                }
+            )
 
     return {
         "chain": chain,

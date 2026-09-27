@@ -1,4 +1,5 @@
 """quote 子命令: 查询单个或多个代码实时行情."""
+
 from __future__ import annotations
 
 from .. import prices
@@ -9,7 +10,9 @@ from ._common import _print_json
 def cmd_quote(args) -> None:
     """查询实时行情, 支持 --json 机器可读输出."""
     quotes, errors, notes = prices.get_quotes(
-        args.symbols, prefer_akshare=args.akshare, use_ibkr=args.ibkr,
+        args.symbols,
+        prefer_akshare=args.akshare,
+        use_ibkr=args.ibkr,
         use_longport=getattr(args, "longport", False),
     )
     rows: list[dict] = []
@@ -46,9 +49,7 @@ def cmd_quote(args) -> None:
         if "error" in r:
             print(f"  {r['symbol']}: ⚠ {r['error']}")
         else:
-            chg = (
-                f" ({r['change_pct']:+.2f}%)" if r["change_pct"] is not None else ""
-            )
+            chg = f" ({r['change_pct']:+.2f}%)" if r["change_pct"] is not None else ""
             print(
                 f"  {r['symbol']:>12}  {r['price']:,.3f} {r['currency']}"
                 f"{chg}  {r['name'] or ''}"

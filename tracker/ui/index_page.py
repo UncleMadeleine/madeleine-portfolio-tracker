@@ -3,6 +3,7 @@
 复用 K线图表组件与渲染函数; 数据走 prices.get_index_history (provider 源链:
 中国指数 akshare 优先, 其余 yfinance 主源), 缓存键 index: 前缀隔离。
 """
+
 from __future__ import annotations
 
 import pandas as pd
@@ -38,19 +39,30 @@ def render_index_page() -> None:
     chosen = sel_col.selectbox(
         "指数",
         list(labels.keys()),
-        index=list(labels.keys()).index("美元指数 (美元/利率)") if "美元指数 (美元/利率)" in labels else 0,
+        index=list(labels.keys()).index("美元指数 (美元/利率)")
+        if "美元指数 (美元/利率)" in labels
+        else 0,
         key="index_symbol",
     )
     imonths = r1_col.selectbox(
-        "范围", [3, 6, 12, 24, 36], index=2,
-        format_func=lambda m: f"近 {m} 个月", key="index_months",
+        "范围",
+        [3, 6, 12, 24, 36],
+        index=2,
+        format_func=lambda m: f"近 {m} 个月",
+        key="index_months",
     )
     iperiod = r2_col.selectbox(
-        "周期", ["daily", "weekly", "monthly"], index=0,
-        format_func=lambda v: charting.PERIOD_LABELS[v], key="index_period",
+        "周期",
+        ["daily", "weekly", "monthly"],
+        index=0,
+        format_func=lambda v: charting.PERIOD_LABELS[v],
+        key="index_period",
     )
     imas = st.multiselect(
-        "均线", [5, 10, 20, 30, 60, 120, 250], default=[5, 20, 60], key="index_ma",
+        "均线",
+        [5, 10, 20, 30, 60, 120, 250],
+        default=[5, 20, 60],
+        key="index_ma",
     )
 
     st.caption(
@@ -73,7 +85,11 @@ def render_index_page() -> None:
         return
 
     render_kline_view(
-        kdf, f"{index_label(key)} ({yahoo})", period=iperiod, mas=imas,
-        show_volume=False, green_up=settings.green_up(),
+        kdf,
+        f"{index_label(key)} ({yahoo})",
+        period=iperiod,
+        mas=imas,
+        show_volume=False,
+        green_up=settings.green_up(),
         currency=None,  # 指数以点数/%计价, 不标货币
     )

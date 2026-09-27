@@ -4,6 +4,7 @@
 一次请求 ~1s; 返回原始行, 由各 provider 按域过滤并归一为规范代码。
 provider 之外 (tracker.search 聚合层) 不感知该接口细节。
 """
+
 from __future__ import annotations
 
 import json
@@ -60,9 +61,7 @@ def suggest_merged(query: str) -> tuple[list[dict], bool] | None:
                 failed = True
             else:
                 got = {json.dumps(r, sort_keys=True) for r in rows}
-                rows += [
-                    r for r in extra if json.dumps(r, sort_keys=True) not in got
-                ]
+                rows += [r for r in extra if json.dumps(r, sort_keys=True) not in got]
     if failed and not rows:
         return None
     return rows, failed

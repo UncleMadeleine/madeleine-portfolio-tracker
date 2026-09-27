@@ -8,6 +8,7 @@ CLI 与 Streamlit 页面共用同一组函数, 保证 schema 归一与权威 typ
 - portfolio.json 保存时合并磁盘上已有键 (如 _说明 等文档/自定义字段), 不丢用户数据。
 - 写盘统一 json.dumps(..., allow_nan=False): NaN/None 单元格在清洗阶段剔除。
 """
+
 from __future__ import annotations
 
 import json
@@ -34,6 +35,7 @@ class CorruptDataError(ValueError):
 # ---------------------------------------------------------------------------
 # 通用
 # ---------------------------------------------------------------------------
+
 
 def backup_file(path: str | Path) -> str | None:
     """备份 <path> 为 <path>.bak; 文件不存在返回 None。导入写盘前统一调用。"""
@@ -105,6 +107,7 @@ def _stamp_type(row: dict) -> dict:
 # portfolio.json
 # ---------------------------------------------------------------------------
 
+
 def load_portfolio(path: str | Path = PORTFOLIO_PATH) -> dict:
     """读取持仓文件; 文件缺失时返回空组合。"""
     if not Path(path).exists():
@@ -142,13 +145,16 @@ def save_portfolio(data: dict, path: str | Path = PORTFOLIO_PATH) -> None:
         merged = {}
     merged.update(data)
     merged.setdefault("base_currency", DEFAULT_BASE_CURRENCY)
-    merged["holdings"] = [_stamp_type(r) for r in _clean_rows(merged.get("holdings", []))]
+    merged["holdings"] = [
+        _stamp_type(r) for r in _clean_rows(merged.get("holdings", []))
+    ]
     _write_json(merged, p)
 
 
 # ---------------------------------------------------------------------------
 # watchlist.json
 # ---------------------------------------------------------------------------
+
 
 def parse_lists(v) -> list[str]:
     """把逗号分隔字符串/列表解析为归属列表; 空则回退默认。"""
@@ -213,9 +219,22 @@ def load_watchlist(path: str | Path = WATCHLIST_PATH) -> dict:
 
 
 def save_watchlist(data: dict, path: str | Path = WATCHLIST_PATH) -> None:
-    """保存自选 (写盘唯一入口): 逐条 schema 归一 + 权威 type 覆写。"""
-    entries = [normalize_watch_entry(dict(e)) for e in data.get("watchlist", [])]
-    _write_json({"watchlist": entries}, path)
+    """保存自选 (写盘唯一入口): 逐条 schema 归一 + 权威 type 覆写。
+
+    与 save_portfolio 一致: 保留文件中已有其它键 (_说明 等文档/自定义字段)。
+    """
+    p = Path(path)
+    if p.exists():
+        try:
+            merged = _read_json(p)
+        except (json.JSONDecodeError, OSError):
+            merged = {}
+    else:
+        merged = {}
+    merged["watchlist"] = [
+        normalize_watch_entry(dict(e)) for e in data.get("watchlist", [])
+    ]
+    _write_json(merged, p)
 
 
 # ---------------------------------------------------------------------------

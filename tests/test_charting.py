@@ -1,4 +1,5 @@
 """K线模块测试: 数据清洗 / 均线 / 重采样 / 图表构建 / 摘要 / OHLC 缓存. 纯离线."""
+
 import json
 import sqlite3
 
@@ -68,15 +69,50 @@ class TestCleanOclc:
         bad = pd.DataFrame(
             [
                 # NaN close
-                {"date": pd.Timestamp(2025, 2, 3), "open": 1, "high": 2, "low": 0.5, "close": None, "volume": 1},
+                {
+                    "date": pd.Timestamp(2025, 2, 3),
+                    "open": 1,
+                    "high": 2,
+                    "low": 0.5,
+                    "close": None,
+                    "volume": 1,
+                },
                 # high < low
-                {"date": pd.Timestamp(2025, 2, 4), "open": 10, "high": 9, "low": 11, "close": 10, "volume": 1},
+                {
+                    "date": pd.Timestamp(2025, 2, 4),
+                    "open": 10,
+                    "high": 9,
+                    "low": 11,
+                    "close": 10,
+                    "volume": 1,
+                },
                 # high < max(open, close)
-                {"date": pd.Timestamp(2025, 2, 5), "open": 10, "high": 10.5, "low": 9.5, "close": 12, "volume": 1},
+                {
+                    "date": pd.Timestamp(2025, 2, 5),
+                    "open": 10,
+                    "high": 10.5,
+                    "low": 9.5,
+                    "close": 12,
+                    "volume": 1,
+                },
                 # low > min(open, close)
-                {"date": pd.Timestamp(2025, 2, 6), "open": 10, "high": 11, "low": 10.2, "close": 9.5, "volume": 1},
+                {
+                    "date": pd.Timestamp(2025, 2, 6),
+                    "open": 10,
+                    "high": 11,
+                    "low": 10.2,
+                    "close": 9.5,
+                    "volume": 1,
+                },
                 # close <= 0
-                {"date": pd.Timestamp(2025, 2, 7), "open": 1, "high": 2, "low": 0.5, "close": -1, "volume": 1},
+                {
+                    "date": pd.Timestamp(2025, 2, 7),
+                    "open": 1,
+                    "high": 2,
+                    "low": 0.5,
+                    "close": -1,
+                    "volume": 1,
+                },
             ]
         )
         out = charting.clean_ohlc(pd.concat([df, bad], ignore_index=True))
@@ -88,11 +124,32 @@ class TestCleanOclc:
         bad = pd.DataFrame(
             [
                 # low = 0 (close 正常)
-                {"date": pd.Timestamp(2025, 3, 3), "open": 10, "high": 12, "low": 0, "close": 11, "volume": 1},
+                {
+                    "date": pd.Timestamp(2025, 3, 3),
+                    "open": 10,
+                    "high": 12,
+                    "low": 0,
+                    "close": 11,
+                    "volume": 1,
+                },
                 # open = 0
-                {"date": pd.Timestamp(2025, 3, 4), "open": 0, "high": 12, "low": 1, "close": 11, "volume": 1},
+                {
+                    "date": pd.Timestamp(2025, 3, 4),
+                    "open": 0,
+                    "high": 12,
+                    "low": 1,
+                    "close": 11,
+                    "volume": 1,
+                },
                 # high = 0
-                {"date": pd.Timestamp(2025, 3, 5), "open": 1, "high": 0, "low": 0, "close": 1, "volume": 1},
+                {
+                    "date": pd.Timestamp(2025, 3, 5),
+                    "open": 1,
+                    "high": 0,
+                    "low": 0,
+                    "close": 1,
+                    "volume": 1,
+                },
             ]
         )
         out = charting.clean_ohlc(pd.concat([_mk_df(), bad], ignore_index=True))
@@ -317,7 +374,15 @@ class TestGetOhlc:
         raw_broken = raw.copy()
         raw_broken.loc[0, "high"] = 1.0  # high < body → 应被清洗掉
 
-        def fake_history(symbol, months=12, start_date=None, end_date=None, prefer_akshare=False, use_ibkr=False, use_longport=False):
+        def fake_history(
+            symbol,
+            months=12,
+            start_date=None,
+            end_date=None,
+            prefer_akshare=False,
+            use_ibkr=False,
+            use_longport=False,
+        ):
             calls["n"] += 1
             return raw_broken
 
@@ -334,7 +399,15 @@ class TestGetOhlc:
 
         calls = {"n": 0}
 
-        def fake_history(symbol, months=12, start_date=None, end_date=None, prefer_akshare=False, use_ibkr=False, use_longport=False):
+        def fake_history(
+            symbol,
+            months=12,
+            start_date=None,
+            end_date=None,
+            prefer_akshare=False,
+            use_ibkr=False,
+            use_longport=False,
+        ):
             calls["n"] += 1
             return _mk_df(base=100.0 + calls["n"])
 
@@ -349,7 +422,15 @@ class TestGetOhlc:
 
         calls = {"n": 0}
 
-        def fake_history(symbol, months=12, start_date=None, end_date=None, prefer_akshare=False, use_ibkr=False, use_longport=False):
+        def fake_history(
+            symbol,
+            months=12,
+            start_date=None,
+            end_date=None,
+            prefer_akshare=False,
+            use_ibkr=False,
+            use_longport=False,
+        ):
             calls["n"] += 1
             return _mk_df()
 
@@ -446,9 +527,9 @@ class TestMacd:
         df = pd.DataFrame({"close": [float(p) for p in prices]})
         macd = charting.calc_macd(df)
         # 后半段 DIF 上穿 DEA
-        assert (macd["dif"].iloc[-1] > macd["dea"].iloc[-1])
+        assert macd["dif"].iloc[-1] > macd["dea"].iloc[-1]
         # 前半段 DIF 在 DEA 下方 (死叉区间)
-        assert (macd["dif"].iloc[10] < macd["dea"].iloc[10])
+        assert macd["dif"].iloc[10] < macd["dea"].iloc[10]
 
     def test_custom_params(self):
         df = _mk_df()

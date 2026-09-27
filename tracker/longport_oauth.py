@@ -8,6 +8,7 @@
 UI 侧 (longport_login.py) 用 subprocess.Popen 启动本模块, 轮询状态文件渲染。
 token 由 SDK 持久化到 ~/.longport/openapi/tokens/<client_id> 并自动刷新。
 """
+
 from __future__ import annotations
 
 import json
@@ -17,7 +18,9 @@ from pathlib import Path
 
 from . import longport
 
-_STATE_PATH = Path(__file__).resolve().parent.parent / "var" / "longport_oauth_state.json"
+_STATE_PATH = (
+    Path(__file__).resolve().parent.parent / "var" / "longport_oauth_state.json"
+)
 
 
 def _write_state(payload: dict) -> None:
@@ -56,7 +59,9 @@ def main() -> int:
         api = longport._sdk()
         port = cfg.get("callback_port")
         builder = (
-            api.OAuthBuilder(client_id, int(port)) if port else api.OAuthBuilder(client_id)
+            api.OAuthBuilder(client_id, int(port))
+            if port
+            else api.OAuthBuilder(client_id)
         )
         oauth = builder.build(on_open)
         lang = longport._language(api, cfg)

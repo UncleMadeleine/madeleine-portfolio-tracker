@@ -1,4 +1,5 @@
 """cache 子命令: 行情磁盘缓存管理 (info / clear)."""
+
 from __future__ import annotations
 
 from datetime import datetime

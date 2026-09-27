@@ -10,6 +10,7 @@ provider 搜索失败时返回 [] (空结果), 最终由各域的合法代码直
 (_fallback_match, 经 symbols.parse 校验)。
 域隔离不变: 结果的权威 type 由 symbols.parse 推导, 不信任接口返回。
 """
+
 from __future__ import annotations
 
 from dataclasses import asdict
@@ -81,8 +82,11 @@ def resolve_symbol(query: str, *, limit: int = 1) -> list[dict]:
     # - 非 ASCII (中文名, parse 误判成美股; 东财 suggest 中文召回 0700.HK)
     #   搜索无果时才回退 parse 结果, 保留对真实存在的非常规代码的兼容
     if q.isdigit() or not q.isascii():
-        hits = [h for h in search_symbols(q, limit=max(limit, 5))
-                if not (h["code"].isdigit() and h["type"] == "global")]
+        hits = [
+            h
+            for h in search_symbols(q, limit=max(limit, 5))
+            if not (h["code"].isdigit() and h["type"] == "global")
+        ]
         if not hits:
             return _parse_pass(q, parse)
         if q.isdigit():
@@ -90,10 +94,12 @@ def resolve_symbol(query: str, *, limit: int = 1) -> list[dict]:
             # 同为精确命中取代码更短者 (0700.HK 优于 000700.SZ 的 000700),
             # 子串匹配 (600700.SS 等) 最后 —— 用户输 700 想要的是"那只股"
             digits = q.lstrip("0") or "0"
-            hits.sort(key=lambda h: (
-                0 if h["code"].split(".")[0].lstrip("0") == digits else 1,
-                len(h["code"].split(".")[0]),
-            ))
+            hits.sort(
+                key=lambda h: (
+                    0 if h["code"].split(".")[0].lstrip("0") == digits else 1,
+                    len(h["code"].split(".")[0]),
+                )
+            )
         return hits[:limit]
     try:
         p = parse(q)
@@ -113,11 +119,7 @@ def _parse_pass(q: str, parse) -> list[dict]:
         p = parse(q)
     except ValueError:
         return []
-    ok = (
-        "." in p.yahoo
-        or "-" in p.yahoo
-        or (p.yahoo.isascii() and p.yahoo.isalpha())
-    )
+    ok = "." in p.yahoo or "-" in p.yahoo or (p.yahoo.isascii() and p.yahoo.isalpha())
     if not ok:
         return []
     return [{"code": p.yahoo, "name": q, "market": p.market_label, "type": p.type}]
@@ -134,6 +136,6 @@ def _fallback_match(query: str, limit: int) -> list[dict]:
         p = parse(q)
     except ValueError:
         return []
-    return [
-        {"code": p.yahoo, "name": q, "market": p.market_label, "type": p.type}
-    ][:limit]
+    return [{"code": p.yahoo, "name": q, "market": p.market_label, "type": p.type}][
+        :limit
+    ]

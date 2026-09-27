@@ -1,4 +1,5 @@
 """本地磁盘缓存: 行情持久化到 SQLite, 避免重复网络请求."""
+
 from __future__ import annotations
 
 import json
@@ -54,7 +55,9 @@ def _ensure_db() -> None:
 # ---------- K线 (OHLC) 缓存 ----------
 
 
-def get_ohlc_cached(symbol: str, months: int, ttl: int = OHLC_TTL) -> pd.DataFrame | None:
+def get_ohlc_cached(
+    symbol: str, months: int, ttl: int = OHLC_TTL
+) -> pd.DataFrame | None:
     """读取缓存的日线 OHLC; 未命中 / 过期 / 载荷损坏返回 None."""
     _ensure_db()
     with sqlite3.connect(CACHE_DB) as con:
@@ -69,7 +72,11 @@ def get_ohlc_cached(symbol: str, months: int, ttl: int = OHLC_TTL) -> pd.DataFra
         if df.empty:
             return None
         df["date"] = pd.to_datetime(df["date"])
-        cols = [c for c in ("date", "open", "high", "low", "close", "volume") if c in df.columns]
+        cols = [
+            c
+            for c in ("date", "open", "high", "low", "close", "volume")
+            if c in df.columns
+        ]
         return df[cols]
     except Exception:
         return None
@@ -82,7 +89,11 @@ def set_ohlc_cached(symbol: str, months: int, df: pd.DataFrame) -> None:
     _ensure_db()
     recs = df.copy()
     recs["date"] = pd.to_datetime(recs["date"]).dt.strftime("%Y-%m-%d")
-    cols = [c for c in ("date", "open", "high", "low", "close", "volume") if c in recs.columns]
+    cols = [
+        c
+        for c in ("date", "open", "high", "low", "close", "volume")
+        if c in recs.columns
+    ]
     payload = json.dumps(recs[cols].to_dict(orient="records"))
     with _lock, sqlite3.connect(CACHE_DB) as con:
         con.execute(
@@ -110,13 +121,15 @@ def get_cached(symbols: list[str], ttl: int = CACHE_TTL) -> dict[str, "Quote"]:
     with sqlite3.connect(CACHE_DB) as con:
         rows = con.execute(
             f"SELECT symbol, name, price, prev_close, change_pct, currency FROM quotes "
-            f"WHERE symbol IN ({','.join('?'*len(symbols))}) AND fetched_at > ?",
+            f"WHERE symbol IN ({','.join('?' * len(symbols))}) AND fetched_at > ?",
             [*symbols, now - ttl],
         ).fetchall()
         for sym, name, price, prev, chg, ccy in rows:
             if price is not None and price > 0:
                 hits[sym] = Quote(
-                    symbol=sym, name=name, price=price,
+                    symbol=sym,
+                    name=name,
+                    price=price,
                     prev_close=float(prev) if prev is not None else None,
                     change_pct=float(chg) if chg is not None else None,
                     currency=str(ccy),
@@ -134,7 +147,9 @@ def set_cached(quotes: dict[str, "Quote"]) -> None:
     for q in quotes.values():
         if q.price is None or q.price <= 0:
             continue
-        rows.append((q.symbol, q.name, q.price, q.prev_close, q.change_pct, q.currency, now))
+        rows.append(
+            (q.symbol, q.name, q.price, q.prev_close, q.change_pct, q.currency, now)
+        )
     with _lock, sqlite3.connect(CACHE_DB) as con:
         con.executemany(
             """
@@ -190,4 +205,3 @@ def clear() -> int:
         n_ohlc = con.execute("DELETE FROM ohlc_cache").rowcount
         con.commit()
         return n_quotes + n_ohlc
-

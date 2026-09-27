@@ -4,4 +4,5 @@
 页面模块间用相对导入; app.py 是 streamlit 以裸脚本执行的入口,
 在其中做仓库根 sys.path 引导后使用绝对导入。
 """
+
 from . import settings  # noqa: F401 - 供 `from tracker.ui import settings` 使用

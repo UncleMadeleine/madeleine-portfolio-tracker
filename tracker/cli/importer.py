@@ -7,6 +7,7 @@
 
 三个来源共用: --overwrite 覆盖(默认追加合并) / --dry-run / --portfolio / --json.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -61,7 +62,9 @@ def cmd_import(args: argparse.Namespace) -> None:
     """import <来源> 统一入口: 采集 → 预览 → 按模式写入 portfolio.json."""
     rows, skipped, label = _collect(args)
     mode = importer.MODE_OVERWRITE if args.overwrite else importer.MODE_APPEND
-    result = importer.apply_import(rows, args.portfolio, mode=mode, dry_run=args.dry_run)
+    result = importer.apply_import(
+        rows, args.portfolio, mode=mode, dry_run=args.dry_run
+    )
 
     if args.json:
         _print_json(

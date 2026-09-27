@@ -1,4 +1,5 @@
 """行情路由离线测试: 加密货币与股票混查时的分流与降级 (provider 层)."""
+
 import types
 
 import pandas as pd
@@ -11,8 +12,14 @@ from tracker.symbols import Market, parse
 
 
 def _q(sym, price, ccy="USD", name=None):
-    return Quote(symbol=sym, name=name or sym, price=price, prev_close=price,
-                 change_pct=0.0, currency=ccy)
+    return Quote(
+        symbol=sym,
+        name=name or sym,
+        price=price,
+        prev_close=price,
+        change_pct=0.0,
+        currency=ccy,
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -20,8 +27,10 @@ def _isolate_cache(monkeypatch, tmp_path):
     """每个测试用临时 DB 隔离, 并清掉 get_quotes 的缓存命中路径."""
     monkeypatch.setattr("tracker.cache.CACHE_DB", tmp_path / "test_quotes_cache.db")
     import tracker.cache as cache_mod
+
     cache_mod._ensure_db()
     import tracker.providers.orchestration as orch
+
     monkeypatch.setattr(orch.cache_mod, "get_cached", lambda syms, ttl=300: {})
     monkeypatch.setattr(orch.cache_mod, "set_cached", lambda q: None)
 
@@ -217,7 +226,10 @@ def test_binance_history_shape(monkeypatch):
 def _fake_hl_ctx(coin="BTC", mark="61000.5", prev="60000.0"):
     """构造 HL metaAndAssetCtxs 假响应: [{"universe": [...]}, [ctx, ...]]."""
     universe = {"universe": [{"name": coin}, {"name": "ETH"}]}
-    ctxs = [{"markPx": mark, "prevDayPx": prev}, {"markPx": "2400.0", "prevDayPx": "2350.0"}]
+    ctxs = [
+        {"markPx": mark, "prevDayPx": prev},
+        {"markPx": "2400.0", "prevDayPx": "2350.0"},
+    ]
     return [universe, ctxs]
 
 
@@ -254,8 +266,22 @@ def test_hl_quote_non_usd_quote_skips(monkeypatch):
 def test_hl_history_shape(monkeypatch):
     """HL candleSnapshot → 标准列名升序 DataFrame."""
     bars = [
-        {"t": 1788912000000, "o": "78455.8", "h": "79760.0", "l": "77770.0", "c": "78306.43", "v": "14129.92"},
-        {"t": 1788998400000, "o": "78306.43", "h": "78564.39", "l": "76464.0", "c": "76568.72", "v": "15320.37"},
+        {
+            "t": 1788912000000,
+            "o": "78455.8",
+            "h": "79760.0",
+            "l": "77770.0",
+            "c": "78306.43",
+            "v": "14129.92",
+        },
+        {
+            "t": 1788998400000,
+            "o": "78306.43",
+            "h": "78564.39",
+            "l": "76464.0",
+            "c": "76568.72",
+            "v": "15320.37",
+        },
     ]
     monkeypatch.setattr(crypto_mod, "_hl_post", lambda payload: bars)
 
@@ -268,7 +294,6 @@ def test_hl_history_shape(monkeypatch):
 
 def test_crypto_quote_falls_back_to_hyperliquid(monkeypatch):
     """Binance 失败 → HL 接管; 记录的 errors 为空."""
-    import tracker.providers.orchestration as orch
 
     def failing_binance(p):
         raise RuntimeError("Binance API 不可达")
@@ -283,13 +308,16 @@ def test_crypto_quote_falls_back_to_hyperliquid(monkeypatch):
 
 def test_crypto_yf_history_fallback_does_not_nameerror(monkeypatch):
     """yfinance 历史降级: _obb 必须已定义 (缺失会让整条降级链 NameError 崩溃)."""
+
     class FakeRes:
         def to_dataframe(self):
             return pd.DataFrame(
                 {
                     "date": pd.to_datetime(["2026-01-01", "2026-01-02"]),
-                    "open": [1.0, 2.0], "high": [1.0, 2.0],
-                    "low": [1.0, 2.0], "close": [1.0, 2.0],
+                    "open": [1.0, 2.0],
+                    "high": [1.0, 2.0],
+                    "low": [1.0, 2.0],
+                    "close": [1.0, 2.0],
                     "volume": [10.0, 20.0],
                 }
             ).set_index("date")

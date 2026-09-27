@@ -3,6 +3,7 @@
 代码规范: .SS (沪) / .SZ (深) / .BJ (北交所); B 股 (900xxx.SS / 200xxx.SZ)
 同属本域, 数据源与 A 股一致。与全球股票域靠后缀严格区分。
 """
+
 from __future__ import annotations
 
 from ..symbols import Market, ParsedSymbol
@@ -13,7 +14,12 @@ from .em_suggest import (
     parse_symbol_safe,
     suggest_merged,
 )
-from .global_stocks import _akshare_history, _akshare_quote, _yahoo_history, _yahoo_quote
+from .global_stocks import (
+    _akshare_history,
+    _akshare_quote,
+    _yahoo_history,
+    _yahoo_quote,
+)
 
 
 class CNStocksProvider(Provider):
@@ -25,7 +31,13 @@ class CNStocksProvider(Provider):
         # 本域 akshare 永远在前 (prefer_first 仅影响全球域的港股顺序)
         return [_akshare_quote, _yahoo_quote]
 
-    def history_sources(self, p: ParsedSymbol, start_date: str, end_date: str | None, prefer_first: bool = False) -> list:
+    def history_sources(
+        self,
+        p: ParsedSymbol,
+        start_date: str,
+        end_date: str | None,
+        prefer_first: bool = False,
+    ) -> list:
         return [
             lambda: _akshare_history(p, start_date, end_date),
             lambda: _yahoo_history(p, start_date, end_date),

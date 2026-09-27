@@ -1,4 +1,5 @@
 """A股券商持仓文件导入测试 (纯离线, 不联网)."""
+
 import pytest
 
 from tracker.ashare_sync import code_to_yahoo, parse_positions_file

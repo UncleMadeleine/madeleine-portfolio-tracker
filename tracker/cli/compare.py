@@ -1,4 +1,5 @@
 """compare 子命令: 多股走势对比 (归一化折线, --json 输出序列 / HTML 输出图表)."""
+
 from __future__ import annotations
 
 import sys
@@ -55,14 +56,21 @@ def cmd_compare(args) -> None:
         _finish_with_error("至少需要 2 个代码, 如: tracker compare AAPL 0700.HK")
     codes, warnings = resolve_inputs(args.symbols)
     for w in warnings:
-        print(f"⚠ {w}", file=sys.stderr)  # 诊断信息走 stderr, 保证 --json 的 stdout 纯净
+        print(
+            f"⚠ {w}", file=sys.stderr
+        )  # 诊断信息走 stderr, 保证 --json 的 stdout 纯净
     if len(codes) < 2:
         _finish_with_error("有效代码不足 2 个, 无法对比")
     frames: dict[str, object] = {}
     for code in codes:
         try:
-            df = prices.get_ohlc(code, months=args.months, prefer_akshare=args.akshare,
-                                 use_longport=getattr(args, "longport", False))
+            df = prices.get_ohlc(
+                code,
+                months=args.months,
+                prefer_akshare=args.akshare,
+                use_ibkr=getattr(args, "ibkr", False),
+                use_longport=getattr(args, "longport", False),
+            )
             if df is None or df.empty:
                 print(f"⚠ {code}: 无有效K线数据, 已跳过", file=sys.stderr)
             else:
@@ -112,7 +120,10 @@ def cmd_compare(args) -> None:
             y = y / y.iloc[0] * 100
         fig.add_trace(
             go.Scatter(
-                x=d["date"], y=y, mode="lines", name=code,
+                x=d["date"],
+                y=y,
+                mode="lines",
+                name=code,
                 line=dict(color=palette[i % len(palette)], width=1.8, shape="spline"),
                 hovertemplate="%{y:.2f}<extra>" + code + " %{x|%Y-%m-%d}</extra>",
             )
@@ -122,9 +133,14 @@ def cmd_compare(args) -> None:
         + ("" if args.raw else " (起点=100)"),
         template="plotly_white",
         yaxis_title="收盘价 (各代码原币种)" if args.raw else "归一化 (起点=100)",
-        hovermode="x unified", height=560,
+        hovermode="x unified",
+        height=560,
     )
-    out = Path(args.output) if args.output else VAR_DIR / f"compare_{'-'.join(c[:6] for c in codes)}.html"
+    out = (
+        Path(args.output)
+        if args.output
+        else VAR_DIR / f"compare_{'-'.join(c[:6] for c in codes)}.html"
+    )
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(charting.fig_to_html(fig), encoding="utf-8")
     # 终端摘要: 区间涨跌

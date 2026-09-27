@@ -1,9 +1,9 @@
 """链上钱包余额查询测试 (全部 RPC 调用 mock, 无需网络)."""
+
 from __future__ import annotations
 
 import json
 import re
-from pathlib import Path
 
 import pytest
 
@@ -14,12 +14,16 @@ from tracker import wallet as wallet_mod
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_fake_requests(responses: list[dict] | None = None, always_error: bool = False):
+
+def _make_fake_requests(
+    responses: list[dict] | None = None, always_error: bool = False
+):
     """构造假的 requests 模块.
 
     responses: 从列表中按顺序返回 (每个 RPC 调用消耗一个).
     always_error: 全部抛 ConnectionError.
     """
+
     class FakeResp:
         def __init__(self, result):
             self._result = result
@@ -63,13 +67,18 @@ def _per_call_responses(call_results: list[dict]):
 # Address validation
 # ---------------------------------------------------------------------------
 
+
 class TestValidateAddress:
     def test_valid_lowercase(self):
-        addr = wallet_mod._validate_address("0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", "eth")
+        addr = wallet_mod._validate_address(
+            "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", "eth"
+        )
         assert addr == "0xd8da6bf26964af9d7eed9e03e53415d37aa96045"
 
     def test_valid_uppercase(self):
-        addr = wallet_mod._validate_address("0xD8DA6BF26964AF9D7EED9E03E53415D37AA96045", "eth")
+        addr = wallet_mod._validate_address(
+            "0xD8DA6BF26964AF9D7EED9E03E53415D37AA96045", "eth"
+        )
         assert addr == "0xd8da6bf26964af9d7eed9e03e53415d37aa96045"
 
     def test_invalid_prefix(self):
@@ -82,7 +91,9 @@ class TestValidateAddress:
 
     def test_unsupported_chain(self):
         with pytest.raises(ValueError, match="不支持的链"):
-            wallet_mod._validate_address("0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", "solana")
+            wallet_mod._validate_address(
+                "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", "solana"
+            )
 
     def test_mixed_case_normalized(self):
         addr = "0xd8Da6Bf26964aF9D7eeD9e03E53415D37aA96045"
@@ -93,6 +104,7 @@ class TestValidateAddress:
 # ---------------------------------------------------------------------------
 # _SUPPORTED_CHAINS 完整性
 # ---------------------------------------------------------------------------
+
 
 class TestSupportedChains:
     def test_all_chains_in_config(self):
@@ -113,12 +125,16 @@ class TestSupportedChains:
         for chain, cfg in wallet_mod._CHAIN_CONFIG.items():
             tl_key = cfg.get("tokenlist")
             if tl_key:
-                assert tl_key in wallet_mod._BUILTIN_TOKENLIST, f"chain {chain} tokenlist key '{tl_key}' not found"
+                assert tl_key in wallet_mod._BUILTIN_TOKENLIST, (
+                    f"chain {chain} tokenlist key '{tl_key}' not found"
+                )
 
     def test_tokenlist_addresses_well_formed(self):
         for chain, tokens in wallet_mod._BUILTIN_TOKENLIST.items():
             for contract, info in tokens.items():
-                assert re.fullmatch(r"0x[0-9a-fA-F]{40}", contract), f"{chain} {contract}"
+                assert re.fullmatch(r"0x[0-9a-fA-F]{40}", contract), (
+                    f"{chain} {contract}"
+                )
                 assert info["decimals"] >= 0, f"{chain} {contract}"
 
     def test_tokenlist_symbols_are_valid_crypto_bases(self):
@@ -137,28 +153,35 @@ class TestSupportedChains:
 # _native_balance
 # ---------------------------------------------------------------------------
 
+
 class TestNativeBalance:
     def test_returns_none_for_zero(self, monkeypatch):
         monkeypatch.setattr(
-            wallet_mod, "_requests",
+            wallet_mod,
+            "_requests",
             lambda: _always_zero_requests(),
         )
         result = wallet_mod._native_balance(
-            "0xd8da6bf26964af9d7eed9e03e53415d37aaa96045", "eth",
-            wallet_mod._CHAIN_CONFIG["eth"], 10.0,
+            "0xd8da6bf26964af9d7eed9e03e53415d37aaa96045",
+            "eth",
+            wallet_mod._CHAIN_CONFIG["eth"],
+            10.0,
         )
         assert result is None
 
     def test_returns_balance_for_positive(self, monkeypatch):
         # 1 ETH = 1e18 wei
-        one_eth_wei = hex(10 ** 18)
+        one_eth_wei = hex(10**18)
         monkeypatch.setattr(
-            wallet_mod, "_requests",
+            wallet_mod,
+            "_requests",
             lambda: _make_fake_requests([{"result": one_eth_wei}]),
         )
         result = wallet_mod._native_balance(
-            "0xd8da6bf26964af9d7eed9e03e53415d37aaa96045", "eth",
-            wallet_mod._CHAIN_CONFIG["eth"], 10.0,
+            "0xd8da6bf26964af9d7eed9e03e53415d37aaa96045",
+            "eth",
+            wallet_mod._CHAIN_CONFIG["eth"],
+            10.0,
         )
         assert result is not None
         assert result["symbol"] == "ETH"
@@ -168,38 +191,47 @@ class TestNativeBalance:
 
     def test_fractional_amount(self, monkeypatch):
         # 0.5 ETH = 0.5e18 wei
-        half_eth = hex(int(0.5 * 10 ** 18))
+        half_eth = hex(int(0.5 * 10**18))
         monkeypatch.setattr(
-            wallet_mod, "_requests",
+            wallet_mod,
+            "_requests",
             lambda: _make_fake_requests([{"result": half_eth}]),
         )
         result = wallet_mod._native_balance(
-            "0xd8da6bf26964af9d7eed9e03e53415d37aaa96045", "eth",
-            wallet_mod._CHAIN_CONFIG["eth"], 10.0,
+            "0xd8da6bf26964af9d7eed9e03e53415d37aaa96045",
+            "eth",
+            wallet_mod._CHAIN_CONFIG["eth"],
+            10.0,
         )
         assert result is not None
         assert result["amount"] == pytest.approx(0.5)
 
     def test_all_hosts_fail_raises(self, monkeypatch):
         monkeypatch.setattr(
-            wallet_mod, "_requests",
+            wallet_mod,
+            "_requests",
             lambda: _make_fake_requests(always_error=True),
         )
         with pytest.raises(RuntimeError, match="全部 RPC 节点不可达"):
             wallet_mod._native_balance(
-                "0xd8da6bf26964af9d7eed9e03e53415d37aaa96045", "eth",
-                wallet_mod._CHAIN_CONFIG["eth"], 2.0,
+                "0xd8da6bf26964af9d7eed9e03e53415d37aaa96045",
+                "eth",
+                wallet_mod._CHAIN_CONFIG["eth"],
+                2.0,
             )
 
     def test_bsc_native_balance(self, monkeypatch):
-        one_bnb = hex(10 ** 18)
+        one_bnb = hex(10**18)
         monkeypatch.setattr(
-            wallet_mod, "_requests",
+            wallet_mod,
+            "_requests",
             lambda: _make_fake_requests([{"result": one_bnb}]),
         )
         result = wallet_mod._native_balance(
-            "0xd8da6bf26964af9d7eed9e03e53415d37aaa96045", "bsc",
-            wallet_mod._CHAIN_CONFIG["bsc"], 10.0,
+            "0xd8da6bf26964af9d7eed9e03e53415d37aaa96045",
+            "bsc",
+            wallet_mod._CHAIN_CONFIG["bsc"],
+            10.0,
         )
         assert result is not None
         assert result["symbol"] == "BNB"
@@ -210,18 +242,22 @@ class TestNativeBalance:
 # _erc20_balance
 # ---------------------------------------------------------------------------
 
+
 class TestERC20Balance:
     USDT_CONTRACT = "0xdac17f958d2ee523a2206206994597c13d831ec7"
 
     def test_returns_none_for_zero(self, monkeypatch):
         monkeypatch.setattr(
-            wallet_mod, "_requests",
+            wallet_mod,
+            "_requests",
             lambda: _always_zero_requests(),
         )
         result = wallet_mod._erc20_balance(
             "0xd8da6bf26964af9d7eed9e03e53415d37aaa96045",
             self.USDT_CONTRACT,
-            "eth", 6, 10.0,
+            "eth",
+            6,
+            10.0,
         )
         assert result is None
 
@@ -229,13 +265,16 @@ class TestERC20Balance:
         # 100 USDT = 100 * 1e6 = 100000000
         raw = hex(100_000_000)
         monkeypatch.setattr(
-            wallet_mod, "_requests",
+            wallet_mod,
+            "_requests",
             lambda: _make_fake_requests([{"result": raw}]),
         )
         result = wallet_mod._erc20_balance(
             "0xd8da6bf26964af9d7eed9e03e53415d37aaa96045",
             self.USDT_CONTRACT,
-            "eth", 6, 10.0,
+            "eth",
+            6,
+            10.0,
         )
         assert result is not None
         assert result["amount"] == pytest.approx(100.0)
@@ -244,53 +283,68 @@ class TestERC20Balance:
 
     def test_decimals_applied(self, monkeypatch):
         # 1 WBTC = 1 * 1e8
-        raw = hex(10 ** 8)
+        raw = hex(10**8)
         monkeypatch.setattr(
-            wallet_mod, "_requests",
+            wallet_mod,
+            "_requests",
             lambda: _make_fake_requests([{"result": raw}]),
         )
         result = wallet_mod._erc20_balance(
             "0xd8da6bf26964af9d7eed9e03e53415d37aaa96045",
             "0x2260fac5e5542a773aa44fbfcedf7c193bc2c599",
-            "eth", 8, 10.0,
+            "eth",
+            8,
+            10.0,
         )
         assert result is not None
         assert result["amount"] == pytest.approx(1.0)
 
     def test_all_hosts_fail_raises(self, monkeypatch):
         monkeypatch.setattr(
-            wallet_mod, "_requests",
+            wallet_mod,
+            "_requests",
             lambda: _make_fake_requests(always_error=True),
         )
         with pytest.raises(RuntimeError, match="全部 RPC 节点不可达"):
             wallet_mod._erc20_balance(
                 "0xd8da6bf26964af9d7eed9e03e53415d37aaa96045",
                 self.USDT_CONTRACT,
-                "eth", 6, 2.0,
+                "eth",
+                6,
+                2.0,
             )
 
-    @pytest.mark.parametrize("payload", [{"result": "not-hex"}, {"result": None}, {"result": ""}])
+    @pytest.mark.parametrize(
+        "payload", [{"result": "not-hex"}, {"result": None}, {"result": ""}]
+    )
     def test_malformed_result_returns_none(self, monkeypatch, payload):
         """节点返回非 hex / 空载荷时按无余额处理, 不得抛 ValueError 给调用方."""
         monkeypatch.setattr(
-            wallet_mod, "_requests",
+            wallet_mod,
+            "_requests",
             lambda: _make_fake_requests([payload]),
         )
-        assert wallet_mod._erc20_balance(
-            "0xd8da6bf26964af9d7eed9e03e53415d37aaa96045",
-            self.USDT_CONTRACT,
-            "eth", 6, 10.0,
-        ) is None
+        assert (
+            wallet_mod._erc20_balance(
+                "0xd8da6bf26964af9d7eed9e03e53415d37aaa96045",
+                self.USDT_CONTRACT,
+                "eth",
+                6,
+                10.0,
+            )
+            is None
+        )
 
 
 # ---------------------------------------------------------------------------
 # import_wallet integration
 # ---------------------------------------------------------------------------
 
+
 class TestImportWallet:
     def test_returns_holdings_with_native_and_token(self, monkeypatch):
         """同时有主币和 ERC-20 时, holdings 都包含且符号正确."""
-        responses = [hex(10 ** 18), hex(100_000_000)]
+        responses = [hex(10**18), hex(100_000_000)]
         idx = [0]
 
         def fake_try_rpc_hosts(hosts, payload, timeout):
@@ -314,7 +368,8 @@ class TestImportWallet:
 
     def test_skips_zero_balances(self, monkeypatch):
         monkeypatch.setattr(
-            wallet_mod, "_try_rpc_hosts",
+            wallet_mod,
+            "_try_rpc_hosts",
             lambda hosts, payload, timeout: "0x0",
         )
         result = wallet_mod.import_wallet(
@@ -326,7 +381,8 @@ class TestImportWallet:
     def test_malformed_payload_does_not_abort_import(self, monkeypatch):
         """节点返回非 hex 载荷时跳过该代币, 整个导入不得崩掉 (曾抛 ValueError 逃出 except)."""
         monkeypatch.setattr(
-            wallet_mod, "_try_rpc_hosts",
+            wallet_mod,
+            "_try_rpc_hosts",
             lambda hosts, payload, timeout: "not-hex",
         )
         result = wallet_mod.import_wallet(
@@ -338,7 +394,9 @@ class TestImportWallet:
 
     def test_unsupported_chain_raises(self):
         with pytest.raises(ValueError, match="不支持的链"):
-            wallet_mod.import_wallet("solana", "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045")
+            wallet_mod.import_wallet(
+                "solana", "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
+            )
 
     def test_invalid_address_raises(self):
         with pytest.raises(ValueError, match="地址格式无效"):
@@ -369,13 +427,18 @@ class TestImportWallet:
 
         def fake_erc20(address, contract, chain, decimals, timeout):
             return {
-                "amount": 42.0, "symbol": "USDT", "contract": contract,
-                "chain": "eth", "source": "erc20",
+                "amount": 42.0,
+                "symbol": "USDT",
+                "contract": contract,
+                "chain": "eth",
+                "source": "erc20",
             }
 
         monkeypatch.setattr(wallet_mod, "_native_balance", fake_native)
         monkeypatch.setattr(wallet_mod, "_erc20_balance", fake_erc20)
-        result = wallet_mod.import_wallet("eth", "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045")
+        result = wallet_mod.import_wallet(
+            "eth", "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
+        )
         erc20s = [h for h in result["holdings"] if h["source"] == "erc20"]
         assert len(erc20s) >= 1
         assert erc20s[0]["contract"] is not None
@@ -383,8 +446,9 @@ class TestImportWallet:
 
     def test_bsc_chain_works(self, monkeypatch):
         monkeypatch.setattr(
-            wallet_mod, "_try_rpc_hosts",
-            lambda hosts, payload, timeout: hex(10 ** 18),
+            wallet_mod,
+            "_try_rpc_hosts",
+            lambda hosts, payload, timeout: hex(10**18),
         )
         result = wallet_mod.import_wallet(
             "bsc",
@@ -399,7 +463,8 @@ class TestImportWallet:
         custom = {
             "eth": {
                 "0xAbC1234567890aBcdef1234567890aBcDeF12345": {
-                    "symbol": "CUSTOM", "decimals": 18
+                    "symbol": "CUSTOM",
+                    "decimals": 18,
                 }
             }
         }
@@ -411,7 +476,12 @@ class TestImportWallet:
 
         def fake_erc20(address, contract, chain, decimals, timeout):
             if contract.lower() == "0xabc1234567890abcdef1234567890abcdef12345":
-                return {"amount": 42.0, "symbol": "CUSTOM", "contract": contract, "chain": "eth"}
+                return {
+                    "amount": 42.0,
+                    "symbol": "CUSTOM",
+                    "contract": contract,
+                    "chain": "eth",
+                }
             return None
 
         monkeypatch.setattr(wallet_mod, "_native_balance", fake_native)
@@ -428,8 +498,9 @@ class TestImportWallet:
 
     def test_polygon_chain(self, monkeypatch):
         monkeypatch.setattr(
-            wallet_mod, "_try_rpc_hosts",
-            lambda hosts, payload, timeout: hex(10 ** 18),
+            wallet_mod,
+            "_try_rpc_hosts",
+            lambda hosts, payload, timeout: hex(10**18),
         )
         result = wallet_mod.import_wallet(
             "polygon",
@@ -443,6 +514,7 @@ class TestImportWallet:
 # ---------------------------------------------------------------------------
 # _load_tokenlist
 # ---------------------------------------------------------------------------
+
 
 class TestLoadTokenlist:
     def test_builtin_has_eth_key(self):
@@ -459,7 +531,14 @@ class TestLoadTokenlist:
         assert "0xabcd" in tl["bsc"]
 
     def test_external_file_normalizes_keys_lower(self, monkeypatch, tmp_path):
-        custom = {"eth": {"0xDAC17F958D2ee523a2206206994597C13D831ec7": {"symbol": "USDT", "decimals": 6}}}
+        custom = {
+            "eth": {
+                "0xDAC17F958D2ee523a2206206994597C13D831ec7": {
+                    "symbol": "USDT",
+                    "decimals": 6,
+                }
+            }
+        }
         p = tmp_path / "tl.json"
         p.write_text(json.dumps(custom), encoding="utf-8")
         tl = wallet_mod._load_tokenlist(str(p))
@@ -467,7 +546,14 @@ class TestLoadTokenlist:
 
     def test_external_file_normalizes_chain_key_lower(self, tmp_path):
         """链名大小写不敏感: 外部文件写 "ETH" 也要能被 chain.lower() 查到."""
-        custom = {"ETH": {"0xdac17f958d2ee523a2206206994597c13d831ec7": {"symbol": "USDT", "decimals": 6}}}
+        custom = {
+            "ETH": {
+                "0xdac17f958d2ee523a2206206994597c13d831ec7": {
+                    "symbol": "USDT",
+                    "decimals": 6,
+                }
+            }
+        }
         p = tmp_path / "tl.json"
         p.write_text(json.dumps(custom), encoding="utf-8")
         tl = wallet_mod._load_tokenlist(str(p))
@@ -482,6 +568,7 @@ class TestLoadTokenlist:
 # ---------------------------------------------------------------------------
 # _symbol_for_token
 # ---------------------------------------------------------------------------
+
 
 class TestSymbolForToken:
     def test_default_usd(self):

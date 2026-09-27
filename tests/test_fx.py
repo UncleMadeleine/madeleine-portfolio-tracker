@@ -28,7 +28,8 @@ def test_cfets_table_skips_nan(monkeypatch):
     )
 
     class FakeAk:
-        fx_spot_quote = lambda self, **kw: df
+        def fx_spot_quote(self, **kw):
+            return df
 
     import sys
 
@@ -51,7 +52,8 @@ def test_cfets_table_skips_zero_mid(monkeypatch):
     )
 
     class FakeAk:
-        fx_spot_quote = lambda self, **kw: df
+        def fx_spot_quote(self, **kw):
+            return df
 
     import sys
 
@@ -63,7 +65,9 @@ def test_cfets_table_skips_zero_mid(monkeypatch):
 
 def test_cfets_zero_rate_degrades_to_yahoo(monkeypatch):
     """CFETS 表里出现 0 汇率时降级到 yahoo 兜底, 不抛 ZeroDivisionError."""
-    monkeypatch.setattr(fx, "_cfets_table", lambda: {"CNY": 1.0, "USD": 6.71, "EUR": 0.0})
+    monkeypatch.setattr(
+        fx, "_cfets_table", lambda: {"CNY": 1.0, "USD": 6.71, "EUR": 0.0}
+    )
     monkeypatch.setattr(fx, "_pair_rate", lambda a, b: 7.5)
     assert fx.get_rate("USD", "EUR") == 7.5
 
@@ -113,7 +117,8 @@ def test_cfets_table_parsing(monkeypatch):
     )
 
     class FakeAk:
-        fx_spot_quote = lambda self, **kw: df
+        def fx_spot_quote(self, **kw):
+            return df
 
     import sys
 
@@ -127,7 +132,9 @@ def test_cfets_table_parsing(monkeypatch):
 
 def test_cfets_cross_rate(monkeypatch):
     monkeypatch.setattr(fx, "_cfets_cache", (0.0, {}))
-    monkeypatch.setattr(fx, "_cfets_table", lambda: {"CNY": 1.0, "USD": 6.71, "HKD": 0.855})
+    monkeypatch.setattr(
+        fx, "_cfets_table", lambda: {"CNY": 1.0, "USD": 6.71, "HKD": 0.855}
+    )
     assert abs(fx.get_rate("HKD", "USD") - 0.855 / 6.71) < 1e-9
     assert abs(fx.get_rate("USD", "HKD") - 6.71 / 0.855) < 1e-9
 

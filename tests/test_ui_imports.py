@@ -4,6 +4,7 @@
 在启动时 ImportError 直接白屏 —— 这里静态校验每个 `from tracker.* import X`
 的 X 都真实存在 (不导入 app.py 本身, 避免执行整页脚本).
 """
+
 from __future__ import annotations
 
 import ast

@@ -10,7 +10,8 @@
 
 from __future__ import annotations
 
-from .base import Provider, Quote
+from .base import Provider
+from .base import Quote as Quote
 from .crypto import CryptoProvider
 from .global_stocks import GlobalStocksProvider
 from .cn_stocks import CNStocksProvider

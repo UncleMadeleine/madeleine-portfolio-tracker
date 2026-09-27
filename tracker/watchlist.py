@@ -4,6 +4,7 @@
 services/rules.py); 本模块仅保留 load/save 与条目归一 (storage 委托),
 保证旧导入路径兼容。
 """
+
 from __future__ import annotations
 
 from .storage import (

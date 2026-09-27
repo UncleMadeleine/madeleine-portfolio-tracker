@@ -3,6 +3,7 @@
 无任何 I/O: 输入归一化阈值与现价, 输出状态与距离百分比,
 便于离线单测, 由 services.watchlist 组装视图时调用。
 """
+
 from __future__ import annotations
 
 import math
@@ -14,12 +15,13 @@ STATUS_LOWER_1 = "🟡 跌破下限 I"
 STATUS_LOWER_2 = "🟢 跌破下限 II"
 STATUS_WITHIN = "⚪ 区间内"
 
-# 严重度排序: II 级突破 > I 级突破 > 跌破 I > 跌破 II > 区间内
+# 严重度排序 (与 evaluate_thresholds 判定顺序一致: II > I, 深跌破 > 浅跌破):
+# 上限 II > 上限 I > 下限 II > 下限 I > 区间内
 STATUS_RANK = {
     STATUS_UPPER_2: 1,
     STATUS_UPPER_1: 2,
-    STATUS_LOWER_1: 3,
-    STATUS_LOWER_2: 4,
+    STATUS_LOWER_2: 3,
+    STATUS_LOWER_1: 4,
     STATUS_WITHIN: 5,
 }
 

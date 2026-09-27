@@ -4,6 +4,7 @@
 与 A 股域的批量行情前置; 指数域无实时行情, 直接记 errors) → 汇总 quotes/errors/notes。
 任一域失败不影响其它域。
 """
+
 from __future__ import annotations
 
 import pandas as pd
@@ -13,7 +14,7 @@ from ..symbols import ParsedSymbol, parse as _parse_symbol
 from .base import Quote, resolve
 from .crypto import CryptoProvider
 from .cn_stocks import CNStocksProvider
-from .global_stocks import GlobalStocksProvider, _akshare_quote, _yahoo_batch, _yahoo_history
+from .global_stocks import _yahoo_batch
 from .index import IndexProvider
 
 __all__ = ["get_quotes", "get_history"]
@@ -37,7 +38,10 @@ def _route_provider(p: ParsedSymbol):
 
 
 def get_quotes(
-    symbols, prefer_akshare: bool = False, use_ibkr: bool = False, use_longport: bool = False
+    symbols,
+    prefer_akshare: bool = False,
+    use_ibkr: bool = False,
+    use_longport: bool = False,
 ) -> tuple[dict[str, Quote], dict[str, str], list[str]]:
     """多代码实时行情: 缓存 → 长桥/IBKR 批量 (可选, IBKR 优先) → 按域 provider 取数 → 回写缓存."""
     quotes: dict[str, Quote] = {}
@@ -81,7 +85,9 @@ def get_quotes(
         provider = _route_provider(p)
         if isinstance(provider, IndexProvider):
             # 指数域无实时行情 (仅历史K线): 显式记入 errors, 不进全球/股票源链
-            errors.setdefault(p.yahoo, f"{p.yahoo}: 指数域仅提供历史K线 (index-kline), 无实时行情")
+            errors.setdefault(
+                p.yahoo, f"{p.yahoo}: 指数域仅提供历史K线 (index-kline), 无实时行情"
+            )
             continue
         if isinstance(provider, CryptoProvider):
             groups.setdefault("crypto", []).append(p)
@@ -98,16 +104,16 @@ def get_quotes(
 
     # 各域逐个走 provider 源链 (批量未命中的全球股 / 全部 CN / 全部 crypto)
     for domain, plist in groups.items():
-        provider = resolve(
-            {"global": "GLOBAL", "cn": "CN", "crypto": "CRYPTO"}[domain]
-        )
+        provider = resolve({"global": "GLOBAL", "cn": "CN", "crypto": "CRYPTO"}[domain])
         for p in plist:
             if p.yahoo in quotes:
                 continue
             try:
                 if domain == "global":
                     # 批量已尝试 yfinance: 这里走完整源链 (港股 akshare 兜底)
-                    quotes[p.yahoo] = provider.fetch_quote(p, prefer_first=prefer_akshare)
+                    quotes[p.yahoo] = provider.fetch_quote(
+                        p, prefer_first=prefer_akshare
+                    )
                 else:
                     quotes[p.yahoo] = provider.fetch_quote(p)
             except Exception as e:  # noqa: BLE001 - 单代码失败记录 errors
@@ -116,8 +122,7 @@ def get_quotes(
     # 只回写本次真正取到的新鲜行情 (IBKR/akshare/yahoo), 缓存命中项不重写,
     # 否则 set_cached 会刷新其 fetched_at, TTL 被无限延长
     fresh = {
-        sym: q for sym, q in quotes.items()
-        if sym in by_yahoo and sym not in cached
+        sym: q for sym, q in quotes.items() if sym in by_yahoo and sym not in cached
     }
     cache_mod.set_cached(fresh)
     return quotes, errors, notes
@@ -144,7 +149,9 @@ def get_history(
         try:
             from .. import ibkr as ibkr_mod
 
-            ib_hist, reason = ibkr_mod.get_history_ibkr([p], months)
+            ib_hist, reason = ibkr_mod.get_history_ibkr(
+                [p], months, start_date=start_date, end_date=end_date
+            )
             if p.yahoo in ib_hist:
                 return ib_hist[p.yahoo]
             if reason:

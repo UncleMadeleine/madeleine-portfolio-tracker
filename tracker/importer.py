@@ -17,12 +17,18 @@ base_currency 与其它自定义键 (如 _说明)。
 CLI (tracker import <来源>) 与 Streamlit「导入」页共用本模块;
 tracker.ibkr_sync / tracker.ashare_sync 的 run_sync 为兼容入口.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
 
-from .storage import PORTFOLIO_PATH as DEFAULT_PORTFOLIO, backup_file, load_portfolio, save_portfolio
+from .storage import (
+    PORTFOLIO_PATH as DEFAULT_PORTFOLIO,
+    backup_file,
+    load_portfolio,
+    save_portfolio,
+)
 from .symbols import parse
 
 MODE_APPEND = "append"
@@ -60,6 +66,7 @@ def _merge_key(row: dict) -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 # 采集 (各来源 → 统一 rows)
 # ---------------------------------------------------------------------------
+
 
 def collect_ibkr(mode: str | None = None) -> tuple[list[dict], list[str]]:
     """从 IB Gateway 账户读取股票持仓. mode: paper/live/None(按 ibkr.json 配置)."""
@@ -132,14 +139,17 @@ def collect_wallet(
 # 合并与写入
 # ---------------------------------------------------------------------------
 
+
 def _source_quantities(row: dict) -> dict[str, float]:
-    """条目已有的各来源分量表; 兼容旧格式 (无 import_source → 记为空串来源)."""
+    """条目已有的各来源分量表; 兼容旧格式 (无 import_source → 记为空串来源).
+
+    手动录入/IBKR 等无来源条目按 "" 空串分量入账: 后续钱包导入按来源累加
+    时不会丢掉原有数量; 条目完全迁入来源记账后仍保持幂等。
+    """
     sq = row.get("source_quantities")
     if isinstance(sq, dict):
         return {str(k): float(v or 0) for k, v in sq.items()}
     src = str(row.get("import_source") or "")
-    if not src:
-        return {}
     return {src: float(row.get("quantity") or 0)}
 
 
@@ -175,8 +185,10 @@ def merge_holdings(
             target = merged[index[key]]
             if "avg_cost" in r:
                 target["avg_cost"] = r["avg_cost"]
-            # 同来源幂等: 只替换该来源分量, 其它来源分量保留, 总量按分量重算
-            if src:
+            # 同来源幂等: 只替换该来源分量, 其它来源分量保留, 总量按分量重算。
+            # 台账只在条目已入来源记账时延续 (plain→plain 不生成台账);
+            # plain 行对台账条目替换 "" 分量, 不把多来源总量打平成单值
+            if isinstance(target.get("source_quantities"), dict):
                 sq = _source_quantities(target)
                 sq[src] = float(r["quantity"] or 0)
                 target["source_quantities"] = sq
@@ -185,12 +197,10 @@ def merge_holdings(
                 target["quantity"] = r["quantity"]
             stats["updated"].append(sym)
             continue
-        # 同代码但来源不同 (不同链/地址的钱包导入): 累加该来源分量, 不覆盖其它来源
+        # 同代码但来源不同 (手动条目/其它链地址的钱包导入): 累加该来源分量,
+        # 不覆盖其它来源。无来源的新行匹配同代码的无来源条目外的所有条目。
         same = next(
-            (
-                i for i, h in enumerate(merged)
-                if src and _norm_sym(h.get("symbol", "")) == sym
-            ),
+            (i for i, h in enumerate(merged) if _norm_sym(h.get("symbol", "")) == sym),
             None,
         )
         if same is not None:

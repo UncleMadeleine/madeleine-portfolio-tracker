@@ -1,4 +1,5 @@
 """指数页面测试 (AppTest, 不联网): 选择即拉取渲染, 无查询按钮."""
+
 from __future__ import annotations
 
 import pytest

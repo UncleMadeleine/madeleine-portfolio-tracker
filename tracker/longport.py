@@ -13,12 +13,12 @@
   AAPL ↔ AAPL.US / 0700.HK ↔ 700.HK (长桥不补零) / 600519.SS ↔ 600519.SH /
   000001.SZ ↔ 000001.SZ / 830799.BJ ↔ 无 (长桥暂不支持北交所)
 """
+
 from __future__ import annotations
 
 import json
 import math
 import os
-import queue
 import threading
 import time
 from datetime import date, datetime
@@ -95,6 +95,7 @@ def reset() -> None:
 # SDK 可用性 / Config 构造
 # ---------------------------------------------------------------------------
 
+
 def _sdk():
     try:
         import longport.openapi as api
@@ -106,7 +107,11 @@ def _sdk():
 
 def _language(api, cfg: dict):
     lang = str(cfg.get("language") or "").strip()
-    mapping = {"zh-CN": api.Language.ZH_CN, "zh-HK": api.Language.ZH_HK, "en": api.Language.EN}
+    mapping = {
+        "zh-CN": api.Language.ZH_CN,
+        "zh-HK": api.Language.ZH_HK,
+        "en": api.Language.EN,
+    }
     return mapping.get(lang)
 
 
@@ -139,15 +144,18 @@ def build_config(cfg: dict | None = None):
         )
     if "填入" in client_id or "YOUR_" in client_id:
         # 模板占位值: 直接报配置错误, 绝不发起授权流 (OAuth 会阻塞等浏览器回调)
-        raise RuntimeError("longport.json 的 client_id 仍是模板占位值, 请填入真实 client_id")
+        raise RuntimeError(
+            "longport.json 的 client_id 仍是模板占位值, 请填入真实 client_id"
+        )
     oauth = oauth_login(cfg)
     return api.Config.from_oauth(oauth, **kwargs)
 
 
-def oauth_login(cfg: dict | None = None):
+def oauth_login(cfg: dict | None = None, on_open_url=None):
     """OAuth 登录: token 已缓存则直接复用 (不弹浏览器), 否则启动授权流并阻塞.
 
     SDK 在 ~/.longport/openapi/tokens/<client_id> 缓存 token 并自动刷新。
+    on_open_url: 可选回调 (url), 替代默认打印行为 (CLI --json 用它截获 URL)。
     """
     api = _sdk()
     cfg = cfg or load_config()
@@ -155,8 +163,10 @@ def oauth_login(cfg: dict | None = None):
     if not client_id or "填入" in client_id or "YOUR_" in client_id:
         raise RuntimeError("longport.json 缺少有效 client_id, 无法发起 OAuth 授权")
     port = cfg.get("callback_port")
-    builder = api.OAuthBuilder(client_id, int(port)) if port else api.OAuthBuilder(client_id)
-    return builder.build(_print_auth_url)
+    builder = (
+        api.OAuthBuilder(client_id, int(port)) if port else api.OAuthBuilder(client_id)
+    )
+    return builder.build(on_open_url or _print_auth_url)
 
 
 def _print_auth_url(url: str) -> None:
@@ -166,6 +176,7 @@ def _print_auth_url(url: str) -> None:
 # ---------------------------------------------------------------------------
 # 代码映射: 内部 Yahoo 规范 ↔ 长桥 ticker.region
 # ---------------------------------------------------------------------------
+
 
 def yahoo_to_longport(yahoo: str) -> str | None:
     """内部规范代码 → 长桥 ticker.region; 长桥不支持的市场返回 None.
@@ -210,6 +221,33 @@ def longport_to_yahoo(symbol: str) -> str | None:
 # 连接管理 (QuoteContext 长连接缓存; 失败 TTL 防抖)
 # ---------------------------------------------------------------------------
 
+
+def _drop_quote_ctx() -> None:
+    """丢弃缓存的 QuoteContext (疑似死连接): 下次取数重建新连接。"""
+    global _quote_ctx
+    with _lock:
+        _quote_ctx = None
+
+
+def _ctx_call(fn, *args, cfg: dict | None = None, **kwargs):
+    """带死连接重连的 ctx 调用: 首次异常丢弃缓存连接重建一次再试。
+
+    长连接被服务端/网络断开后, SDK 的 QuoteContext 不暴露 isConnected(),
+    死连接上再调用只会持续报错 —— 必须在调用层重建。
+    """
+    ctx = _get_quote_ctx(cfg)
+    if ctx is None:
+        raise RuntimeError(unavailable_reason() or "长桥连接不可用")
+    try:
+        return fn(ctx, *args, **kwargs)
+    except Exception:
+        _drop_quote_ctx()
+        ctx = _get_quote_ctx(cfg)
+        if ctx is None:
+            raise
+        return fn(ctx, *args, **kwargs)
+
+
 def _get_quote_ctx(cfg: dict | None = None):
     global _quote_ctx, _unavailable
     with _lock:
@@ -240,6 +278,7 @@ def unavailable_reason() -> str | None:
 # 行情 / 历史
 # ---------------------------------------------------------------------------
 
+
 def _f(v) -> float | None:
     try:
         f = float(v)
@@ -266,15 +305,16 @@ def get_quotes_longport(
     mappable = [(p, lp) for p, lp in mappable if lp]
     if not mappable:
         return {}, None
-    ctx = _get_quote_ctx(cfg)
-    if ctx is None:
-        return {}, unavailable_reason() or "不可用"
     quotes: dict[str, Quote] = {}
     reason = None
     for i in range(0, len(mappable), _BATCH):
         chunk = mappable[i : i + _BATCH]
         try:
-            resp = ctx.quote([lp for _, lp in chunk])
+            resp = _ctx_call(
+                lambda c, syms: c.quote(syms),
+                [lp for _, lp in chunk],
+                cfg=cfg,
+            )
         except Exception as e:  # noqa: BLE001 - 整批失败降级默认源
             reason = f"{type(e).__name__}: {e}"[:200]
             break
@@ -289,24 +329,27 @@ def get_quotes_longport(
                 continue
             chg = (price - prev) / prev * 100.0 if prev else None
             quotes[p.yahoo] = Quote(
-                symbol=p.yahoo, name=None, price=price, prev_close=prev,
-                change_pct=chg, currency=_currency_for(p.yahoo),
+                symbol=p.yahoo,
+                name=None,
+                price=price,
+                prev_close=prev,
+                change_pct=chg,
+                currency=_currency_for(p.yahoo),
             )
     return quotes, reason
 
 
-def static_names_longport(symbols_lp: list[str], cfg: dict | None = None) -> dict[str, str]:
+def static_names_longport(
+    symbols_lp: list[str], cfg: dict | None = None
+) -> dict[str, str]:
     """长桥代码 → 名称 (static_info); 失败返回空 dict (名称为可选增强)."""
     if not symbols_lp:
-        return {}
-    ctx = _get_quote_ctx(cfg)
-    if ctx is None:
         return {}
     names: dict[str, str] = {}
     for i in range(0, len(symbols_lp), _BATCH):
         chunk = symbols_lp[i : i + _BATCH]
         try:
-            for info in ctx.static_info(chunk):
+            for info in _ctx_call(lambda c, syms: c.static_info(syms), chunk, cfg=cfg):
                 lp = str(getattr(info, "symbol", "") or "").strip()
                 name = (
                     str(getattr(info, "name_cn", "") or "").strip()
@@ -330,15 +373,15 @@ def get_history_longport(
     lp = yahoo_to_longport(p.yahoo)
     if lp is None:
         return None
-    ctx = _get_quote_ctx(cfg)
-    if ctx is None:
-        return None
     api = _sdk()
     end = date.fromisoformat(end_date) if end_date else date.today()
     start = date.fromisoformat(start_date)
     try:
-        candles = ctx.history_candlesticks_by_date(
-            lp, api.Period.Day, api.AdjustType.ForwardAdjust, start, end
+        candles = _ctx_call(
+            lambda c: c.history_candlesticks_by_date(
+                lp, api.Period.Day, api.AdjustType.ForwardAdjust, start, end
+            ),
+            cfg=cfg,
         )
     except Exception:  # noqa: BLE001 - 历史数据不可用即回退默认源
         return None
@@ -367,6 +410,7 @@ def get_history_longport(
 # ---------------------------------------------------------------------------
 # 持仓导入 (TradeContext.stock_positions)
 # ---------------------------------------------------------------------------
+
 
 def fetch_stock_positions(cfg: dict | None = None) -> list:
     """读取账户股票持仓 (需要凭据有效); 失败抛 RuntimeError."""

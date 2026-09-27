@@ -1,4 +1,5 @@
 """sync 子命令: 从 IB Gateway 账户同步持仓 (兼容入口, 已并入 import ibkr)."""
+
 from __future__ import annotations
 
 

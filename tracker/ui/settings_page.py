@@ -1,4 +1,5 @@
 """「设置」页面: 基础货币 / 涨跌配色 / 数据源偏好, 全局生效并持久化到 settings.json."""
+
 from __future__ import annotations
 
 import streamlit as st
@@ -13,14 +14,18 @@ def render_settings_page() -> None:
     """设置页: 即改即存 (on_change 回调落盘), 其余页面每次 rerun 读 settings.json."""
     settings = storage.load_settings()
     st.markdown("### :material/settings: 设置")
-    st.caption("设置保存到项目根目录 settings.json, 全部页面生效; 基础货币另存于 portfolio.json。")
+    st.caption(
+        "设置保存到项目根目录 settings.json, 全部页面生效; 基础货币另存于 portfolio.json。"
+    )
 
     # ---- 显示 ----
     st.markdown("#### 显示")
     up_tag, down_tag = S.up_down_tags(settings)
     up_hex, down_hex = S.up_down_colors(settings)
     cur = f":{up_tag}[▲ {_COLOR_SAMPLE_PCT}] · :{down_tag}[▼ −1.20%]"
-    st.markdown(f"当前配色: {cur}", help=f"涨 {up_hex} / 跌 {down_hex} · 与 K线图配色一致")
+    st.markdown(
+        f"当前配色: {cur}", help=f"涨 {up_hex} / 跌 {down_hex} · 与 K线图配色一致"
+    )
     st.radio(
         "涨跌配色",
         list(S.SCHEME_LABELS),
@@ -56,7 +61,10 @@ def render_settings_page() -> None:
         help="启用后优先从长桥 OpenAPI 获取美股/港股/沪深行情与历史K线, 失败自动回退默认源。"
         "需先登录: 在「导入」页长桥标签完成 OAuth 授权; 连接配置见 longport.json。",
     )
-    with st.expander("长桥账户登录", expanded=bool(settings.get("use_longport")) and not settings.get("use_ibkr")):
+    with st.expander(
+        "长桥账户登录",
+        expanded=bool(settings.get("use_longport")) and not settings.get("use_ibkr"),
+    ):
         from .longport_login import login_state_label, render_login_section
 
         st.caption(f"当前状态: {login_state_label()}")
@@ -69,13 +77,17 @@ def render_settings_page() -> None:
     st.selectbox(
         "基础货币",
         S.BASE_CURRENCIES,
-        index=S.BASE_CURRENCIES.index(saved_base) if saved_base in S.BASE_CURRENCIES else 0,
+        index=S.BASE_CURRENCIES.index(saved_base)
+        if saved_base in S.BASE_CURRENCIES
+        else 0,
         key="set_base_currency",
         on_change=_save_base,
         help="组合市值/盈亏的换算货币; CLI snapshot 默认也读取该值",
     )
     if saved_base not in S.BASE_CURRENCIES:
-        st.warning(f"portfolio.json 中的基础货币 {saved_base} 不在常用列表, 保存后将被覆盖。")
+        st.warning(
+            f"portfolio.json 中的基础货币 {saved_base} 不在常用列表, 保存后将被覆盖。"
+        )
 
 
 def _save_display() -> None:
@@ -95,5 +107,7 @@ def _save_base() -> None:
     """切换基础货币立即写入 portfolio.json (与原侧栏行为一致)."""
     new_base = st.session_state.get("set_base_currency", "CNY")
     data = storage.load_portfolio(storage.PORTFOLIO_PATH)
-    storage.save_portfolio({"base_currency": new_base, "holdings": data.get("holdings", [])})
+    storage.save_portfolio(
+        {"base_currency": new_base, "holdings": data.get("holdings", [])}
+    )
     st.toast(f"基础货币已保存为 {new_base}")

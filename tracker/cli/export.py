@@ -1,4 +1,5 @@
 """export 子命令: 导出快照为 CSV / JSON / Markdown 报表."""
+
 from __future__ import annotations
 
 import csv
@@ -16,17 +17,34 @@ from ._common import _sanitize
 
 # 持仓 CSV 导出列 (按出现顺序)
 _CSV_COLS = [
-    "symbol", "name", "market", "currency", "price", "change_pct",
-    "quantity", "avg_cost", "market_value", "cost", "pnl", "pnl_pct",
+    "symbol",
+    "name",
+    "market",
+    "currency",
+    "price",
+    "change_pct",
+    "quantity",
+    "avg_cost",
+    "market_value",
+    "cost",
+    "pnl",
+    "pnl_pct",
     "today_pnl",
 ]
 
 # 持仓 Markdown 表格列
 _MD_COLS = [
-    ("symbol", "代码"), ("name", "名称"), ("market", "市场"),
-    ("price", "现价"), ("change_pct", "涨跌%"), ("quantity", "数量"),
-    ("avg_cost", "成本"), ("market_value", "市值"), ("cost", "成本额"),
-    ("pnl", "盈亏"), ("pnl_pct", "盈亏%"),
+    ("symbol", "代码"),
+    ("name", "名称"),
+    ("market", "市场"),
+    ("price", "现价"),
+    ("change_pct", "涨跌%"),
+    ("quantity", "数量"),
+    ("avg_cost", "成本"),
+    ("market_value", "市值"),
+    ("cost", "成本额"),
+    ("pnl", "盈亏"),
+    ("pnl_pct", "盈亏%"),
 ]
 
 
@@ -63,7 +81,11 @@ def _export_md(base: str, view: pd.DataFrame, summary: dict, issues: list[str]) 
     if m.get("total_value") is not None:
         lines.append(f"- 总市值: {m['total_value']:,.2f} {base}")
     if m.get("total_pnl") is not None:
-        pct = f" ({m['total_pnl_pct']:+.2%})" if m.get("total_pnl_pct") is not None else ""
+        pct = (
+            f" ({m['total_pnl_pct']:+.2%})"
+            if m.get("total_pnl_pct") is not None
+            else ""
+        )
         lines.append(f"- 浮动盈亏: {m['total_pnl']:+,.2f} {base}{pct}")
     if m.get("today_pnl") is not None:
         lines.append(f"- 今日估算: {m['today_pnl']:+,.2f} {base}")
@@ -123,8 +145,11 @@ def cmd_export(args) -> None:
         portfolio["base_currency"] = args.base.upper()
     watchlist = load_watchlist(args.watchlist_file)
     base, view, summary, wview, issues = take_snapshot(
-        portfolio, watchlist, watch_name=args.watchlist,
-        prefer_akshare=args.akshare, use_ibkr=args.ibkr,
+        portfolio,
+        watchlist,
+        watch_name=args.watchlist,
+        prefer_akshare=args.akshare,
+        use_ibkr=args.ibkr,
         use_longport=getattr(args, "longport", False),
     )
     if args.format == "json":

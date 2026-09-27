@@ -6,6 +6,7 @@
 
 合并与写盘逻辑在 tracker.importer, 与 CLI `tracker import <来源>` 一致.
 """
+
 from __future__ import annotations
 
 import tempfile
@@ -14,7 +15,6 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from . import settings as S
 from tracker import importer, storage
 
 _CHAIN_LABELS = {
@@ -77,6 +77,7 @@ def render_import_page(on_saved=None) -> None:
 # IBKR 账户
 # ---------------------------------------------------------------------------
 
+
 def _ibkr_section(mode: str, on_saved) -> None:
     st.caption("从本机 IB Gateway / TWS 读取账户股票持仓 (连接参数见 ibkr.json)。")
     gw = st.selectbox(
@@ -92,13 +93,13 @@ def _ibkr_section(mode: str, on_saved) -> None:
                 rows, skipped = importer.collect_ibkr(mode=gw_mode)
             except Exception as e:
                 st.session_state.pop("imp_ibkr", None)
-                st.error(
-                    f"{e} — 请确认 IB Gateway 已登录运行, 且 API 连接已启用。"
-                )
+                st.error(f"{e} — 请确认 IB Gateway 已登录运行, 且 API 连接已启用。")
             else:
                 st.session_state["imp_ibkr"] = {"rows": rows, "skipped": skipped}
     _preview_and_confirm(
-        "imp_ibkr", mode, on_saved,
+        "imp_ibkr",
+        mode,
+        on_saved,
         note="avg_cost 为 IBKR 报告的合约货币每股均价 (含佣金), 仅供估算。",
     )
 
@@ -122,7 +123,9 @@ def _longport_section(mode: str, on_saved) -> None:
             else:
                 st.session_state["imp_longport"] = {"rows": rows, "skipped": skipped}
     _preview_and_confirm(
-        "imp_longport", mode, on_saved,
+        "imp_longport",
+        mode,
+        on_saved,
         note="avg_cost 为长桥报告的合约货币成本价 (按账户设置的平均/摊薄口径), 仅供估算。",
     )
 
@@ -168,7 +171,9 @@ def _wallet_section(mode: str, on_saved) -> None:
                         "preview": raw.get("holdings", []),
                     }
     _preview_and_confirm(
-        "imp_wallet", mode, on_saved,
+        "imp_wallet",
+        mode,
+        on_saved,
         note="avg_cost 未设置, 导入后请在持仓管理中补填。",
     )
 
@@ -177,14 +182,13 @@ def _wallet_section(mode: str, on_saved) -> None:
 # 券商文件
 # ---------------------------------------------------------------------------
 
+
 def _file_section(mode: str, on_saved) -> None:
     st.caption(
         "导入券商客户端导出的持仓文件 (同花顺/通达信/华泰/东财/QMT 等, "
         "CSV 或 Excel); A股代码自动映射为 Yahoo 后缀 (.SS/.SZ/.BJ)。"
     )
-    up = st.file_uploader(
-        "持仓文件", type=["csv", "xlsx", "xls"], key="imp_file_up"
-    )
+    up = st.file_uploader("持仓文件", type=["csv", "xlsx", "xls"], key="imp_file_up")
     if up is None:
         st.session_state.pop("imp_file", None)
         st.session_state.pop("imp_file_sig", None)
@@ -206,7 +210,9 @@ def _file_section(mode: str, on_saved) -> None:
         st.session_state["imp_file"] = {"rows": rows, "skipped": skipped}
         st.session_state["imp_file_sig"] = sig
     _preview_and_confirm(
-        "imp_file", mode, on_saved,
+        "imp_file",
+        mode,
+        on_saved,
         note="avg_cost 为券商导出的成本价 (当地货币), 仅供估算。",
     )
 
@@ -215,9 +221,8 @@ def _file_section(mode: str, on_saved) -> None:
 # 预览 + 确认导入 (三来源共用)
 # ---------------------------------------------------------------------------
 
-def _preview_and_confirm(
-    state_key: str, mode: str, on_saved, note: str = ""
-) -> None:
+
+def _preview_and_confirm(state_key: str, mode: str, on_saved, note: str = "") -> None:
     payload = st.session_state.get(state_key)
     if not payload:
         return

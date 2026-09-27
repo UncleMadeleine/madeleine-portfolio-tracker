@@ -1,4 +1,5 @@
 """portfolio 子命令: 持仓管理 (list / add / remove / set-base)."""
+
 from __future__ import annotations
 
 import pandas as pd
@@ -11,7 +12,9 @@ from ._common import _finish_with_error, _print_json, _sym
 def portfolio_add(args) -> None:
     """添加/更新持仓 (需指定 --quantity)."""
     if not args.symbols:
-        _finish_with_error("请指定要添加的代码, 如: portfolio add AAPL --quantity 10 --avg-cost 180")
+        _finish_with_error(
+            "请指定要添加的代码, 如: portfolio add AAPL --quantity 10 --avg-cost 180"
+        )
     if args.quantity is None:
         _finish_with_error("请指定持仓数量 --quantity")
     if args.quantity <= 0:
@@ -76,7 +79,9 @@ def portfolio_list(args) -> None:
     data = load_portfolio(args.portfolio)
     holdings = data.get("holdings", [])
     if args.json:
-        _print_json({"base_currency": data.get("base_currency", "CNY"), "holdings": holdings})
+        _print_json(
+            {"base_currency": data.get("base_currency", "CNY"), "holdings": holdings}
+        )
         return
     base = data.get("base_currency", "CNY")
     print(f"\n=== 持仓 ({base}) ===")
@@ -85,12 +90,16 @@ def portfolio_list(args) -> None:
         return
     rows = []
     for h in holdings:
-        rows.append({
-            "symbol": _sym(h),
-            "quantity": h.get("quantity"),
-            "avg_cost": h.get("avg_cost"),
-        })
-    with pd.option_context("display.float_format", "{:,.2f}".format, "display.width", 120):
+        rows.append(
+            {
+                "symbol": _sym(h),
+                "quantity": h.get("quantity"),
+                "avg_cost": h.get("avg_cost"),
+            }
+        )
+    with pd.option_context(
+        "display.float_format", "{:,.2f}".format, "display.width", 120
+    ):
         print(pd.DataFrame(rows).to_string(index=False))
 
 

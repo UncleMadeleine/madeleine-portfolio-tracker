@@ -23,8 +23,12 @@ from tracker.watchlist import load_watchlist, parse_lists
 
 def q(sym, price, ccy="USD"):
     return Quote(
-        symbol=sym, name=sym, price=price, prev_close=price,
-        change_pct=1.0, currency=ccy,
+        symbol=sym,
+        name=sym,
+        price=price,
+        prev_close=price,
+        change_pct=1.0,
+        currency=ccy,
     )
 
 
@@ -174,7 +178,8 @@ def test_sort_severity_order():
         ]
     )
     out = sort_watchlist(view, "severity")
-    assert list(out["symbol"]) == ["B", "D", "C", "E", "A"]
+    # 下限 II (深跌破) 严重度高于下限 I (浅跌破), 与 evaluate_thresholds 一致
+    assert list(out["symbol"]) == ["B", "D", "E", "C", "A"]
     assert "status_rank" not in out.columns
 
 
@@ -205,7 +210,9 @@ def test_load_migrates_old_flat_format(tmp_path):
     )
     data = load_watchlist(f)
     assert list_names(data) == ["默认"]
-    assert data["watchlist"] == [{"symbol": "AAPL", "upper_1": 100, "lists": ["默认"], "type": "global"}]
+    assert data["watchlist"] == [
+        {"symbol": "AAPL", "upper_1": 100, "lists": ["默认"], "type": "global"}
+    ]
 
 
 def test_load_migrates_old_nested_format(tmp_path):
@@ -224,14 +231,14 @@ def test_load_migrates_old_nested_format(tmp_path):
 def test_load_new_format(tmp_path):
     f = tmp_path / "w.json"
     f.write_text(
-        json.dumps(
-            {"watchlist": [{"symbol": "AAPL", "lists": ["科技", "美股"]}]}
-        ),
+        json.dumps({"watchlist": [{"symbol": "AAPL", "lists": ["科技", "美股"]}]}),
         encoding="utf-8",
     )
     data = load_watchlist(f)
     assert list_names(data) == ["科技", "美股"]
-    assert entries_for(data, "科技") == [{"symbol": "AAPL", "lists": ["科技", "美股"], "type": "global"}]
+    assert entries_for(data, "科技") == [
+        {"symbol": "AAPL", "lists": ["科技", "美股"], "type": "global"}
+    ]
 
 
 def test_load_missing_file(tmp_path):
@@ -255,7 +262,10 @@ def test_list_names_and_entries():
         {"symbol": "B", "lists": ["科技", "美股"]},
         {"symbol": "C", "lists": ["科技"]},
     ]
-    assert entries_for(data, "科技") == [{"symbol": "B", "lists": ["科技", "美股"]}, {"symbol": "C", "lists": ["科技"]}]
+    assert entries_for(data, "科技") == [
+        {"symbol": "B", "lists": ["科技", "美股"]},
+        {"symbol": "C", "lists": ["科技"]},
+    ]
     assert entries_for(data, "美股") == [{"symbol": "B", "lists": ["科技", "美股"]}]
     assert entries_for(data) == [
         {"symbol": "A", "lists": ["默认"]},

@@ -1,4 +1,5 @@
 """Symbol 解析与市场识别 (Yahoo Finance 后缀规范)."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -61,46 +62,70 @@ _SUFFIX_MARKET: dict[str, Market] = {
 # index_us_stock_sina, 缺省 = key 本身). currency 仅作展示 (指数无交割货币).
 INDEX_GROUPS: dict[str, dict[str, dict[str, str]]] = {
     "风险/波动": {
-        "VIX":  {"name": "恐慌指数 VIX", "yf": "^VIX", "currency": "USD"},
+        "VIX": {"name": "恐慌指数 VIX", "yf": "^VIX", "currency": "USD"},
         "VIX3M": {"name": "VIX 3个月", "yf": "^VIX3M", "currency": "USD"},
         "MOVE": {"name": "美债波动率 MOVE", "yf": "^MOVE", "currency": "USD"},
     },
     "美元/利率": {
-        "DXY":  {"name": "美元指数", "yf": "DX-Y.NYB", "currency": "USD"},
+        "DXY": {"name": "美元指数", "yf": "DX-Y.NYB", "currency": "USD"},
         "US10Y": {"name": "美债 10 年收益率", "yf": "^TNX", "currency": "%"},
         "US02Y": {"name": "美债 2 年收益率", "yf": "^IRX", "currency": "%"},
     },
     "美股": {
-        "SPX":  {"name": "标普 500", "yf": "^GSPC", "currency": "点"},
-        "NDX":  {"name": "纳斯达克 100", "yf": "^NDX", "currency": "点"},
-        "DJI":  {"name": "道琼斯工业", "yf": "^DJI", "currency": "点"},
-        "RUT":  {"name": "罗素 2000", "yf": "^RUT", "currency": "点"},
+        "SPX": {"name": "标普 500", "yf": "^GSPC", "currency": "点"},
+        "NDX": {"name": "纳斯达克 100", "yf": "^NDX", "currency": "点"},
+        "DJI": {"name": "道琼斯工业", "yf": "^DJI", "currency": "点"},
+        "RUT": {"name": "罗素 2000", "yf": "^RUT", "currency": "点"},
     },
     "全球": {
-        "DAX":  {"name": "德国 DAX", "yf": "^GDAXI", "currency": "点"},
+        "DAX": {"name": "德国 DAX", "yf": "^GDAXI", "currency": "点"},
         "FTSE": {"name": "英国富时 100", "yf": "^FTSE", "currency": "点"},
         "N225": {"name": "日经 225", "yf": "^N225", "currency": "点"},
-        "HSI":  {"name": "恒生指数", "yf": "^HSI", "currency": "点"},
+        "HSI": {"name": "恒生指数", "yf": "^HSI", "currency": "点"},
     },
     "中国": {
         "CSI300": {"name": "沪深 300", "ak": "sh000300", "currency": "点"},
         "CSI500": {"name": "中证 500", "ak": "sh000905", "currency": "点"},
         "CSI1000": {"name": "中证 1000", "ak": "sh000852", "currency": "点"},
-        "SSE":   {"name": "上证指数", "ak": "sh000001", "currency": "点"},
-        "SZSE":  {"name": "深证成指", "ak": "sz399001", "currency": "点"},
-        "CYB":   {"name": "创业板指", "ak": "sz399006", "currency": "点"},
+        "SSE": {"name": "上证指数", "ak": "sh000001", "currency": "点"},
+        "SZSE": {"name": "深证成指", "ak": "sz399001", "currency": "点"},
+        "CYB": {"name": "创业板指", "ak": "sz399006", "currency": "点"},
         "KECHUANG50": {"name": "科创 50", "ak": "sh000688", "currency": "点"},
     },
     # 中国水泥网 (index.ccement.com, 免登录前端接口; 见 providers/index.py)
     "水泥网": {
-        "CEMPI":  {"name": "水泥价格指数 CEMPI", "ccement": "kline", "currency": "点"},
-        "CEMPIPO": {"name": "P.O 42.5 水泥价格指数", "ccement": "priceindex/po425zsline", "currency": "元/吨"},
-        "CCPDI":  {"name": "水泥煤价差指数 CCPDI", "ccement": "coal", "currency": "点"},
-        "CLINKER": {"name": "熟料价格指数", "ccement": "clinker/ClinkerPrice", "currency": "元/吨"},
-        "CONCRETE": {"name": "混凝土价格指数", "ccement": "concrete/ConcretePrice", "currency": "元/方"},
-        "CSPI":   {"name": "碎石价格指数 CSPI", "ccement": "stone/stoneZSLine", "currency": "元/吨"},
-        "MSPI":   {"name": "机制砂价格指数 MSPI", "ccement": "manufactured/manufacturedZSLine", "currency": "元/吨"},
-        "MORPI":  {"name": "预拌砂浆价格指数 MORPI", "ccement": "mortar/mortarZSLine", "currency": "元/吨"},
+        "CEMPI": {"name": "水泥价格指数 CEMPI", "ccement": "kline", "currency": "点"},
+        "CEMPIPO": {
+            "name": "P.O 42.5 水泥价格指数",
+            "ccement": "priceindex/po425zsline",
+            "currency": "元/吨",
+        },
+        "CCPDI": {"name": "水泥煤价差指数 CCPDI", "ccement": "coal", "currency": "点"},
+        "CLINKER": {
+            "name": "熟料价格指数",
+            "ccement": "clinker/ClinkerPrice",
+            "currency": "元/吨",
+        },
+        "CONCRETE": {
+            "name": "混凝土价格指数",
+            "ccement": "concrete/ConcretePrice",
+            "currency": "元/方",
+        },
+        "CSPI": {
+            "name": "碎石价格指数 CSPI",
+            "ccement": "stone/stoneZSLine",
+            "currency": "元/吨",
+        },
+        "MSPI": {
+            "name": "机制砂价格指数 MSPI",
+            "ccement": "manufactured/manufacturedZSLine",
+            "currency": "元/吨",
+        },
+        "MORPI": {
+            "name": "预拌砂浆价格指数 MORPI",
+            "ccement": "mortar/mortarZSLine",
+            "currency": "元/吨",
+        },
     },
 }
 
@@ -131,12 +156,15 @@ def index_label(key: str) -> str:
     e = INDEX_CATALOG.get(key)
     return e["name"] if e else key
 
+
 # 便士计价符号: LSE 以 GBp/GBX 报价 (1 GBP = 100 便士), 实际数据源大小写混用。
 # 判定规则: 代码形如 <G><B><p|X> (任意大小写) 即便士; 精确的 "GBP" 是英镑本体,
 # 若把它当便士会在 GBP 报价上再除 100, 结果偏小 100 倍。
 def is_pence(currency: str) -> bool:
     """该币种代码是否为 LSE 便士计价 (GBp/GBX 任意大小写; 精确 "GBP" 不算)."""
     s = str(currency).strip()
+    # "GBP" (精确大写) 是英镑本体, 不能再除 100; "gbp" 等小写变体按便士处理
+    # (数据源从不用小写表示英镑本体, 大小写混用只出现在便士符号上)
     if not s or s == "GBP":
         return False
     return s.upper() in ("GBP", "GBX")
@@ -144,21 +172,98 @@ def is_pence(currency: str) -> bool:
 
 # 加密货币常见基础代码 (用于 BTCUSD → BTC-USD 自动补全)
 _KNOWN_CRYPTO: set[str] = {
-    "BTC", "ETH", "BNB", "SOL", "XRP", "ADA", "DOGE", "DOT", "MATIC", "AVAX",
-    "LINK", "LTC", "BCH", "UNI", "ATOM", "XLM", "NEAR", "TRX", "ICP", "FIL",
-    "HBAR", "VET", "ALGO", "AAVE", "MKR", "SNX", "COMP", "GRT", "LDO", "OP",
-    "ARB", "APT", "INJ", "SUI", "SEI", "TIA", "STX", "RUNE", "PEPE", "WIF",
-    "BONK", "JUP", "PYTH", "DYDX", "ORDI", "TON", "SHIB", "ETC", "XMR", "ZEC",
-    "FTM", "SAND", "MANA", "AXS", "IMX", "GALA", "CRV", "SUSHI", "1INCH",
+    "BTC",
+    "ETH",
+    "BNB",
+    "SOL",
+    "XRP",
+    "ADA",
+    "DOGE",
+    "DOT",
+    "MATIC",
+    "AVAX",
+    "LINK",
+    "LTC",
+    "BCH",
+    "UNI",
+    "ATOM",
+    "XLM",
+    "NEAR",
+    "TRX",
+    "ICP",
+    "FIL",
+    "HBAR",
+    "VET",
+    "ALGO",
+    "AAVE",
+    "MKR",
+    "SNX",
+    "COMP",
+    "GRT",
+    "LDO",
+    "OP",
+    "ARB",
+    "APT",
+    "INJ",
+    "SUI",
+    "SEI",
+    "TIA",
+    "STX",
+    "RUNE",
+    "PEPE",
+    "WIF",
+    "BONK",
+    "JUP",
+    "PYTH",
+    "DYDX",
+    "ORDI",
+    "TON",
+    "SHIB",
+    "ETC",
+    "XMR",
+    "ZEC",
+    "FTM",
+    "SAND",
+    "MANA",
+    "AXS",
+    "IMX",
+    "GALA",
+    "CRV",
+    "SUSHI",
+    "1INCH",
 }
 
 # 加密货币计价货币 (法币 + 主流稳定币 + 主流币本位; Yahoo Finance 用 BTC-USD 格式)
 # 必须覆盖 search._CRYPTO_QUOTE_ASSETS: 目录产出的每个 BASE-QUOTE 都要能被 parse 识别
 _CRYPTO_QUOTES: set[str] = {
-    "USD", "EUR", "GBP", "JPY", "KRW", "AUD", "CAD", "CHF", "SGD", "HKD",
-    "INR", "BRL", "CNY", "RUB", "TRY", "MXN", "ZAR", "THB", "IDR",
-    "USDT", "USDC", "DAI", "BUSD", "FDUSD", "TUSD",
-    "BTC", "ETH", "BNB",
+    "USD",
+    "EUR",
+    "GBP",
+    "JPY",
+    "KRW",
+    "AUD",
+    "CAD",
+    "CHF",
+    "SGD",
+    "HKD",
+    "INR",
+    "BRL",
+    "CNY",
+    "RUB",
+    "TRY",
+    "MXN",
+    "ZAR",
+    "THB",
+    "IDR",
+    "USDT",
+    "USDC",
+    "DAI",
+    "BUSD",
+    "FDUSD",
+    "TUSD",
+    "BTC",
+    "ETH",
+    "BNB",
 }
 
 
@@ -237,19 +342,26 @@ def type_for_symbol(yahoo: str) -> str:
         if suffix in ("SS", "SZ", "BJ"):
             return "cn"
     return "global"
+
+
 def parse(symbol: str) -> ParsedSymbol:
     # 宏观/风险指数: IX.<KEY> (独立域, 目录校验; 与股票代码永不冲突)
     yahoo = normalize(symbol)
     ikey = index_key(yahoo)
     if ikey:
         return ParsedSymbol(
-            raw=symbol.strip(), yahoo=yahoo, market=Market.INDEX,
-            currency=INDEX_CATALOG[ikey]["currency"], type="index",
+            raw=symbol.strip(),
+            yahoo=yahoo,
+            market=Market.INDEX,
+            currency=INDEX_CATALOG[ikey]["currency"],
+            type="index",
         )
 
     # 加密货币: BTC-USD / ETH-EUR 等连字符格式 (Yahoo Finance crypto 行情)
     if yahoo.startswith("IX."):
-        raise ValueError(f"未收录的指数代码: {symbol} (指数目录: {', '.join(INDEX_CATALOG)})")
+        raise ValueError(
+            f"未收录的指数代码: {symbol} (指数目录: {', '.join(INDEX_CATALOG)})"
+        )
     if "-" in yahoo and "." not in yahoo:
         base, _, quote = yahoo.rpartition("-")
         if quote in _CRYPTO_QUOTES:
@@ -284,6 +396,10 @@ def parse(symbol: str) -> ParsedSymbol:
             is_b_share = True
             currency = "HKD"  # 深 B 以港币交易
     return ParsedSymbol(
-        raw=symbol.strip(), yahoo=yahoo, market=market, currency=currency,
-        is_b_share=is_b_share, type=type_for_symbol(yahoo),
+        raw=symbol.strip(),
+        yahoo=yahoo,
+        market=market,
+        currency=currency,
+        is_b_share=is_b_share,
+        type=type_for_symbol(yahoo),
     )

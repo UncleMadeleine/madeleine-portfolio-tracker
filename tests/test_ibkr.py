@@ -114,8 +114,15 @@ def test_unknown_mode_reports_error(monkeypatch):
     # 非法 mode 不抛异常, 记录不可用原因供上层展示
     monkeypatch.setattr(ibkr_mod, "_client", None)
     monkeypatch.setattr(ibkr_mod, "_unavailable", None)
-    ib = ibkr_mod._get_client({"host": "127.0.0.1", "mode": "bogus", "client_id": 1,
-                               "connect_timeout": 1, "market_data_type": 3})
+    ib = ibkr_mod._get_client(
+        {
+            "host": "127.0.0.1",
+            "mode": "bogus",
+            "client_id": 1,
+            "connect_timeout": 1,
+            "market_data_type": 3,
+        }
+    )
     assert ib is None
     assert ibkr_mod._unavailable is not None
     assert "未知 mode" in ibkr_mod._unavailable[0]
@@ -124,6 +131,8 @@ def test_unknown_mode_reports_error(monkeypatch):
 def test_contract_spec_all_markets():
     cases = [
         ("AAPL", ContractSpec("AAPL", "SMART", "USD")),
+        # 美股类别股: Yahoo 连字符 → IBKR 合约库空格形态
+        ("BRK-B", ContractSpec("BRK B", "SMART", "USD")),
         ("600519.SS", ContractSpec("600519", "SEHK", "CNY", "600519")),
         ("000001.SZ", ContractSpec("000001", "SEHK", "CNY", "000001")),
         ("002594.SZ", ContractSpec("002594", "SEHK", "CNY", "002594")),
@@ -238,8 +247,14 @@ def test_positions_to_rows():
 
 
 def _make_quote(sym, price):
-    return Quote(symbol=sym, name=sym, price=price, prev_close=price,
-                 change_pct=0.0, currency="USD")
+    return Quote(
+        symbol=sym,
+        name=sym,
+        price=price,
+        prev_close=price,
+        change_pct=0.0,
+        currency="USD",
+    )
 
 
 def test_get_quotes_ibkr_first_then_fallback(monkeypatch):
@@ -259,9 +274,7 @@ def test_get_quotes_ibkr_first_then_fallback(monkeypatch):
     monkeypatch.setattr(orch.cache_mod, "get_cached", lambda syms, ttl=300: {})
     monkeypatch.setattr(orch.cache_mod, "set_cached", lambda q: None)
 
-    quotes, errors, notes = orch.get_quotes(
-        ["AAPL", "NVDA"], use_ibkr=True
-    )
+    quotes, errors, notes = orch.get_quotes(["AAPL", "NVDA"], use_ibkr=True)
     assert quotes["AAPL"].price == 333.0
     assert quotes["NVDA"].price == 1.0
     assert errors == {} and notes == []
@@ -294,7 +307,9 @@ def test_get_quotes_ibkr_not_used_by_default(monkeypatch):
 
     monkeypatch.setattr(ibkr_mod, "get_quotes_ibkr", fake_ibkr)
     monkeypatch.setattr(
-        orch, "_yahoo_batch", lambda parsed: {p.yahoo: _make_quote(p.yahoo, 3.0) for p in parsed}
+        orch,
+        "_yahoo_batch",
+        lambda parsed: {p.yahoo: _make_quote(p.yahoo, 3.0) for p in parsed},
     )
     monkeypatch.setattr(orch.cache_mod, "get_cached", lambda syms, ttl=300: {})
     monkeypatch.setattr(orch.cache_mod, "set_cached", lambda q: None)
@@ -306,22 +321,27 @@ def test_get_quotes_ibkr_not_used_by_default(monkeypatch):
 def test_get_history_ibkr(monkeypatch):
     import pandas as pd
 
-    ibkr_df = pd.DataFrame({
-        "date": pd.to_datetime(["2024-01-02", "2024-01-03"]),
-        "open": [100.0, 101.0],
-        "high": [102.0, 103.0],
-        "low": [99.0, 100.0],
-        "close": [101.0, 102.0],
-        "volume": [1000.0, 1100.0],
-    })
+    ibkr_df = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2024-01-02", "2024-01-03"]),
+            "open": [100.0, 101.0],
+            "high": [102.0, 103.0],
+            "low": [99.0, 100.0],
+            "close": [101.0, 102.0],
+            "volume": [1000.0, 1100.0],
+        }
+    )
 
-    def fake_ibkr(parsed, months, cfg=None):
+    def fake_ibkr(parsed, months, cfg=None, start_date=None, end_date=None):
         return {p.yahoo: ibkr_df for p in parsed}, None
 
     monkeypatch.setattr(ibkr_mod, "get_history_ibkr", fake_ibkr)
     monkeypatch.setattr(
-        prices_mod, "_yahoo_history",
-        lambda p, start_date=None, end_date=None: (_ for _ in ()).throw(AssertionError("不应调用 yahoo"))
+        prices_mod,
+        "_yahoo_history",
+        lambda p, start_date=None, end_date=None: (_ for _ in ()).throw(
+            AssertionError("不应调用 yahoo")
+        ),
     )
 
     df = prices_mod.get_history("AAPL", months=3, use_ibkr=True)
@@ -330,35 +350,43 @@ def test_get_history_ibkr(monkeypatch):
 
 
 def test_get_history_ibkr_fallback(monkeypatch):
-    def fake_ibkr(parsed, months, cfg=None):
+    def fake_ibkr(parsed, months, cfg=None, start_date=None, end_date=None):
         return {}, "连接失败"
 
-    yahoo_df = pd.DataFrame({
-        "date": pd.to_datetime(["2024-01-02", "2024-01-03"]),
-        "open": [100.0, 101.0],
-        "high": [102.0, 103.0],
-        "low": [99.0, 100.0],
-        "close": [101.0, 102.0],
-        "volume": [1000.0, 1100.0],
-    })
+    yahoo_df = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2024-01-02", "2024-01-03"]),
+            "open": [100.0, 101.0],
+            "high": [102.0, 103.0],
+            "low": [99.0, 100.0],
+            "close": [101.0, 102.0],
+            "volume": [1000.0, 1100.0],
+        }
+    )
 
     monkeypatch.setattr(ibkr_mod, "get_history_ibkr", fake_ibkr)
     import tracker.providers.global_stocks as gs
 
-    monkeypatch.setattr(gs, "_yahoo_history", lambda p, start_date=None, end_date=None: yahoo_df)
+    monkeypatch.setattr(
+        gs, "_yahoo_history", lambda p, start_date=None, end_date=None: yahoo_df
+    )
 
     df = prices_mod.get_history("AAPL", months=3, use_ibkr=True)
     assert len(df) == 2
 
 
 def test_get_fx_rate_ibkr(monkeypatch):
-    monkeypatch.setattr(ibkr_mod, "get_fx_rate_ibkr", lambda src, dst, cfg=None: (7.15, None))
+    monkeypatch.setattr(
+        ibkr_mod, "get_fx_rate_ibkr", lambda src, dst, cfg=None: (7.15, None)
+    )
     rate = fx.get_rate("USD", "CNY", use_ibkr=True)
     assert abs(rate - 7.15) < 1e-9
 
 
 def test_get_fx_rate_ibkr_fallback(monkeypatch):
-    monkeypatch.setattr(ibkr_mod, "get_fx_rate_ibkr", lambda src, dst, cfg=None: (None, "连接失败"))
+    monkeypatch.setattr(
+        ibkr_mod, "get_fx_rate_ibkr", lambda src, dst, cfg=None: (None, "连接失败")
+    )
     monkeypatch.setattr(fx, "_cfets_rate", lambda s, d: 7.1)
     rate = fx.get_rate("USD", "CNY", use_ibkr=True)
     assert abs(rate - 7.1) < 1e-9
@@ -376,7 +404,9 @@ def test_ibkr_to_yahoo_b_shares_without_exchange():
 def test_quote_from_ticker_pence_case_insensitive():
     # 便士符号大小写混用时都必须换算为英镑 (÷100), 否则价格放大 100 倍
     for ccy in ("GBp", "GBX", "gbx", "gbX", "gBp"):
-        q = quote_from_ticker("BP.L", FakeTicker(price=539.7, close=528.0, currency=ccy))
+        q = quote_from_ticker(
+            "BP.L", FakeTicker(price=539.7, close=528.0, currency=ccy)
+        )
         assert q.currency == "GBP", ccy
         assert abs(q.price - 5.397) < 1e-9, ccy
         assert abs(q.prev_close - 5.28) < 1e-9, ccy
@@ -396,9 +426,7 @@ def test_run_sync_json_writes_portfolio(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(ibkr_mod, "load_config", lambda: {})
     p = tmp_path / "p.json"
     p.write_text(json.dumps({"base_currency": "USD", "holdings": []}), encoding="utf-8")
-    sync_mod.run_sync(
-        types.SimpleNamespace(dry_run=False, json=True, portfolio=str(p))
-    )
+    sync_mod.run_sync(types.SimpleNamespace(dry_run=False, json=True, portfolio=str(p)))
     out = capsys.readouterr().out
     payload = json.loads(out)
     assert payload["written"] is True
@@ -416,9 +444,7 @@ def test_run_sync_json_dry_run_no_write(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(ibkr_mod, "fetch_positions", lambda cfg: positions)
     monkeypatch.setattr(ibkr_mod, "load_config", lambda: {})
     p = tmp_path / "p.json"
-    sync_mod.run_sync(
-        types.SimpleNamespace(dry_run=True, json=True, portfolio=str(p))
-    )
+    sync_mod.run_sync(types.SimpleNamespace(dry_run=True, json=True, portfolio=str(p)))
     payload = json.loads(capsys.readouterr().out)
     assert payload["written"] is False
     assert not p.exists()

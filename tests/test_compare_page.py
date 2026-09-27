@@ -1,4 +1,5 @@
 """多股对比渲染门控测试 (AppTest, 不联网): 通过「K线」页入口验证走势对比子 tab."""
+
 from __future__ import annotations
 
 import pandas as pd

@@ -1,4 +1,5 @@
 """index-kline 子命令: 宏观/风险指数K线 (IX.<KEY>), 与股票 kline 完全独立."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -17,7 +18,9 @@ def cmd_index_kline(args) -> None:
     from .. import charting
 
     if not args.symbol:
-        _finish_with_error("请指定指数代码 (IX.<KEY>), 如 index-kline IX.DXY; --list 查看目录")
+        _finish_with_error(
+            "请指定指数代码 (IX.<KEY>), 如 index-kline IX.DXY; --list 查看目录"
+        )
     try:
         p = parse(args.symbol)
     except ValueError as e:
@@ -25,9 +28,7 @@ def cmd_index_kline(args) -> None:
     if p.type != "index":
         _finish_with_error(f"{args.symbol}: 不是指数代码 (规范 IX.<KEY>, 见 --list)")
     try:
-        df = prices.get_index_history(
-            p.yahoo, months=args.months, refresh=args.refresh
-        )
+        df = prices.get_index_history(p.yahoo, months=args.months, refresh=args.refresh)
     except Exception as e:
         _finish_with_error(f"{p.yahoo}: 指数K线数据获取失败 ({e})")
     if args.period != "daily":
@@ -81,10 +82,18 @@ def cmd_index_kline(args) -> None:
     )
 
     fig = charting.build_candlestick_fig(
-        df, f"{label} ({p.yahoo})", currency=None, mas=mas,
-        show_volume=args.volume, period=args.period,
+        df,
+        f"{label} ({p.yahoo})",
+        currency=None,
+        mas=mas,
+        show_volume=args.volume,
+        period=args.period,
     )
-    out = Path(args.output) if args.output else VAR_DIR / f"index_kline_{p.yahoo.replace('.', '_')}.html"
+    out = (
+        Path(args.output)
+        if args.output
+        else VAR_DIR / f"index_kline_{p.yahoo.replace('.', '_')}.html"
+    )
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(charting.fig_to_html(fig), encoding="utf-8")
     print(f"\n✅ 指数K线图已生成: {out}")
@@ -97,14 +106,22 @@ def print_index_catalog(as_json: bool = False) -> None:
     """打印指数目录 (IX.<KEY> 全表, 按分组)."""
     groups = index_groups()
     if as_json:
-        _print_json({
-            "total": len(INDEX_CATALOG),
-            "indices": [
-                {"code": f"IX.{key}", "key": key, "name": index_label(key),
-                 "group": group, **INDEX_CATALOG[key]}
-                for group, keys in groups.items() for key in keys
-            ],
-        })
+        _print_json(
+            {
+                "total": len(INDEX_CATALOG),
+                "indices": [
+                    {
+                        "code": f"IX.{key}",
+                        "key": key,
+                        "name": index_label(key),
+                        "group": group,
+                        **INDEX_CATALOG[key],
+                    }
+                    for group, keys in groups.items()
+                    for key in keys
+                ],
+            }
+        )
         return
     print(f"已收录指数 ({len(INDEX_CATALOG)} 个, 代码规范 IX.<KEY>):")
     for group, keys in groups.items():

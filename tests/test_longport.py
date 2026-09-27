@@ -2,7 +2,7 @@
 
 不联网: SDK 层全部用假对象替换; 真实网络行为由 smoke 覆盖。
 """
-import math
+
 from datetime import datetime
 import json
 from decimal import Decimal
@@ -20,6 +20,7 @@ from tracker.symbols import parse
 # ---------------------------------------------------------------------------
 # 代码映射
 # ---------------------------------------------------------------------------
+
 
 def test_yahoo_to_longport_roundtrip():
     cases = [
@@ -57,6 +58,7 @@ def test_longport_to_yahoo_us_and_unknown():
 # 配置
 # ---------------------------------------------------------------------------
 
+
 def test_load_config_falls_back_to_example(tmp_path, monkeypatch):
     monkeypatch.setattr(lp, "DEFAULT_CONFIG", tmp_path / "nope.json")
     monkeypatch.delenv("LONGPORT_CONFIG", raising=False)
@@ -67,7 +69,9 @@ def test_load_config_falls_back_to_example(tmp_path, monkeypatch):
 
 def test_load_config_real_overrides_example(tmp_path, monkeypatch):
     real = tmp_path / "longport.json"
-    real.write_text('{"auth": "apikey", "app_key": "K", "app_secret": "S", "access_token": "T", "_comment": "x"}')
+    real.write_text(
+        '{"auth": "apikey", "app_key": "K", "app_secret": "S", "access_token": "T", "_comment": "x"}'
+    )
     cfg = lp.load_config(real)
     assert cfg["auth"] == "apikey"
     assert cfg["app_key"] == "K"
@@ -100,6 +104,7 @@ def test_build_config_unknown_auth(tmp_path):
 # 行情 / 历史 (SDK 假对象)
 # ---------------------------------------------------------------------------
 
+
 def _fake_sdk(api=None):
     """monkeypatch lp._sdk 返回指定 openapi 模块替身."""
     return patch.object(lp, "_sdk", return_value=api)
@@ -122,14 +127,26 @@ def test_get_quotes_longport_maps_and_skips_unsupported(monkeypatch):
             captured["symbols"] = list(symbols)
             return [
                 SimpleNamespace(
-                    symbol="700.HK", last_done=Decimal("338.0"), prev_close=Decimal("334.8"),
-                    open=Decimal("340"), high=Decimal("341"), low=Decimal("333"),
-                    timestamp=datetime(2026, 9, 24), volume=100, turnover=Decimal("1"),
+                    symbol="700.HK",
+                    last_done=Decimal("338.0"),
+                    prev_close=Decimal("334.8"),
+                    open=Decimal("340"),
+                    high=Decimal("341"),
+                    low=Decimal("333"),
+                    timestamp=datetime(2026, 9, 24),
+                    volume=100,
+                    turnover=Decimal("1"),
                 ),
                 SimpleNamespace(
-                    symbol="AAPL.US", last_done=Decimal("150.0"), prev_close=Decimal("150.0"),
-                    open=Decimal("150"), high=Decimal("150"), low=Decimal("150"),
-                    timestamp=datetime(2026, 9, 24), volume=1, turnover=Decimal("1"),
+                    symbol="AAPL.US",
+                    last_done=Decimal("150.0"),
+                    prev_close=Decimal("150.0"),
+                    open=Decimal("150"),
+                    high=Decimal("150"),
+                    low=Decimal("150"),
+                    timestamp=datetime(2026, 9, 24),
+                    volume=1,
+                    turnover=Decimal("1"),
                 ),
             ]
 
@@ -165,10 +182,22 @@ def test_get_quotes_longport_batch_failure_reports_reason(monkeypatch):
 
 def test_get_history_longport_returns_sorted_df(monkeypatch):
     candles = [
-        SimpleNamespace(timestamp=datetime(2026, 9, 23), open=Decimal("1"), high=Decimal("2"),
-                        low=Decimal("0.5"), close=Decimal("1.5"), volume=10),
-        SimpleNamespace(timestamp=datetime(2026, 9, 24), open=Decimal("1.5"), high=Decimal("3"),
-                        low=Decimal("1"), close=Decimal("2"), volume=20),
+        SimpleNamespace(
+            timestamp=datetime(2026, 9, 23),
+            open=Decimal("1"),
+            high=Decimal("2"),
+            low=Decimal("0.5"),
+            close=Decimal("1.5"),
+            volume=10,
+        ),
+        SimpleNamespace(
+            timestamp=datetime(2026, 9, 24),
+            open=Decimal("1.5"),
+            high=Decimal("3"),
+            low=Decimal("1"),
+            close=Decimal("2"),
+            volume=20,
+        ),
     ]
 
     class FakeCtx:
@@ -194,6 +223,7 @@ def test_get_history_longport_unsupported_or_unavailable(monkeypatch):
 # orchestration 接线
 # ---------------------------------------------------------------------------
 
+
 def _fake_quote(symbol: str):
     from tracker.providers.base import Quote
 
@@ -218,11 +248,14 @@ def test_orchestration_longport_prefetch_used(monkeypatch):
 
 def test_orchestration_longport_unavailable_note(monkeypatch):
     monkeypatch.setattr(
-        "tracker.longport.get_quotes_longport", lambda parsed, cfg=None: ({}, "连接失败")
+        "tracker.longport.get_quotes_longport",
+        lambda parsed, cfg=None: ({}, "连接失败"),
     )
     # 回退链全部 mock: 测试只关心 note 与"前置失败不阻塞主链", 不联网
     monkeypatch.setattr(
-        orch, "_yahoo_batch", lambda plist: {p.yahoo: _fake_quote(p.yahoo) for p in plist}
+        orch,
+        "_yahoo_batch",
+        lambda plist: {p.yahoo: _fake_quote(p.yahoo) for p in plist},
     )
     from tracker import cache as cache_mod
 
@@ -239,7 +272,9 @@ def test_orchestration_no_longport_by_default(monkeypatch):
 
     monkeypatch.setattr("tracker.longport.get_quotes_longport", _boom)
     monkeypatch.setattr(
-        orch, "_yahoo_batch", lambda plist: {p.yahoo: _fake_quote(p.yahoo) for p in plist}
+        orch,
+        "_yahoo_batch",
+        lambda plist: {p.yahoo: _fake_quote(p.yahoo) for p in plist},
     )
     from tracker import cache as cache_mod
 
@@ -250,8 +285,16 @@ def test_orchestration_no_longport_by_default(monkeypatch):
 
 
 def test_orchestration_get_history_longport_passthrough(monkeypatch):
-    df = pd.DataFrame({"date": ["2026-09-24"], "open": [1.0], "high": [1.0],
-                       "low": [1.0], "close": [1.0], "volume": [1]})
+    df = pd.DataFrame(
+        {
+            "date": ["2026-09-24"],
+            "open": [1.0],
+            "high": [1.0],
+            "low": [1.0],
+            "close": [1.0],
+            "volume": [1],
+        }
+    )
     monkeypatch.setattr("tracker.longport.get_history_longport", lambda p, s, e: df)
     out = orch.get_history("0700.HK", months=3, use_longport=True)
     assert float(out["close"].iloc[0]) == 1.0
@@ -260,6 +303,7 @@ def test_orchestration_get_history_longport_passthrough(monkeypatch):
 # ---------------------------------------------------------------------------
 # 持仓导入
 # ---------------------------------------------------------------------------
+
 
 class FakeMarket:
     def __init__(self, name):
@@ -271,10 +315,14 @@ class FakeMarket:
 
 def _pos(symbol, qty, cost, ccy, market):
     return SimpleNamespace(
-        symbol=symbol, symbol_name=symbol,
-        quantity=Decimal(str(qty)), cost_price=Decimal(str(cost)),
-        currency=ccy, market=FakeMarket(market),
-        available_quantity=Decimal(str(qty)), init_quantity=None,
+        symbol=symbol,
+        symbol_name=symbol,
+        quantity=Decimal(str(qty)),
+        cost_price=Decimal(str(cost)),
+        currency=ccy,
+        market=FakeMarket(market),
+        available_quantity=Decimal(str(qty)),
+        init_quantity=None,
     )
 
 
@@ -283,8 +331,8 @@ def test_positions_to_rows_mapping_and_skips():
         _pos("700.HK", 100, 457.53, "HKD", "HK"),
         _pos("AAPL.US", 10.5, 180.25, "USD", "US"),
         _pos("600519.SH", 200, 1700.0, "CNY", "CN"),
-        _pos("9999.HK", 0, 1.0, "HKD", "HK"),      # 零仓位跳过
-        _pos("XXX.DD", 10, 1.0, "USD", "US"),       # 非法形态跳过
+        _pos("9999.HK", 0, 1.0, "HKD", "HK"),  # 零仓位跳过
+        _pos("XXX.DD", 10, 1.0, "USD", "US"),  # 非法形态跳过
     ]
     rows, skipped = lp.positions_to_rows(positions)
     assert len(rows) == 3 and len(skipped) == 1
@@ -298,7 +346,8 @@ def test_positions_to_rows_mapping_and_skips():
 
 def test_collect_longport_via_importer(monkeypatch):
     monkeypatch.setattr(
-        lp, "fetch_stock_positions",
+        lp,
+        "fetch_stock_positions",
         lambda cfg=None: [_pos("700.HK", 100, 457.5, "HKD", "HK")],
     )
     rows, skipped = importer.collect_longport()
@@ -322,17 +371,58 @@ def test_fetch_stock_positions_wraps_sdk_errors(monkeypatch):
 # OAuth 子进程入口 (tracker.longport_oauth)
 # ---------------------------------------------------------------------------
 
+
+def test_ctx_call_rebuilds_on_dead_connection(monkeypatch):
+    """死连接: 首次调用异常 → 丢弃缓存 ctx → 重建后重试成功."""
+    import tracker.longport as lp
+
+    calls = {"n": 0}
+    rebuilds = {"n": 0}
+
+    class FakeCtx:
+        def quote(self, syms):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("connection reset")
+
+            class _Sq:
+                symbol = syms[0]
+                last_done = 1.0
+                prev_close = 0.9
+
+            return [_Sq()]
+
+    lp._quote_ctx = FakeCtx()
+
+    def fake_get(cfg=None):
+        if lp._quote_ctx is None:
+            rebuilds["n"] += 1
+            lp._quote_ctx = FakeCtx()
+        return lp._quote_ctx
+
+    monkeypatch.setattr(lp, "_get_quote_ctx", fake_get)
+    try:
+        out = lp._ctx_call(lambda c, syms: c.quote(syms), ["AAPL.US"])
+        assert out[0].last_done == 1.0
+        assert calls["n"] == 2  # 首次失败 + 重建后重试
+        assert rebuilds["n"] == 1
+    finally:
+        lp._quote_ctx = None
+
+
 def test_longport_oauth_module_writes_error_without_client_id(tmp_path, monkeypatch):
     """占位/缺失 client_id → 子进程脚本写 error 状态并退出码 2."""
-    import subprocess
-    import sys
     from tracker import longport_oauth
 
     state_file = tmp_path / "state.json"
     monkeypatch.setattr(longport_oauth, "_STATE_PATH", state_file)
     monkeypatch.setattr(
-        longport_oauth.longport, "load_config",
-        lambda path=None: {"auth": "oauth", "client_id": "在此填入 OAuth 客户端注册返回的 client_id"},
+        longport_oauth.longport,
+        "load_config",
+        lambda path=None: {
+            "auth": "oauth",
+            "client_id": "在此填入 OAuth 客户端注册返回的 client_id",
+        },
     )
     # 直接调 main (不 spawn), 验证状态写入与退出码
     rc = longport_oauth.main()
@@ -344,15 +434,18 @@ def test_longport_oauth_module_writes_error_without_client_id(tmp_path, monkeypa
 
 def test_longport_oauth_module_success_flow(tmp_path, monkeypatch):
     """SDK mock: build 回调 → waiting 状态 + URL; from_oauth 验证 → ok."""
-    import subprocess
-    import sys
     from tracker import longport_oauth
 
     state_file = tmp_path / "state.json"
     monkeypatch.setattr(longport_oauth, "_STATE_PATH", state_file)
     monkeypatch.setattr(
-        longport_oauth.longport, "load_config",
-        lambda path=None: {"auth": "oauth", "client_id": "cid-9", "callback_port": 60355},
+        longport_oauth.longport,
+        "load_config",
+        lambda path=None: {
+            "auth": "oauth",
+            "client_id": "cid-9",
+            "callback_port": 60355,
+        },
     )
 
     class FakeBuilder:
@@ -383,6 +476,7 @@ def test_longport_oauth_module_success_flow(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 # settings
 # ---------------------------------------------------------------------------
+
 
 def test_settings_default_use_longport(tmp_path):
     from tracker import storage

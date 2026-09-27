@@ -12,6 +12,7 @@
     python -m tracker.ashare_sync 持仓.csv --json
     tracker import file 持仓.csv --overwrite   # 统一 CLI 入口 (tracker.importer)
 """
+
 from __future__ import annotations
 
 import argparse
@@ -38,7 +39,7 @@ def code_to_yahoo(code: str) -> str | None:
     # 去掉可能的前导市场标记 (SH/SZ/BJ.)
     for prefix in ("SH", "SZ", "BJ"):
         if raw.upper().startswith(prefix):
-            raw = raw[len(prefix):].lstrip(".")
+            raw = raw[len(prefix) :].lstrip(".")
             break
     # 数值读入残留的小数形式 (1.0 → 1) 先归一为整数串
     if raw.endswith(".0"):
@@ -56,12 +57,29 @@ def code_to_yahoo(code: str) -> str | None:
 _CODE_KEYS = ("证券代码", "股票代码", "代码", "product_code", "symbol", "证券账号代码")
 _NAME_KEYS = ("证券名称", "股票名称", "名称", "product_name", "name")
 _QTY_KEYS = (
-    "持仓数量", "当前持仓", "股份余额", "股份可用", "可用余额",
-    "持仓股数", "总持仓", "volume", "当前数量", "持仓量",
+    "持仓数量",
+    "当前持仓",
+    "股份余额",
+    "股份可用",
+    "可用余额",
+    "持仓股数",
+    "总持仓",
+    "volume",
+    "当前数量",
+    "持仓量",
 )
 _COST_KEYS = (
-    "成本价", "参考成本价", "买入均价", "持仓成本", "开仓均价",
-    "摊薄成本价", "保本价", "成本", "avg_price", "vwap", "open_price",
+    "成本价",
+    "参考成本价",
+    "买入均价",
+    "持仓成本",
+    "开仓均价",
+    "摊薄成本价",
+    "保本价",
+    "成本",
+    "avg_price",
+    "vwap",
+    "open_price",
 )
 
 
@@ -79,8 +97,14 @@ def _pick_col(df: pd.DataFrame, keys: tuple[str, ...]) -> str | None:
 
 
 def _to_float(v) -> float | None:
+    """数值归一; 容忍千分位逗号/空格 ("1,000"/"1 000" → 1000, 券商导出常见)."""
+    if v is None:
+        return None
+    s = str(v).strip().replace(",", "").replace("\u00a0", "").replace(" ", "")
+    if not s:
+        return None
     try:
-        f = float(v)
+        f = float(s)
     except (TypeError, ValueError):
         return None
     if pd.isna(f):
@@ -108,7 +132,8 @@ def parse_positions_file(path: str | Path) -> tuple[list[dict], list[str]]:
     else:
         # CSV: 尝试常见编码 (券商导出多为 GBK/GB2312)
         df = None
-        for enc in ("utf-8", "gbk", "gb18030", "utf-8-sig"):
+        # utf-8-sig 优先: BOM 文件用 utf-8 读会把 \ufeff 混入首列名致列匹配失败
+        for enc in ("utf-8-sig", "utf-8", "gbk", "gb18030"):
             try:
                 # dtype=str: 券商导出常省略前导零 (000001), 按数值读入会变成 1 而丢失代码
                 df = pd.read_csv(p, encoding=enc, dtype=str)
@@ -139,7 +164,13 @@ def parse_positions_file(path: str | Path) -> tuple[list[dict], list[str]]:
             skipped.append(f"{raw_code}: 非6位A股代码, 跳过")
             continue
         qty = _to_float(r[qty_col])
-        if qty is None or qty == 0:
+        if qty is None:
+            # 代码合法但数量列无法解析: 显式记入 skipped, 不静默丢行
+            skipped.append(
+                f"{raw_code}: 数量列 {qty_col!r} 值 {r[qty_col]!r} 无法解析, 跳过"
+            )
+            continue
+        if qty == 0:
             continue
         avg_cost = _to_float(r[cost_col]) if cost_col else None
         rows.append(
@@ -167,7 +198,9 @@ def run_sync(args) -> None:
         if getattr(args, "append", False)
         else importer.MODE_OVERWRITE
     )
-    result = importer.apply_import(rows, args.portfolio, mode=mode, dry_run=args.dry_run)
+    result = importer.apply_import(
+        rows, args.portfolio, mode=mode, dry_run=args.dry_run
+    )
 
     if getattr(args, "json", False):
         print(
@@ -220,8 +253,11 @@ def main(argv=None) -> None:
     ap.add_argument("file", help="券商导出的持仓文件路径 (CSV/Excel)")
     ap.add_argument("--portfolio", default=str(DEFAULT_PORTFOLIO))
     ap.add_argument("--dry-run", action="store_true", help="仅打印, 不写入")
-    ap.add_argument("--append", action="store_true",
-                    help="追加合并 (按代码更新/新增); 缺省覆盖全部持仓")
+    ap.add_argument(
+        "--append",
+        action="store_true",
+        help="追加合并 (按代码更新/新增); 缺省覆盖全部持仓",
+    )
     ap.add_argument("--json", action="store_true", help="输出 JSON 而非表格")
     args = ap.parse_args(argv)
     run_sync(args)

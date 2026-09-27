@@ -249,7 +249,7 @@ def test_is_pence_case_insensitive():
     # LSE 便士符号各数据源大小写不一 (yfinance 用 GBp, IBKR 用 GBX/GBp)
     for ccy in ("GBp", "GBX", "GBx", "gbx", "gbX", "gBp", "  GBp "):
         assert is_pence(ccy), ccy
-    # 精确 "GBP" 是英镑本体, 不能再除 100
+    # 精确 "GBP" 是英镑本体, 不能再除 100 (便士与英镑只差大小写, 不能放宽)
     assert not is_pence("GBP")
     assert not is_pence("USD")
     assert not is_pence("")

@@ -1,4 +1,5 @@
 """汇率获取: CFETS(akshare) 优先, OpenBB(yfinance) 货币对兜底."""
+
 from __future__ import annotations
 
 import math
@@ -111,6 +112,7 @@ def get_rate(src: str, dst: str, use_ibkr: bool = False) -> float | None:
     if use_ibkr:
         try:
             from . import ibkr as ibkr_mod
+
             rate, reason = ibkr_mod.get_fx_rate_ibkr(src, dst)
             if rate is not None:
                 return rate
@@ -130,7 +132,9 @@ def get_rate(src: str, dst: str, use_ibkr: bool = False) -> float | None:
     return None
 
 
-def get_fx_rates(base: str, currencies, use_ibkr: bool = False) -> tuple[dict[str, float], list[str]]:
+def get_fx_rates(
+    base: str, currencies, use_ibkr: bool = False
+) -> tuple[dict[str, float], list[str]]:
     base = base.upper()
     rates: dict[str, float] = {}
     missing: list[str] = []

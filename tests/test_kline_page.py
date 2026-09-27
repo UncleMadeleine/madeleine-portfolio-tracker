@@ -4,6 +4,7 @@
 「何时进入渲染分支」与双模式数据流: 滑动模式一次加载上市以来全量历史 (换代码
 重取, 参数只重绘); 范围模式保持旧流程 (提交驱动)。
 """
+
 from __future__ import annotations
 
 import pandas as pd
@@ -20,7 +21,9 @@ kp.render_kline_controls(False)
 """
 
 
-def _fake_ohlc(symbol, months=12, prefer_akshare=False, start_date=None, end_date=None, **kw):
+def _fake_ohlc(
+    symbol, months=12, prefer_akshare=False, start_date=None, end_date=None, **kw
+):
     """2014-2024 十年日K; 区间查询返回 [start_date, end_date) 内的数据."""
     idx = pd.date_range("2014-01-01", periods=3600, freq="D")
     close = [1.0 + (i % 50) * 0.01 for i in range(len(idx))]
@@ -28,7 +31,7 @@ def _fake_ohlc(symbol, months=12, prefer_akshare=False, start_date=None, end_dat
         {
             "date": idx,
             "open": close,
-            "high": [c + 0.1 for c in close],   # 保持 high >= max(open,close) 不变式
+            "high": [c + 0.1 for c in close],  # 保持 high >= max(open,close) 不变式
             "low": [c - 0.1 for c in close],
             "close": close,
             "volume": 100.0,
@@ -48,7 +51,9 @@ def kline_app(monkeypatch):
     """每个测试独立: 桩掉组件与网络, 清空两层缓存."""
     calls = {"n": 0}
 
-    def _fake_ohlc(symbol, months=12, prefer_akshare=False, start_date=None, end_date=None, **kw):
+    def _fake_ohlc(
+        symbol, months=12, prefer_akshare=False, start_date=None, end_date=None, **kw
+    ):
         calls["n"] += 1
         idx = pd.date_range("2024-01-01", periods=360, freq="D")
         df = pd.DataFrame(
@@ -134,7 +139,9 @@ def test_range_mode_param_change_redraws_not_refetches(kline_app):
     kline_app.multiselect[0].set_value([5, 10]).run()
     assert len(kline_app.metric) == 4
     assert kline_app._calls["n"] == base
-    kline_app.selectbox[1].set_value("weekly").run()  # 周期切换只重绘 (selectbox[0]=范围)
+    kline_app.selectbox[1].set_value(
+        "weekly"
+    ).run()  # 周期切换只重绘 (selectbox[0]=范围)
     assert len(kline_app.metric) == 4
     assert kline_app._calls["n"] == base
     kline_app.selectbox[0].set_value(6).run()  # 范围: 12 → 6 个月

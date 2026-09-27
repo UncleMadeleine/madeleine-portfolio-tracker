@@ -3,13 +3,14 @@
 覆盖市场: 裸代码=美股, .HK=港股, .DE/.F/.BE/.DU/.HM/.SG/.MU=德股,
 .L/.IL/.AL=英股, .TO/.V/.CN/.NE=加股, .AX=澳股。
 """
+
 from __future__ import annotations
 
 import threading
 
 import pandas as pd
 
-from ..symbols import Market, ParsedSymbol, is_pence, normalize
+from ..symbols import Market, ParsedSymbol, is_pence
 from ..util import with_timeout
 from .base import Provider, Quote, SymbolEntry
 from .em_suggest import parse_symbol_safe
@@ -97,6 +98,11 @@ def _quote_from_dump(p: ParsedSymbol, d: dict) -> Quote | None:
     if raw_ccy is None:
         raw_ccy = "GBp" if p.market is Market.GB else p.currency
     raw_ccy = str(raw_ccy).strip()
+    # B 股计价币种以本地规范为准 (沪B=USD / 深B=HKD): yfinance 对沪深 B 股
+    # 常误报 currency=CNY, 按其转换会把美元/港币市值按 CNY 记账 (汇率差 7 倍)。
+    # p.currency 由 symbols.parse 按 B 股代码段权威推导, 优先于数据源自报。
+    if p.is_b_share and raw_ccy.upper() == "CNY":
+        raw_ccy = p.currency
     # 便士符号大小写混用 (GBp/GBX/gbx/…), 必须先判定再大写, 否则小写 "gbx"
     # 会被当作普通货币而漏掉 ÷100, 英股价格放大 100 倍
     if is_pence(raw_ccy):
@@ -154,7 +160,9 @@ def _yahoo_batch(parsed: list[ParsedSymbol]) -> dict[str, Quote]:
     return out
 
 
-def _yahoo_history(p: ParsedSymbol, start_date: str, end_date: str | None = None) -> pd.DataFrame:
+def _yahoo_history(
+    p: ParsedSymbol, start_date: str, end_date: str | None = None
+) -> pd.DataFrame:
     kwargs = {"symbol": p.yahoo, "provider": "yfinance", "start_date": start_date}
     if end_date:
         kwargs["end_date"] = end_date
@@ -162,7 +170,9 @@ def _yahoo_history(p: ParsedSymbol, start_date: str, end_date: str | None = None
     df = res.to_dataframe().reset_index()
     df = df.rename(columns={df.columns[0]: "date"})
     df = df.dropna(subset=["close"])
-    keep = [c for c in ("date", "open", "high", "low", "close", "volume") if c in df.columns]
+    keep = [
+        c for c in ("date", "open", "high", "low", "close", "volume") if c in df.columns
+    ]
     df = df[keep]
     if p.market is Market.GB:
         for c in ("open", "high", "low", "close"):
@@ -231,12 +241,19 @@ def _akshare_quote(p: ParsedSymbol) -> Quote:
     )
 
 
-def _akshare_history(p: ParsedSymbol, start_date: str, end_date: str | None = None) -> pd.DataFrame:
+def _akshare_history(
+    p: ParsedSymbol, start_date: str, end_date: str | None = None
+) -> pd.DataFrame:
     ak = _ak()
     start = start_date.replace("-", "")
     end = end_date.replace("-", "") if end_date else None
     if p.market in (Market.CN, Market.BJ):
-        kwargs = {"symbol": p.yahoo.split(".")[0], "period": "daily", "start_date": start, "adjust": "qfq"}
+        kwargs = {
+            "symbol": p.yahoo.split(".")[0],
+            "period": "daily",
+            "start_date": start,
+            "adjust": "qfq",
+        }
         if end:
             kwargs["end_date"] = end
         df = ak.stock_zh_a_hist(**kwargs)
@@ -244,7 +261,12 @@ def _akshare_history(p: ParsedSymbol, start_date: str, end_date: str | None = No
         ak_code = p.ak_code or ""
         if not ak_code or not ak_code.isdigit():
             raise ValueError(f"{p.yahoo}: 无效港股代码 (ak_code={ak_code!r})")
-        kwargs = {"symbol": ak_code, "period": "daily", "start_date": start, "adjust": "qfq"}
+        kwargs = {
+            "symbol": ak_code,
+            "period": "daily",
+            "start_date": start,
+            "adjust": "qfq",
+        }
         if end:
             kwargs["end_date"] = end
         df = ak.stock_hk_hist(**kwargs)
@@ -262,7 +284,9 @@ def _akshare_history(p: ParsedSymbol, start_date: str, end_date: str | None = No
     )
     df["date"] = pd.to_datetime(df["date"])
     df = df.dropna(subset=["close"])
-    keep = [c for c in ("date", "open", "high", "low", "close", "volume") if c in df.columns]
+    keep = [
+        c for c in ("date", "open", "high", "low", "close", "volume") if c in df.columns
+    ]
     return df[keep]
 
 
@@ -283,7 +307,13 @@ class GlobalStocksProvider(Provider):
             return [_yahoo_quote, _akshare_quote]
         return [_yahoo_quote]
 
-    def history_sources(self, p: ParsedSymbol, start_date: str, end_date: str | None, prefer_first: bool = False) -> list:
+    def history_sources(
+        self,
+        p: ParsedSymbol,
+        start_date: str,
+        end_date: str | None,
+        prefer_first: bool = False,
+    ) -> list:
         if p.market is Market.HK:
             if prefer_first:
                 return [
@@ -329,7 +359,10 @@ class GlobalStocksProvider(Provider):
         if ibkr_rows:
             for row in ibkr_rows[: limit * 2]:
                 yahoo = ibkr_to_yahoo(
-                    row["symbol"], row["exchange"], row["primary_exchange"], row["currency"]
+                    row["symbol"],
+                    row["exchange"],
+                    row["primary_exchange"],
+                    row["currency"],
                 )
                 if yahoo:
                     _add(yahoo, row["long_name"] or row["symbol"], _market_label(yahoo))
@@ -337,7 +370,11 @@ class GlobalStocksProvider(Provider):
         # 源 2: 东财 suggest (纯数字 / 非 ASCII 查询): 700 补零命中 00700 腾讯控股,
         # 中文名命中港股/中概 (东财 suggest 支持中文, yf 不支持); 只取港股行
         if q.isdigit() or not q.isascii():
-            from .em_suggest import em_code_to_yahoo, normalize_suggest_row, suggest_merged
+            from .em_suggest import (
+                em_code_to_yahoo,
+                normalize_suggest_row,
+                suggest_merged,
+            )
 
             merged = suggest_merged(q)
             if merged is not None:

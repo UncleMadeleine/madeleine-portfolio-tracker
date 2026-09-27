@@ -8,7 +8,7 @@
 
 ## 项目目标
 
-1. **投资组合追踪** — 多数据源接入 A股 / B股 / 港股 / 美股 / 德股 / 英股 / 加股 / 澳股 / 加密货币（规划：新加坡股 `.SI`）
+1. **投资组合追踪** — 多数据源接入 A股 / B股 / 港股 / 美股 / 德股 / 英股 / 加股 / 澳股 / 新加坡股 / 加密货币
 2. **Watchlist 管理** — 多列表归属 + 两级价格阈值提醒
 3. **按代码或名称查询** — 模糊搜索代码/名称，一键查看 K 线与基本数据
 4. **双前端** — 人类用 Streamlit UI；Agent（hermes / openclaw 等）用统一 CLI，全部子命令支持 `--json`，解决手机上查看的问题
@@ -189,10 +189,11 @@ python -m tracker.cli longport-login --json    # 长桥 OAuth 授权 URL（脚�
 | B股 | `.SS` / `.SZ` | `900902.SS` `200012.SZ` | USD / HKD | cn | 上海 B 股 `9` 开头以**美元**交易，深圳 B 股 `2` 开头以**港币**交易 |
 | 北交所 | `.BJ` | `830799.BJ` | CNY | cn | |
 | 港股 | `.HK` | `0700.HK` `0941.HK` | HKD | global | **4 位补零**；`00700.HK` 自动归一 |
-| 德股 | `.DE` 等 | `SAP.DE` | EUR | global | `.F` `.BE` `.DU` `.HM` `.SG` `.MU` 均可 |
+| 德股 | `.DE` 等 | `SAP.DE` | EUR | global | `.F` `.BE` `.DU` `.HM` `.MU` 均可 |
 | 英股 | `.L` | `BP.L` | GBP | global | Yahoo 报价单位为便士（GBp），系统自动 ÷100 换算为英镑；`.IL` `.AL` 同属伦交所 |
 | 加股 | `.TO` 等 | `RY.TO` | CAD | global | `.V`（TSXV）`.CN` `.NE` 均可 |
 | 澳股 | `.AX` | `BHP.AX` | AUD | global | |
+| 新加坡股 | `.SI` | `D05.SI` | SGD | global | SGX；`.SG` 别名自动归一为 `.SI`（yfinance 无 `.SG` 数据） |
 | 加密货币 | `-QUOTE` | `BTC-USD` `ETH-USDT` | 计价货币 | crypto | 连字符 `BASE-QUOTE`（Yahoo crypto 规范）；无分隔符 `BTCUSD` 自动补全 |
 
 **互斥保证**：点后缀/裸代码永远是股票，连字符+计价货币永远是加密货币（单字母连字符 `BRK-B`
@@ -484,7 +485,6 @@ python -m tracker.cli import wallet polygon 0x... --tokenlist my_tokens.json
 - IBKR 行情需本机运行 IB Gateway 且 API 已启用；A股/港股/B股数据若无市场数据订阅，`reqTickers` 可能返回空值，自动回退 Yahoo/akshare
 - IBKR A股合约默认映射为 `SEHK/CNY`，若你的账户显示不同交易所代码，在 `ibkr.json` 中修改 `exchanges.CN`；B股合约根据 IBKR 返回的 `SHSE/USD` 或 `SZSE/HKD` 自动识别
 - 长桥行情/持仓需 `pip install longport` 并完成登录；未安装/未配置时 `--longport` 与 `import longport` 报可读错误并回退默认数据源
-- 新加坡股（`.SI`）暂未支持
 
 ---
 
@@ -498,7 +498,6 @@ python -m tracker.cli import wallet polygon 0x... --tokenlist my_tokens.json
 - [x] 链上钱包余额导入（EVM 五链）
 - [x] 多股 K 线对比（同坐标系 + 归一化）
 - [ ] **K 线比值模式** — 两标的收盘价比值画成 K 线（如腾讯 / 南非报业）
-- [ ] **新加坡股接入**（`.SI`，Yahoo 后缀即可覆盖行情，需补目录与测试）
 - [ ] Hyperliquid / A股券商实时**持仓**对接（当前 HL 仅为行情源）
 - [ ] 交易流水记录与分批成本（FIFO）
 - [ ] 分红/拆分事件跟踪
@@ -511,7 +510,7 @@ python -m tracker.cli import wallet polygon 0x... --tokenlist my_tokens.json
 
 > **Local-first multi-market portfolio tracker. Human-facing Streamlit UI + agent-facing CLI (`--json`). Zero API keys. Completely free.**
 
-A **local-first** portfolio tracker supporting **A-shares / B-shares / Beijing SE / HK / US / DE / GB / CA / AU** and **crypto** (SGX planned). Data layer is split into four isolated **providers** (global stocks / CN stocks / crypto / macro-risk indices) that only meet at the portfolio & watchlist aggregation level.
+A **local-first** portfolio tracker supporting **A-shares / B-shares / Beijing SE / HK / US / DE / GB / CA / AU / SG (SGX)** and **crypto**. Data layer is split into four isolated **providers** (global stocks / CN stocks / crypto / macro-risk indices) that only meet at the portfolio & watchlist aggregation level.
 
 ### Goals
 

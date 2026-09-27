@@ -17,7 +17,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from .symbols import type_for_symbol
+from .symbols import parse, type_for_symbol
 
 # 数据文件锚定仓库根 (包内目录会随部署位置漂移)
 _ROOT = Path(__file__).resolve().parent.parent
@@ -93,9 +93,17 @@ def _write_json(data: dict, path: str | Path) -> None:
 
 
 def _stamp_type(row: dict) -> dict:
-    """条目补写权威 type 字段 (系统维护, 用户不可见不可改)."""
+    """条目补写权威 type 字段 (系统维护, 用户不可见不可改)。
+
+    symbol 先经 parse().yahoo 归一 (别名后缀 .SG→.SI, .SH→.SS, 港股补零等):
+    手写/导入的别名与规范形态不会在文件里裂成两条; parse 失败保留原串。
+    """
     sym = str(row.get("symbol", "")).strip()
     if sym:
+        try:
+            row["symbol"] = parse(sym).yahoo
+        except Exception:
+            pass
         try:
             row["type"] = type_for_symbol(sym)
         except Exception:
@@ -168,11 +176,22 @@ def parse_lists(v) -> list[str]:
 
 
 def normalize_watch_entry(e: dict) -> dict:
-    """自选条目 schema 归一: 旧阈值键名迁移 + 权威 type 覆写。"""
+    """自选条目 schema 归一: 旧阈值键名迁移 + symbol 归一 + 权威 type 覆写。
+
+    symbol 经 parse().yahoo 归一 (别名后缀 .SG→.SI, 港股补零 700→0700,
+    .SH→.SS 等): 手写/导入的别名与规范形态不会在文件里裂成两条。
+    parse 失败 (无法识别的代码) 时保留原串, 由取数/视图层报错。
+    """
     out = dict(e)
     for old, new in (("upper", "upper_1"), ("lower", "lower_1")):
         if old in out and new not in out:
             out[new] = out.pop(old)
+    sym = str(out.get("symbol", "")).strip()
+    if sym:
+        try:
+            out["symbol"] = parse(sym).yahoo
+        except Exception:
+            pass
     return _stamp_type(out)
 
 
@@ -219,9 +238,11 @@ def load_watchlist(path: str | Path = WATCHLIST_PATH) -> dict:
 
 
 def save_watchlist(data: dict, path: str | Path = WATCHLIST_PATH) -> None:
-    """保存自选 (写盘唯一入口): 逐条 schema 归一 + 权威 type 覆写。
+    """保存自选 (写盘唯一入口): 逐条 schema 归一 + 权威 type 覆写 + 同代码去重。
 
     与 save_portfolio 一致: 保留文件中已有其它键 (_说明 等文档/自定义字段)。
+    symbol 经 normalize_watch_entry 归一后按代码去重 (lists 并集, 其余字段
+    非空者补齐): 别名 (如 D05.SG/D05.SI) 与规范形态不会在文件里裂成两条。
     """
     p = Path(path)
     if p.exists():
@@ -231,9 +252,23 @@ def save_watchlist(data: dict, path: str | Path = WATCHLIST_PATH) -> None:
             merged = {}
     else:
         merged = {}
-    merged["watchlist"] = [
-        normalize_watch_entry(dict(e)) for e in data.get("watchlist", [])
-    ]
+    by_symbol: dict[str, dict] = {}
+    for raw in data.get("watchlist", []):
+        e = normalize_watch_entry(dict(raw))
+        sym = str(e.get("symbol", "")).strip()
+        found = by_symbol.get(sym)
+        if found is None:
+            by_symbol[sym] = e
+            continue
+        for name in e.get("lists") or []:
+            if name not in (found.setdefault("lists", [])):
+                found["lists"].append(name)
+        for k, v in e.items():
+            if k in ("symbol", "lists", "type"):
+                continue
+            if v is not None and v != "" and (k not in found or not found[k]):
+                found[k] = v
+    merged["watchlist"] = list(by_symbol.values())
     _write_json(merged, p)
 
 

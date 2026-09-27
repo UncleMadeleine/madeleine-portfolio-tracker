@@ -334,7 +334,7 @@ if st.session_state.app_page == "portfolio":
     all_watch_entries = merge_entries(watch)
     if holdings.empty and not all_watch_entries:
         st.info(
-            "在左侧添加持仓或自选股并保存。支持 A股/港股/美股/德股/英股/加股/澳股/加密货币。"
+            "在左侧添加持仓或自选股并保存。支持 A股/港股/美股/德股/英股/加股/澳股/新加坡股/加密货币。"
         )
         st.stop()
 

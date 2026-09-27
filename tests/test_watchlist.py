@@ -18,6 +18,7 @@ from tracker.services.watchlist import (
     sort_watchlist,
     triggered_entries,
 )
+from tracker.storage import normalize_watch_entry
 from tracker.watchlist import load_watchlist, parse_lists
 
 
@@ -305,3 +306,36 @@ def test_parse_lists():
     assert parse_lists("") == ["默认"]
     assert parse_lists(None) == ["默认"]
     assert parse_lists(float("nan")) == ["默认"]
+
+
+def test_normalize_watch_entry_symbol_alias_to_canonical():
+    """symbol 经 parse 归一: 别名后缀 .SG→.SI, .SH→.SS, 港股补零 (回归:
+    其他 agent 导入 watchlist 时 .SI/.SG 无法识别/别名残留裂成两条)。"""
+    assert normalize_watch_entry({"symbol": "D05.SG"})["symbol"] == "D05.SI"
+    assert normalize_watch_entry({"symbol": "600519.SH"})["symbol"] == "600519.SS"
+    assert normalize_watch_entry({"symbol": "00700.HK"})["symbol"] == "0700.HK"
+    assert normalize_watch_entry({"symbol": "d05.si"})["symbol"] == "D05.SI"
+    # 无法识别的代码保留原串 (取数/视图层报真实错误)
+    assert normalize_watch_entry({"symbol": "BAD.ZZ"})["symbol"] == "BAD.ZZ"
+
+
+def test_normalize_watch_entry_no_alias_split(tmp_path):
+    """同一代码的别名与规范形态保存后收敛为一条 (write path 唯一入口)."""
+    from tracker.storage import save_watchlist
+
+    f = tmp_path / "w.json"
+    save_watchlist(
+        {
+            "watchlist": [
+                {"symbol": "D05.SI", "lists": ["A"]},
+                {"symbol": "D05.SG", "lists": ["B"], "upper_1": 80},
+            ]
+        },
+        f,
+    )
+    data = load_watchlist(f)
+    d05 = [e for e in data["watchlist"] if e["symbol"].startswith("D05")]
+    assert len(d05) == 1
+    assert d05[0]["symbol"] == "D05.SI"
+    assert set(d05[0]["lists"]) == {"A", "B"}
+    assert d05[0]["upper_1"] == 80

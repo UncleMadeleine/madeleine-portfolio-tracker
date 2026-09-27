@@ -209,6 +209,8 @@ def contract_spec(p: ParsedSymbol, exchanges: dict | None = None) -> ContractSpe
         return ContractSpec(code, ex.get("CA", "TSE"), "CAD")
     if p.market is Market.AU:
         return ContractSpec(code, ex.get("AU", "ASX"), "AUD")
+    if p.market is Market.SG:
+        return ContractSpec(code, ex.get("SG", "SGX"), "SGD")
     raise ValueError(f"不支持的市场: {p.market}")
 
 
@@ -382,10 +384,12 @@ def ibkr_to_yahoo(
     # NEOE = Cboe Canada (NEO) 现行交易所代号, 与 contract_spec 的默认值对应
     if exkey in ("NEO", "NEOEX", "NEOE"):
         return f"{sym}.NE"
-    if ccy == "CAD" or exkey in ("TSE", "TSXV", "TSX", "CDGX"):
-        return f"{sym}.V" if exkey == "TSXV" else f"{sym}.TO"
     if ccy == "AUD" or exkey == "ASX":
         return f"{sym}.AX"
+    if ccy == "SGD" or exkey in ("SGX", "SES"):
+        return f"{sym}.SI"
+    if ccy == "CAD" or exkey in ("TSE", "TSXV", "TSX", "CDGX"):
+        return f"{sym}.V" if exkey == "TSXV" else f"{sym}.TO"
     if ccy == "USD" or exkey in (
         "SMART",
         "NYSE",

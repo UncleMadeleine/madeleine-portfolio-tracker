@@ -14,6 +14,7 @@ class Market(str, Enum):
     GB = "GB"
     CA = "CA"
     AU = "AU"
+    SG = "SG"
     BJ = "BJ"
     CRYPTO = "CRYPTO"
     INDEX = "INDEX"
@@ -27,6 +28,7 @@ MARKET_META: dict[Market, dict[str, str]] = {
     Market.GB: {"label": "英股", "currency": "GBP"},
     Market.CA: {"label": "加股", "currency": "CAD"},
     Market.AU: {"label": "澳股", "currency": "AUD"},
+    Market.SG: {"label": "新加坡股", "currency": "SGD"},
     Market.BJ: {"label": "北交所", "currency": "CNY"},
     Market.CRYPTO: {"label": "加密货币", "currency": "USD"},
     Market.INDEX: {"label": "指数", "currency": "USD"},
@@ -43,7 +45,6 @@ _SUFFIX_MARKET: dict[str, Market] = {
     "BE": Market.DE,
     "DU": Market.DE,
     "HM": Market.DE,
-    "SG": Market.DE,
     "MU": Market.DE,
     "L": Market.GB,
     "IL": Market.GB,
@@ -53,6 +54,9 @@ _SUFFIX_MARKET: dict[str, Market] = {
     "CN": Market.CA,
     "NE": Market.CA,
     "AX": Market.AU,
+    # 新加坡 (SGX): Yahoo 规范后缀 .SI (D05.SI); .SG 为常见别名, normalize 归一
+    "SI": Market.SG,
+    "SG": Market.SG,
 }
 
 # 宏观/风险指数目录: 与股票域完全隔离的独立代码规范 (IX.<KEY>).
@@ -316,6 +320,8 @@ def normalize(symbol: str) -> str:
         suffix = "SS"
     elif suffix == "HK":
         head = head.lstrip("0").zfill(4)
+    elif suffix == "SG":
+        suffix = "SI"  # SGX: Yahoo 规范后缀 .SI; .SG 别名归一 (yfinance 无 .SG 数据)
     return f"{head}.{suffix}"
 
 

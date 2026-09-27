@@ -73,6 +73,27 @@ def test_parse_all_markets():
     assert parse("RY.TO").market is Market.CA
     assert parse("X.V").market is Market.CA
     assert parse("BHP.AX").market is Market.AU
+    assert parse("D05.SI").market is Market.SG
+
+
+def test_parse_singapore_alias_and_normalization():
+    """SGX: .SI 规范后缀 (SGD); .SG 别名归一为 .SI (yfinance 无 .SG 数据)。"""
+    p = parse("D05.SI")
+    assert p.yahoo == "D05.SI"
+    assert p.market is Market.SG
+    assert p.currency == "SGD"
+    assert p.market_label == "新加坡股"
+    assert p.type == "global"
+    # 别名大小写/空白/小写后缀一律归一
+    assert parse("D05.SG").yahoo == "D05.SI"
+    assert parse("d05.sg").yahoo == "D05.SI"
+    assert parse(" U11.SI ").yahoo == "U11.SI"
+    from tracker.symbols import type_for_symbol
+
+    assert type_for_symbol("D05.SG") == "global"
+    # .SG 不再误判德股 (回归: 德股仅 .DE/.F/.BE/.DU/.HM/.MU)
+    assert parse("SAP.SG").market is Market.SG
+    assert parse("SAP.SG").currency == "SGD"
 
 
 def test_parse_unknown_suffix():

@@ -1,7 +1,7 @@
 """全球股票 provider: 美股/港股/德英加澳 (IBKR 优先 → yfinance → 港股 akshare 兜底).
 
-覆盖市场: 裸代码=美股, .HK=港股, .DE/.F/.BE/.DU/.HM/.SG/.MU=德股,
-.L/.IL/.AL=英股, .TO/.V/.CN/.NE=加股, .AX=澳股。
+覆盖市场: 裸代码=美股, .HK=港股, .DE/.F/.BE/.DU/.HM/.MU=德股,
+.L/.IL/.AL=英股, .TO/.V/.CN/.NE=加股, .AX=澳股, .SI=新加坡 (SGX, .SG 别名归一)。
 """
 
 from __future__ import annotations
@@ -294,6 +294,7 @@ class GlobalStocksProvider(Provider):
     """美股/港股/全球股票域: IBKR 在批量层前置 (orchestration), 此处 yfinance 为主源,
 
     港股附 akshare 兜底。A股 (.SS/.SZ/.BJ) 不属于本域。
+    新加坡 (.SI) yfinance 主源; IBKR 需 SGX 行情订阅 (contract_spec 默认 SGX)。
     搜索源链: IBKR reqMatchingSymbols (可选) → yfinance Search → 本地目录/代码直查。
     """
 

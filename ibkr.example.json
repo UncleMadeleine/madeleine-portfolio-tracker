@@ -15,6 +15,7 @@
     "CA_V": "TSXV",
     "CA_CN": "CSE",
     "CA_NE": "NEOE",
-    "AU": "ASX"
+    "AU": "ASX",
+    "SG": "SGX"
   }
 }

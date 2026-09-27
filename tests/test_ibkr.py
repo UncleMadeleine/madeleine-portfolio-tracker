@@ -133,14 +133,16 @@ def test_contract_spec_all_markets():
         ("AAPL", ContractSpec("AAPL", "SMART", "USD")),
         # 美股类别股: Yahoo 连字符 → IBKR 合约库空格形态
         ("BRK-B", ContractSpec("BRK B", "SMART", "USD")),
-        ("600519.SS", ContractSpec("600519", "SEHK", "CNY", "600519")),
-        ("000001.SZ", ContractSpec("000001", "SEHK", "CNY", "000001")),
-        ("002594.SZ", ContractSpec("002594", "SEHK", "CNY", "002594")),
+        # A股: 沪深港通通道 (沪=SEHKNTL, 深=SEHKSZSE), CNH 计价, 无 tradingClass
+        ("600519.SS", ContractSpec("600519", "SEHKNTL", "CNH")),
+        ("688981.SS", ContractSpec("688981", "SEHKSTAR", "CNH")),
+        ("000001.SZ", ContractSpec("000001", "SEHKSZSE", "CNH")),
+        ("002594.SZ", ContractSpec("002594", "SEHKSZSE", "CNH")),
         ("900902.SS", ContractSpec("900902", "SHSE", "USD", "900902")),
         ("200012.SZ", ContractSpec("200012", "SZSE", "HKD", "200012")),
         ("0700.HK", ContractSpec("700", "SEHK", "HKD")),
         ("SAP.DE", ContractSpec("SAP", "IBIS", "EUR")),
-        ("BP.L", ContractSpec("BP", "LSE", "GBP")),
+        ("BP.L", ContractSpec("BP.", "LSE", "GBP")),
         ("RY.TO", ContractSpec("RY", "TSE", "CAD")),
         ("X.V", ContractSpec("X", "TSXV", "CAD")),
         ("ABC.CN", ContractSpec("ABC", "CSE", "CAD")),
@@ -152,8 +154,8 @@ def test_contract_spec_all_markets():
 
 
 def test_contract_spec_exchange_override():
-    spec = contract_spec(parse("600519.SS"), exchanges={"CN": "SHSE"})
-    assert spec == ContractSpec("600519", "SHSE", "CNY", "600519")
+    spec = contract_spec(parse("600519.SS"), exchanges={"CN_SH": "SEHKNTL2"})
+    assert spec == ContractSpec("600519", "SEHKNTL2", "CNH")
 
 
 def test_contract_spec_ca_cse_neo_override():
@@ -297,6 +299,51 @@ def test_get_quotes_ibkr_unavailable_note(monkeypatch):
     quotes, errors, notes = orch.get_quotes(["AAPL"], use_ibkr=True)
     assert quotes["AAPL"].price == 2.0
     assert len(notes) == 1 and "IBKR 不可用" in notes[0]
+
+
+def test_get_quotes_ibkr_skips_cn_and_crypto():
+    """分域规范: A股/北交所/B股/crypto/指数不被 IBKR 认领, 交回默认链."""
+    from tracker.symbols import parse
+
+    assert ibkr_mod._claims_global(parse("AAPL"))
+    assert ibkr_mod._claims_global(parse("0700.HK"))
+    assert ibkr_mod._claims_global(parse("SAP.DE"))
+    assert not ibkr_mod._claims_global(parse("600519.SS"))
+    assert not ibkr_mod._claims_global(parse("000001.SZ"))
+    assert not ibkr_mod._claims_global(parse("830799.BJ"))
+    assert not ibkr_mod._claims_global(parse("900902.SS"))
+    assert not ibkr_mod._claims_global(parse("BTC-USD"))
+    assert not ibkr_mod._claims_global(parse("IX.DXY"))
+
+
+def test_get_quotes_ibkr_claims_only_global(monkeypatch):
+    """混批 (A股+美股+crypto+港股): 真函数内过滤 — A股/crypto 不进 IBKR 批次."""
+    from tracker.symbols import parse
+
+    built: list[str] = []
+
+    class FakeIB:
+        def qualifyContracts(self, *contracts):
+            return list(contracts)
+
+        def reqTickers(self, *contracts):
+            return []
+
+    monkeypatch.setattr(ibkr_mod, "_get_client", lambda cfg: FakeIB())
+
+    orig_spec = ibkr_mod.contract_spec
+
+    def spy_spec(p, exchanges=None):
+        built.append(p.yahoo)
+        return orig_spec(p, exchanges)
+
+    monkeypatch.setattr(ibkr_mod, "contract_spec", spy_spec)
+
+    parsed = [parse(s) for s in ["600519.SS", "AAPL", "BTC-USD", "0700.HK"]]
+    quotes, reason = ibkr_mod.get_quotes_ibkr(parsed)
+    # 只认领全球域: A股/crypto 不构建合约
+    assert built == ["AAPL", "0700.HK"]
+    assert quotes == {} and reason is None
 
 
 def test_get_quotes_ibkr_not_used_by_default(monkeypatch):

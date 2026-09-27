@@ -190,13 +190,25 @@ def contract_spec(p: ParsedSymbol, exchanges: dict | None = None) -> ContractSpe
                 return ContractSpec(
                     code, ex.get("SZSE", "SZSE"), "HKD", trading_class=code
                 )
-        return ContractSpec(code, ex.get("CN", "SEHK"), "CNY", trading_class=code)
+        # A股经沪深港通在 IBKR 交易: 沪=SEHKNTL, 深=SEHKSZSE, 科创板=SEHKSTAR;
+        # 计价为 CNH (离岸人民币), CNY/SSE/SZSE/SMART 均不被 IBKR 合约库识别
+        if p.market is Market.BJ:
+            # 北交所无沪深港通通道: IBKR 不提供, 落 SEHKNTL 会查无合约,
+            # 快速失败让调用方回退 akshare/yfinance
+            return ContractSpec(code, ex.get("BJ", "SEHKNTL"), "CNH")
+        # 科创板 (.SS 68 开头) 走 SEHKSTAR, 其余沪股走 SEHKNTL
+        if suffix == "SS" and code.startswith("68"):
+            return ContractSpec(code, ex.get("CN_STAR", "SEHKSTAR"), "CNH")
+        if suffix == "SS":
+            return ContractSpec(code, ex.get("CN_SH", "SEHKNTL"), "CNH")
+        return ContractSpec(code, ex.get("CN_SZ", "SEHKSZSE"), "CNH")
     if p.market is Market.HK:
         return ContractSpec(code.lstrip("0") or code, ex.get("HK", "SEHK"), "HKD")
     if p.market is Market.DE:
         return ContractSpec(code, ex.get("DE", "IBIS"), "EUR")
     if p.market is Market.GB:
-        return ContractSpec(code, ex.get("GB", "LSE"), "GBP")
+        # LSE 合约 symbol 带尾点 (BP./HSBA./VOD.); 裸代码 qualify 查无合约
+        return ContractSpec(code + ".", ex.get("GB", "LSE"), "GBP")
     if p.market is Market.CA:
         # 加拿大三所: TSX(TSE) / TSXV(TSXV) / CSE(CSE) / NEO(Cboe Canada, NEOE);
         # .CN/.NE 误入 TSE 会让 qualifyContracts 报无安全定义
@@ -259,9 +271,27 @@ def quote_from_ticker(yahoo_symbol: str, ticker) -> Quote | None:
     )
 
 
+def _claims_global(p: ParsedSymbol) -> bool:
+    """IBKR 认领范围: 全球域 (美股/港股/德英加澳新).
+
+    A股/B股/北交所始终走 akshare→yfinance (CNY 实时价, 分域记账规范);
+    crypto/index 无 IBKR 合约。不认领的交回调用方默认链。
+    """
+    return p.market not in (
+        Market.CN,
+        Market.BJ,
+        Market.CRYPTO,
+        Market.INDEX,
+    )
+
+
 def get_quotes_ibkr(
     parsed: list[ParsedSymbol], cfg: dict | None = None
 ) -> tuple[dict[str, Quote], str | None]:
+    # 认领过滤先于连接: 全部不认领 (纯 A股/crypto 批) 时不建 Gateway 会话
+    claimed = [p for p in parsed if _claims_global(p)]
+    if not claimed:
+        return {}, None
     cfg = cfg or load_config()
     ib = _get_client(cfg)
     if ib is None:
@@ -269,7 +299,7 @@ def get_quotes_ibkr(
         return {}, reason
     m = _ib_module()
     pairs = []
-    for p in parsed:
+    for p in claimed:
         spec = contract_spec(p, cfg.get("exchanges"))
         c = m.Contract()
         c.symbol = spec.symbol
@@ -279,19 +309,22 @@ def get_quotes_ibkr(
         if spec.trading_class:
             c.tradingClass = spec.trading_class
         pairs.append((p.yahoo, c))
+    # qualifyContracts 对查无定义的合约会在返回列表塞 None (ib_async 行为):
+    # 一只坏合约若混入 reqTickers 会炸整批 ('NoneType' has no attribute 'secType'),
+    # 因此按位过滤, 只保留 qualify 成功的合约
     try:
         qualified = ib.qualifyContracts(*[c for _, c in pairs])
     except Exception as e:
         return {}, f"qualifyContracts 失败: {e}"[:200]
-    if not qualified:
+    good = [(c, y) for c, y in zip(qualified, [yy for yy, _ in pairs]) if c is not None]
+    if not good:
         return {}, None
-    by_id = {id(c): y for y, c in pairs}
     quotes: dict[str, Quote] = {}
-    tickers = []
     try:
-        tickers = ib.reqTickers(*qualified)
+        tickers = ib.reqTickers(*[c for c, _ in good])
     except Exception as e:
         return quotes, f"reqTickers 失败: {e}"[:200]
+    by_id = {id(c): y for c, y in good}
     for t in tickers:
         y = by_id.get(id(t.contract))
         if not y:
@@ -416,6 +449,9 @@ def get_history_ibkr(
 ) -> tuple[dict[str, pd.DataFrame], str | None]:
     import pandas as pd
 
+    claimed = [p for p in parsed if _claims_global(p)]
+    if not claimed:
+        return {}, None
     cfg = cfg or load_config()
     ib = _get_client(cfg)
     if ib is None:
@@ -423,7 +459,7 @@ def get_history_ibkr(
         return {}, reason
     m = _ib_module()
     results: dict[str, pd.DataFrame] = {}
-    for p in parsed:
+    for p in claimed:
         spec = contract_spec(p, cfg.get("exchanges"))
         c = m.Contract()
         c.symbol = spec.symbol

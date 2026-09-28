@@ -150,8 +150,11 @@ python -m tracker.cli import longport --dry-run        # 长桥账户持仓预�
 python -m tracker.cli longport-login                       # OAuth 浏览器授权登录（token 自动缓存刷新）
 python -m tracker.cli quote AAPL 0700.HK --longport --json # 指定子命令走长桥行情
 
-# 运行单元测试（不联网，纯逻辑 mock）
+# 运行单元测试（全离线；禁网护栏兜底：漏打桩的测试秒红而非挂起）
 python -m pytest tests/ -q
+
+# 真实联网集成测试（仅 @pytest.mark.network 标记的用例，默认不运行）
+python -m pytest -m network
 ```
 
 > 完整 CLI 帮助：`python -m tracker.cli --help`（或每个子命令 `--help`）。`python -m tracker` 等价。

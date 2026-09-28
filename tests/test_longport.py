@@ -100,6 +100,42 @@ def test_build_config_unknown_auth(tmp_path):
         lp.build_config(lp.load_config(real))
 
 
+def test_build_config_endpoint_overrides(tmp_path):
+    """longport.json 里的 http_url/quote_ws_url/trade_ws_url 必须透传 SDK Config."""
+    real = tmp_path / "longport.json"
+    real.write_text(
+        json.dumps(
+            {
+                "auth": "apikey",
+                "app_key": "K",
+                "app_secret": "S",
+                "access_token": "T",
+                "http_url": "https://openapi.longportapp.com",
+                "quote_ws_url": "wss://openapi-quote.longportapp.com",
+                "trade_ws_url": "wss://openapi-trade.longportapp.com",
+            }
+        )
+    )
+    captured = {}
+
+    class _FakeConfig:
+        @staticmethod
+        def from_apikey(app_key, app_secret, access_token, **kwargs):
+            captured.update(kwargs)
+            return object()
+    with patch.object(
+        lp,
+        "_sdk",
+        return_value=SimpleNamespace(
+            Config=_FakeConfig, Language=SimpleNamespace(ZH_CN=1, ZH_HK=2, EN=3)
+        ),
+    ):
+        lp.build_config(lp.load_config(real))
+    assert captured["http_url"] == "https://openapi.longportapp.com"
+    assert captured["quote_ws_url"] == "wss://openapi-quote.longportapp.com"
+    assert captured["trade_ws_url"] == "wss://openapi-trade.longportapp.com"
+
+
 # ---------------------------------------------------------------------------
 # 行情 / 历史 (SDK 假对象)
 # ---------------------------------------------------------------------------

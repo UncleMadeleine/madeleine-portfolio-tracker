@@ -123,6 +123,16 @@ def build_config(cfg: dict | None = None):
     lang = _language(api, cfg)
     if lang is not None:
         kwargs["language"] = lang
+    # 端点覆盖 (可选): SDK 默认端点随账号区域解析, 部分网络环境 (如 .cn 域名
+    # 无法解析) 需显式指定国际端点。http_url/quote_ws_url/trade_ws_url 任一可配。
+    for key, kw in (
+        ("http_url", "http_url"),
+        ("quote_ws_url", "quote_ws_url"),
+        ("trade_ws_url", "trade_ws_url"),
+    ):
+        val = str(cfg.get(key) or "").strip()
+        if val:
+            kwargs[kw] = val
     auth = str(cfg.get("auth") or "oauth").strip().lower()
     if auth == "apikey":
         app_key = str(cfg.get("app_key") or "").strip()

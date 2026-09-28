@@ -12,5 +12,11 @@
   "_app_secret": "YOUR_APP_SECRET",
   "_access_token": "YOUR_ACCESS_TOKEN",
 
+
+  "_端点覆盖": "可选: http_url / quote_ws_url / trade_ws_url 显式指定接入点。SDK 默认端点随账号区域解析 (中国区为 *.longport.cn); 若所在网络无法解析 .cn 域名 (DNS 污染/无路由), 取消下划线前缀填入国际端点:",
+  "_http_url": "https://openapi.longportapp.com",
+  "_quote_ws_url": "wss://openapi-quote.longportapp.com",
+  "_trade_ws_url": "wss://openapi-trade.longportapp.com",
+
   "language": "zh-CN"
 }

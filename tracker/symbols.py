@@ -277,6 +277,19 @@ _CRYPTO_QUOTES: set[str] = {
 }
 
 
+def _is_us_preferred(quote: str) -> bool:
+    """美股优先股系列后缀: Yahoo 惯例 BASE-P<系列字母> (WFC-PL / BAC-PL / GS-PA).
+
+    系列 1 个字母 (Yahoo 实际全部单系列字母); 两位以上会放过垃圾代码 (XX-PP)。
+    """
+    return (
+        len(quote) == 2
+        and quote[0] == "P"
+        and quote[1].isalpha()
+        and quote[1].isupper()
+    )
+
+
 @dataclass(frozen=True)
 class ParsedSymbol:
     raw: str
@@ -328,13 +341,15 @@ def normalize(symbol: str) -> str:
 def type_for_symbol(yahoo: str) -> str:
     """自定义后缀规范 → 权威域标记 (唯一推导规则, 供配置打标与导入使用).
 
-    global: 裸代码 (美股, 含 BRK-B 类别股) 与 .HK/.DE/.L/.TO/.AX 等全球股票后缀
+    global: 裸代码 (美股, 含 BRK-B 类别股 / WFC-PL 优先股) 与 .HK/.DE/.L/.TO/.AX
+            等全球股票后缀
     cn:     .SS/.SZ (沪深 A/B 股) 与 .BJ (北交所)
     crypto: BASE-QUOTE 连字符格式 (计价货币为法币/稳定币/主流币本位)
     index:  IX.<KEY> 宏观/风险指数 (IX.DXY 美元指数 / IX.VIX 恐慌指数 ...)
 
     与 parse() 的判定语义完全一致: 单字母连字符 (BRK-B) 是美股类别代码,
-    不是加密货币 —— 保证同一代码在任何路径下都不会路由到两个域。
+    优先股系列 (WFC-PL) 是美股优先股 —— 都不是加密货币, 保证同一代码在任何
+    路径下都不会路由到两个域。
     先经 normalize() 归一 (如 600519.SH → 600519.SS, 00700.HK → 0700.HK,
     BTCUSDT → BTC-USDT), 否则配置里手写的别名会被打上错误的域标记。
     """
@@ -342,9 +357,14 @@ def type_for_symbol(yahoo: str) -> str:
     if "-" in s and "." not in s:
         base, _, quote = s.rpartition("-")
         is_us_class = len(quote) == 1 and quote.isalpha()
-        # parse() 对无法识别的连字符代码显式报错; 打标只需处理两类合法形态:
-        # crypto (BASE-QUOTE, 计价货币为法币/稳定币) 与美股类别股 (单字母后缀)
-        if not is_us_class and (base in _KNOWN_CRYPTO or quote in _CRYPTO_QUOTES):
+        # parse() 对无法识别的连字符代码显式报错; 打标只需处理三类合法形态:
+        # crypto (BASE-QUOTE, 计价货币为法币/稳定币), 美股类别股 (单字母后缀),
+        # 美股优先股系列 (WFC-PL)
+        if (
+            not is_us_class
+            and not _is_us_preferred(quote)
+            and (base in _KNOWN_CRYPTO or quote in _CRYPTO_QUOTES)
+        ):
             return "crypto"
     # 宏观/风险指数 (IX.<KEY>): 独立域, 与股票代码永不冲突 (IX 前缀 + 目录校验)
     if index_key(s):
@@ -386,9 +406,14 @@ def parse(symbol: str) -> ParsedSymbol:
             )
     if "-" in yahoo and "." not in yahoo:
         base, _, quote = yahoo.rpartition("-")
-        # 连字符既不是 crypto 计价货币、也不符合美股类别代码 (如 BRK-B / BRK.B) 的形态
-        # (美股类别 1 个大写字母) 且 base 非已知 crypto → 大概率是无效代码, 显式报错
-        if base not in _KNOWN_CRYPTO and not (len(quote) == 1 and quote.isalpha()):
+        # 连字符既不是 crypto 计价货币、也不符合美股类别代码 (如 BRK-B / BRK.B)
+        # 或美股优先股系列 (WFC-PL) 的形态 (类别 1 个大写字母; 优先股 P+系列字母)
+        # 且 base 非已知 crypto → 大概率是无效代码, 显式报错
+        if (
+            base not in _KNOWN_CRYPTO
+            and not (len(quote) == 1 and quote.isalpha())
+            and not _is_us_preferred(quote)
+        ):
             raise ValueError(f"无法识别的代码: {symbol}")
     if "." not in yahoo:
         market = Market.US

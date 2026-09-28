@@ -510,6 +510,70 @@ def test_longport_oauth_module_success_flow(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# 自选导入 (fetch_watchlist_groups / watchlist_to_rows)
+# ---------------------------------------------------------------------------
+
+
+def _wl_group(name, secs):
+    return SimpleNamespace(name=name, securities=secs)
+
+
+def _wl_sec(symbol, name="X", watched_price=None):
+    return SimpleNamespace(
+        symbol=symbol, name=name, watched_price=watched_price
+    )
+
+
+def test_watchlist_to_rows_normalizes_and_merges_groups():
+    groups = [
+        _wl_group("us", [_wl_sec("AAPL.US", "苹果", 250), _wl_sec("TAP.A.US")]),
+        _wl_group("etf", [_wl_sec("AAPL.US", "苹果", 250)]),  # 跨组重复
+        _wl_group("hk", [_wl_sec("700.HK"), _wl_sec("600519.SH")]),
+        _wl_group("sg", [_wl_sec("D05.SG")]),
+    ]
+    rows, skipped = lp.watchlist_to_rows(groups)
+    assert skipped == []
+    by_sym = {r["symbol"]: r for r in rows}
+    assert set(by_sym) == {"AAPL", "TAP-A", "0700.HK", "600519.SS", "D05.SI"}
+    assert by_sym["AAPL"]["lists"] == ["us", "etf"]  # 跨组合并 lists
+    assert by_sym["AAPL"]["note"] == "苹果 (长桥关注价 250)"
+    assert by_sym["TAP-A"]["lists"] == ["us"]  # 类别股点分 → 连字符
+    assert by_sym["700.HK".replace("700", "0700")]["lists"] == ["hk"]
+
+
+def test_watchlist_to_rows_skips_unmappable_once():
+    groups = [
+        _wl_group("a", [_wl_sec("SAP.DE"), _wl_sec("BP.L")]),
+        _wl_group("b", [_wl_sec("SAP.DE")]),  # 跨组重复: 原因只记一次
+    ]
+    rows, skipped = lp.watchlist_to_rows(groups)
+    assert rows == []
+    assert len(skipped) == 2  # SAP.DE ×1 + BP.L ×1
+    assert all("无法映射" in s for s in skipped)
+
+
+def test_watchlist_to_rows_watched_price_without_name():
+    rows, _ = lp.watchlist_to_rows([_wl_group("g", [_wl_sec("AAPL.US", "", 7.5)])])
+    assert rows[0]["note"] == "长桥关注价 7.5"
+
+
+def test_fetch_watchlist_groups_uses_quote_ctx(monkeypatch):
+    sentinel = [_wl_group("g", [])]
+    monkeypatch.setattr(
+        lp, "_get_quote_ctx", lambda cfg=None: FakeWatchlistCtx(sentinel)
+    )
+    assert lp.fetch_watchlist_groups() is sentinel
+
+
+class FakeWatchlistCtx:
+    def __init__(self, groups):
+        self._groups = groups
+
+    def watchlist(self):
+        return self._groups
+
+
+# ---------------------------------------------------------------------------
 # settings
 # ---------------------------------------------------------------------------
 

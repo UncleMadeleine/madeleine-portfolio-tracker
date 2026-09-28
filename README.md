@@ -120,6 +120,8 @@ python -m tracker.cli portfolio set-base USD
 python -m tracker.cli watchlist list
 python -m tracker.cli watchlist add NVDA --list 科技,美股 --upper1 260
 python -m tracker.cli watchlist remove NVDA
+python -m tracker.cli watchlist import-longport --dry-run  # 长桥自选导入预览（先 longport-login）
+python -m tracker.cli watchlist import-longport --overwrite  # 覆盖现有自选
 
 # 导出自选监控报告
 python -m tracker.cli report
@@ -426,14 +428,25 @@ python -m tracker.cli import ibkr --overwrite        # 覆盖全部持仓
 python -m tracker.cli longport-login                  # OAuth 浏览器授权登录（token 缓存于 ~/.longport/，自动刷新）
 python -m tracker.cli import longport --dry-run       # 预览长桥账户持仓（港股/美股/沪深）
 python -m tracker.cli import longport --overwrite     # 覆盖全部持仓
+python -m tracker.cli watchlist import-longport --dry-run  # 预览长桥自选分组导入
+python -m tracker.cli watchlist import-longport            # 追加合并到 watchlist.json
+python -m tracker.cli watchlist import-longport --overwrite  # 覆盖现有自选（写前备份 .bak）
 ```
+
+**长桥自选导入**：读取账户全部自选分组（QuoteContext.watchlist），每个分组映射为
+`watchlist.json` 的一个列表名，代码归一为 Yahoo 规范（`700.HK→0700.HK`、
+`600519.SH→600519.SS`、`G13.SG→G13.SI`、`AAPL.US→AAPL`、类别股/优先股
+`TAP.A.US→TAP-A` / `WFC.PR.L.US→WFC-PL`）。同一代码在多个分组的 lists 并集合并；
+已有条目的阈值/备注保留，仅补列表归属；重复导入幂等。无法映射的标的
+（长桥独有 ADR/优先股等 Yahoo 无对应代码）跳过并报告原因。
 
 - 认证配置在 `longport.json`（模板 `longport.example.json`，已 gitignore）：推荐 `auth: oauth`
   （填入 OAuth 客户端注册返回的 `client_id`），也支持 `auth: apikey`（开发者中心 app_key/app_secret/access_token，90 天过期）
 - 行情接入：各取数子命令加 `--longport`（如 `quote AAPL --longport`），或 `settings.json` `"use_longport": true`；
   两源都启用时 IBKR 优先级更高，长桥失败自动回退默认数据源
-- 代码映射：内部 `0700.HK` ↔ 长桥 `700.HK`，`600519.SS` ↔ `600519.SH`，`AAPL` ↔ `AAPL.US`；
-  德英加澳/北交所不支持（前置自动跳过，回落默认源）
+- 代码映射：内部 `0700.HK` ↔ 长桥 `700.HK`，`600519.SS` ↔ `600519.SH`，`AAPL` ↔
+  `AAPL.US`，`D05.SI` ↔ `D05.SG`，类别股/优先股 `TAP-A` ↔ `TAP.A.US` / `WFC-PL` ↔
+  `WFC.PR.L.US`；德英加澳/北交所不支持（前置自动跳过，回落默认源）
 - UI 登录引导在「导入」页长桥标签（授权在独立子进程运行，状态经 `var/longport_oauth_state.json`）；
   授权子进程独占 `callback_port`（默认 60355），同一端口只能跑一个登录流程
 

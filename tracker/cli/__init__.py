@@ -128,10 +128,15 @@ def build_parser() -> argparse.ArgumentParser:
             "  tracker watchlist add AAPL --list 科技 --upper1 250 --note 苹果\n"
             "  tracker watchlist add 600519.SS --list 白酒 --lower1 1500\n"
             "  tracker watchlist remove AAPL --list 科技       # 仅从「科技」列表移除\n"
+            "  tracker watchlist import-longport --dry-run     # 预览长桥自选导入\n"
+            "  tracker watchlist import-longport --overwrite   # 覆盖现有自选\n"
         ),
     )
     p_w.add_argument(
-        "action", nargs="?", choices=["list", "add", "remove"], default="list"
+        "action",
+        nargs="?",
+        choices=["list", "add", "remove", "import-longport"],
+        default="list",
     )
     p_w.add_argument("symbols", nargs="*", help="add/remove 的目标代码")
     p_w.add_argument(
@@ -151,6 +156,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_w.add_argument("--akshare", action="store_true")
     p_w.add_argument("--ibkr", action="store_true")
     p_w.add_argument("--longport", action="store_true")
+    p_w.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        help="import-longport: 仅预览, 不写入",
+    )
+    p_w.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="import-longport: 清空现有自选后写入 (写前备份 .bak)",
+    )
     p_w.add_argument("--json", action="store_true", help="输出 JSON")
     p_w.add_argument(
         "--no-quotes", action="store_true", help="list 时不拉行情, 仅展示配置"

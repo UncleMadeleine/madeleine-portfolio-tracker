@@ -1125,6 +1125,61 @@ class TestSnapshotCryptoMixed:
         assert e["upper_1"] == 3000.0
         assert e["upper_2"] == 3500.0
 
+    def test_watchlist_import_longport_merges(self, tmp_path, capsys, monkeypatch):
+        """import-longport: 归一代码按 lists 并集合并, 已有阈值保留; 跳过项报告."""
+        from types import SimpleNamespace
+        from tracker.cli import watchlist as wl_cli
+
+        groups = [
+            SimpleNamespace(
+                name="科技",
+                securities=[
+                    SimpleNamespace(
+                        symbol="700.HK", name="腾讯", watched_price=None
+                    ),
+                    SimpleNamespace(
+                        symbol="TAP.A.US", name="TAP A", watched_price=100
+                    ),
+                    SimpleNamespace(symbol="SAP.DE", name="SAP", watched_price=None),
+                ],
+            )
+        ]
+        monkeypatch.setattr(
+            wl_cli, "load_watchlist", lambda path=None: _load(path)
+        )
+        monkeypatch.setattr(
+            "tracker.longport.fetch_watchlist_groups", lambda cfg=None: groups
+        )
+        f = tmp_path / "w3.json"
+        f.write_text(
+            json.dumps(
+                {
+                    "watchlist": [
+                        {
+                            "symbol": "0700.HK",
+                            "lists": ["默认"],
+                            "upper_1": 400,
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        out = _run(
+            capsys,
+            "watchlist",
+            "import-longport",
+            "--file",
+            str(f),
+        )
+        data = _load(f)
+        by_sym = {e["symbol"]: e for e in data["watchlist"]}
+        assert set(by_sym) == {"0700.HK", "TAP-A"}
+        assert by_sym["0700.HK"]["lists"] == ["默认", "科技"]  # 并集
+        assert by_sym["0700.HK"]["upper_1"] == 400  # 已有阈值不被清掉
+        assert by_sym["TAP-A"]["note"] == "TAP A (长桥关注价 100)"
+        assert "SAP.DE" in out  # 跳过原因可见
+
 
 class TestVersion:
     """--version / -v 全局选项."""

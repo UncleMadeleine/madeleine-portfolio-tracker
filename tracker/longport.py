@@ -192,7 +192,7 @@ def yahoo_to_longport(yahoo: str) -> str | None:
     """内部规范代码 → 长桥 ticker.region; 长桥不支持的市场返回 None.
 
     AAPL → AAPL.US; 0700.HK → 700.HK (长桥不补零); 600519.SS → 600519.SH;
-    000001.SZ 原样; 其它后缀 (.DE/.L/.TO/.AX/.BJ...) 长桥不支持。
+    000001.SZ 原样; D05.SI → D05.SG; 其它后缀 (.DE/.L/.TO/.AX/.BJ...) 不支持。
     """
     s = str(yahoo).strip().upper()
     head, dot, suffix = s.rpartition(".")
@@ -204,13 +204,17 @@ def yahoo_to_longport(yahoo: str) -> str | None:
         return f"{head}.SH"
     if suffix == "SZ":
         return f"{head}.SZ"
+    if suffix == "SI":
+        return f"{head}.SG"
     return None
 
 
 def longport_to_yahoo(symbol: str) -> str | None:
     """长桥 ticker.region → 内部规范代码; 未知形态返回 None.
 
-    700.HK → 0700.HK (4位补零); 600519.SH → 600519.SS; AAPL.US → AAPL。
+    700.HK → 0700.HK (4位补零); 600519.SH → 600519.SS; AAPL.US → AAPL;
+    G13.SG → G13.SI; 美股类别股/优先股: TAP.A.US → TAP-A, WFC.PR.L.US 形态
+    (Yahoo 惯例: 类别股连字符+单字母, 优先股连字符+P+系列字母)。
     """
     raw = str(symbol).strip().upper()
     if "." not in raw:
@@ -223,7 +227,19 @@ def longport_to_yahoo(symbol: str) -> str | None:
     if region == "SZ":
         return f"{head}.SZ"
     if region == "US":
+        # 类别股/优先股: 长桥点分限定 (TAP.A / WFC.PR.L) → Yahoo 连字符惯例
+        # (类别股 X-A; 优先股 X-P + 系列字母, 如 WFC-PL)
+        parts = head.split(".")
+        if len(parts) >= 2:
+            base = parts[0]
+            qual = parts[1:]
+            # PR (preferred) 系列: X.PR.L → X-PL; 类别: X.A → X-A
+            if qual[0] == "PR":
+                return base + "-P" + "".join(qual[1:])
+            return base + "-" + "".join(qual)
         return head
+    if region == "SG":
+        return f"{head}.SI"  # SGX: Yahoo 规范后缀 .SI (yfinance 无 .SG 数据)
     return None
 
 
@@ -460,4 +476,69 @@ def positions_to_rows(positions: list) -> tuple[list[dict], list[str]]:
                 "currency": ccy or None,
             }
         )
+    return rows, skipped
+
+
+# ---------------------------------------------------------------------------
+# 自选导入 (QuoteContext.watchlist)
+# ---------------------------------------------------------------------------
+
+
+def fetch_watchlist_groups(cfg: dict | None = None) -> list:
+    """读取账户自选分组 (WatchlistGroup 列表); 失败抛 RuntimeError."""
+    try:
+        return _ctx_call(lambda c: c.watchlist(), cfg=cfg) or []
+    except Exception as e:  # noqa: BLE001 - 统一转可读错误
+        raise RuntimeError(f"长桥自选查询失败: {e}") from e
+
+
+def watchlist_to_rows(groups: list) -> tuple[list[dict], list[str]]:
+    """WatchlistGroup 列表 → watchlist.json 条目 rows + skipped 原因.
+
+    归一: 长桥 ticker.region → Yahoo 规范代码 (700.HK→0700.HK, 600519.SH→
+    600519.SS, G13.SG→G13.SI, AAPL.US→AAPL); 每组一个 list 名, 同代码多组
+    的 lists 并集由 save_watchlist 去重合并。无法映射/解析失败默认跳过
+    (记入 skipped, 不静默丢弃); watchlist.json 对垃圾代码容忍度低。
+    """
+    from .symbols import parse
+
+    rows: list[dict] = []
+    skipped: list[str] = []
+    seen: set[str] = set()
+    for g in groups:
+        name = str(getattr(g, "name", "") or "").strip() or "长桥自选"
+        for sec in getattr(g, "securities", []) or []:
+            raw = str(getattr(sec, "symbol", "") or "").strip()
+            if not raw:
+                continue
+            yahoo = longport_to_yahoo(raw)
+            if not yahoo:
+                msg = f"{raw} 无法映射为内部代码 (市场不支持)"
+            else:
+                try:
+                    yahoo = parse(yahoo).yahoo
+                except ValueError as e:
+                    msg = f"{raw}: {e}"
+                else:
+                    msg = None
+            if msg:
+                # 同一代码在多个分组重复出现: 跳过原因只记一次
+                if msg not in skipped:
+                    skipped.append(msg)
+                continue
+            note = str(getattr(sec, "name", "") or "").strip()
+            wp = _f(getattr(sec, "watched_price", None))
+            if wp:
+                # 关注价 (当地货币, 长桥 App 里的成本锚): watchlist.json schema 无此键,
+                # 并入 note 供参考, 阈值留给用户自己设
+                ref = f"长桥关注价 {wp:g}"
+                note = f"{note} ({ref})" if note else ref
+            if yahoo in seen:
+                # 同代码已在先前分组导入过: 只补组名, 不重复出 row
+                for r in rows:
+                    if r["symbol"] == yahoo and name not in r["lists"]:
+                        r["lists"].append(name)
+                continue
+            seen.add(yahoo)
+            rows.append({"symbol": yahoo, "lists": [name], "note": note or None})
     return rows, skipped

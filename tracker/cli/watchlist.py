@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 
 from .. import prices
@@ -206,11 +208,80 @@ def watchlist_list(args) -> None:
         print(f"  ℹ {n}")
 
 
+def watchlist_import_longport(args) -> None:
+    """从长桥账户自选分组导入 (归一为 Yahoo 规范代码, 按组名建列表).
+
+    合并语义与持仓导入一致: 已有代码只并列表/补空字段, 其余保留;
+    --overwrite 清空现有自选后写入。写前自动备份 .bak。
+    """
+    from .. import longport as lp
+
+    try:
+        groups = lp.fetch_watchlist_groups()
+    except Exception as e:
+        _finish_with_error(
+            f"{e} (请先完成登录: 运行 tracker longport-login, 或在 UI 导入页长桥标签登录)"
+        )
+    rows, skipped = lp.watchlist_to_rows(groups)
+
+    if args.json:
+        _print_json({"groups": len(groups), "entries": rows, "skipped": skipped})
+        return
+
+    print(f"\n=== 长桥账户自选 ({len(groups)} 组, {len(rows)} 个规范代码) ===")
+    if rows:
+        df = pd.DataFrame(rows)
+        df["lists"] = df["lists"].apply(lambda v: ", ".join(v))
+        with pd.option_context("display.max_colwidth", 40, "display.width", 160):
+            print(df.to_string(index=False))
+    else:
+        print("(无可导入的自选)")
+    for s in skipped:
+        print(f"  ⚠ {s}")
+    if args.dry_run:
+        print(f"\n(dry-run, 未写入; 导入方式: {'覆盖' if args.overwrite else '追加合并'})")
+        return
+
+    data = {"watchlist": []} if args.overwrite else load_watchlist(args.file)
+    existing = data.setdefault("watchlist", [])
+    by_sym = {_sym(e): e for e in existing}
+    added, updated = [], []
+    for r in rows:
+        found = by_sym.get(r["symbol"])
+        if found is None:
+            existing.append(r)
+            by_sym[r["symbol"]] = r
+            added.append(r["symbol"])
+        else:
+            cur = found.setdefault("lists", [])
+            for name in r["lists"]:
+                if name not in cur:
+                    cur.append(name)
+            note = r.get("note")
+            if note and not found.get("note"):
+                found["note"] = note
+            updated.append(r["symbol"])
+    if args.overwrite:
+        p = Path(args.file)
+        if p.exists():
+            backup = p.with_name(p.name + ".bak")
+            backup.write_text(p.read_text(encoding="utf-8"), encoding="utf-8")
+            print(f"\n已备份原文件: {backup.name}")
+    save_watchlist(data, args.file)
+    verb = "覆盖写入" if args.overwrite else "追加合并"
+    print(
+        f"\n✅ 已写入 {args.file} ({verb}: 新增 {len(added)} · "
+        f"更新 {len(updated)}, 共 {len(existing)} 条自选)"
+    )
+
+
 def cmd_watchlist(args) -> None:
-    """watchlist 子命令分发: list / add / remove."""
+    """watchlist 子命令分发: list / add / remove / import-longport."""
     if args.action == "add":
         watchlist_add(args)
     elif args.action == "remove":
         watchlist_remove(args)
+    elif args.action == "import-longport":
+        watchlist_import_longport(args)
     else:
         watchlist_list(args)

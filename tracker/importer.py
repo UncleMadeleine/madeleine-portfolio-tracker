@@ -253,3 +253,49 @@ def apply_import(
         "portfolio": str(target),
         "backup": backup,
     }
+
+
+def merge_watchlist(
+    existing: list[dict], rows: list[dict], mode: str = MODE_APPEND
+) -> tuple[list[dict], dict[str, list[str]]]:
+    """自选导入合并: 返回 (合并后 watchlist 条目, {added, updated}).
+
+    append  已有代码只并 lists (并集) / 补空 note, 阈值等其余字段原样保留;
+            新代码追加 —— 重复导入幂等。
+    overwrite 忽略现有自选, 全部由本次 rows 组成。
+
+    rows 需为 watchlist_to_rows 的产出形态 ({symbol, lists, note?});
+    归一/去重/权威 type 覆写仍由 save_watchlist 统一处理。
+    """
+    if mode not in (MODE_APPEND, MODE_OVERWRITE):
+        raise ValueError(f"未知导入方式: {mode!r}")
+    if mode == MODE_OVERWRITE:
+        return [dict(r) for r in rows], {
+            "added": [r.get("symbol", "") for r in rows],
+            "updated": [],
+        }
+    merged = [dict(e) for e in existing]
+    by_sym = {_norm_sym(e.get("symbol", "")): e for e in merged}
+    added: list[str] = []
+    updated: list[str] = []
+    for r in rows:
+        sym = _norm_sym(r.get("symbol", ""))
+        if not sym:
+            continue
+        found = by_sym.get(sym)
+        if found is None:
+            entry = dict(r)
+            entry["symbol"] = sym
+            merged.append(entry)
+            by_sym[sym] = entry
+            added.append(sym)
+        else:
+            cur = found.setdefault("lists", [])
+            for name in r.get("lists") or []:
+                if name not in cur:
+                    cur.append(name)
+            note = r.get("note")
+            if note and not found.get("note"):
+                found["note"] = note
+            updated.append(sym)
+    return merged, {"added": added, "updated": updated}

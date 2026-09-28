@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from .. import prices
+from .. import importer, prices, storage
 from ..symbols import parse
 from ..services.watchlist import (
     build_watchlist_view,
@@ -243,35 +243,22 @@ def watchlist_import_longport(args) -> None:
         return
 
     data = {"watchlist": []} if args.overwrite else load_watchlist(args.file)
-    existing = data.setdefault("watchlist", [])
-    by_sym = {_sym(e): e for e in existing}
-    added, updated = [], []
-    for r in rows:
-        found = by_sym.get(r["symbol"])
-        if found is None:
-            existing.append(r)
-            by_sym[r["symbol"]] = r
-            added.append(r["symbol"])
-        else:
-            cur = found.setdefault("lists", [])
-            for name in r["lists"]:
-                if name not in cur:
-                    cur.append(name)
-            note = r.get("note")
-            if note and not found.get("note"):
-                found["note"] = note
-            updated.append(r["symbol"])
+    merged, stats = importer.merge_watchlist(
+        data.get("watchlist", []),
+        rows,
+        importer.MODE_OVERWRITE if args.overwrite else importer.MODE_APPEND,
+    )
+    backup = None
     if args.overwrite:
         p = Path(args.file)
         if p.exists():
-            backup = p.with_name(p.name + ".bak")
-            backup.write_text(p.read_text(encoding="utf-8"), encoding="utf-8")
-            print(f"\n已备份原文件: {backup.name}")
+            backup = storage.backup_file(p)
+    data["watchlist"] = merged
     save_watchlist(data, args.file)
     verb = "覆盖写入" if args.overwrite else "追加合并"
     print(
-        f"\n✅ 已写入 {args.file} ({verb}: 新增 {len(added)} · "
-        f"更新 {len(updated)}, 共 {len(existing)} 条自选)"
+        f"\n✅ 已写入 {args.file} ({verb}: 新增 {len(stats['added'])} · "
+        f"更新 {len(stats['updated'])}, 共 {len(merged)} 条自选)"
     )
 
 

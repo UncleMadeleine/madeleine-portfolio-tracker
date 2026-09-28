@@ -15,7 +15,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from tracker import importer, storage
+from tracker import importer, longport as longport_mod, storage
 
 _CHAIN_LABELS = {
     "eth": "Ethereum",
@@ -128,6 +128,65 @@ def _longport_section(mode: str, on_saved) -> None:
         on_saved,
         note="avg_cost 为长桥报告的合约货币成本价 (按账户设置的平均/摊薄口径), 仅供估算。",
     )
+
+    st.divider()
+    _longport_watchlist_section()
+
+
+def _longport_watchlist_section() -> None:
+    """长桥自选分组 → watchlist.json 导入 (独立于持仓导入的写盘目标)."""
+    st.caption(
+        "导入长桥账户**自选分组**: 每个分组映射为自选的一个列表, 代码归一为 "
+        "Yahoo 规范 (700.HK→0700.HK / TAP.A.US→TAP-A 等); 已有条目的阈值/备注"
+        "保留, 仅并列表归属; 重复导入幂等。"
+    )
+    if st.button(
+        "获取自选分组", icon=":material/star:", key="imp_lp_wl_fetch"
+    ):
+        with st.spinner("正在读取长桥自选..."):
+            try:
+                groups = longport_mod.fetch_watchlist_groups()
+                rows, skipped = longport_mod.watchlist_to_rows(groups)
+            except Exception as e:
+                st.session_state.pop("imp_lp_wl", None)
+                st.error(f"{e} — 请先完成上方登录, 或检查 longport.json 配置。")
+            else:
+                st.session_state["imp_lp_wl"] = {
+                    "rows": rows,
+                    "skipped": skipped,
+                    "groups": len(groups),
+                }
+    payload = st.session_state.get("imp_lp_wl")
+    if not payload:
+        return
+    for s in payload.get("skipped", []):
+        st.caption(f":material/warning: {s}")
+    rows = payload.get("rows", [])
+    if not rows:
+        st.caption("未发现可导入的自选。")
+        return
+    df = pd.DataFrame(rows)
+    df["lists"] = df["lists"].apply(lambda v: ", ".join(v))
+    st.dataframe(df, width="stretch", hide_index=True)
+    st.caption(f"共 {payload.get('groups', '?')} 组 {len(rows)} 个规范代码。")
+    if st.button(
+        f"确认导入自选 ({_MODE_LABELS[importer.MODE_APPEND]})",
+        icon=":material/star_outline:",
+        key="imp_lp_wl_confirm",
+    ):
+        data = storage.load_watchlist(storage.WATCHLIST_PATH)
+        merged, stats = importer.merge_watchlist(
+            data.get("watchlist", []), rows, importer.MODE_APPEND
+        )
+        storage.backup_file(storage.WATCHLIST_PATH)
+        data["watchlist"] = merged
+        storage.save_watchlist(data)
+        st.session_state.pop("imp_lp_wl", None)
+        st.toast(
+            f"自选导入完成: 新增 {len(stats['added'])} · "
+            f"更新 {len(stats['updated'])}, 共 {len(merged)} 条"
+        )
+        st.rerun()
 
 
 def _wallet_section(mode: str, on_saved) -> None:

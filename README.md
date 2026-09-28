@@ -1,8 +1,8 @@
-# OpenBB Portfolio Tracker
+# Madeleine Portfolio Tracker
 
 > 本地多市场投资组合追踪：人类用 Streamlit 页面，Agent 用 CLI（`--json`），零 API Key，完全免费
 
-[中文](#openbb-portfolio-tracker) · [English](#openbb-portfolio-tracker-en)
+[中文](#madeleine-portfolio-tracker) · [English](#madeleine-portfolio-tracker-english)
 
 ---
 
@@ -19,7 +19,7 @@
 
 ## 简介
 
-OpenBB Portfolio Tracker 是一款**本地优先**的投资组合追踪工具，提供：
+Madeleine Portfolio Tracker 是一款**本地优先**的投资组合追踪工具，提供：
 
 - **多币种持仓追踪** — 自动汇率换算，统一基础货币展示
 - **自选股价格阈值提醒** — 两级上限/下限，触发分级，距离预测
@@ -49,7 +49,7 @@ OpenBB Portfolio Tracker 是一款**本地优先**的投资组合追踪工具，
 ### 安装
 
 ```bash
-cd ~/Project/openbb-portfolio-tracker
+cd ~/Project/madeleine-portfolio-tracker
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -509,7 +509,7 @@ python -m tracker.cli import wallet polygon 0x... --tokenlist my_tokens.json
 
 ---
 
-## OpenBB Portfolio Tracker (English)
+## Madeleine Portfolio Tracker (English)
 
 > **Local-first multi-market portfolio tracker. Human-facing Streamlit UI + agent-facing CLI (`--json`). Zero API keys. Completely free.**
 
@@ -562,7 +562,7 @@ Quotes are fetched with a priority chain:
 
 1. **LongPort** (optional, `use_longport` / `--longport`) — HK/US/CN quotes & history, silent fallback
 2. **IBKR** (TWS / IB Gateway) — real-time if subscribed, delayed otherwise, batch snapshot (higher priority than LongPort when both enabled)
-3. **OpenBB → yfinance** — batch quote (1 request) + individual retry
+3. **yfinance** — batch quote (1 request) + individual retry
 4. **akshare** (East Money) — A-shares / HK spot + history (CN domain: akshare first)
 5. **FX** — CFETS for full XXX/CNY table, direct/inverse/USD bridge fallback
 6. **Indices** — `IX.<KEY>` historical only: CN indices via akshare (Sina), global via yfinance with Sina fallback

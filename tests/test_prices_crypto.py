@@ -31,6 +31,7 @@ def _isolate_cache(monkeypatch, tmp_path):
     cache_mod._ensure_db()
     import tracker.providers.orchestration as orch
 
+    orch._neg_cache.clear()  # 进程内负缓存不随 DB 隔离, 防跨测试泄漏
     monkeypatch.setattr(orch.cache_mod, "get_cached", lambda syms, ttl=300: {})
     monkeypatch.setattr(orch.cache_mod, "set_cached", lambda q: None)
 

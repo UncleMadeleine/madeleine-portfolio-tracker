@@ -3,9 +3,15 @@
 输入混合代码列表 → parse → 按 provider 分组 → 各域独立取数 (IBKR 只注入全球域
 与 A 股域的批量行情前置; 指数域无实时行情, 直接记 errors) → 汇总 quotes/errors/notes。
 任一域失败不影响其它域。
+逐代码源链回退并发执行 (全球域死代码单次 10s+ 耗时, 串行会拖死大批量场景);
+取失败的代码进进程内负缓存, TTL 内跳过重试 (死代码每轮重烧 10s+ 无意义)。
 """
 
 from __future__ import annotations
+
+import time
+from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
 
 import pandas as pd
 
@@ -30,6 +36,68 @@ def _parse_all(symbols) -> tuple[dict[str, ParsedSymbol], dict[str, str]]:
         except ValueError as e:
             errors[str(s)] = str(e)
     return by_yahoo, errors
+
+
+# ---------- 进程内负缓存: 全部源失败的代码, TTL 内不再重试 ----------
+
+_NEG_TTL = cache_mod.CACHE_TTL  # 与实时行情缓存同周期 (5 分钟)
+_neg_cache: dict[str, float] = {}
+_neg_lock = Lock()
+_FALLBACK_WORKERS = 8  # 逐代码源链回退并发数
+
+
+def _neg_filtered(
+    plist: list[ParsedSymbol], errors: dict[str, str]
+) -> list[ParsedSymbol]:
+    """剔除负缓存命中项 (记入 errors), 返回真正需要取数的代码."""
+    now = time.time()
+    out: list[ParsedSymbol] = []
+    with _neg_lock:
+        expired = [k for k, ts in _neg_cache.items() if now - ts >= _NEG_TTL]
+        for k in expired:
+            _neg_cache.pop(k, None)
+        hit = {k for k, ts in _neg_cache.items() if now - ts < _NEG_TTL}
+    for p in plist:
+        if p.yahoo in hit:
+            errors[p.yahoo] = "近期全部数据源失败 (负缓存), 稍后自动重试"
+        else:
+            out.append(p)
+    return out
+
+
+def _fetch_domain(
+    domain: str,
+    plist: list[ParsedSymbol],
+    prefer_akshare: bool,
+    errors: dict[str, str],
+) -> dict[str, Quote]:
+    """一个域内并发走源链: 返回 {yahoo: Quote}, 失败写 errors + 负缓存."""
+    provider = resolve({"global": "GLOBAL", "cn": "CN", "crypto": "CRYPTO"}[domain])
+
+    def _one(p: ParsedSymbol):
+        # 单代码失败捕获为 Exception 值返回: pool.map 迭代时不中断其余代码
+        try:
+            if domain == "global":
+                # 批量已尝试 yfinance: 这里走完整源链 (港股 akshare 兜底)
+                return p.yahoo, provider.fetch_quote(p, prefer_first=prefer_akshare)
+            return p.yahoo, provider.fetch_quote(p)
+        except Exception as e:  # noqa: BLE001 - 单代码失败记录 errors
+            return p.yahoo, e
+
+    out: dict[str, Quote] = {}
+    with ThreadPoolExecutor(max_workers=_FALLBACK_WORKERS) as pool:
+        for p, (yahoo, result_or_exc) in zip(
+            plist, pool.map(_one, plist), strict=False
+        ):
+            if isinstance(result_or_exc, Exception):
+                errors[yahoo] = str(result_or_exc)
+                with _neg_lock:
+                    _neg_cache[yahoo] = time.time()
+            else:
+                out[yahoo] = result_or_exc
+                with _neg_lock:
+                    _neg_cache.pop(yahoo, None)
+    return out
 
 
 def _route_provider(p: ParsedSymbol):
@@ -102,22 +170,17 @@ def get_quotes(
         batch = _yahoo_batch(global_rest)
         quotes.update(batch)
 
-    # 各域逐个走 provider 源链 (批量未命中的全球股 / 全部 CN / 全部 crypto)
-    for domain, plist in groups.items():
-        provider = resolve({"global": "GLOBAL", "cn": "CN", "crypto": "CRYPTO"}[domain])
-        for p in plist:
-            if p.yahoo in quotes:
-                continue
-            try:
-                if domain == "global":
-                    # 批量已尝试 yfinance: 这里走完整源链 (港股 akshare 兜底)
-                    quotes[p.yahoo] = provider.fetch_quote(
-                        p, prefer_first=prefer_akshare
-                    )
-                else:
-                    quotes[p.yahoo] = provider.fetch_quote(p)
-            except Exception as e:  # noqa: BLE001 - 单代码失败记录 errors
-                errors[p.yahoo] = str(e)
+    # 各域剩余代码并发走 provider 源链 (批量未命中的全球股 / 全部 CN / 全部 crypto)。
+    # 负缓存命中项不发起网络 (TTL 内全部源失败过的代码), 直接记 errors。
+    # 域间串行保持日志可读, 域内并发: 死代码单次 10s+, 串行会拖死大批量场景。
+    for domain in ("global", "cn", "crypto"):
+        plist = [
+            p
+            for p in _neg_filtered(groups.get(domain, []), errors)
+            if p.yahoo not in quotes
+        ]
+        if plist:
+            quotes.update(_fetch_domain(domain, plist, prefer_akshare, errors))
 
     # 只回写本次真正取到的新鲜行情 (IBKR/akshare/yahoo), 缓存命中项不重写,
     # 否则 set_cached 会刷新其 fetched_at, TTL 被无限延长

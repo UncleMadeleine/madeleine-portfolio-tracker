@@ -19,6 +19,7 @@ _AK_TIMEOUT = 6.0
 # 按市场独立缓存: 某市场接口失败不影响其它市场, 且失败不占用 TTL (可重试)
 _ak_spot_cache: dict[Market, tuple[float, pd.DataFrame]] = {}
 _ak_spot_lock = threading.Lock()
+_ak_spot_inflight: dict[Market, threading.Lock] = {}  # per-market 并发首拉去重
 _AK_SPOT_TTL = 60
 
 
@@ -54,13 +55,6 @@ def _yf_search(query: str) -> list[dict]:
         if sym and name:
             out.append({"symbol": sym, "name": name})
     return out
-
-
-_AK_TIMEOUT = 6.0
-# 按市场独立缓存: 某市场接口失败不影响其它市场, 且失败不占用 TTL (可重试)
-_ak_spot_cache: dict[Market, tuple[float, pd.DataFrame]] = {}
-_ak_spot_lock = threading.Lock()
-_AK_SPOT_TTL = 60
 
 
 def _obb():
@@ -185,29 +179,48 @@ def _yahoo_history(
 
 
 def _ak_spot(market: Market) -> pd.DataFrame:
+    """全域 spot 快照 (按市场缓存 60s); 并发首拉以 per-key 锁去重, 只发一次请求."""
     global _ak_spot_cache
     now = pd.Timestamp.now().timestamp()
     with _ak_spot_lock:
         hit = _ak_spot_cache.get(market)
         if hit and now - hit[0] < _AK_SPOT_TTL:
             return hit[1]
-    ak = _ak()
-    fetcher = {
-        Market.CN: ak.stock_zh_a_spot_em,
-        Market.BJ: ak.stock_zh_a_spot_em,
-        Market.HK: ak.stock_hk_spot_em,
-    }.get(market)
-    if fetcher is None:
-        return pd.DataFrame()
+        gate = _ak_spot_inflight.setdefault(market, threading.Lock())
+    acquired = gate.acquire(blocking=False)
     try:
-        df = with_timeout(fetcher, _AK_TIMEOUT)
-    except Exception:
-        return pd.DataFrame()
-    if df.empty:
-        return df
+        if acquired:  # 本线程负责拉取; 其它线程等拉取方写回缓存后读结果
+            ak = _ak()
+            fetcher = {
+                Market.CN: ak.stock_zh_a_spot_em,
+                Market.BJ: ak.stock_zh_a_spot_em,
+                Market.HK: ak.stock_hk_spot_em,
+            }.get(market)
+            if fetcher is None:
+                return pd.DataFrame()
+            try:
+                df = with_timeout(fetcher, _AK_TIMEOUT)
+            except Exception:
+                return pd.DataFrame()
+            if df.empty:
+                return df
+            with _ak_spot_lock:
+                _ak_spot_cache[market] = (now, df)
+            return df
+        gate.acquire()
+        gate.release()  # 拉取方已 pop 此 gate: 立即释放, 不留持有者
+    finally:
+        if acquired:
+            with _ak_spot_lock:
+                if _ak_spot_inflight.get(market) is gate:
+                    _ak_spot_inflight.pop(market, None)
+            gate.release()
+    # 未获 gate: 拉取方已完成, 重读缓存; 缓存仍空 (拉取失败) 则返回空表
     with _ak_spot_lock:
-        _ak_spot_cache[market] = (now, df)
-    return df
+        hit = _ak_spot_cache.get(market)
+    if hit and now - hit[0] < _AK_SPOT_TTL:
+        return hit[1]
+    return pd.DataFrame()
 
 
 def _akshare_quote(p: ParsedSymbol) -> Quote:

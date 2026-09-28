@@ -61,13 +61,13 @@ pip install -r requirements.txt
 streamlit run tracker/ui/app.py
 ```
 
-页面默认运行在 `http://localhost:8501`，侧边栏五个页面：
+页面默认运行在 `http://localhost:8501`，五个页面各有独立 URL（刷新 / 书签 / 前进后退不丢页）：
 
-- **组合** — 持仓编辑、明细表、资产配置饼图、自选提醒
-- **K线** — 任意代码 K 线查询（支持按代码或名称模糊搜索）+ 多股走势对比（K线子功能）
-- **指数K线** — 宏观/风险指数查询（IX.<KEY> 分组下拉，分组随目录维护；CLI `index-kline --list` 可查全部已收录指数）
-- **导入** — IBKR 账户 / 长桥账户 / 链上钱包 / A股券商文件导入
-- **设置** — 涨跌配色（红涨绿跌/绿涨红跌）、数据源偏好（akshare / IBKR / 长桥）、基础货币
+- **组合** (`/`) — 持仓编辑、明细表、资产配置饼图、自选提醒
+- **K线** (`/kline`) — 任意代码 K 线查询（支持按代码或名称模糊搜索）+ 多股走势对比（K线子功能）
+- **指数K线** (`/index`) — 宏观/风险指数查询（IX.<KEY> 分组下拉，分组随目录维护；CLI `index-kline --list` 可查全部已收录指数）
+- **导入** (`/import`) — IBKR 账户 / 长桥账户 / 链上钱包 / A股券商文件导入
+- **设置** (`/settings`) — 涨跌配色（红涨绿跌/绿涨红跌）、数据源偏好（akshare / IBKR / 长桥）、基础货币
 
 ### CLI 快速上手
 
@@ -281,7 +281,8 @@ python -m tracker.cli kline 0700.HK --period weekly --open  # 周K + 自动打�
 
 ```
 tracker/ui/           Streamlit 页面包（streamlit run tracker/ui/app.py）
-├── app.py              主页（组合：持仓编辑/明细/配置/自选提醒）
+├── app.py              路由入口（st.navigation 多页面, 每页独立 URL, 刷新不丢页）
+├── portfolio_page.py   「组合」页面（持仓编辑/明细/配置/自选提醒 + 行情/汇率缓存）
 ├── kline_page.py       「K线」页面（搜索框 + lightweight-charts 组件 + 上市以来全量滑动 + 多股走势对比）
 ├── index_page.py       「指数K线」页面（IX.<KEY> 分组下拉, 独立于股票 K线页）
 ├── import_page.py      「导入」页面（IBKR 账户 / 长桥账户 / 链上钱包 / 券商文件, 追加合并或覆盖）

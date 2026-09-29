@@ -166,15 +166,17 @@ def render_portfolio_page() -> None:
                     for r in clean:
                         r.update(extra.get(r["symbol"], {}))
                         # 手改过数量: 来源分量已与 quantity 不一致, 作废分量表
-                        # (否则下次钱包导入会把旧分量加回来, 数量虚增)
+                        # (否则下次钱包导入会把旧分量加回来, 数量虚增);
+                        # 未改数量时保留分量表, 多钱包来源记账不丢
                         q = r.get("quantity")
                         q = float(q) if isinstance(q, (int, float)) else 0.0
-                        sq = r.pop("source_quantities", None)
+                        sq = r.get("source_quantities")
                         if (
                             isinstance(sq, dict)
                             and sq
                             and q != sum(float(v or 0) for v in sq.values())
                         ):
+                            r.pop("source_quantities", None)
                             r["import_source"] = r.get("import_source") or ""
                     storage.save_portfolio({"base_currency": base, "holdings": clean})
                     cached_quotes.clear()

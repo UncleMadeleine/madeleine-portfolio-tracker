@@ -38,10 +38,13 @@ def _read_state() -> dict | None:
 def _write_state(payload: dict) -> None:
     try:
         _STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _STATE_PATH.write_text(
+        # 原子写 (与子进程侧一致): tmp + os.replace, 避免读侧读到半截 JSON
+        tmp = _STATE_PATH.with_suffix(".json.tmp")
+        tmp.write_text(
             json.dumps({**payload, "ts": time.time()}, ensure_ascii=False),
             encoding="utf-8",
         )
+        tmp.replace(_STATE_PATH)
     except OSError:
         pass
 
@@ -55,6 +58,10 @@ def _popens() -> subprocess.Popen | None:
 
 
 def _start_login() -> None:
+    # 已有存活的授权子进程时不重复启动: 子进程独占 callback_port,
+    # 第二个进程会因端口占用写 error, 与旧进程的成功交错造成状态混乱
+    if _popens() is not None:
+        return
     _write_state({"status": "starting"})
     proc = subprocess.Popen(
         [sys.executable, "-m", "tracker.longport_oauth"],
@@ -85,7 +92,23 @@ def render_login_section(key_prefix: str = "lp") -> None:
     state = _read_state()
     status = (state or {}).get("status", "idle")
 
+    # 本会话曾确认过登录成功: 状态文件已被删, 持久展示成功态,
+    # 避免用户误以为登录失败而重复授权
+    if st.session_state.get("lp_oauth_view") == "ok" and status != "ok":
+        st.success(
+            "长桥已登录。token 缓存于 ~/.longport/openapi/tokens/ (SDK 自动刷新)。",
+            icon=":material/check_circle:",
+        )
+        if st.button(
+            "退出重登", icon=":material/logout:", key=f"{key_prefix}_logout_ok"
+        ):
+            st.session_state.pop("lp_oauth_view", None)
+            _start_login()
+            st.rerun()
+        return
+
     if status == "ok":
+        st.session_state["lp_oauth_view"] = "ok"
         st.success(
             "长桥已登录。token 缓存于 ~/.longport/openapi/tokens/ (SDK 自动刷新)。",
             icon=":material/check_circle:",
@@ -95,6 +118,7 @@ def render_login_section(key_prefix: str = "lp") -> None:
             proc.terminate()
         _STATE_PATH.unlink(missing_ok=True)
         if st.button("退出重登", icon=":material/logout:", key=f"{key_prefix}_logout"):
+            st.session_state.pop("lp_oauth_view", None)
             _start_login()
             st.rerun()
         return

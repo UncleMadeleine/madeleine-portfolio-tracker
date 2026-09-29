@@ -340,7 +340,9 @@ def _render_slide_mode(
     state_key = "kline_slide_df"
     state_qid_key = "kline_slide_qid"
 
-    qid = yahoo
+    # 失效键含数据源三元组: 设置页切换 prefer_akshare/use_ibkr/use_longport 后
+    # 必须重取数, 否则继续展示旧源数据
+    qid = (yahoo, prefer_akshare, use_ibkr, use_longport)
     qid_changed = st.session_state.get(state_qid_key) != qid
     if qid_changed:
         st.session_state[state_key] = None
@@ -375,7 +377,7 @@ def _render_slide_mode(
         green_up=kgreen,
         currency=kcur,
         indicators=indicators or None,
-        query_id=qid,
+        query_id=yahoo,
     )
 
 
@@ -514,11 +516,12 @@ def render_kline_controls(
         st.info("输入代码后回车或点「查询」获取数据 —— 页面启动不会预加载任何 K线。")
         return
     st.session_state["kline_last_symbol"] = ksym
-    st.session_state["kline_queried"] = True
-    # 范围模式: 代码/范围变化才重新取数; 其余参数变化只重绘。
+    # 范围模式: 代码/范围/数据源设置变化才重新取数; 其余参数变化只重绘。
     data_changed = (
         st.session_state.get("kline_current_symbol") != yahoo
         or st.session_state.get("kline_last_months") != kdepth
+        or st.session_state.get("kline_last_src")
+        != (prefer_akshare, use_ibkr, use_longport)
     )
     if data_changed or st.session_state.get("kline_current_df") is None:
         try:
@@ -535,6 +538,7 @@ def render_kline_controls(
         st.session_state["kline_current_df"] = kdf
         st.session_state["kline_current_symbol"] = yahoo
         st.session_state["kline_last_months"] = kdepth
+        st.session_state["kline_last_src"] = (prefer_akshare, use_ibkr, use_longport)
     kdf = st.session_state["kline_current_df"]
     try:
         kcur = parse(yahoo).currency

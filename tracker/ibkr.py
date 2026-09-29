@@ -223,6 +223,9 @@ def contract_spec(p: ParsedSymbol, exchanges: dict | None = None) -> ContractSpe
         return ContractSpec(code, ex.get("AU", "ASX"), "AUD")
     if p.market is Market.SG:
         return ContractSpec(code, ex.get("SG", "SGX"), "SGD")
+    if p.market is Market.BR:
+        # B3 (圣保罗): Yahoo 后缀 .SA (PETR4.SA); IBKR 合约库交易代码无后缀数字
+        return ContractSpec(code, ex.get("BR", "BVMF"), "BRL")
     raise ValueError(f"不支持的市场: {p.market}")
 
 
@@ -421,6 +424,8 @@ def ibkr_to_yahoo(
         return f"{sym}.AX"
     if ccy == "SGD" or exkey in ("SGX", "SES"):
         return f"{sym}.SI"
+    if ccy == "BRL" or exkey in ("BVMF", "BOVESPA"):
+        return f"{sym}.SA"
     if ccy == "CAD" or exkey in ("TSE", "TSXV", "TSX", "CDGX"):
         return f"{sym}.V" if exkey == "TSXV" else f"{sym}.TO"
     if ccy == "USD" or exkey in (

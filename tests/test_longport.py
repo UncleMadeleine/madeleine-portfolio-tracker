@@ -28,7 +28,9 @@ def test_yahoo_to_longport_roundtrip():
         ("600519.SS", "600519.SH"),
         ("000001.SZ", "000001.SZ"),
         ("AAPL", "AAPL.US"),
-        ("BRK-B", "BRK-B.US"),  # 美股类别股: 单字母连字符不误判
+        # 美股类别股/优先股: Yahoo 连字符 → 长桥点分 (SDK 侧只认 TAP.A.US 形态)
+        ("BRK-B", "BRK.B.US"),
+        ("WFC-PL", "WFC.PR.L.US"),
     ]
     for yahoo, expected in cases:
         got = lp.yahoo_to_longport(yahoo)
@@ -123,6 +125,7 @@ def test_build_config_endpoint_overrides(tmp_path):
         def from_apikey(app_key, app_secret, access_token, **kwargs):
             captured.update(kwargs)
             return object()
+
     with patch.object(
         lp,
         "_sdk",
@@ -519,9 +522,7 @@ def _wl_group(name, secs):
 
 
 def _wl_sec(symbol, name="X", watched_price=None):
-    return SimpleNamespace(
-        symbol=symbol, name=name, watched_price=watched_price
-    )
+    return SimpleNamespace(symbol=symbol, name=name, watched_price=watched_price)
 
 
 def test_watchlist_to_rows_normalizes_and_merges_groups():
@@ -584,7 +585,6 @@ def test_watchlist_to_rows_skips_n_prefix_placeholder():
     )
     assert [r["symbol"] for r in rows] == ["0700.HK"]
     assert len(skipped) == 1 and "未挂牌" in skipped[0]
-
 
 
 def test_fetch_watchlist_groups_uses_quote_ctx(monkeypatch):

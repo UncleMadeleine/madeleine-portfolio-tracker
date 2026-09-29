@@ -27,7 +27,7 @@ from pathlib import Path
 import pandas as pd
 
 from .providers.base import Quote
-from .symbols import parse, type_for_symbol
+from .symbols import _is_us_preferred, parse, type_for_symbol
 from .symbol_migrations import migrate_symbol
 
 DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "longport.json"
@@ -193,12 +193,21 @@ def yahoo_to_longport(yahoo: str) -> str | None:
     """内部规范代码 → 长桥 ticker.region; 长桥不支持的市场返回 None.
 
     AAPL → AAPL.US; 0700.HK → 700.HK (长桥不补零); 600519.SS → 600519.SH;
-    000001.SZ 原样; D05.SI → D05.SG; 其它后缀 (.DE/.L/.TO/.AX/.BJ...) 不支持。
+    000001.SZ 原样; D05.SI → D05.SG; 美股类别/优先股 TAP-A → TAP.A.US,
+    WFC-PL → WFC.PR.L.US; 其它后缀 (.DE/.L/.TO/.AX/.BJ...) 不支持。
     """
     s = str(yahoo).strip().upper()
     head, dot, suffix = s.rpartition(".")
     if not dot:
-        return f"{s}.US"  # 裸代码 = 美股 (含 BRK-B 类别股)
+        # 美股类别股/优先股: Yahoo 连字符 → 长桥点分 (TAP-A → TAP.A.US,
+        # WFC-PL → WFC.PR.L.US); 纯字母数字裸代码 (AAPL) 原样 + .US
+        base, hyphen, tail = s.partition("-")
+        if hyphen and tail:
+            # 长桥 ticker 必须带 region 后缀: TAP.A.US / WFC.PR.L.US
+            if _is_us_preferred(tail):
+                return f"{base}.PR.{tail[1:]}.US"
+            return f"{base}.{tail}.US"
+        return f"{s}.US"
     if suffix == "HK":
         return f"{head.lstrip('0') or '0'}.HK"
     if suffix == "SS":
@@ -243,6 +252,7 @@ def longport_to_yahoo(symbol: str) -> str | None:
         return f"{head}.SI"  # SGX: Yahoo 规范后缀 .SI (yfinance 无 .SG 数据)
     return None
 
+
 def _is_unquoted_placeholder(symbol: str) -> bool:
     """长桥未挂牌/未定价占位代码 (打新股 N 前缀等): 拿不到行情, 导入即死代码.
 
@@ -250,9 +260,12 @@ def _is_unquoted_placeholder(symbol: str) -> bool:
     纯数字打头 N + 后缀形态仅占位符使用, 正常上市证券没有这种代码。
     """
     head, _, region = str(symbol).strip().upper().rpartition(".")
-    return bool(head) and region in ("HK", "US") and head.startswith("N") and head[1:].isdigit()
-
-
+    return (
+        bool(head)
+        and region in ("HK", "US")
+        and head.startswith("N")
+        and head[1:].isdigit()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -515,7 +528,6 @@ def watchlist_to_rows(groups: list) -> tuple[list[dict], list[str]]:
     改码代码自动迁移到接替代码 (symbol_migrations)。
     """
     from .symbols import parse
-
 
     rows: list[dict] = []
     skipped: list[str] = []

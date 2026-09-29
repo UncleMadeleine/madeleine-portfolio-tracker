@@ -48,7 +48,8 @@ def backup_file(path: str | Path) -> str | None:
 
 
 def _read_json(path: str | Path) -> dict:
-    with open(path, encoding="utf-8") as f:
+    # utf-8-sig: 容忍带 BOM 的文件 (部分编辑器保存 JSON 时加 BOM, utf-8 直接解码报错)
+    with open(path, encoding="utf-8-sig") as f:
         data = json.load(f)
     return data if isinstance(data, dict) else {}
 
@@ -215,18 +216,24 @@ def load_watchlist(path: str | Path = WATCHLIST_PATH) -> dict:
                 sym = str(e.get("symbol", "")).strip()
                 if not sym:
                     continue
-                if sym not in merged:
-                    merged[sym] = dict(e)
-                    merged[sym].setdefault("lists", [])
+                # 去重键用归一后的规范代码: 别名 (D05.SG/D05.SI) 与规范形态
+                # (D05.SI) 跨组出现时并 lists 而不是裂成两条
+                try:
+                    key = parse(sym).yahoo
+                except Exception:
+                    key = sym
+                if key not in merged:
+                    merged[key] = dict(e)
+                    merged[key].setdefault("lists", [])
                 else:
                     # 同名代码在多个列表中各有一份阈值/备注: 保留先出现的,
                     # 缺失字段 (如只在旧列表设过 upper) 从后出现的补齐
                     for k, v in e.items():
                         if k == "symbol" or k == "lists":
                             continue
-                        merged[sym].setdefault(k, v)
-                if name not in merged[sym]["lists"]:
-                    merged[sym]["lists"].append(name)
+                        merged[key].setdefault(k, v)
+                if name not in merged[key]["lists"]:
+                    merged[key]["lists"].append(name)
         entries = []
         for e in merged.values():
             if not e["lists"]:

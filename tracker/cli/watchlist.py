@@ -224,22 +224,30 @@ def watchlist_import_longport(args) -> None:
         )
     rows, skipped = lp.watchlist_to_rows(groups)
 
-    if args.json:
-        _print_json({"groups": len(groups), "entries": rows, "skipped": skipped})
-        return
-
-    print(f"\n=== 长桥账户自选 ({len(groups)} 组, {len(rows)} 个规范代码) ===")
-    if rows:
-        df = pd.DataFrame(rows)
-        df["lists"] = df["lists"].apply(lambda v: ", ".join(v))
-        with pd.option_context("display.max_colwidth", 40, "display.width", 160):
-            print(df.to_string(index=False))
-    else:
-        print("(无可导入的自选)")
-    for s in skipped:
-        print(f"  ⚠ {s}")
     if args.dry_run:
-        print(f"\n(dry-run, 未写入; 导入方式: {'覆盖' if args.overwrite else '追加合并'})")
+        if args.json:
+            _print_json(
+                {
+                    "dry_run": True,
+                    "groups": len(groups),
+                    "entries": rows,
+                    "skipped": skipped,
+                }
+            )
+            return
+        print(f"\n=== 长桥账户自选 ({len(groups)} 组, {len(rows)} 个规范代码) ===")
+        if rows:
+            df = pd.DataFrame(rows)
+            df["lists"] = df["lists"].apply(lambda v: ", ".join(v))
+            with pd.option_context("display.max_colwidth", 40, "display.width", 160):
+                print(df.to_string(index=False))
+        else:
+            print("(无可导入的自选)")
+        for s in skipped:
+            print(f"  ⚠ {s}")
+        print(
+            f"\n(dry-run, 未写入; 导入方式: {'覆盖' if args.overwrite else '追加合并'})"
+        )
         return
 
     data = {"watchlist": []} if args.overwrite else load_watchlist(args.file)
@@ -256,6 +264,30 @@ def watchlist_import_longport(args) -> None:
     data["watchlist"] = merged
     save_watchlist(data, args.file)
     verb = "覆盖写入" if args.overwrite else "追加合并"
+    if args.json:
+        _print_json(
+            {
+                "written": args.file,
+                "mode": verb,
+                "backup": backup,
+                "added": stats["added"],
+                "updated": stats["updated"],
+                "total": len(merged),
+                "skipped": skipped,
+            }
+        )
+        return
+
+    print(f"\n=== 长桥账户自选 ({len(groups)} 组, {len(rows)} 个规范代码) ===")
+    if rows:
+        df = pd.DataFrame(rows)
+        df["lists"] = df["lists"].apply(lambda v: ", ".join(v))
+        with pd.option_context("display.max_colwidth", 40, "display.width", 160):
+            print(df.to_string(index=False))
+    else:
+        print("(无可导入的自选)")
+    for s in skipped:
+        print(f"  ⚠ {s}")
     print(
         f"\n✅ 已写入 {args.file} ({verb}: 新增 {len(stats['added'])} · "
         f"更新 {len(stats['updated'])}, 共 {len(merged)} 条自选)"

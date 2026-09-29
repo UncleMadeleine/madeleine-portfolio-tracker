@@ -557,6 +557,36 @@ def test_watchlist_to_rows_watched_price_without_name():
     assert rows[0]["note"] == "长桥关注价 7.5"
 
 
+def test_watchlist_to_rows_migrates_renamed_symbols():
+    """改码代码自动迁移到接替代码 (ERJ→EMBJ), 关注价保留."""
+    rows, skipped = lp.watchlist_to_rows(
+        [_wl_group("g", [_wl_sec("ERJ.US", "Embraer", 33.2)])]
+    )
+    assert [r["symbol"] for r in rows] == ["EMBJ"]
+    assert rows[0]["note"] == "Embraer (长桥关注价 33.2)"
+    assert skipped == []
+
+
+def test_watchlist_to_rows_skips_delisted_without_successor():
+    """已退市且无接替码 (CLDL 清盘) 跳过并说明, 不产出行."""
+    rows, skipped = lp.watchlist_to_rows(
+        [_wl_group("g", [_wl_sec("CLDL.US", "云2x"), _wl_sec("AAPL.US")])]
+    )
+    assert [r["symbol"] for r in rows] == ["AAPL"]
+    assert len(skipped) == 1
+    assert "已退市" in skipped[0] and "CLDL" in skipped[0]
+
+
+def test_watchlist_to_rows_skips_n_prefix_placeholder():
+    """长桥打新占位码 (N 前缀) 拿不到行情, 导入即跳过."""
+    rows, skipped = lp.watchlist_to_rows(
+        [_wl_group("g", [_wl_sec("N22117.HK", "魔方"), _wl_sec("700.HK", "腾讯")])]
+    )
+    assert [r["symbol"] for r in rows] == ["0700.HK"]
+    assert len(skipped) == 1 and "未挂牌" in skipped[0]
+
+
+
 def test_fetch_watchlist_groups_uses_quote_ctx(monkeypatch):
     sentinel = [_wl_group("g", [])]
     monkeypatch.setattr(

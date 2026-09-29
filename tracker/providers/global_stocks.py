@@ -81,7 +81,9 @@ def _pick(d: dict, *keys):
 
 
 def _quote_from_dump(p: ParsedSymbol, d: dict) -> Quote | None:
-    price = _pick(d, "last_price", "price", "close")
+    # yfinance 部分证券 (多为 ETF) 的 quoteSummary 缺 last/close, 只有 open
+    # (盘前/盘后/无成交场景): 逐级回退, open 视为最新参考价
+    price = _pick(d, "last_price", "price", "close", "open")
     if price is None:
         return None
     prev = _pick(d, "prev_close", "previous_close")
@@ -121,8 +123,13 @@ def _quote_from_dump(p: ParsedSymbol, d: dict) -> Quote | None:
     )
 
 
+_QUOTE_TIMEOUT = 5.0  # yfinance/OpenBB 偶发内部重试会把单码失败拖到 8s+; 硬超时快速降级
+
+
 def _yahoo_quote(p: ParsedSymbol) -> Quote:
-    res = _obb().equity.price.quote(symbol=p.yahoo, provider="yfinance")
+    res = with_timeout(
+        _obb().equity.price.quote, _QUOTE_TIMEOUT, symbol=p.yahoo, provider="yfinance"
+    )
     if not res.results:
         raise RuntimeError(f"{p.yahoo}: yfinance 无行情结果")
     d = res.results[0].model_dump()

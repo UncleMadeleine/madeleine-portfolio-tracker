@@ -28,6 +28,7 @@ import pandas as pd
 
 from .providers.base import Quote
 from .symbols import parse, type_for_symbol
+from .symbol_migrations import migrate_symbol
 
 DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "longport.json"
 EXAMPLE_CONFIG = Path(__file__).resolve().parent.parent / "longport.example.json"
@@ -241,6 +242,17 @@ def longport_to_yahoo(symbol: str) -> str | None:
     if region == "SG":
         return f"{head}.SI"  # SGX: Yahoo 规范后缀 .SI (yfinance 无 .SG 数据)
     return None
+
+def _is_unquoted_placeholder(symbol: str) -> bool:
+    """长桥未挂牌/未定价占位代码 (打新股 N 前缀等): 拿不到行情, 导入即死代码.
+
+    长桥对未挂牌新股用 N 前缀 ticker (如 N22117.HK); 挂牌后恢复原代码。
+    纯数字打头 N + 后缀形态仅占位符使用, 正常上市证券没有这种代码。
+    """
+    head, _, region = str(symbol).strip().upper().rpartition(".")
+    return bool(head) and region in ("HK", "US") and head.startswith("N") and head[1:].isdigit()
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -499,8 +511,11 @@ def watchlist_to_rows(groups: list) -> tuple[list[dict], list[str]]:
     600519.SS, G13.SG→G13.SI, AAPL.US→AAPL); 每组一个 list 名, 同代码多组
     的 lists 并集由 save_watchlist 去重合并。无法映射/解析失败默认跳过
     (记入 skipped, 不静默丢弃); watchlist.json 对垃圾代码容忍度低。
+    长桥占位代码 (N 前缀打新) 与已退市无接替码的代码同样跳过;
+    改码代码自动迁移到接替代码 (symbol_migrations)。
     """
     from .symbols import parse
+
 
     rows: list[dict] = []
     skipped: list[str] = []
@@ -511,10 +526,22 @@ def watchlist_to_rows(groups: list) -> tuple[list[dict], list[str]]:
             raw = str(getattr(sec, "symbol", "") or "").strip()
             if not raw:
                 continue
-            yahoo = longport_to_yahoo(raw)
-            if not yahoo:
+            if _is_unquoted_placeholder(raw):
+                msg = f"{raw} 未挂牌/未定价 (长桥占位代码), 已跳过"
+                if msg not in skipped:
+                    skipped.append(msg)
+                continue
+            raw_mapped = longport_to_yahoo(raw)
+            if not raw_mapped:
                 msg = f"{raw} 无法映射为内部代码 (市场不支持)"
             else:
+                # 退市/改码代码自动迁移到接替代码 (无接替码则跳过)
+                yahoo, mig = migrate_symbol(raw_mapped)
+                if mig and yahoo == raw_mapped:
+                    msg = f"{raw} 已退市: {mig}"
+                    if msg not in skipped:
+                        skipped.append(msg)
+                    continue
                 try:
                     yahoo = parse(yahoo).yahoo
                 except ValueError as e:

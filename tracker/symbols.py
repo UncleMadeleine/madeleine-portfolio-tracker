@@ -15,6 +15,7 @@ class Market(str, Enum):
     CA = "CA"
     AU = "AU"
     SG = "SG"
+    BR = "BR"
     BJ = "BJ"
     CRYPTO = "CRYPTO"
     INDEX = "INDEX"
@@ -29,6 +30,7 @@ MARKET_META: dict[Market, dict[str, str]] = {
     Market.CA: {"label": "加股", "currency": "CAD"},
     Market.AU: {"label": "澳股", "currency": "AUD"},
     Market.SG: {"label": "新加坡股", "currency": "SGD"},
+    Market.BR: {"label": "巴西股", "currency": "BRL"},
     Market.BJ: {"label": "北交所", "currency": "CNY"},
     Market.CRYPTO: {"label": "加密货币", "currency": "USD"},
     Market.INDEX: {"label": "指数", "currency": "USD"},
@@ -54,6 +56,8 @@ _SUFFIX_MARKET: dict[str, Market] = {
     "CN": Market.CA,
     "NE": Market.CA,
     "AX": Market.AU,
+    # 巴西 (B3): Yahoo 规范后缀 .SA (PETR4.SA / MBRF3.SA)
+    "SA": Market.BR,
     # 新加坡 (SGX): Yahoo 规范后缀 .SI (D05.SI); .SG 为常见别名, normalize 归一
     "SI": Market.SG,
     "SG": Market.SG,

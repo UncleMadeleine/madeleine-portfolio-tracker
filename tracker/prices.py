@@ -38,11 +38,24 @@ __all__ = [
 
 
 def get_quote(symbol: str, prefer_akshare: bool = False) -> Quote:
-    """单代码实时行情 (prefer_akshare 仅影响港股源顺序)."""
+    """单代码实时行情 (prefer_akshare 仅影响港股源顺序).
+
+    与批量路径共用进程内负缓存: TTL 内全部源失败过的代码不再发起网络
+    (单代码 OpenBB/yfinance 一次失败 8s+, CLI 循环多码查询会串行卡死)。
+    """
+    from .providers import orchestration as orch
     from .providers.base import resolve
 
     p = parse(symbol)
-    return resolve(p.type).fetch_quote(p, prefer_first=prefer_akshare)
+    if orch.neg_cached(p.yahoo):
+        raise RuntimeError(
+            f"{p.yahoo}: 近期全部数据源失败 (负缓存), 稍后自动重试"
+        )
+    try:
+        return resolve(p.type).fetch_quote(p, prefer_first=prefer_akshare)
+    except Exception:
+        orch.neg_mark(p.yahoo)
+        raise
 
 
 def get_ohlc(

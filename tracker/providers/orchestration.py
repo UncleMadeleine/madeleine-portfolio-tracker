@@ -46,6 +46,28 @@ _neg_lock = Lock()
 _FALLBACK_WORKERS = 8  # 逐代码源链回退并发数
 
 
+def neg_cached(yahoo: str) -> bool:
+    """代码是否处于负缓存 TTL 内 (get_quote 单代码路径共用)."""
+    now = time.time()
+    with _neg_lock:
+        ts = _neg_cache.get(yahoo)
+    return ts is not None and now - ts < _NEG_TTL
+
+
+def neg_mark(yahoo: str) -> None:
+    """标记代码全部源失败 (get_quote 单代码路径共用)."""
+    with _neg_lock:
+        _neg_cache[yahoo] = time.time()
+
+
+def neg_clear(yahoo: str) -> None:
+    """代码取数成功, 清出负缓存."""
+    with _neg_lock:
+        _neg_cache.pop(yahoo, None)
+
+
+
+
 def _neg_filtered(
     plist: list[ParsedSymbol], errors: dict[str, str]
 ) -> list[ParsedSymbol]:
@@ -91,12 +113,10 @@ def _fetch_domain(
         ):
             if isinstance(result_or_exc, Exception):
                 errors[yahoo] = str(result_or_exc)
-                with _neg_lock:
-                    _neg_cache[yahoo] = time.time()
+                neg_mark(yahoo)
             else:
                 out[yahoo] = result_or_exc
-                with _neg_lock:
-                    _neg_cache.pop(yahoo, None)
+                neg_clear(yahoo)
     return out
 
 
@@ -164,14 +184,10 @@ def get_quotes(
         else:
             groups.setdefault("global", []).append(p)
 
-    # 全球域: 先批量 (yfinance), 缺失再逐个走源链
-    global_rest = groups.get("global", [])
-    if global_rest:
-        batch = _yahoo_batch(global_rest)
-        quotes.update(batch)
-
-    # 各域剩余代码并发走 provider 源链 (批量未命中的全球股 / 全部 CN / 全部 crypto)。
-    # 负缓存命中项不发起网络 (TTL 内全部源失败过的代码), 直接记 errors。
+    # 各域先过滤负缓存 (全部源失败的代码 TTL 内不重试, 记 errors), 再取数。
+    # 全球域: 剩余代码先批量 (yfinance), 批量未命中再逐个走源链 (域内并发)。
+    # 负缓存前置到批量层: 批量请求同样包含这些死代码, 不剔除会整批重发并
+    # 触发数据源限流 (单代码源链阶段原先才过滤, 批量层一直漏着)。
     # 域间串行保持日志可读, 域内并发: 死代码单次 10s+, 串行会拖死大批量场景。
     for domain in ("global", "cn", "crypto"):
         plist = [
@@ -179,8 +195,14 @@ def get_quotes(
             for p in _neg_filtered(groups.get(domain, []), errors)
             if p.yahoo not in quotes
         ]
-        if plist:
-            quotes.update(_fetch_domain(domain, plist, prefer_akshare, errors))
+        if not plist:
+            continue
+        if domain == "global":
+            quotes.update(_yahoo_batch(plist))
+            plist = [p for p in plist if p.yahoo not in quotes]
+            if not plist:
+                continue
+        quotes.update(_fetch_domain(domain, plist, prefer_akshare, errors))
 
     # 只回写本次真正取到的新鲜行情 (IBKR/akshare/yahoo), 缓存命中项不重写,
     # 否则 set_cached 会刷新其 fetched_at, TTL 被无限延长

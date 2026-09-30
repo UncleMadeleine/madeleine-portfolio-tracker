@@ -16,8 +16,12 @@ from . import settings
 from tracker import charting, prices, search
 from tracker.symbols import parse
 
-# 顶部快捷代码 (来自当前持仓与自选, 不预取任何行情数据, 仅展示代码名)
+# 快捷入口: 持仓/自选可能很长, 单只查询页只展示前 N 个 (数量/成本顺序, 无行情排序)
+QUICK_SYMBOLS_LIMIT = 10
 KLINE_SYMBOLS_KEY = "kline_quick_symbols"
+# 最近查看: 会话级记录最近成功渲染 K线的代码 (最新在前, 去重, 上限 RECENT_LIMIT)
+RECENT_KEY = "kline_recent_symbols"
+RECENT_LIMIT = 10
 
 # TradingView lightweight-charts 组件 (st.components.v2, JS 不过 DOMPurify):
 # 拖动平移 / 滚轮·捏合缩放 / 触控板双指手势, 券商 App 通用交互.
@@ -32,6 +36,27 @@ _KLINE_CHART = st.components.v2.component(
 def quick_symbols() -> list[str]:
     """持仓+自选代码 (页面启动时注入, K线页自身不发起任何网络请求)."""
     return list(st.session_state.get(KLINE_SYMBOLS_KEY, []))
+
+
+def recent_symbols() -> list[str]:
+    """本会话最近成功渲染 K线的代码 (最新在前, 上限 RECENT_LIMIT)."""
+    return list(st.session_state.get(RECENT_KEY, []))
+
+
+def record_recent(symbol: str) -> bool:
+    """查询成功渲染后调用: 记录进最近查看 (去重, 最新在前, 截断保留).
+
+    返回列表是否发生变化 (供调用方决定是否 st.rerun 让 pills 立即显示)。
+    """
+    s = str(symbol or "").strip().upper()
+    if not s:
+        return False
+    old = recent_symbols()
+    new = ([s] + [x for x in old if x != s])[:RECENT_LIMIT]
+    if new == old:
+        return False
+    st.session_state[RECENT_KEY] = new
+    return True
 
 
 def set_quick_symbols(symbols: list[str]) -> None:
@@ -361,6 +386,11 @@ def _render_slide_mode(
             return
         st.session_state[state_key] = kdf
         st.session_state["kline_queried"] = True
+        # 记录进最近查看; 列表有变时 rerun 一次让 pills 立即显示
+        # (df 已存 session_state, rerun 走重绘分支, 不会重新取数)
+        if record_recent(yahoo):
+            st.session_state["_kline_recent_rerun"] = True
+            st.rerun()
         df_all = kdf
 
     try:
@@ -427,11 +457,15 @@ def render_kline_controls(
         key="kline_period",
     )
     # 范围模式提交判定: 代码变化 (回车/快捷 pill/搜索选择) 或点「查询」;
-    # 首次渲染只记录输入框当前值, 不视为提交 (页面启动不预加载任何 K线)
+    # 首次渲染只记录输入框当前值, 不视为提交 (页面启动不预加载任何 K线)。
+    # 「最近查看」rerun 标志在此统一消费: 范围模式借它保持已查询状态
+    # (图表以 kline_current_df 重绘, 不再取数); 滑动模式本来就渲染。
     if "kline_last_symbol" not in st.session_state:
         st.session_state["kline_last_symbol"] = ksym
     submitted = st.session_state["kline_last_symbol"] != ksym
     if c4.button("查询", type="primary", icon=":material/search:"):
+        submitted = True
+    if st.session_state.pop("_kline_recent_rerun", False):
         submitted = True
 
     opt1, opt2 = st.columns([1, 1])
@@ -473,19 +507,44 @@ def render_kline_controls(
         "英股 BP.L · 加股 RY.TO · 澳股 BHP.AX · 新加坡 D05.SI · 加密货币 BTC-USD"
     )
 
+    def _pick_symbol(code, pill_key):
+        """pill 点击回调: 把代码回填进输入框, 查询以输入框的值为准;
+        随后复位 pill 选中态, 同一 pill 可重复点击再次触发."""
+        if code:
+            # 回调在 widget 实例化前运行, 可合法写 key → 输入框同步显示
+            st.session_state["kline_symbol"] = str(code).strip().upper()
+        if st.session_state.get(pill_key) is not None:
+            del st.session_state[pill_key]
+
+    def _pick_recent():
+        v = st.session_state.get("kline_recent")
+        if isinstance(v, (list, tuple)):
+            v = v[0] if v else None
+        _pick_symbol(v, "kline_recent")
+
     def _pick_quick():
         v = st.session_state.get("kline_quick")
         if isinstance(v, (list, tuple)):
             v = v[0] if v else None
-        if v:
-            # 回调在 widget 实例化前运行, 可合法写 key → 输入框同步显示
-            st.session_state["kline_symbol"] = str(v).strip().upper()
+        _pick_symbol(v, "kline_quick")
 
-    if qs:
+    # 持仓/自选可能很长, 只展示前 N 个 (portfolio_page 注入顺序 = 持仓在前);
+    # 最近查看是本会话查过的代码, 最新在前, 与常用互补 (常用里出现的会被
+    # 去重剔除, 保证两行不重复)。
+    shown = qs[:QUICK_SYMBOLS_LIMIT]
+    recents = [s for s in recent_symbols() if s not in set(shown)]
+    if shown:
         # on_change 仅在 pill 真正被点击时触发 (状态保持的旧值不会重复触发),
         # 回调负责把选中代码同步进输入框; 查询一律以输入框的值为准,
         # 避免残留的 pill 选中项覆盖用户手动输入的代码。
-        st.pills("常用 (持仓/自选)", qs, key="kline_quick", on_change=_pick_quick)
+        st.pills("常用 (持仓/自选)", shown, key="kline_quick", on_change=_pick_quick)
+    if recents:
+        st.pills(
+            f"最近查看 (最多 {RECENT_LIMIT} 条)",
+            recents,
+            key="kline_recent",
+            on_change=_pick_recent,
+        )
 
     if not ksym:
         st.info("输入代码后回车获取数据 —— 页面启动不会预加载任何 K线。")
@@ -539,6 +598,11 @@ def render_kline_controls(
         st.session_state["kline_current_symbol"] = yahoo
         st.session_state["kline_last_months"] = kdepth
         st.session_state["kline_last_src"] = (prefer_akshare, use_ibkr, use_longport)
+        # 记录进最近查看; 列表有变时 rerun 一次让 pills 立即显示
+        # (df 已存 session_state, rerun 走重绘分支, 不会重新取数)
+        if record_recent(yahoo):
+            st.session_state["_kline_recent_rerun"] = True
+            st.rerun()
     kdf = st.session_state["kline_current_df"]
     try:
         kcur = parse(yahoo).currency

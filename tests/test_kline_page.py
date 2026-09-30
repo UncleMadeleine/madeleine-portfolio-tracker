@@ -154,3 +154,75 @@ def test_invalid_symbol_rejected(kline_app):
     kline_app.text_input[1].set_value("600519.XX").run()  # 无法识别的交易所后缀
     assert len(kline_app.metric) == 0
     assert any("无法识别" in e.value for e in kline_app.error)
+
+
+def test_quick_pills_truncated_to_limit():
+    """常用 pills 只展示前 QUICK_SYMBOLS_LIMIT 个 (持仓/自选很长时页面保持整洁)."""
+    script = """
+import tracker.ui.kline_page as kp
+kp.set_quick_symbols([f"SYM{i}.HK" for i in range(30)])
+kp.render_kline_controls(False)
+"""
+    app = AppTest.from_string(script, default_timeout=30).run()
+    assert app.pills[0].label == "常用 (持仓/自选)"
+    assert app.pills[0].options == [
+        f"SYM{i}.HK" for i in range(kline_page.QUICK_SYMBOLS_LIMIT)
+    ]
+
+
+def test_record_recent_dedupes_and_caps():
+    """最近查看: 最新在前、去重、上限 RECENT_LIMIT (AppTest 会话内调用真实函数)."""
+    script = """
+import tracker.ui.kline_page as kp
+for s in ["MSFT", "AAPL", "NVDA", "MSFT"]:
+    kp.record_recent(s)
+for i in range(kp.RECENT_LIMIT + 3):
+    kp.record_recent(f"S{i}.HK")
+"""
+    app = AppTest.from_string(script, default_timeout=30).run()
+    recent = app.session_state["kline_recent_symbols"]
+    assert len(recent) == kline_page.RECENT_LIMIT
+    assert recent[0] == f"S{kline_page.RECENT_LIMIT + 2}.HK"  # 最新在前
+    assert "S0.HK" not in recent  # 超出上限的旧记录被截断
+
+
+def test_record_recent_skips_empty():
+    """空串/None 不进入最近查看 (state 键保持未初始化, 展示层回退空列表)."""
+    script = """
+import tracker.ui.kline_page as kp
+kp.record_recent("")
+kp.record_recent("  ")
+kp.record_recent(None)
+"""
+    app = AppTest.from_string(script, default_timeout=30).run()
+    assert "kline_recent_symbols" not in app.session_state
+
+
+def test_slide_mode_query_records_recent(kline_app):
+    """滑动模式取数成功后, 代码进入最近查看 (record_recent 挂在成功路径)."""
+    kline_app.text_input[1].set_value("MSFT").run()
+    assert kline_app.session_state["kline_recent_symbols"][0] == "MSFT"
+
+
+def test_recent_pills_rendered_and_click_fills_symbol(kline_app):
+    """最近查看 pills 点击后回填代码输入框 (查询以输入框值为准)."""
+    kline_app.session_state["kline_quick_symbols"] = []
+    kline_app.session_state["kline_recent_symbols"] = ["0700.HK", "MSFT"]
+    kline_app.run()
+    recent_pills = [p for p in kline_app.pills if p.label.startswith("最近查看")]
+    assert len(recent_pills) == 1
+    assert recent_pills[0].options == ["0700.HK", "MSFT"]  # 最新在前
+    recent_pills[0].set_value("MSFT").run()
+    assert kline_app.text_input[1].value == "MSFT"
+
+
+def test_recent_excluded_when_already_in_quick_shown(kline_app):
+    """最近查看与常用展示行去重: 出现在常用前 10 的代码不再重复展示."""
+    kline_app.session_state["kline_quick_symbols"] = ["AAPL", "MSFT"] + [
+        f"X{i}.HK" for i in range(8)
+    ]
+    kline_app.session_state["kline_recent_symbols"] = ["ZZZ.HK", "AAPL"]
+    kline_app.run()
+    recent_pills = [p for p in kline_app.pills if p.label.startswith("最近查看")]
+    assert len(recent_pills) == 1
+    assert recent_pills[0].options == ["ZZZ.HK"]

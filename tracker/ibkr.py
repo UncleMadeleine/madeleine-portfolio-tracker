@@ -271,6 +271,7 @@ def quote_from_ticker(yahoo_symbol: str, ticker) -> Quote | None:
         prev_close=close,
         change_pct=chg,
         currency=currency,
+        source="ibkr",
     )
 
 

@@ -98,7 +98,7 @@ def render_portfolio_page() -> None:
     with st.sidebar:
         st.markdown(
             ":material/candlestick_chart: **组合追踪**",
-            help="多市场持仓 + 自选提醒 · 数据源 Yahoo/akshare/Binance",
+            help="多市场持仓 + 自选提醒 · 数据源按域路由: 全球 yfinance / A股 akshare / 加密 Binance; 可选长桥/IBKR 前置 (设置页)",
         )
         with st.expander(":material/edit_note: 持仓管理", expanded=True):
             st.caption(
@@ -285,8 +285,10 @@ def render_portfolio_page() -> None:
                         "note",
                     ):
                         v = e.get(k)
-                        if v is None or v == "" or (
-                            isinstance(v, float) and pd.isna(v)
+                        if (
+                            v is None
+                            or v == ""
+                            or (isinstance(v, float) and pd.isna(v))
                         ):
                             e.pop(k, None)
                     rows.append(e)
@@ -315,6 +317,7 @@ def render_portfolio_page() -> None:
     st.caption(
         "数据源: 美股/港股/全球 Yahoo Finance; A股/北交所 akshare 优先 (港股 akshare 兜底); "
         "加密货币 Binance; 汇率 CFETS + yfinance。可选前置源: 长桥 / IBKR (设置页开启)。"
+        "每个代码实际命中的源见下方「数据来源」列与页头汇总。"
         "非美股行情一般延迟 15-30 分钟, 仅供个人参考。"
     )
 
@@ -382,6 +385,17 @@ def render_portfolio_page() -> None:
     if notes:
         for n in notes:
             st.caption(f":material/info: {n}")
+    src_counts: dict[str, int] = {}
+    for q in quotes.values():
+        src = getattr(q, "source", None)
+        if src:
+            src_counts[src] = src_counts.get(src, 0) + 1
+    if src_counts:
+        st.caption(
+            "数据来源: "
+            + " · ".join(f"{k} ×{v}" for k, v in sorted(src_counts.items()))
+            + " (明细见持仓/自选表「数据来源」列)"
+        )
 
     if not view.empty:
         cov = m.get("cost_coverage")
@@ -469,6 +483,11 @@ def render_portfolio_page() -> None:
                     "name": st.column_config.TextColumn("名称", width="medium"),
                     "market": st.column_config.TextColumn("市场", width="small"),
                     "currency": st.column_config.TextColumn("币种", width="small"),
+                    "source": st.column_config.TextColumn(
+                        "数据来源",
+                        width="small",
+                        help="本次行情实际命中的数据源 (长桥/IBKR 优先时标注; 缓存沿用上次来源)",
+                    ),
                     "price": st.column_config.NumberColumn(
                         "现价", format="%.3f", width="small"
                     ),
@@ -619,9 +638,12 @@ def render_portfolio_page() -> None:
                     styled_w,
                     column_config={
                         "metric": st.column_config.TextColumn("基准", width="small"),
-                        "currency": st.column_config.TextColumn(
-                            "币种", width="small"
+                        "source": st.column_config.TextColumn(
+                            "数据来源",
+                            width="small",
+                            help="本次行情实际命中的数据源 (长桥/IBKR 优先时标注; 缓存沿用上次来源)",
                         ),
+                        "currency": st.column_config.TextColumn("币种", width="small"),
                         "book_value": st.column_config.NumberColumn(
                             "每股净资产", format="%.2f", width="small"
                         ),

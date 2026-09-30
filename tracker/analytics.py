@@ -58,7 +58,7 @@ def build_view(
                 "currency": q.currency,
                 "price": q.price,
                 "change_pct": q.change_pct,
-                "quantity": qty,
+                "source": getattr(q, "source", None),
                 "avg_cost": cost,
                 "market_value": mv,
                 "cost": cost_base,

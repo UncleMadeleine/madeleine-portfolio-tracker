@@ -39,6 +39,9 @@ class Quote:
     change_pct: float | None
     currency: str
     book_value: float | None = None  # 每股净资产 (PB 提醒用; 部分源无此数据)
+    # 实际命中数据源 (longport/ibkr/yfinance/akshare/binance/hyperliquid/cache);
+    # 由取数链路打标, 缓存命中项从磁盘缓存恢复, 供前端「数据来源」列展示
+    source: str | None = None
 
 
 class Provider:

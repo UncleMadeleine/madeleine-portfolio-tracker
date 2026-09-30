@@ -395,6 +395,7 @@ def get_quotes_longport(
                 currency=_currency_for(p.yahoo),
                 # 长桥实时撮合口径 PB → 反推 BVPS (实测与 yfinance 口径一致)
                 book_value=price / pb if pb is not None and pb > 0 else None,
+                source="longport",
             )
     return quotes, reason
 

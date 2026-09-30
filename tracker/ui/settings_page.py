@@ -38,6 +38,37 @@ def render_settings_page() -> None:
 
     # ---- 数据源 ----
     st.markdown("#### 数据源")
+
+    def _chain(domain: str, main: str, fallback: str = "") -> str:
+        parts = [main] + ([fallback] if fallback else [])
+        return f"**{domain}**: " + " → ".join(parts)
+
+    if settings["use_longport"] or settings["use_ibkr"]:
+        front = []
+        if settings["use_longport"]:
+            front.append("长桥")
+        if settings["use_ibkr"]:
+            front.append("IBKR")
+        front_txt = " → ".join(front) + " → "
+    else:
+        front_txt = ""
+    hk_order = (
+        "akshare → yfinance" if settings["prefer_akshare"] else "yfinance → akshare"
+    )
+    st.caption(
+        "当前生效链路 (失败自动落到下一源):  \n"
+        + _chain("美股/港股/全球", front_txt + "yfinance", "港股 " + hk_order)
+        + "  \n"
+        + _chain("A股/北交所", "akshare (东财)", "yfinance")
+        + "  \n"
+        + _chain("加密货币", "Binance", "Hyperliquid → yfinance")
+        + "  \n"
+        + _chain("汇率", "IBKR" if settings["use_ibkr"] else "CFETS", "yfinance")
+    )
+    st.caption(
+        "每个代码实际命中的源见「组合」页持仓/自选表的**数据来源**列; "
+        "实时行情缓存 5 分钟, 下方开关切换时自动清空以立即生效。"
+    )
     st.toggle(
         "A股/港股优先 akshare (国内网络)",
         value=settings["prefer_akshare"],
@@ -92,6 +123,8 @@ def render_settings_page() -> None:
 
 def _save_display() -> None:
     """保存显示与数据源设置; 基础货币以外的改动只影响前端渲染."""
+    old = storage.load_settings()
+    source_keys = ("prefer_akshare", "use_ibkr", "use_longport")
     storage.save_settings(
         {
             "color_scheme": st.session_state.get("set_color_scheme", S.SCHEME_CN),
@@ -100,6 +133,15 @@ def _save_display() -> None:
             "use_longport": bool(st.session_state.get("set_use_longport")),
         }
     )
+    if any(old.get(k) != st.session_state.get(f"set_{k}") for k in source_keys):
+        # 数据源偏好变化: 清实时行情缓存 (保留K线/基本面), 下次取数按新链路执行
+        # 并重新打标来源; 页面缓存 (st.cache_data) 由组合页「重载」或 TTL 兜底
+        from tracker.cache import clear_quotes
+
+        clear_quotes()
+        from tracker.ui.portfolio_page import cached_quotes
+
+        cached_quotes.clear()
     st.toast("设置已保存")
 
 

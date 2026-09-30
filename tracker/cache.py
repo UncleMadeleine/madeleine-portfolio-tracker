@@ -35,13 +35,18 @@ def _ensure_db() -> None:
                 change_pct REAL,
                 currency TEXT,
                 book_value REAL,
+                source TEXT,
                 fetched_at REAL
             )
             """
         )
-        # 旧库无 book_value 列: 补列 (ALTER 失败说明已存在, 忽略)
+        # 旧库无 book_value/source 列: 补列 (ALTER 失败说明已存在, 忽略)
         try:
             con.execute("ALTER TABLE quotes ADD COLUMN book_value REAL")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            con.execute("ALTER TABLE quotes ADD COLUMN source TEXT")
         except sqlite3.OperationalError:
             pass
         con.execute(
@@ -182,12 +187,12 @@ def get_cached(symbols: list[str], ttl: int = CACHE_TTL) -> dict[str, "Quote"]:
     hits: dict[str, Quote] = {}
     with sqlite3.connect(CACHE_DB) as con:
         rows = con.execute(
-            f"SELECT symbol, name, price, prev_close, change_pct, currency, book_value "
+            f"SELECT symbol, name, price, prev_close, change_pct, currency, book_value, source "
             f"FROM quotes "
             f"WHERE symbol IN ({','.join('?' * len(symbols))}) AND fetched_at > ?",
             [*symbols, now - ttl],
         ).fetchall()
-        for sym, name, price, prev, chg, ccy, bv in rows:
+        for sym, name, price, prev, chg, ccy, bv, src in rows:
             if price is not None and price > 0:
                 hits[sym] = Quote(
                     symbol=sym,
@@ -197,6 +202,7 @@ def get_cached(symbols: list[str], ttl: int = CACHE_TTL) -> dict[str, "Quote"]:
                     change_pct=float(chg) if chg is not None else None,
                     currency=str(ccy),
                     book_value=float(bv) if bv is not None else None,
+                    source=str(src) if src else None,
                 )
     return hits
 
@@ -220,23 +226,33 @@ def set_cached(quotes: dict[str, "Quote"]) -> None:
                 q.change_pct,
                 q.currency,
                 q.book_value,
+                getattr(q, "source", None),
                 now,
             )
         )
     with _lock, sqlite3.connect(CACHE_DB) as con:
         con.executemany(
             """
-            INSERT INTO quotes (symbol, name, price, prev_close, change_pct, currency, book_value, fetched_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO quotes (symbol, name, price, prev_close, change_pct, currency, book_value, source, fetched_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(symbol) DO UPDATE SET
                 name=excluded.name, price=excluded.price,
                 prev_close=excluded.prev_close, change_pct=excluded.change_pct,
                 currency=excluded.currency, book_value=excluded.book_value,
-                fetched_at=excluded.fetched_at
+                source=excluded.source, fetched_at=excluded.fetched_at
             """,
             rows,
         )
         con.commit()
+
+
+def clear_quotes() -> int:
+    """只清实时行情缓存 (保留 K线/基本面): 数据源偏好切换后强制按新源链重取."""
+    _ensure_db()
+    with _lock, sqlite3.connect(CACHE_DB) as con:
+        n = con.execute("DELETE FROM quotes").rowcount
+        con.commit()
+        return n
 
 
 def info() -> dict:

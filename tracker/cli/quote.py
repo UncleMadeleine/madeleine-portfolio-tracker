@@ -39,6 +39,7 @@ def cmd_quote(args) -> None:
                     "currency": q.currency,
                     "prev_close": q.prev_close,
                     "change_pct": q.change_pct,
+                    "source": getattr(q, "source", None),
                 }
             )
     if args.json:
@@ -48,11 +49,12 @@ def cmd_quote(args) -> None:
     for r in rows:
         if "error" in r:
             print(f"  {r['symbol']}: ⚠ {r['error']}")
-        else:
-            chg = f" ({r['change_pct']:+.2f}%)" if r["change_pct"] is not None else ""
-            print(
-                f"  {r['symbol']:>12}  {r['price']:,.3f} {r['currency']}"
-                f"{chg}  {r['name'] or ''}"
-            )
+            continue
+        chg = f" ({r['change_pct']:+.2f}%)" if r["change_pct"] is not None else ""
+        src = f" [{r['source']}]" if r.get("source") else ""
+        print(
+            f"  {r['symbol']:>12}  {r['price']:,.3f} {r['currency']}"
+            f"{chg}{src}  {r['name'] or ''}"
+        )
     for n in notes:
         print(f"  ℹ {n}")

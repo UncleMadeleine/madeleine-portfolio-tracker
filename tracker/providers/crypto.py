@@ -77,6 +77,7 @@ def _hl_quote(p: ParsedSymbol) -> Quote:
         prev_close=prev,
         change_pct=chg,
         currency=p.currency,
+        source="hyperliquid",
     )
 
 
@@ -204,6 +205,7 @@ def _binance_quote(p: ParsedSymbol) -> Quote:
         prev_close=prev,
         change_pct=chg,
         currency=p.currency,
+        source="binance",
     )
 
 
@@ -231,6 +233,7 @@ def _yf_quote(p: ParsedSymbol) -> Quote:
         prev_close=float(prev) if prev and pd.notna(prev) else None,
         change_pct=float(chg) if chg is not None and pd.notna(chg) else None,
         currency=str(info.get("currency") or p.currency).upper(),
+        source="yfinance",
     )
 
 

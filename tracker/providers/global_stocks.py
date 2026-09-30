@@ -120,6 +120,7 @@ def _quote_from_dump(p: ParsedSymbol, d: dict) -> Quote | None:
         prev_close=prev,
         change_pct=float(chg) if chg is not None else None,
         currency=currency,
+        source="yfinance",
     )
 
 
@@ -263,6 +264,7 @@ def _akshare_quote(p: ParsedSymbol) -> Quote:
         change_pct=_num(chg),
         currency=p.currency,
         book_value=book_value,
+        source="akshare",
     )
 
 

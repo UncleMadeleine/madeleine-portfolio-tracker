@@ -161,6 +161,7 @@ def build_watchlist_view(
             "metric": metric,
             "price": price,
             "change_pct": q.change_pct,
+            "source": getattr(q, "source", None),
             **thresholds,
             "status": status,
             "note": _note_str(e.get("note")),

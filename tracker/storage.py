@@ -18,6 +18,7 @@ import tempfile
 from pathlib import Path
 
 from .symbols import parse, type_for_symbol
+from .services.rules import metric_for_entry as rules_metric_for_entry
 
 # 数据文件锚定仓库根 (包内目录会随部署位置漂移)
 _ROOT = Path(__file__).resolve().parent.parent
@@ -177,16 +178,22 @@ def parse_lists(v) -> list[str]:
 
 
 def normalize_watch_entry(e: dict) -> dict:
-    """自选条目 schema 归一: 旧阈值键名迁移 + symbol 归一 + 权威 type 覆写。
+    """自选条目 schema 归一: 旧阈值键名迁移 + metric 归一 + symbol 归一 + 权威 type 覆写。
 
     symbol 经 parse().yahoo 归一 (别名后缀 .SG→.SI, 港股补零 700→0700,
     .SH→.SS 等): 手写/导入的别名与规范形态不会在文件里裂成两条。
+    metric 归一为 price/pb; price 为缺省基准不落盘, 非法值剔除。
     parse 失败 (无法识别的代码) 时保留原串, 由取数/视图层报错。
     """
     out = dict(e)
     for old, new in (("upper", "upper_1"), ("lower", "lower_1")):
         if old in out and new not in out:
             out[new] = out.pop(old)
+    metric = rules_metric_for_entry(out)
+    if metric == "price":
+        out.pop("metric", None)  # 缺省基准不落盘, 文件保持干净
+    else:
+        out["metric"] = metric
     sym = str(out.get("symbol", "")).strip()
     if sym:
         try:

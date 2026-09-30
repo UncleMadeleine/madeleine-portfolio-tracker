@@ -38,6 +38,7 @@ class Quote:
     prev_close: float | None
     change_pct: float | None
     currency: str
+    book_value: float | None = None  # 每股净资产 (PB 提醒用; 部分源无此数据)
 
 
 class Provider:

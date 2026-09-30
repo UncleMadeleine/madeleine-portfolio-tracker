@@ -21,6 +21,7 @@ WATCH_COLS = [
     "name",
     "market",
     "currency",
+    "metric",
     "price",
     "change_pct",
     "upper_1",

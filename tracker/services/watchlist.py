@@ -19,9 +19,15 @@ from ..providers.base import Quote
 from ..storage import parse_lists, normalize_watch_entry
 from ..symbols import parse
 from .rules import (
+    METRIC_PB,
+    METRIC_PRICE,
+    STATUS_NO_DATA,
     STATUS_RANK,
     STATUS_WITHIN,
+    entry_book_value,
     evaluate_thresholds,
+    metric_for_entry,
+    metric_value_for_quote,
     parse_thresholds,
 )
 
@@ -68,8 +74,24 @@ def _note_str(v) -> str:
 def build_watchlist_view(
     entries, quotes: dict[str, Quote]
 ) -> tuple[pd.DataFrame, list[str]]:
+    """条目 + 行情 → 视图. metric 决定基准值: price=现价, pb=现价/每股净资产.
+
+    PB 条目的 book_value 缺失时 (crypto/无数据源/净资产为负) 不判状态,
+    记 issue 并保留配置列, 阈值列留空。
+    """
     rows: list[dict] = []
     issues: list[str] = []
+    # PB 条目先集中取每股净资产 (批量 + 磁盘缓存), 单条目缺 BVPS 时补拉
+    pb_syms = [
+        str(e.get("symbol", "")).strip()
+        for e in entries
+        if metric_for_entry(e) == METRIC_PB
+    ]
+    book_values: dict[str, float | None] = {}
+    if pb_syms:
+        from .. import fundamentals
+
+        book_values = fundamentals.fetch_book_values(pb_syms)
     for e in entries:
         e = normalize_watch_entry(e)
         raw = str(e.get("symbol", "")).strip()
@@ -80,30 +102,68 @@ def build_watchlist_view(
         except ValueError as err:
             issues.append(str(err))
             continue
+        metric = metric_for_entry(e)
+        thresholds = parse_thresholds(e)
+        has_thresholds = any(v is not None for v in thresholds.values())
         q = quotes.get(p.yahoo)
         if q is None or q.price is None or not math.isfinite(q.price):
             issues.append(f"{p.yahoo}: 行情缺失")
             continue
         price = q.price
-        thresholds = parse_thresholds(e)
-        status, dist = evaluate_thresholds(thresholds, price)
-        rows.append(
-            {
-                "symbol": p.yahoo,
-                "name": q.name or "",
-                "market": p.market_label,
-                "currency": q.currency,
-                "price": price,
-                "change_pct": q.change_pct,
-                **thresholds,
-                "status": status,
-                "note": _note_str(e.get("note")),
-                **dist,
-            }
-        )
+        base_value = None
+        effective_bv = None
+        if metric == METRIC_PB:
+            if not has_thresholds:
+                # 无阈值仅跟踪: 不为 PB 拉基本面 (crypto 等无数据源不报假 issue)
+                base_value = None
+            else:
+                # BVPS 优先级: 条目手写 (离线可用) > 行情自带 (akshare 东财实时
+                # 口径, 最准) > fundamentals 数据源 (yfinance 财报, 磁盘缓存 6h)
+                bv = entry_book_value(e) or q.book_value
+                if bv is None:
+                    bv = book_values.get(p.yahoo)
+                    if bv is None and p.yahoo not in book_values:
+                        bv = fundamentals.book_value_for(p.yahoo)
+                        book_values[p.yahoo] = bv
+                effective_bv = bv
+                base_value = (
+                    price / bv
+                    if bv is not None and math.isfinite(bv) and bv > 0
+                    else None
+                )
+                if base_value is None:
+                    issues.append(f"{p.yahoo}: PB 缺失 (无每股净资产数据)")
+        else:
+            base_value = metric_value_for_quote(metric, q)
+        if has_thresholds and base_value is None:
+            # 有阈值但指标无数据 (PB 缺失): 不判区间内, 标记无数据
+            status, dist = STATUS_NO_DATA, {}
+        else:
+            status, dist = evaluate_thresholds(thresholds, base_value if base_value is not None else price)
+        row = {
+            "symbol": p.yahoo,
+            "name": q.name or "",
+            "market": p.market_label,
+            "currency": q.currency,
+            "metric": metric,
+            "price": price,
+            "change_pct": q.change_pct,
+            **thresholds,
+            "status": status,
+            "note": _note_str(e.get("note")),
+            **dist,
+        }
+        if metric == METRIC_PB:
+            # book_value 列 = 实际参与计算的 BVPS (手写/行情自带/数据源), 而非缓存值
+            row["book_value"] = effective_bv
+            row["base_value"] = base_value
+        rows.append(row)
     df = pd.DataFrame(rows)
     if not df.empty:
-        df["triggered"] = df["status"] != STATUS_WITHIN
+        # 触发 = 越过阈值; 「指标无数据」(如 PB 缺失) 不算触发, 不打扰用户
+        df["triggered"] = df["status"].ne(STATUS_WITHIN) & df["status"].ne(
+            STATUS_NO_DATA
+        )
         df = df.sort_values(
             ["triggered", "symbol"], ascending=[False, True]
         ).reset_index(drop=True)

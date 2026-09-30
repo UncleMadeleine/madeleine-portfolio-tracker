@@ -9,7 +9,7 @@
 ## 项目目标
 
 1. **投资组合追踪** — 多数据源接入 A股 / B股 / 港股 / 美股 / 德股 / 英股 / 加股 / 澳股 / 新加坡股 / 加密货币
-2. **Watchlist 管理** — 多列表归属 + 两级价格阈值提醒
+2. **Watchlist 管理** — 多列表归属 + 两级阈值提醒 (价格 / 市净率 PB 双指标)
 3. **按代码或名称查询** — 模糊搜索代码/名称，一键查看 K 线与基本数据
 4. **双前端** — 人类用 Streamlit UI；Agent（hermes / openclaw 等）用统一 CLI，全部子命令支持 `--json`，解决手机上查看的问题
 5. **只读券商对接** — IBKR Gateway（TWS/IB Gateway）行情 + 持仓同步；长桥 (LongPort) 行情/持仓（OAuth 登录）；A股券商持仓文件导入；Hyperliquid 行情源（规划：HL/A股券商实时持仓对接）
@@ -22,7 +22,7 @@
 Madeleine Portfolio Tracker 是一款**本地优先**的投资组合追踪工具，提供：
 
 - **多币种持仓追踪** — 自动汇率换算，统一基础货币展示
-- **自选股价格阈值提醒** — 两级上限/下限，触发分级，距离预测
+- **自选股阈值提醒** — 价格与市净率 (PB) 双指标基准，两级上限/下限，触发分级，距离预测
 - **IBKR 行情接入** — TWS / IB Gateway 实时快照，自动回退
 - **长桥 (LongPort) 行情接入** — 可选行情/历史/持仓源（OAuth 登录），失败自动回退默认数据源
 - **K 线蜡烛图** — 日K / 周K / 月K，MA 均线，成交量，MACD / RSI / KDJ / 布林带，滑动模式默认加载上市以来全量历史
@@ -253,26 +253,27 @@ python -m tracker.cli kline 0700.HK --period weekly --open  # 周K + 自动打�
 
 ---
 
-## 自选股与价格阈值提醒
+## 自选股与阈值提醒 (价格 / 市净率)
 
-`watchlist.json` 为扁平条目列表，**一个代码可属于多个列表**（`lists` 数组，逗号分隔多归属），支持**两级阈值**（`upper_1`/`upper_2`、`lower_1`/`lower_2`）与备注。旧格式（扁平 `upper`/`lower`、嵌套 `{"watchlists": {...}}`）自动迁移：
+`watchlist.json` 为扁平条目列表，**一个代码可属于多个列表**（`lists` 数组，逗号分隔多归属），支持**两级阈值**（`upper_1`/`upper_2`、`lower_1`/`lower_2`）、**指标基准**（`metric`：`price`=现价，默认；`pb`=市净率）与备注。旧格式（扁平 `upper`/`lower`、嵌套 `{"watchlists": {...}}`）自动迁移：
 
 ```json
 {
   "watchlist": [
     { "symbol": "TSLA", "lists": ["科技", "美股"], "upper_1": 420, "upper_2": 450, "lower_1": 280, "lower_2": 250, "note": "两级提醒" },
-    { "symbol": "600036.SS", "lists": ["银行", "A股"], "upper_1": 55, "lower_1": 38, "note": "招商银行" },
+    { "symbol": "600036.SS", "lists": ["银行", "A股"], "metric": "pb", "upper_1": 1.2, "lower_1": 0.8, "note": "PB提醒" },
     { "symbol": "BRK-B", "lists": ["默认"], "note": "无阈值纯观察" }
   ]
 }
 ```
 
 - **同一代码属于多个列表**：如 TSLA 同时在「科技」和「美股」，配置集中在一处，改一次全生效
-- **阈值按当地货币**（与显示的现价同币种），到达或越过（含等于）即触发
+- **阈值基准 `metric`**：`price`（默认，可省略）= 按现价判定，阈值按当地货币；`pb` = 按市净率（现价 ÷ 每股净资产）判定，阈值是 PB 倍数。每股净资产来自 Yahoo Finance（美股/港股/A股等有数据），缓存 6 小时；crypto 与无数据标的 PB 缺失时显示「指标无数据」，不误判触发
 - 触发等级（从高到低）：`🔴 突破上限 II` / `🟠 突破上限 I` / `🟢 跌破下限 II` / `🟡 跌破下限 I`；触发项排在最前
 - 距离列：`距上限 I%` / `距上限 II%` / `距下限 I%` / `距下限 II%` = 还需变动百分之几才触发（负值 = 已越过）
 - 页面侧栏「所属列表」列用逗号分隔编辑多归属；「自选观察」tab 顶部「查看范围」选 `全部` 或单个列表
 - CLI：`--watchlist <列表名>` 只看某个列表（`全部` 合并去重）
+- CLI 添加 PB 提醒：`tracker watchlist add 600036.SS --metric pb --upper1 1.2 --lower1 0.8`
 - 持仓与自选**共用一次批量行情请求**，多加自选不增加请求次数
 
 ---
@@ -319,7 +320,7 @@ tracker/
 ├── prices.py           行情门面（历史 API 保持不变, 全部路由到 providers）
 ├── search.py           搜索聚合层：search_grouped() 按域调 provider.search() 保持分组；纯在线接口，失败即该域空结果 + 合法代码直查兜底
 ├── fx.py               汇率：CFETS（akshare）优先，yfinance 货币对兜底（直对/逆对/USD 桥）
-├── cache.py            行情 SQLite 磁盘缓存（实时 5 分钟 / K线 30 分钟）
+├── cache.py            行情/基本面 SQLite 磁盘缓存（实时 5 分钟 / K线 30 分钟 / 基本面 6 小时）
 ├── charting.py         K线渲染（plotly CLI HTML + lightweight-charts 页面组件：蜡烛/均线/指标/对比）
 ├── analytics.py        组合视图与指标（纯函数）
 ├── watchlist.py        自选配置存储门面（读写委托 storage，仅 I/O 归一）
@@ -327,6 +328,7 @@ tracker/
 │   ├── rules.py          阈值规则（纯函数：两级上下限状态判定 + 距离）
 │   ├── watchlist.py      自选视图组装 + 取数用例（watchlist list / report 复用）
 │   └── snapshot.py       快照用例（take_snapshot / snapshot_json, 存储剥离）
+├── fundamentals.py     基本面取数门面（每股净资产, 6h 磁盘缓存）— PB 提醒数据源
 ├── ibkr.py             IBKR 行情接入 + 持仓读取（可选依赖 ib_async，失败静默回退）
 ├── longport.py         长桥行情/历史/持仓接入（可选依赖 longport，失败静默回退）
 ├── longport_oauth.py   长桥 OAuth 授权子进程（独立进程运行, 状态写 var/longport_oauth_state.json）

@@ -251,6 +251,10 @@ def _akshare_quote(p: ParsedSymbol) -> Quote:
         except (TypeError, ValueError):
             return None
 
+    # A股/北交 spot 自带市净率 (东财实时口径, HK spot 最终列已丢弃): 反推每股净资产,
+    # 供 PB 阈值提醒使用 (yfinance BVPS 为滞后财报, 东财口径更准)
+    pb = _num(r.get("市净率")) if "市净率" in df.columns else None
+    book_value = price / pb if pb is not None and pb > 0 else None
     return Quote(
         symbol=p.yahoo,
         name=str(r.get("名称") or "") or None,
@@ -258,6 +262,7 @@ def _akshare_quote(p: ParsedSymbol) -> Quote:
         prev_close=_num(prev),
         change_pct=_num(chg),
         currency=p.currency,
+        book_value=book_value,
     )
 
 

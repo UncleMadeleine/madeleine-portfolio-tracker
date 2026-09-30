@@ -23,6 +23,7 @@ _MD_COLS = [
     ("symbol", "代码"),
     ("price", "现价"),
     ("change_pct", "涨跌%"),
+    ("metric", "基准"),
     ("upper_1", "上限I"),
     ("upper_2", "上限II"),
     ("lower_1", "下限I"),
@@ -41,6 +42,7 @@ _CSV_COLS = [
     "name",
     "market",
     "currency",
+    "metric",
     "price",
     "change_pct",
     "upper_1",
@@ -144,10 +146,13 @@ def _report_md(payload, wview, sym_lists, issues) -> str:
         lines.append(f"🔔 共 {s['triggered']} 只触及阈值:")
         for r in payload["triggered"]:
             note = f" · {r['note']}" if r.get("note") else ""
-            lines.append(
-                f"- **{r['symbol']}** {r['status']} — 现价 "
-                f"{r['price']:,.2f} {r['currency']}{note}"
+            metric = r.get("metric") or "price"
+            base = (
+                f"PB {r['base_value']:.2f}"
+                if metric == "pb" and r.get("base_value") is not None
+                else f"现价 {r['price']:,.2f} {r['currency']}"
             )
+            lines.append(f"- **{r['symbol']}** {r['status']} — {base}{note}")
         lines.append("")
 
     lines.append("## 按列表")
@@ -171,8 +176,10 @@ def _report_md(payload, wview, sym_lists, issues) -> str:
             cells = []
             for col, _ in _MD_COLS:
                 v = r.get(col)
-                if col in ("price", "upper_1", "upper_2", "lower_1", "lower_2"):
+                if col in ("price", "upper_1", "upper_2", "lower_1", "lower_2") or col == "base_value":
                     cells.append(_fmt_num(v))
+                elif col == "metric":
+                    cells.append({"pb": "市净率"}.get(v, "现价") if v else "现价")
                 elif col == "change_pct" or col.startswith("dist_"):
                     cells.append(_fmt_pct(v))
                 else:

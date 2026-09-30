@@ -1,4 +1,4 @@
-"""本地磁盘缓存: 行情持久化到 SQLite, 避免重复网络请求."""
+"""本地磁盘缓存: 行情/基本面持久化到 SQLite, 避免重复网络请求."""
 
 from __future__ import annotations
 
@@ -46,6 +46,15 @@ def _ensure_db() -> None:
                 payload TEXT NOT NULL,
                 fetched_at REAL NOT NULL,
                 PRIMARY KEY (symbol, months)
+            )
+            """
+        )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS fundamentals (
+                symbol TEXT PRIMARY KEY,
+                book_value REAL,
+                fetched_at REAL
             )
             """
         )
@@ -104,6 +113,53 @@ def set_ohlc_cached(symbol: str, months: int, df: pd.DataFrame) -> None:
                 payload=excluded.payload, fetched_at=excluded.fetched_at
             """,
             (symbol, int(months), payload, time.time()),
+        )
+        con.commit()
+
+
+# ---------- 基本面 (每股净资产) 缓存 ----------
+
+
+def get_fundamental_cached(symbol: str, ttl: int = 21600) -> dict | None:
+    """读取缓存的每股净资产; 未命中/过期返回 None.
+
+    负缓存 (已确认无有效净资产的标的) 命中返回 {"book_value": None},
+    与「未缓存」(None) 区分, 避免 TTL 内重复网络请求。
+    """
+    _ensure_db()
+    now = time.time()
+    with sqlite3.connect(CACHE_DB) as con:
+        row = con.execute(
+            "SELECT book_value, fetched_at FROM fundamentals WHERE symbol = ?",
+            (symbol,),
+        ).fetchone()
+    if row is None:
+        return None
+    bv, fetched_at = row
+    if fetched_at is None or now - fetched_at > ttl:
+        return None
+    if isinstance(bv, (int, float)) and bv == bv and bv > 0:
+        return {"book_value": float(bv)}
+    return {"book_value": None}
+
+
+def set_fundamental_cached(symbol: str, book_value: float | None) -> None:
+    """写入每股净资产缓存; book_value 无效 (≤0/NaN) 时也落库 (负缓存, 6h 不重试)."""
+    _ensure_db()
+    now = time.time()
+    if book_value is None or book_value != book_value or book_value <= 0:
+        bv = None  # 负缓存: 该标的无有效净资产, TTL 内不再请求
+    else:
+        bv = float(book_value)
+    with _lock, sqlite3.connect(CACHE_DB) as con:
+        con.execute(
+            """
+            INSERT INTO fundamentals (symbol, book_value, fetched_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(symbol) DO UPDATE SET
+                book_value=excluded.book_value, fetched_at=excluded.fetched_at
+            """,
+            (symbol, bv, now),
         )
         con.commit()
 
@@ -198,10 +254,11 @@ def info() -> dict:
 
 
 def clear() -> int:
-    """清空全部缓存 (行情 + K线), 返回删除条数."""
+    """清空全部缓存 (行情 + K线 + 基本面), 返回删除条数."""
     _ensure_db()
     with _lock, sqlite3.connect(CACHE_DB) as con:
         n_quotes = con.execute("DELETE FROM quotes").rowcount
         n_ohlc = con.execute("DELETE FROM ohlc_cache").rowcount
         con.commit()
-        return n_quotes + n_ohlc
+        n_fund = con.execute("DELETE FROM fundamentals").rowcount
+        return n_quotes + n_ohlc + n_fund

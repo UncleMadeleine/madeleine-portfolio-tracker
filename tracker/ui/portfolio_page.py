@@ -198,8 +198,9 @@ def render_portfolio_page() -> None:
             if not watch.get("watchlist"):
                 watch["watchlist"] = []
             st.caption(
-                "同一个代码可属于多个列表（「所属列表」列用逗号分隔，如: 科技,美股）。"
+                "同一个代码可属多个列表（「所属列表」列用逗号分隔，如: 科技,美股）。"
                 "阈值按当地货币; 两级: upper_1/upper_2、lower_1/lower_2; 可只设一侧。"
+                "指标基准 metric: price=现价 (默认) / pb=市净率 (阈值按 PB 倍数)。"
                 "旧格式自动迁移。"
             )
             st.caption("现有列表: " + "、".join(list_names(watch)))
@@ -209,6 +210,7 @@ def render_portfolio_page() -> None:
                 columns=[
                     "symbol",
                     "lists",
+                    "metric",
                     "upper_1",
                     "upper_2",
                     "lower_1",
@@ -233,6 +235,11 @@ def render_portfolio_page() -> None:
                         "代码", help="Yahoo 规范代码"
                     ),
                     "lists": st.column_config.TextColumn("所属列表 (逗号分隔)"),
+                    "metric": st.column_config.SelectboxColumn(
+                        "指标基准",
+                        options=["", "price", "pb"],
+                        help="price=现价 (默认); pb=市净率",
+                    ),
                     "upper_1": st.column_config.NumberColumn("上限 I", format="%.2f"),
                     "upper_2": st.column_config.NumberColumn("上限 II", format="%.2f"),
                     "lower_1": st.column_config.NumberColumn("下限 I", format="%.2f"),
@@ -269,9 +276,18 @@ def render_portfolio_page() -> None:
                     e["lists"] = parse_lists(e.get("lists"))
                     # data_editor 清空单元格会产生 NaN; note 若是 NaN 会让
                     # save_watchlist 的 allow_nan=False 直接抛 ValueError
-                    for k in ("upper_1", "upper_2", "lower_1", "lower_2", "note"):
+                    for k in (
+                        "metric",
+                        "upper_1",
+                        "upper_2",
+                        "lower_1",
+                        "lower_2",
+                        "note",
+                    ):
                         v = e.get(k)
-                        if v is None or (isinstance(v, float) and pd.isna(v)):
+                        if v is None or v == "" or (
+                            isinstance(v, float) and pd.isna(v)
+                        ):
                             e.pop(k, None)
                     rows.append(e)
                 if bad or dups:
@@ -553,15 +569,23 @@ def render_portfolio_page() -> None:
                 st.caption(f":material/warning: {i}")
             if not trig.empty:
                 for _, r in trig.iterrows():
+                    base_txt = (
+                        f"PB {r['base_value']:.2f}"
+                        if r.get("metric") == "pb"
+                        and r.get("base_value") is not None
+                        and pd.notna(r.get("base_value"))
+                        else f"现价 {r['price']:,.2f} {r['currency']}"
+                    )
                     st.warning(
-                        f"**{r['symbol']}** {r['status']} · 现价 {r['price']:,.2f} {r['currency']}"
+                        f"**{r['symbol']}** {r['status']} · {base_txt}"
                         + (f" · {r['note']}" if r["note"] else ""),
                         icon=":material/notifications_active:",
                     )
             else:
                 st.caption(":material/check_circle: 自选中暂无阈值触发")
             st.caption(
-                f"当前查看: {scope} · 阈值按当地货币; I 为预警线 / II 为强提醒线; "
+                f"当前查看: {scope} · 阈值按当地货币 (基准=pb 时按市净率倍数); "
+                "I 为预警线 / II 为强提醒线; "
                 "距离 = 还需变动百分之几才触发 (负值=已越过)。"
             )
             if not wview.empty:
@@ -593,21 +617,16 @@ def render_portfolio_page() -> None:
                 )
                 st.dataframe(
                     styled_w,
-                    width="stretch",
-                    height=min(120 + 35 * len(wview), 560),
-                    hide_index=True,
                     column_config={
-                        "symbol": st.column_config.TextColumn(
-                            "代码", pinned=True, width="small"
+                        "metric": st.column_config.TextColumn("基准", width="small"),
+                        "currency": st.column_config.TextColumn(
+                            "币种", width="small"
                         ),
-                        "name": st.column_config.TextColumn("名称", width="medium"),
-                        "market": st.column_config.TextColumn("市场", width="small"),
-                        "currency": st.column_config.TextColumn("币种", width="small"),
-                        "price": st.column_config.NumberColumn(
-                            "现价", format="%.3f", width="small"
+                        "book_value": st.column_config.NumberColumn(
+                            "每股净资产", format="%.2f", width="small"
                         ),
-                        "change_pct": st.column_config.NumberColumn(
-                            "涨跌%", format="%+.2f%%", width="small"
+                        "base_value": st.column_config.NumberColumn(
+                            "基准值", format="%.2f", width="small"
                         ),
                         "upper_1": st.column_config.NumberColumn(
                             "上限 I", format="%.2f", width="small"
@@ -622,6 +641,9 @@ def render_portfolio_page() -> None:
                             "下限 II", format="%.2f", width="small"
                         ),
                         "status": st.column_config.TextColumn("状态", width="small"),
+                        "change_pct": st.column_config.NumberColumn(
+                            "涨跌%", format="%+.2f%%", width="small"
+                        ),
                         "dist_upper_1_pct": st.column_config.NumberColumn(
                             "距上限 I %", format="%.1f", width="small"
                         ),

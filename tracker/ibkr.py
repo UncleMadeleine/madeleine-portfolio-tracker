@@ -398,6 +398,14 @@ def ibkr_to_yahoo(
         if raw.startswith("200"):
             return f"{raw}.SZ"
     if ccy == "CNY":
+        # 沪深港通 A 股经 IBKR 交易挂 SEHK 通道但报 CNY (见 contract_spec);
+        # 港股人民币柜台 (HKEX RMB counter, 8 开头 5 位如 82318) 也以 CNY 交易。
+        # 两者都要先于代码前缀判定: 柜台 82318+SEHK 的 8 恰在北交所前缀里,
+        # 误判会落成 82318.BJ。通道与柜台以「交易所 + 代码形态」区分:
+        # 沪深港通代码 6 位, 柜台 lstrip 后 ≤5 位且 8 开头 (与北交所 830/430/920 不重叠)。
+        if exkey in ("SEHK", "HKEX") and len(raw) == 5 and raw.isdigit() and raw.startswith("8"):
+            code = raw.lstrip("0") or "0"
+            return f"{code.zfill(4)}.HK"
         if raw[:1] in _A_SHARE_BJ_PREFIX or raw.startswith("920"):
             return f"{raw}.BJ"
         if raw[:1] in _A_SHARE_SH_PREFIX:

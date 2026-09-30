@@ -4,6 +4,10 @@
   - 行情/历史: orchestration 前置 (settings.json "use_longport": true 启用)
   - 持仓导入: import longport (OAuth 登录后读取账户持仓)
 
+行情附带 PB (calc_indexes PbRatio, 实时撮合口径): 反推每股净资产填入
+Quote.book_value, 供 PB 阈值提醒使用 (不依赖 yfinance fundamentals)。
+calc_indexes 失败静默跳过 (PB 提醒回落 fundamentals 链路)。
+
 认证两种方式 (配置文件 longport.json, 模板 longport.example.json):
   - oauth: OAuthBuilder 浏览器授权, token 由 SDK 持久化在
     ~/.longport/openapi/tokens/<client_id> 并自动刷新 (推荐, UI 登录引导走此路径)
@@ -351,6 +355,7 @@ def get_quotes_longport(
     """批量实时行情 (QuoteContext.quote): 返回 {yahoo: Quote}, 不可用返回 ({}, reason).
 
     只认领长桥支持的市场 (美股/港股/沪深); 其它市场交回默认数据源。
+    附带 calc_indexes(PbRatio) 反推每股净资产; PB 拉取失败不影响行情本体。
     """
     mappable = [(p, yahoo_to_longport(p.yahoo)) for p in parsed]
     mappable = [(p, lp) for p, lp in mappable if lp]
@@ -370,6 +375,7 @@ def get_quotes_longport(
             reason = f"{type(e).__name__}: {e}"[:200]
             break
         by_lp = {str(getattr(sq, "symbol", "") or "").strip(): sq for sq in resp}
+        pb_ratios = _pb_ratios_longport([lp for _, lp in chunk], cfg=cfg)
         for p, lp in chunk:
             sq = by_lp.get(lp)
             if sq is None:
@@ -379,6 +385,7 @@ def get_quotes_longport(
             if price is None:
                 continue
             chg = (price - prev) / prev * 100.0 if prev else None
+            pb = pb_ratios.get(lp)
             quotes[p.yahoo] = Quote(
                 symbol=p.yahoo,
                 name=None,
@@ -386,8 +393,43 @@ def get_quotes_longport(
                 prev_close=prev,
                 change_pct=chg,
                 currency=_currency_for(p.yahoo),
+                # 长桥实时撮合口径 PB → 反推 BVPS (实测与 yfinance 口径一致)
+                book_value=price / pb if pb is not None and pb > 0 else None,
             )
     return quotes, reason
+
+
+def _pb_ratios_longport(
+    symbols_lp: list[str], cfg: dict | None = None
+) -> dict[str, float | None]:
+    """calc_indexes(PbRatio) → {lp_symbol: PB 倍数}; 失败/空输入返回 {}.
+
+    PB 属可选增强: 任何异常静默吞掉 (行情本体已到手, 不为基本面拖垮取数)。
+    长桥直接返回 PB 倍数 (非 BVPS), 由调用方按现价反推。
+    """
+    if not symbols_lp:
+        return {}
+    try:
+        from longport.openapi import CalcIndex
+
+        resp = _ctx_call(
+            lambda c, syms: c.calc_indexes(syms, [CalcIndex.PbRatio]),
+            list(symbols_lp),
+            cfg=cfg,
+        )
+    except Exception:  # noqa: BLE001
+        return {}
+    out: dict[str, float | None] = {}
+    for r in resp or []:
+        sym = str(getattr(r, "symbol", "") or "").strip()
+        if not sym:
+            continue
+        try:
+            pb = float(getattr(r, "pb_ratio", None))
+        except (TypeError, ValueError):
+            pb = None
+        out[sym] = pb if pb is not None and math.isfinite(pb) and pb > 0 else None
+    return out
 
 
 def static_names_longport(

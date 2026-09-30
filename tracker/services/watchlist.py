@@ -81,17 +81,32 @@ def build_watchlist_view(
     """
     rows: list[dict] = []
     issues: list[str] = []
-    # PB 条目先集中取每股净资产 (批量 + 磁盘缓存), 单条目缺 BVPS 时补拉
-    pb_syms = [
+    # PB 条目每股净资产: 行情自带 (长桥/akshare 实时口径) 优先, 只有缺失的
+    # 代码才走 fundamentals 批量取数 (yfinance, 磁盘缓存 6h)
+    pb_syms_all = {
         str(e.get("symbol", "")).strip()
         for e in entries
         if metric_for_entry(e) == METRIC_PB
-    ]
+    }
     book_values: dict[str, float | None] = {}
-    if pb_syms:
+
+    fundamentals_done: set[str] = set()
+
+    def _fetch_bvps_missing(yahoo: str) -> None:
+        """行情/条目均无 BVPS 时批量拉取 (一次一批, 进程内去重)."""
+        if yahoo in fundamentals_done:
+            return
         from .. import fundamentals
 
-        book_values = fundamentals.fetch_book_values(pb_syms)
+        remaining = [
+            s
+            for s in pb_syms_all
+            if s not in book_values and s not in fundamentals_done
+        ]
+        fundamentals_done.update(remaining or [yahoo])
+        if remaining:
+            book_values.update(fundamentals.fetch_book_values(remaining))
+
     for e in entries:
         e = normalize_watch_entry(e)
         raw = str(e.get("symbol", "")).strip()
@@ -121,10 +136,8 @@ def build_watchlist_view(
                 # 口径, 最准) > fundamentals 数据源 (yfinance 财报, 磁盘缓存 6h)
                 bv = entry_book_value(e) or q.book_value
                 if bv is None:
+                    _fetch_bvps_missing(p.yahoo)
                     bv = book_values.get(p.yahoo)
-                    if bv is None and p.yahoo not in book_values:
-                        bv = fundamentals.book_value_for(p.yahoo)
-                        book_values[p.yahoo] = bv
                 effective_bv = bv
                 base_value = (
                     price / bv

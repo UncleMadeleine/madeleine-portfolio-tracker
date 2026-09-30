@@ -34,10 +34,16 @@ def _ensure_db() -> None:
                 prev_close REAL,
                 change_pct REAL,
                 currency TEXT,
+                book_value REAL,
                 fetched_at REAL
             )
             """
         )
+        # 旧库无 book_value 列: 补列 (ALTER 失败说明已存在, 忽略)
+        try:
+            con.execute("ALTER TABLE quotes ADD COLUMN book_value REAL")
+        except sqlite3.OperationalError:
+            pass
         con.execute(
             """
             CREATE TABLE IF NOT EXISTS ohlc_cache (
@@ -176,11 +182,12 @@ def get_cached(symbols: list[str], ttl: int = CACHE_TTL) -> dict[str, "Quote"]:
     hits: dict[str, Quote] = {}
     with sqlite3.connect(CACHE_DB) as con:
         rows = con.execute(
-            f"SELECT symbol, name, price, prev_close, change_pct, currency FROM quotes "
+            f"SELECT symbol, name, price, prev_close, change_pct, currency, book_value "
+            f"FROM quotes "
             f"WHERE symbol IN ({','.join('?' * len(symbols))}) AND fetched_at > ?",
             [*symbols, now - ttl],
         ).fetchall()
-        for sym, name, price, prev, chg, ccy in rows:
+        for sym, name, price, prev, chg, ccy, bv in rows:
             if price is not None and price > 0:
                 hits[sym] = Quote(
                     symbol=sym,
@@ -189,6 +196,7 @@ def get_cached(symbols: list[str], ttl: int = CACHE_TTL) -> dict[str, "Quote"]:
                     prev_close=float(prev) if prev is not None else None,
                     change_pct=float(chg) if chg is not None else None,
                     currency=str(ccy),
+                    book_value=float(bv) if bv is not None else None,
                 )
     return hits
 
@@ -204,17 +212,27 @@ def set_cached(quotes: dict[str, "Quote"]) -> None:
         if q.price is None or q.price <= 0:
             continue
         rows.append(
-            (q.symbol, q.name, q.price, q.prev_close, q.change_pct, q.currency, now)
+            (
+                q.symbol,
+                q.name,
+                q.price,
+                q.prev_close,
+                q.change_pct,
+                q.currency,
+                q.book_value,
+                now,
+            )
         )
     with _lock, sqlite3.connect(CACHE_DB) as con:
         con.executemany(
             """
-            INSERT INTO quotes (symbol, name, price, prev_close, change_pct, currency, fetched_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO quotes (symbol, name, price, prev_close, change_pct, currency, book_value, fetched_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(symbol) DO UPDATE SET
                 name=excluded.name, price=excluded.price,
                 prev_close=excluded.prev_close, change_pct=excluded.change_pct,
-                currency=excluded.currency, fetched_at=excluded.fetched_at
+                currency=excluded.currency, book_value=excluded.book_value,
+                fetched_at=excluded.fetched_at
             """,
             rows,
         )

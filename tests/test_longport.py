@@ -208,15 +208,76 @@ def test_get_quotes_longport_maps_and_skips_unsupported(monkeypatch):
     assert quotes["AAPL"].currency == "USD"
 
 
-def test_get_quotes_longport_batch_failure_reports_reason(monkeypatch):
-    class BoomCtx:
-        def quote(self, symbols):
-            raise RuntimeError("rate limit")
+def test_get_quotes_longport_backfills_bvps_from_pb(monkeypatch):
+    """calc_indexes(PbRatio) → price/pb 反推 BVPS 填入 Quote (长桥实时口径)."""
 
-    with patch.object(lp, "_get_quote_ctx", return_value=BoomCtx()):
-        quotes, reason = lp.get_quotes_longport([parse("AAPL")])
-    assert quotes == {}
-    assert "rate limit" in reason
+    class FakeCtx:
+        def quote(self, symbols):
+            return [
+                SimpleNamespace(
+                    symbol="700.HK",
+                    last_done=Decimal("431.0"),
+                    prev_close=Decimal("430.0"),
+                )
+            ]
+
+        def calc_indexes(self, symbols, indexes):
+            assert list(symbols) == ["700.HK"]
+            return [SimpleNamespace(symbol="700.HK", pb_ratio="3.0")]
+
+    with patch.object(lp, "_get_quote_ctx", return_value=FakeCtx()):
+        quotes, reason = lp.get_quotes_longport([parse("0700.HK")])
+    assert reason is None
+    q = quotes["0700.HK"]
+    assert q.price == pytest.approx(431.0)
+    assert q.book_value == pytest.approx(431.0 / 3.0)
+
+
+def test_get_quotes_longport_pb_failure_keeps_quotes(monkeypatch):
+    """calc_indexes 失败 → book_value=None, 行情本体不受影响."""
+
+    class FakeCtx:
+        def quote(self, symbols):
+            return [
+                SimpleNamespace(
+                    symbol="700.HK",
+                    last_done=Decimal("431.0"),
+                    prev_close=Decimal("430.0"),
+                )
+            ]
+
+        def calc_indexes(self, symbols, indexes):
+            raise RuntimeError("pb permission denied")
+
+    with patch.object(lp, "_get_quote_ctx", return_value=FakeCtx()):
+        quotes, reason = lp.get_quotes_longport([parse("0700.HK")])
+    assert reason is None
+    q = quotes["0700.HK"]
+    assert q.price == pytest.approx(431.0)
+    assert q.book_value is None
+
+
+def test_pb_ratios_longport_filters_invalid_values(monkeypatch):
+    """pb_ratio ≤0 / 非数值 → None (不参与反推), 正常值保留."""
+
+    class FakeCtx:
+        def calc_indexes(self, symbols, indexes):
+            return [
+                SimpleNamespace(symbol="700.HK", pb_ratio="3.0"),
+                SimpleNamespace(symbol="AAPL.US", pb_ratio="0"),
+                SimpleNamespace(symbol="BAD.US", pb_ratio=None),
+            ]
+
+    with patch.object(lp, "_get_quote_ctx", return_value=FakeCtx()):
+        out = lp._pb_ratios_longport(["700.HK", "AAPL.US", "BAD.US"])
+    assert out == {"700.HK": 3.0, "AAPL.US": None, "BAD.US": None}
+
+
+def test_pb_ratios_longport_empty_and_error(monkeypatch):
+    """空输入 → {}; ctx 异常 → {} (静默, 不抛)."""
+    assert lp._pb_ratios_longport([]) == {}
+    with patch.object(lp, "_get_quote_ctx", return_value=None):
+        assert lp._pb_ratios_longport(["700.HK"]) == {}
 
 
 def test_get_history_longport_returns_sorted_df(monkeypatch):

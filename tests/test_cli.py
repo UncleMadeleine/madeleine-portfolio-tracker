@@ -451,7 +451,7 @@ class TestImportWalletCli:
 
     def test_import_wallet_unsupported_chain(self, capsys):
         with pytest.raises(SystemExit) as exc:
-            _run(capsys, "import-wallet", "solana", self.ADDR)
+            _run(capsys, "import-wallet", "cosmos", self.ADDR)
         assert exc.value.code == 2
         assert "不支持的链" in capsys.readouterr().err
 

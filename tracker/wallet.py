@@ -1,11 +1,13 @@
 """链上钱包余额查询: 轻钱包策略 (内置 tokenlist + 只读余额调用).
 
-支持 EVM 链 (ETH / BSC / Polygon / Arbitrum / Avalanche) 与 TRON:
+支持 EVM 链 (ETH / BSC / Polygon / Arbitrum / Avalanche)、TRON 与 Solana:
   - EVM: 主币 eth_getBalance + ERC-20 balanceOf 批量调用
   - TRON: TronGrid HTTP API GET /v1/accounts/{addr} (一次返回 TRX + 全部 TRC-20)
+  - Solana: getBalance + getTokenAccountsByOwner jsonParsed 取回 SOL + 全部 SPL
+    (SPL 查询是索引调用, 部分公共节点收费; 可用 TRACKER_SOLANA_RPC 指定节点)
   - 内置主流代币 tokenlist; 支持 --tokenlist 加载外部 JSON 覆盖
 
-不依赖 web3.py/tronpy, 直接 HTTP (requests); 无需 API key.
+不依赖 web3.py/tronpy/solana-py, 直接 HTTP (requests); 无需 API key.
 公钥/地址只读查询, 不涉及私钥操作.
 """
 
@@ -13,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -128,6 +131,22 @@ _BUILTIN_TOKENLIST: dict[str, dict[str, dict[str, Any]]] = {
         "TFczxzPhnThNSqr5by8tvxsdCFRRz6cPNq": {"symbol": "NFT", "decimals": 6},
         "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7": {"symbol": "WIN", "decimals": 6},
     },
+    "solana": {
+        # mint 地址为 base58 32 字节公钥 (区分大小写); decimals 经 getTokenSupply 核对;
+        # WSOL 不在此列, 导入时并入原生 SOL (见 _import_solana)
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": {"symbol": "USDC", "decimals": 6},
+        "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": {"symbol": "USDT", "decimals": 6},
+        "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN": {"symbol": "JUP", "decimals": 6},
+        "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263": {"symbol": "BONK", "decimals": 5},
+        "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn": {
+            "symbol": "JITOSOL",
+            "decimals": 9,
+        },
+        "HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3": {"symbol": "PYTH", "decimals": 6},
+        "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R": {"symbol": "RAY", "decimals": 6},
+        "jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL": {"symbol": "JTO", "decimals": 9},
+        "EKpQGSJtjMFqKZ9KQanSqYXRcF8gtDCb9MvaJrDipump": {"symbol": "WIF", "decimals": 6},
+    },
 }
 
 # ---------------------------------------------------------------------------
@@ -202,6 +221,20 @@ _CHAIN_CONFIG: dict[str, dict[str, Any]] = {
         "tokenlist": "tron",
         "kind": "tron",
     },
+    "solana": {
+        "label": "Solana",
+        "native_symbol": "SOL",
+        "native_decimals": 9,
+        # 公共 JSON-RPC; getTokenAccountsByOwner 是索引调用, 部分节点付费,
+        # TRACKER_SOLANA_RPC 环境变量可前置一个自定义节点 (按序尝试)
+        "rpc": [
+            "https://api.mainnet-beta.solana.com",
+            "https://solana-rpc.publicnode.com",
+            "https://solana.api.onfinality.io/public",
+        ],
+        "tokenlist": "solana",
+        "kind": "solana",
+    },
 }
 
 _SUPPORTED_CHAINS = set(_CHAIN_CONFIG)
@@ -214,6 +247,12 @@ _ERC20_BALANCE_TOPIC = "0x" + _ERC20_BALANCE_SIG.hex()
 _B58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 _B58_INDEX = {c: i for i, c in enumerate(_B58_ALPHABET)}
 _TRON_ADDR_RE = re.compile(r"^T[1-9A-HJ-NP-Za-km-z]{33}$")
+
+# Solana 账户公钥: base58, 解码后恰为 32 字节
+_SOL_TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+_SOL_TOKEN2022_PROGRAM = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+# Wrapped SOL mint: 等价于 SOL, 导入时并入原生 SOL 数量而非单独计价
+_SOL_WSOL_MINT = "So11111111111111111111111111111111111111112"
 
 # ---------------------------------------------------------------------------
 # HTTP helpers
@@ -281,16 +320,24 @@ def _tron_get(hosts: list[str], path: str, timeout: float = 10.0) -> Any:
 # ---------------------------------------------------------------------------
 
 
+def _b58_decode(addr: str) -> bytes | None:
+    """base58 解码 → 原始字节; 非法字符/超长返回 None."""
+    num = 0
+    try:
+        for ch in addr:
+            num = num * 58 + _B58_INDEX[ch]
+    except KeyError:
+        return None
+    body = num.to_bytes((num.bit_length() + 7) // 8, "big")
+    # base58 前导 "1" 编码为 0x00 字节
+    return b"\x00" * (len(addr) - len(addr.lstrip("1"))) + body
+
 def _b58check_decode_tron(addr: str) -> bytes | None:
     """base58check 解码 TRON 地址 → 21 字节载荷 (0x41 + 20B); 校验失败返回 None."""
     if not _TRON_ADDR_RE.fullmatch(addr):
         return None
-    num = 0
-    for ch in addr:
-        num = num * 58 + _B58_INDEX[ch]
-    try:
-        body = num.to_bytes(25, "big")
-    except OverflowError:
+    body = _b58_decode(addr)
+    if body is None or len(body) != 25:
         return None
     payload, checksum = body[:-4], body[-4:]
     if payload[0] != 0x41:
@@ -316,6 +363,15 @@ def _validate_address(address: str, chain: str) -> str:
             raise ValueError(
                 f"地址格式无效 (TRON 地址需 base58check 的 'T' 开头 34 字符): "
                 f"{addr[:10]}..."
+            )
+        return addr
+    if chain_cfg.get("kind") == "solana":
+        # base58 公钥 (区分大小写), 解码恰为 32 字节; 原样返回 (不 lower)
+        decoded = _b58_decode(addr)
+        if decoded is None or len(decoded) != 32:
+            raise ValueError(
+                f"地址格式无效 (Solana 地址需 base58 32 字节公钥, "
+                f"通常 32-44 字符): {addr[:10]}..."
             )
         return addr
     if not re.fullmatch(r"0x[0-9a-fA-F]{40}", addr):
@@ -456,14 +512,15 @@ def import_wallet(
     base_currency: str = "USD",
     rpc_timeout: float = 12.0,
 ) -> dict[str, Any]:
-    """查询链上地址余额 (EVM / TRON), 返回可直接写入 portfolio.json 的结构.
+    """查询链上地址余额 (EVM / TRON / Solana), 返回可直接写入 portfolio.json 的结构.
 
     Parameters
     ----------
     chain : str
-        链标识 (eth / bsc / polygon / arbitrum / avalanche / tron).
+        链标识 (eth / bsc / polygon / arbitrum / avalanche / tron / solana).
     address : str
-        EVM 地址 (0x + 40 hex) 或 TRON 地址 (base58check, "T" 开头 34 字符).
+        EVM 地址 (0x + 40 hex)、TRON 地址 (base58check, "T" 开头 34 字符)
+        或 Solana 地址 (base58, 32 字节公钥).
     tokenlist : str | None
         外部 tokenlist JSON 路径; None 使用内置列表.
     base_currency : str
@@ -501,6 +558,9 @@ def import_wallet(
     if chain_cfg.get("kind") == "tron":
         return _import_tron(chain, addr, chain_cfg, chain_tokens, base_currency,
                             rpc_timeout)
+    if chain_cfg.get("kind") == "solana":
+        return _import_solana(chain, addr, chain_cfg, chain_tokens, base_currency,
+                              rpc_timeout)
 
     holdings: list[dict[str, Any]] = []
 
@@ -665,6 +725,135 @@ def _import_tron(
         skipped = ", ".join(c[:12] + "…" for c in unknown[:5])
         errors.append(
             f"{len(unknown)} 个 TRC-20 代币不在 tokenlist, 已跳过: {skipped}"
+        )
+
+    return {
+        "chain": chain,
+        "address": address,
+        "holdings": holdings,
+        "errors": errors,
+    }
+
+
+def _solana_rpc_hosts(chain_cfg: dict[str, Any]) -> list[str]:
+    """Solana RPC 节点列表: TRACKER_SOLANA_RPC (逗号分隔) 前置自定义节点."""
+    custom = [
+        h.strip()
+        for h in os.environ.get("TRACKER_SOLANA_RPC", "").split(",")
+        if h.strip()
+    ]
+    return custom + list(chain_cfg["rpc"])
+
+
+def _import_solana(
+    chain: str,
+    address: str,
+    chain_cfg: dict[str, Any],
+    chain_tokens: dict[str, dict[str, Any]],
+    base_currency: str,
+    timeout: float,
+) -> dict[str, Any]:
+    """Solana 导入: getBalance 取原生 SOL, getTokenAccountsByOwner(jsonParsed)
+    一次取回全部 SPL 代币账户 (Token Program + Token-2022 各查一次).
+
+    getTokenAccountsByOwner 是索引调用, 部分公共节点收费/限速; SPL 部分失败时
+    原生 SOL 仍返回, 详情记 errors. Wrapped SOL (So111...112) 并入 SOL 数量.
+    """
+    holdings: list[dict[str, Any]] = []
+    errors: list[str] = []
+    hosts = _solana_rpc_hosts(chain_cfg)
+
+    # 1. 原生 SOL (lamports → SOL)
+    sol_lamports = 0
+    try:
+        res = _try_rpc_hosts(
+            hosts,
+            {"jsonrpc": "2.0", "id": 1, "method": "getBalance",
+             "params": [address]},
+            timeout,
+        )
+        sol_lamports = int((res or {}).get("value") or 0)
+    except RuntimeError as e:
+        errors.append(f"SOL 余额查询失败: {e}")
+
+    # 2. SPL 代币: 同一 owner 可能有多个 token account, 按 mint 累加
+    #    (如散户地址常见的 dust 账户); decimals 以链上为准, tokenlist 兜底
+    by_mint: dict[str, dict[str, Any]] = {}
+    for program_id in (_SOL_TOKEN_PROGRAM, _SOL_TOKEN2022_PROGRAM):
+        try:
+            res = _try_rpc_hosts(
+                hosts,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "getTokenAccountsByOwner",
+                    "params": [
+                        address,
+                        {"programId": program_id},
+                        {"encoding": "jsonParsed"},
+                    ],
+                },
+                timeout,
+            )
+        except RuntimeError as e:
+            errors.append(f"SPL 代币账户查询失败 ({program_id[:8]}…): {e}")
+            continue
+        for item in (res or {}).get("value") or []:
+            try:
+                info = item["account"]["data"]["parsed"]["info"]
+                ta = info["tokenAmount"]
+                raw = int(ta["amount"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if raw <= 0:
+                continue
+            mint = info.get("mint") or ""
+            if mint not in by_mint:
+                by_mint[mint] = {"raw": 0, "decimals": ta.get("decimals")}
+            by_mint[mint]["raw"] += raw
+
+    # WSOL 并入原生 SOL (Wrapped SOL ≈ SOL, 单独计价会与 SOL-USD 合并时互相覆盖)
+    wsol = by_mint.pop(_SOL_WSOL_MINT, None)
+    wsol_lamports = int(wsol["raw"]) if wsol else 0
+    sol_total = sol_lamports + wsol_lamports
+    if sol_total > 0:
+        holdings.append(
+            {
+                "symbol": _symbol_for_token(
+                    chain_cfg["native_symbol"], chain, base_currency
+                ),
+                "quantity": sol_total / (10 ** chain_cfg["native_decimals"]),
+                "contract": None,
+                "source": "native",
+                "chain": chain,
+            }
+        )
+    if wsol_lamports > 0:
+        errors.append(
+            f"SOL 合计含 wSOL {wsol_lamports / 1e9:g} (已计入数量)"
+        )
+
+    # 只纳入 tokenlist 内的代币 (Solana 上空投 meme 泛滥, 无元数据的 mint 无法定价)
+    unknown: list[str] = []
+    for mint, bal in by_mint.items():
+        info = chain_tokens.get(mint)
+        if info is None:
+            unknown.append(mint)
+            continue
+        decimals = bal["decimals"] if bal["decimals"] is not None else info["decimals"]
+        holdings.append(
+            {
+                "symbol": _symbol_for_token(info["symbol"], chain, base_currency),
+                "quantity": bal["raw"] / (10 ** decimals),
+                "contract": mint,
+                "source": "spl",
+                "chain": chain,
+            }
+        )
+    if unknown:
+        skipped = ", ".join(c[:12] + "…" for c in unknown[:5])
+        errors.append(
+            f"{len(unknown)} 个 SPL 代币不在 tokenlist, 已跳过: {skipped}"
         )
 
     return {

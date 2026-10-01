@@ -591,17 +591,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="从链上地址导入加密资产 (轻钱包: tokenlist + balanceOf)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
-            "支持链: eth, bsc, polygon, arbitrum, avalanche, tron\n"
+            "支持链: eth, bsc, polygon, arbitrum, avalanche, tron, solana\n"
             "示例:\n"
             "  tracker import wallet eth 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045\n"
             "  tracker import wallet bsc 0x... --base-currency USDT --dry-run\n"
             "  tracker import wallet tron TQxxxxxxxx... --dry-run\n"
+            "  tracker import wallet solana Hxxxxxxxx... --dry-run\n"
         ),
     )
     p_i_wallet.add_argument(
-        "chain", help="链名称: eth / bsc / polygon / arbitrum / avalanche / tron"
+        "chain", help="链名称: eth / bsc / polygon / arbitrum / avalanche / tron / solana"
     )
-    p_i_wallet.add_argument("address", help="链上地址 (EVM: 0x+40位hex; TRON: base58 'T'开头)")
+    p_i_wallet.add_argument(
+        "address", help="链上地址 (EVM: 0x+40位hex; TRON: 'T'开头; Solana: base58 公钥)"
+    )
     p_i_wallet.add_argument(
         "--portfolio", default=str(DEFAULT_PORTFOLIO), help="portfolio.json 路径"
     )
@@ -699,18 +702,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="从链上地址导入加密资产 (已并入 import wallet)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
-            "支持链: eth, bsc, polygon, arbitrum, avalanche, tron\n"
+            "支持链: eth, bsc, polygon, arbitrum, avalanche, tron, solana\n"
             "示例:\n"
             "  tracker import-wallet eth 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045\n"
             "  tracker import-wallet bsc 0x... --base-currency USDT\n"
             "  tracker import-wallet tron T... --add --json\n"
+            "  tracker import-wallet solana H... --dry-run --json\n"
             "  tracker import-wallet polygon 0x... --tokenlist my_tokens.json --add\n"
         ),
     )
     p_wallet.add_argument(
-        "chain", help="链名称: eth / bsc / polygon / arbitrum / avalanche / tron"
+        "chain", help="链名称: eth / bsc / polygon / arbitrum / avalanche / tron / solana"
     )
-    p_wallet.add_argument("address", help="链上地址 (EVM: 0x+40位hex; TRON: base58 'T'开头)")
+    p_wallet.add_argument(
+        "address", help="链上地址 (EVM: 0x+40位hex; TRON: 'T'开头; Solana: base58 公钥)"
+    )
     p_wallet.add_argument(
         "--portfolio", default=str(DEFAULT_PORTFOLIO), help="portfolio.json 路径"
     )

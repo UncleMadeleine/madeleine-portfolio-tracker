@@ -131,9 +131,10 @@ python -m tracker.cli report -f csv -w 科技
 python -m tracker.cli export -f md -o snapshot.md
 python -m tracker.cli export -f csv -o holdings.csv
 
-# 从链上地址查询加密资产余额（只读，支持 eth/bsc/polygon/arbitrum/avalanche/tron）
+# 从链上地址查询加密资产余额（只读，支持 eth/bsc/polygon/arbitrum/avalanche/tron/solana）
 python -m tracker.cli import wallet eth 0xd8dA...6045 --dry-run  # 仅查询
 python -m tracker.cli import wallet tron TQxxxx...             # TRON 链 (base58 地址) 追加写入
+python -m tracker.cli import wallet solana Hxxxx...            # Solana 链 (base58 公钥)
 
 # 行情磁盘缓存管理
 python -m tracker.cli cache info
@@ -477,12 +478,13 @@ python -m tracker.cli import file 持仓.csv --overwrite --json
 python -m tracker.cli import wallet eth 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045 --dry-run
 python -m tracker.cli import wallet bsc 0x... --base-currency USDT --json
 python -m tracker.cli import wallet tron TNPeeaaFB7K9cmo4uQpcU32zGK8G1NYqeL --dry-run
+python -m tracker.cli import wallet solana Hxxxx... --dry-run   # SPL 代币自动取回
 python -m tracker.cli import wallet polygon 0x... --tokenlist my_tokens.json
 ```
 
-- 支持链：`eth` / `bsc` / `polygon` / `arbitrum` / `avalanche` / `tron`（每链多个公共节点自动切换）
-- 轻钱包策略：EVM 链主币 `eth_getBalance` + ERC-20 `balanceOf` 批量调用；TRON 走 TronGrid `GET /v1/accounts` 一次取回 TRX + TRC-20；内置主流代币 tokenlist，可用外部 JSON 覆盖
-- 不依赖 web3.py，EVM 直接 HTTP JSON-RPC，TRON 直接 HTTP
+- 支持链：`eth` / `bsc` / `polygon` / `arbitrum` / `avalanche` / `tron` / `solana`（每链多个公共节点自动切换；Solana 可用环境变量 `TRACKER_SOLANA_RPC` 前置自定义节点）
+- 轻钱包策略：EVM 链主币 `eth_getBalance` + ERC-20 `balanceOf` 批量调用；TRON 走 TronGrid `GET /v1/accounts` 一次取回 TRX + TRC-20；Solana 走 `getBalance` + `getTokenAccountsByOwner`(jsonParsed) 取回 SOL + 全部 SPL（wSOL 并入 SOL），内置主流代币 tokenlist，可用外部 JSON 覆盖
+- 不依赖 web3.py/tronpy/solana-py，EVM/Solana 直接 HTTP JSON-RPC，TRON 直接 HTTP
 - 兼容入口：`python -m tracker.cli import-wallet`（`--add` 追加写入 / `--overwrite` 覆盖）
 
 ---

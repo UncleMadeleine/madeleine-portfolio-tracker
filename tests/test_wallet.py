@@ -98,7 +98,7 @@ class TestValidateAddress:
     def test_unsupported_chain(self):
         with pytest.raises(ValueError, match="不支持的链"):
             wallet_mod._validate_address(
-                "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", "solana"
+                "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", "cosmos"
             )
 
     def test_mixed_case_normalized(self):
@@ -140,6 +140,11 @@ class TestSupportedChains:
             for contract, info in tokens.items():
                 if chain == "tron":  # base58 合约地址 (区分大小写)
                     assert re.fullmatch(r"T[1-9A-HJ-NP-Za-km-z]{33}", contract), (
+                        f"{chain} {contract}"
+                    )
+                elif chain == "solana":  # base58 mint 公钥, 解码恰为 32 字节
+                    decoded = wallet_mod._b58_decode(contract)
+                    assert decoded is not None and len(decoded) == 32, (
                         f"{chain} {contract}"
                     )
                 else:
@@ -406,7 +411,7 @@ class TestImportWallet:
     def test_unsupported_chain_raises(self):
         with pytest.raises(ValueError, match="不支持的链"):
             wallet_mod.import_wallet(
-                "solana", "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
+                "cosmos", "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
             )
 
     def test_invalid_address_raises(self):
@@ -689,3 +694,177 @@ class TestTronWallet:
         result = wallet_mod.import_wallet("tron", self.ADDR)
         assert result["holdings"] == []
         assert result["errors"] and "TRON 账户查询失败" in result["errors"][0]
+
+
+# ---------------------------------------------------------------------------
+# Solana 链 (base58 地址 + getBalance / getTokenAccountsByOwner)
+# ---------------------------------------------------------------------------
+
+
+class TestSolanaWallet:
+    # 系统投票程序地址 (已知有效的 32 字节 base58 公钥)
+    ADDR = "Vote111111111111111111111111111111111111111"
+    USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+    WSOL_MINT = "So11111111111111111111111111111111111111112"
+
+    @staticmethod
+    def _token_account(mint: str, raw: str, decimals: int) -> dict:
+        return {
+            "pubkey": "x" * 43,
+            "account": {
+                "data": {
+                    "parsed": {
+                        "info": {
+                            "mint": mint,
+                            "tokenAmount": {
+                                "amount": raw,
+                                "decimals": decimals,
+                            },
+                        }
+                    }
+                }
+            },
+        }
+
+    def _fake_rpc(self, *, lamports=0, token_accounts=None, token2022_accounts=None):
+        """按 method+programId 分发的 _try_rpc_hosts mock (参数为 result 层载荷)."""
+
+        def fake(hosts, payload, timeout):
+            method = payload["method"]
+            if method == "getBalance":
+                return {"value": lamports}
+            if method == "getTokenAccountsByOwner":
+                program = payload["params"][1]["programId"]
+                if program == wallet_mod._SOL_TOKEN_PROGRAM:
+                    return {"value": token_accounts or []}
+                return {"value": token2022_accounts or []}
+            raise AssertionError(f"unexpected method {method}")
+
+        return fake
+
+    def test_validate_address_valid(self):
+        assert wallet_mod._validate_address(self.ADDR, "solana") == self.ADDR
+
+    def test_validate_address_bad_base58(self):
+        with pytest.raises(ValueError, match="地址格式无效"):
+            wallet_mod._validate_address("0xZZ" + self.ADDR, "solana")
+
+    def test_validate_address_wrong_length(self):
+        # base58 合法但解码不是 32 字节 → 无效
+        with pytest.raises(ValueError, match="地址格式无效"):
+            wallet_mod._validate_address("abc", "solana")
+
+    def test_validate_address_evm_rejected(self):
+        with pytest.raises(ValueError, match="地址格式无效"):
+            wallet_mod._validate_address(
+                "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", "solana"
+            )
+
+    def test_import_native_and_spl(self, monkeypatch):
+        monkeypatch.setattr(
+            wallet_mod,
+            "_try_rpc_hosts",
+            self._fake_rpc(
+                lamports=int(2.5e9),
+                token_accounts=[self._token_account(self.USDC_MINT, "1500000", 6)],
+            ),
+        )
+        result = wallet_mod.import_wallet("solana", self.ADDR)
+        assert result["chain"] == "solana"
+        assert result["address"] == self.ADDR
+        assert result["errors"] == []
+        by_symbol = {h["symbol"]: h for h in result["holdings"]}
+        assert by_symbol["SOL-USD"]["quantity"] == pytest.approx(2.5)
+        assert by_symbol["SOL-USD"]["source"] == "native"
+        assert by_symbol["USDC-USD"]["quantity"] == pytest.approx(1.5)
+        assert by_symbol["USDC-USD"]["contract"] == self.USDC_MINT
+        assert by_symbol["USDC-USD"]["source"] == "spl"
+
+    def test_multiple_token_accounts_same_mint_summed(self, monkeypatch):
+        """同一 owner 的多个 token account 按 mint 累加."""
+        monkeypatch.setattr(
+            wallet_mod,
+            "_try_rpc_hosts",
+            self._fake_rpc(
+                token_accounts=[
+                    self._token_account(self.USDC_MINT, "1000000", 6),
+                    self._token_account(self.USDC_MINT, "500000", 6),
+                ],
+            ),
+        )
+        result = wallet_mod.import_wallet("solana", self.ADDR)
+        usdc = next(h for h in result["holdings"] if h["symbol"] == "USDC-USD")
+        assert usdc["quantity"] == pytest.approx(1.5)
+
+    def test_token2022_accounts_included(self, monkeypatch):
+        """Token-2022 程序下的账户也计入 (如 PYTH-USDC 等 2022 代币)."""
+        monkeypatch.setattr(
+            wallet_mod,
+            "_try_rpc_hosts",
+            self._fake_rpc(
+                token2022_accounts=[self._token_account(self.USDC_MINT, "2000000", 6)],
+            ),
+        )
+        result = wallet_mod.import_wallet("solana", self.ADDR)
+        usdc = next(h for h in result["holdings"] if h["symbol"] == "USDC-USD")
+        assert usdc["quantity"] == pytest.approx(2.0)
+
+    def test_wsol_merged_into_native_sol(self, monkeypatch):
+        """wSOL 不单独成行, 并入 SOL-USD 数量并记提示."""
+        monkeypatch.setattr(
+            wallet_mod,
+            "_try_rpc_hosts",
+            self._fake_rpc(
+                lamports=int(1e9),
+                token_accounts=[self._token_account(self.WSOL_MINT, "500000000", 9)],
+            ),
+        )
+        result = wallet_mod.import_wallet("solana", self.ADDR)
+        sols = [h for h in result["holdings"] if h["symbol"] == "SOL-USD"]
+        assert len(sols) == 1
+        assert sols[0]["quantity"] == pytest.approx(1.5)
+        assert any("wSOL" in e for e in result["errors"])
+
+    def test_unknown_mint_skipped(self, monkeypatch):
+        monkeypatch.setattr(
+            wallet_mod,
+            "_try_rpc_hosts",
+            self._fake_rpc(
+                token_accounts=[
+                    self._token_account("UnknownMint1111111111111111111111111111111", "1", 0)
+                ],
+            ),
+        )
+        result = wallet_mod.import_wallet("solana", self.ADDR)
+        assert result["holdings"] == []
+        assert result["errors"] and "不在 tokenlist" in result["errors"][0]
+
+    def test_rpc_failure_partial_result(self, monkeypatch):
+        """SPL 索引调用失败时原生 SOL 仍返回, 失败记 errors."""
+
+        def fake(hosts, payload, timeout):
+            if payload["method"] == "getBalance":
+                return {"value": int(1e9)}
+            raise RuntimeError("全部 RPC 节点不可达")
+
+        monkeypatch.setattr(wallet_mod, "_try_rpc_hosts", fake)
+        result = wallet_mod.import_wallet("solana", self.ADDR)
+        sols = [h for h in result["holdings"] if h["symbol"] == "SOL-USD"]
+        assert sols and sols[0]["quantity"] == pytest.approx(1.0)
+        assert any("SPL 代币账户查询失败" in e for e in result["errors"])
+
+    def test_all_rpc_failure(self, monkeypatch):
+        def _fail(hosts, payload, timeout):
+            raise RuntimeError("全部 RPC 节点不可达")
+
+        monkeypatch.setattr(wallet_mod, "_try_rpc_hosts", _fail)
+        result = wallet_mod.import_wallet("solana", self.ADDR)
+        assert result["holdings"] == []
+        assert result["errors"] and "SOL 余额查询失败" in result["errors"][0]
+
+    def test_solana_rpc_env_override(self, monkeypatch):
+        """TRACKER_SOLANA_RPC 前置自定义节点."""
+        monkeypatch.setenv("TRACKER_SOLANA_RPC", "https://a.example, https://b.example")
+        hosts = wallet_mod._solana_rpc_hosts(wallet_mod._CHAIN_CONFIG["solana"])
+        assert hosts[:2] == ["https://a.example", "https://b.example"]
+        assert hosts[2:] == wallet_mod._CHAIN_CONFIG["solana"]["rpc"]

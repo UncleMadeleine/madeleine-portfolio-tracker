@@ -537,6 +537,7 @@ export default function (component) {
   var LC = window.LightweightCharts;
   var chart = LC.createChart(el, CFG.options);
   var isCompare = CFG.mode === 'compare';
+  var isCrypto = CFG.mode === 'crypto';
   var candle = null, volSeries = null, tracks = [], indSeries = [];
 
   function addLine(color, data) {
@@ -552,6 +553,21 @@ export default function (component) {
   if (isCompare) {
     tracks = CFG.lines.map(function (ln) {
       return { name: ln.name, color: ln.color, series: addLine(ln.color, ln.data), data: ln.data };
+    });
+  } else if (isCrypto) {
+    // 加密货币对比: 每币一个独立窗格的蜡烛图 (原始价格不归一化, 各自价轴,
+    // 共享时间轴与十字光标); 窗格分隔线可拖拽调高。
+    tracks = CFG.coins.map(function (cn, paneIdx) {
+      var s = chart.addSeries(LC.CandlestickSeries, {
+        upColor: CFG.up, downColor: CFG.down,
+        wickUpColor: CFG.up, wickDownColor: CFG.down,
+        borderVisible: false,
+        priceLineVisible: true, priceLineStyle: 2,
+        priceLineColor: cn.color,
+        priceFormat: { type: 'price', precision: cn.precision, minMove: cn.minMove }
+      }, paneIdx);
+      s.setData(cn.candles);
+      return { name: cn.name, color: cn.color, series: s, data: cn.candles, precision: cn.precision };
     });
   } else {
     candle = chart.addSeries(LC.CandlestickSeries, CFG.candleOpts);
@@ -658,6 +674,17 @@ export default function (component) {
     }
     return ans;
   }
+  // 每币窗格蜡烛定位: 二分查找 ≤ t 的最近 bar 下标 (无则 -1)
+  function barIdx(data, t) {
+    var lo = 0, hi = data.length - 1, ans = -1;
+    while (lo <= hi) {
+      var mid = (lo + hi) >> 1;
+      if (data[mid].time <= t) { ans = mid; lo = mid + 1; }
+      else { hi = mid - 1; }
+    }
+    return ans;
+  }
+  function fpn(v, p) { return v == null ? '—' : Number(v).toFixed(p); }
   function show(param) {
     var h, i;
     if (isCompare) {
@@ -678,6 +705,34 @@ export default function (component) {
             pct >= 0 ? CFG.up : CFG.down);
         }
         h += '&nbsp;&nbsp;';
+      });
+      legend.innerHTML = h;
+      return;
+    }
+    if (isCrypto) {
+      var ct = '';
+      tracks.forEach(function (tr) {
+        var lt = tr.data.length ? tr.data[tr.data.length - 1].time : '';
+        if (lt > ct) { ct = lt; }
+      });
+      if (param && param.time) { ct = tstr(param.time); }
+      h = span(CFG.title + ' ', '#e8eaed') + ' ' + span(ct, '#8b949e') + '&nbsp;&nbsp;';
+      tracks.forEach(function (tr) {
+        var bi = barIdx(tr.data, ct);
+        if (bi < 0) {
+          h += ' ' + span(tr.name, tr.color) + ' ' + span('—') + '&nbsp;&nbsp;';
+          return;
+        }
+        var cb = tr.data[bi], cp = tr.precision;
+        var cprev = bi > 0 ? tr.data[bi - 1].close : cb.open;
+        var cpct = cprev ? (cb.close / cprev - 1) * 100 : 0;
+        var cdir = cb.close >= cb.open ? CFG.up : CFG.down;
+        h += ' ' + span(tr.name, tr.color)
+          + ' 开' + span(fpn(cb.open, cp)) + ' 高' + span(fpn(cb.high, cp), cdir)
+          + ' 低' + span(fpn(cb.low, cp), cdir) + ' 收' + span(fpn(cb.close, cp), cdir)
+          + ' ' + span((cpct >= 0 ? '+' : '') + cpct.toFixed(2) + '%',
+            cpct >= 0 ? CFG.up : CFG.down)
+          + '&nbsp;&nbsp;';
       });
       legend.innerHTML = h;
       return;
@@ -725,7 +780,9 @@ export default function (component) {
 
   var n = isCompare
     ? Math.max.apply(null, CFG.lines.map(function (l) { return l.data.length; }).concat([1]))
-    : CFG.candles.length;
+    : isCrypto
+      ? Math.max.apply(null, CFG.coins.map(function (cn) { return cn.candles.length; }).concat([1]))
+      : CFG.candles.length;
   // 视口还原: 组件因数据更新重建时, 按「锚点 bar 时间 + 分数偏移 + 半宽」还原拖动位置
   // (bar 索引无关, 日/周/月K 通用)。锚点存 window 级 store (按 queryId 键):
   // Streamlit 更新 data 时会重建 .lwc-wrap DOM 节点, DOM 属性随之丢失;
@@ -1068,6 +1125,80 @@ def compare_payload(
         "initBars": init_bars,
         "height": height,
         "lines": lines,
+        "candles": [],
+        "volume": [],
+        "mas": [],
+        "boll": [],
+        "macd": None,
+        "rsi": None,
+        "kdj": None,
+        "options": _lwc_options(),
+    }
+
+
+def crypto_compare_payload(
+    frames: dict[str, pd.DataFrame],
+    *,
+    period: str = "daily",
+    green_up: bool = False,
+    height: int = 560,
+    init_bars: int = 140,
+) -> dict:
+    """加密货币对比 payload (复用 K线组件): 每币一个独立窗格的蜡烛图.
+
+    只接受加密货币代码; 不做归一化 —— 各币按原始价格绘制, 独立价轴,
+    共享时间轴与十字光标 (窗格分隔线可拖拽调高)。
+    """
+    coins = []
+    for i, (sym, df) in enumerate(frames.items()):
+        d = resample_ohlc(df, period) if period != "daily" else clean_ohlc(df)
+        if d.empty:
+            continue
+        dates = d["date"].dt.strftime("%Y-%m-%d")
+        candles = [
+            {
+                "time": t,
+                "open": round(float(o), 8),
+                "high": round(float(h), 8),
+                "low": round(float(lo), 8),
+                "close": round(float(c), 8),
+            }
+            for t, o, h, lo, c in zip(
+                dates, d["open"], d["high"], d["low"], d["close"]
+            )
+        ]
+        if not candles:
+            continue
+        # 低价币 (SHIB/PEPE ~1e-5) 需要比单只K线更细的价格精度才不至于显示为 0.0000
+        med = float(d["close"].median())
+        precision = (
+            min(10, max(4, math.ceil(-math.log10(med)) + 3)) if med > 0 else 6
+        )
+        coins.append(
+            {
+                "name": sym,
+                "color": COMPARE_PALETTE[i % len(COMPARE_PALETTE)],
+                "precision": precision,
+                "minMove": 10**-precision,
+                "candles": candles,
+            }
+        )
+    if not coins:
+        raise ValueError("无有效对比数据")
+    names = " vs ".join(cn["name"] for cn in coins[:4]) + (
+        " …" if len(coins) > 4 else ""
+    )
+    up, down = (
+        (INTL_UP_COLOR, INTL_DOWN_COLOR) if green_up else (CN_UP_COLOR, CN_DOWN_COLOR)
+    )
+    return {
+        "mode": "crypto",
+        "title": f"{names} · {PERIOD_LABELS.get(period, '日K')}",
+        "up": up,
+        "down": down,
+        "initBars": init_bars,
+        "height": height,
+        "coins": coins,
         "candles": [],
         "volume": [],
         "mas": [],

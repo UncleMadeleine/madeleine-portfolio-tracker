@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 
 import pandas as pd
 import streamlit as st
@@ -14,7 +15,8 @@ import streamlit as st
 from . import settings
 
 from tracker import charting, prices, search
-from tracker.symbols import parse
+from tracker.providers import PROVIDERS
+from tracker.symbols import parse, type_for_symbol
 
 # 快捷入口: 持仓/自选可能很长, 单只查询页只展示前 N 个 (数量/成本顺序, 无行情排序)
 QUICK_SYMBOLS_LIMIT = 10
@@ -185,6 +187,11 @@ def render_compare_chart(data: dict, *, height: int = 560) -> None:
     _KLINE_CHART(key="compare_chart", data=data, height=height)
 
 
+def render_crypto_compare_chart(data: dict, *, height: int = 560) -> None:
+    """加密货币K线对比图: 复用 K线组件 (每币一个窗格蜡烛图), data 由 crypto_compare_payload 生成."""
+    _KLINE_CHART(key="crypto_compare_chart", data=data, height=height)
+
+
 def render_compare_controls(
     prefer_akshare: bool,
     quick_symbols: list[str],
@@ -292,15 +299,18 @@ def _append_compare_symbol(code: str) -> None:
     st.session_state["compare_sel"] = cur
 
 
-def _render_symbol_search(*, prefix: str = "kline", on_pick=None) -> None:
-    """搜索框: 输入代码/名称片段 → 三域 provider 独立搜索 → 分域下拉展示.
+def _render_symbol_search(
+    *, prefix: str = "kline", on_pick=None, domains=None, query_label=None
+) -> None:
+    """搜索框: 输入代码/名称片段 → provider 分域搜索 → 分域下拉展示.
 
     prefix 区分多入口 widget key (单只查询/走势对比); on_pick(code) 在
     on_change 回调里执行 (本轮后续 widget 实例化前, 可安全写其状态)。
     prefix=kline 时保持旧行为: 选中回填代码输入框并触发查询。
+    domains 限定搜索域 (如 ("crypto",) 只搜加密货币), None 为全三域。
     """
     sq = st.text_input(
-        "搜索股票 (代码或名称)",
+        query_label or "搜索股票 (代码或名称)",
         value="",
         key=f"{prefix}_search_query",
         placeholder="如: 苹果 · 腾讯 · 茅台 · AAPL · 0700 · BTC",
@@ -309,7 +319,19 @@ def _render_symbol_search(*, prefix: str = "kline", on_pick=None) -> None:
     sq = (sq or "").strip()
     if not sq:
         return
-    grouped = search.search_grouped(sq, limit_per_domain=8)
+    # domains 限定时只调用对应 provider.search() (加密货币页不触碰股票域接口);
+    # 分组 dict 仍按三域键返回, 渲染逻辑不变。
+    if domains is None:
+        grouped = search.search_grouped(sq, limit_per_domain=8)
+    else:
+        grouped = {t: [] for t in search.search_grouped("").keys()}
+        for t in domains:
+            try:
+                grouped[t] = [
+                    asdict(e) for e in PROVIDERS[t].search(sq, limit=8)
+                ]
+            except Exception:
+                grouped[t] = []
     labels = {"cn": "🇨🇳 A股/北交所", "global": "🌐 美股/港股", "crypto": "🪙 加密货币"}
 
     def _pick_legacy(code: str):
@@ -620,15 +642,137 @@ def render_kline_controls(
     )
 
 
+def _append_crypto_compare_symbol(code: str) -> None:
+    """搜索选中 → 追加进加密货币对比代码 (multiselect 状态须在实例化前写入)."""
+    extra = st.session_state.get("crypto_compare_extra") or []
+    if code not in extra:
+        extra = extra + [code]
+    st.session_state["crypto_compare_extra"] = extra
+    cur = list(st.session_state.get("crypto_compare_sel") or [])
+    if code not in cur:
+        cur.append(code)
+    st.session_state["crypto_compare_sel"] = cur
+
+
+def render_crypto_compare_controls(
+    quick_symbols: list[str],
+) -> None:
+    """加密货币K线对比 (K线子功能): 仅加密货币, 原始价格每币一个窗格, 共享时间轴.
+
+    不做归一化: 各币量级差异极大 (BTC ~10万 vs SHIB ~0.00002), 同轴重叠不可读,
+    因此同一统计图内每币独立窗格/价轴, 拖动平移/缩放同步。
+    """
+    # 代码候选 = 持仓/自选中的加密货币 + 搜索/手输 (crypto_compare_extra)
+    crypto_candidates = [
+        s for s in quick_symbols if type_for_symbol(s) == "crypto"
+    ]
+    _render_symbol_search(
+        prefix="ccmp",
+        on_pick=_append_crypto_compare_symbol,
+        domains=("crypto",),
+        query_label="搜索加密货币 (代码或名称)",
+    )
+    crypto_candidates = list(
+        dict.fromkeys(
+            crypto_candidates
+            + list(st.session_state.get("crypto_compare_extra", []))
+        )
+    )
+    c1, c2, c3 = st.columns([5, 1, 1], vertical_alignment="bottom")
+    sel_raw = c1.multiselect(
+        "对比币种",
+        crypto_candidates,
+        default=crypto_candidates[:2],
+        accept_new_options=True,
+        key="crypto_compare_sel",
+        placeholder="选择或直接输入加密货币代码 (如 BTC-USD · ETH-USD)",
+    )
+    ccmp_months = c2.selectbox(
+        "范围",
+        [3, 6, 12, 24, 36],
+        index=2,
+        format_func=lambda m: f"近 {m} 个月",
+        key="crypto_compare_months",
+    )
+    ccmp_period = c3.selectbox(
+        "周期",
+        ["daily", "weekly", "monthly"],
+        index=0,
+        format_func=lambda v: charting.PERIOD_LABELS[v],
+        key="crypto_compare_period",
+    )
+
+    sel, bad = [], []
+    for s in sel_raw:
+        y = normalize_or_none(s)
+        if y is None:
+            bad.append(s)
+        elif type_for_symbol(y) == "crypto":
+            sel.append(y)
+        else:
+            bad.append(f"{s} (非加密货币)")
+    sel = list(dict.fromkeys(sel))
+    if bad:
+        st.error(f"仅支持加密货币代码, 已忽略: {', '.join(bad)}")
+    if not sel:
+        st.info("选择或输入加密货币代码 (如 BTC-USD · ETH-USD) 开始对比。")
+        return
+    frames = {}
+    with st.spinner(f"拉取 {len(sel)} 个币种近 {ccmp_months} 个月 K线..."):
+        for s in sel:
+            try:
+                d = cached_kline(s, ccmp_months, False, False, False)
+                if d.empty:
+                    st.warning(f"{s}: 无有效K线数据")
+                else:
+                    frames[s] = d
+            except Exception as e:
+                st.warning(f"{s}: {e}")
+    if not frames:
+        return
+    render_crypto_compare_chart(
+        charting.crypto_compare_payload(
+            frames,
+            period=ccmp_period,
+            green_up=settings.green_up(),
+            height=max(560, 300 * len(frames)),
+        ),
+        height=max(560, 300 * len(frames)),
+    )
+    chg = []
+    for sym, d in frames.items():
+        dd = charting.resample_ohlc(d, ccmp_period) if ccmp_period != "daily" else d
+        if len(dd) >= 2:
+            pct = float(dd["close"].iloc[-1]) / float(dd["close"].iloc[0]) - 1
+            up_tag, down_tag = settings.up_down_tags()
+            chg.append(
+                f"{sym} :{up_tag}[{pct:+.2%}]"
+                if pct >= 0
+                else f"{sym} :{down_tag}[{pct:+.2%}]"
+            )
+    if chg:
+        st.markdown("区间涨跌: " + " · ".join(chg))
+    st.caption(
+        "各币按原始价格绘制 (不归一化), 每币一个窗格/独立价轴, 共享时间轴与十字光标;"
+        "窗格分隔线可拖拽调高, 拖动平移 / 滚轮缩放同步作用于全部窗格。"
+    )
+
+
 def render_kline_page(
     prefer_akshare: bool,
     use_ibkr: bool = False,
     use_longport: bool = False,
 ) -> None:
-    """「K线」页入口: 单只查询 + 多股对比 两个子功能 (st.tabs)."""
-    tab_single, tab_compare = st.tabs(
-        [":material/candlestick_chart: 单只查询", ":material/show_chart: 走势对比"]
+    """「K线」页入口: 单只查询 + 走势对比 + 加密货币对比 三个子功能 (st.tabs)."""
+    tab_single, tab_compare, tab_crypto = st.tabs(
+        [
+            ":material/candlestick_chart: 单只查询",
+            ":material/show_chart: 走势对比",
+            ":material/currency_bitcoin: 加密货币对比",
+        ]
     )
+    with tab_crypto:
+        render_crypto_compare_controls(quick_symbols())
     with tab_compare:
         render_compare_controls(
             prefer_akshare,
@@ -638,3 +782,6 @@ def render_kline_page(
         )
     with tab_single:
         render_kline_controls(prefer_akshare, use_ibkr, use_longport)
+
+
+

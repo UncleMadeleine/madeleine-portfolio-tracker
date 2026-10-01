@@ -641,6 +641,29 @@ class TestTronWallet:
         assert by_symbol["USDT-USD"]["quantity"] == pytest.approx(250.0)
         assert by_symbol["USDT-USD"]["source"] == "trc20"
 
+    def test_staked_and_unstaking_trx_merged(self, monkeypatch):
+        """frozenV2(质押中) + unfrozen(解冻中) 计入 TRX 总量; TRON_POWER 无 amount 跳过."""
+        body = {
+            "data": [
+                {
+                    "balance": 930_279,  # 0.930279 TRX 可用
+                    "frozenV2": [
+                        {},
+                        {"amount": 124_000_000, "type": "ENERGY"},
+                        {"type": "TRON_POWER"},
+                    ],
+                    "unfrozen": [{"unfreeze_amount": 10_000_000}],
+                }
+            ]
+        }
+        monkeypatch.setattr(
+            wallet_mod, "_tron_get", lambda hosts, path, timeout: body
+        )
+        result = wallet_mod.import_wallet("tron", self.ADDR)
+        trx = next(h for h in result["holdings"] if h["symbol"] == "TRX-USD")
+        assert trx["quantity"] == pytest.approx(0.930279 + 124.0 + 10.0)
+        assert any("质押 124" in e and "解冻中 10" in e for e in result["errors"])
+
     def test_unknown_trc20_noted_not_imported(self, monkeypatch):
         body = {"data": [{"trc20": [{"TUnknownContractxxxxxxxxxxxxxxxxxxx": "9"}]}]}
         monkeypatch.setattr(

@@ -572,11 +572,44 @@ def _import_tron(
         errors.append(f"TRON 账户查询失败: {e}")
         account = {}
 
-    # 原生 TRX: balance 单位为 sun (1 TRX = 1e6 sun), 未激活/零余额无该字段
-    try:
-        trx_sun = int(account.get("balance") or 0)
-    except (TypeError, ValueError):
-        trx_sun = 0
+    # 原生 TRX 总量 (与 TronLink 口径一致) = 可用 balance
+    #   + frozenV2 自质押 (ENERGY/BANDWIDTH 条目有 amount; TRON_POWER 是投票权
+    #     标记无 amount, 跳过)
+    #   + 已委托质押 account_resource.delegated_frozenV2_balance_for_energy /
+    #     delegated_frozenV2_balance_for_bandwidth (DelegateResource 转出的 TRX,
+    #     所有权仍在原地址)
+    #   + unfrozen 解冻中 + canWithdrawUnfreezeAmount 已满14天可领取
+    #   + Stake1.0 遗留 frozen / account_resource.frozen_balance_for_energy
+    # 未激活/零余额无字段; 单位 sun (1 TRX = 1e6 sun)
+    def _to_sun(v: Any) -> int:
+        try:
+            return int(v or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    spendable_sun = _to_sun(account.get("balance"))
+    staked_sun = sum(
+        _to_sun(item.get("amount"))
+        for item in account.get("frozenV2") or []
+        if isinstance(item, dict)
+    )
+    staked_sun += _to_sun(account.get("delegated_frozenV2_balance_for_bandwidth"))
+    res = account.get("account_resource")
+    if isinstance(res, dict):
+        staked_sun += _to_sun(res.get("frozen_balance_for_energy"))
+        staked_sun += _to_sun(res.get("delegated_frozenV2_balance_for_energy"))
+    staked_sun += sum(
+        _to_sun(item.get("frozen_balance"))
+        for item in account.get("frozen") or []
+        if isinstance(item, dict)
+    )
+    unstaking_sun = sum(
+        _to_sun(item.get("unfreeze_amount"))
+        for item in account.get("unfrozen") or []
+        if isinstance(item, dict)
+    )
+    unstaking_sun += _to_sun(account.get("canWithdrawUnfreezeAmount"))
+    trx_sun = spendable_sun + staked_sun + unstaking_sun
     if trx_sun > 0:
         holdings.append(
             {
@@ -588,6 +621,15 @@ def _import_tron(
                 "source": "native",
                 "chain": chain,
             }
+        )
+    notes = []
+    if staked_sun > 0:
+        notes.append(f"质押 {staked_sun / 1e6:g}")
+    if unstaking_sun > 0:
+        notes.append(f"解冻中 {unstaking_sun / 1e6:g}")
+    if notes:
+        errors.append(
+            f"TRX 合计含 {' + '.join(notes)} TRX (已计入数量, 当前不可转账)"
         )
 
     # TRC-20: trc20 字段为 [{contract: raw_amount_str}, ...], 只纳入 tokenlist

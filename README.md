@@ -131,9 +131,9 @@ python -m tracker.cli report -f csv -w 科技
 python -m tracker.cli export -f md -o snapshot.md
 python -m tracker.cli export -f csv -o holdings.csv
 
-# 从链上地址查询加密资产余额（只读，支持 eth/bsc/polygon/arbitrum/avalanche）
+# 从链上地址查询加密资产余额（只读，支持 eth/bsc/polygon/arbitrum/avalanche/tron）
 python -m tracker.cli import wallet eth 0xd8dA...6045 --dry-run  # 仅查询
-python -m tracker.cli import wallet eth 0x...                    # 追加写入 portfolio.json
+python -m tracker.cli import wallet tron TQxxxx...             # TRON 链 (base58 地址) 追加写入
 
 # 行情磁盘缓存管理
 python -m tracker.cli cache info
@@ -335,7 +335,7 @@ tracker/
 ├── importer.py         **统一导入管道**：四来源采集 → 追加/覆盖合并 → 备份写盘
 ├── ibkr_sync.py        IBKR 持仓导入兼容入口（委托 importer，等价 import ibkr）
 ├── ashare_sync.py      A股券商文件解析 + 兼容入口（等价 import file）
-└── wallet.py           链上钱包余额查询（EVM 五链, 轻钱包 RPC, 只读）
+└── wallet.py           链上钱包余额查询（EVM 五链 + TRON, 只读）
 portfolio.json          持仓配置（页面可直接编辑保存; type 字段由系统自动维护, 手改无效;
                         用户本地数据, 已 gitignore, 模板 portfolio.example.json）
 watchlist.json          自选股配置（页面可直接编辑保存; type 字段由系统自动维护, 手改无效;
@@ -476,12 +476,13 @@ python -m tracker.cli import file 持仓.csv --overwrite --json
 ```bash
 python -m tracker.cli import wallet eth 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045 --dry-run
 python -m tracker.cli import wallet bsc 0x... --base-currency USDT --json
+python -m tracker.cli import wallet tron TNPeeaaFB7K9cmo4uQpcU32zGK8G1NYqeL --dry-run
 python -m tracker.cli import wallet polygon 0x... --tokenlist my_tokens.json
 ```
 
-- 支持链：`eth` / `bsc` / `polygon` / `arbitrum` / `avalanche`（每链多个公共 RPC 自动切换）
-- 轻钱包策略：主币 `eth_getBalance` + ERC-20 `balanceOf` 批量调用；内置主流代币 tokenlist，可用外部 JSON 覆盖
-- 不依赖 web3.py，直接 HTTP JSON-RPC
+- 支持链：`eth` / `bsc` / `polygon` / `arbitrum` / `avalanche` / `tron`（每链多个公共节点自动切换）
+- 轻钱包策略：EVM 链主币 `eth_getBalance` + ERC-20 `balanceOf` 批量调用；TRON 走 TronGrid `GET /v1/accounts` 一次取回 TRX + TRC-20；内置主流代币 tokenlist，可用外部 JSON 覆盖
+- 不依赖 web3.py，EVM 直接 HTTP JSON-RPC，TRON 直接 HTTP
 - 兼容入口：`python -m tracker.cli import-wallet`（`--add` 追加写入 / `--overwrite` 覆盖）
 
 ---
@@ -549,8 +550,7 @@ A **local-first** portfolio tracker supporting **A-shares / B-shares / Beijing S
 - **K-line charts** — daily/weekly/monthly, MA overlays, volume, MACD/RSI/KDJ/Bollinger; slide mode loads full listing history by default
 - **Macro/risk index K-lines** — dedicated `IX.<KEY>` symbol space (USD index, VIX, CSI 300, ...), separate page & `index-kline` subcommand, dedicated provider source chain
 - **Multi-symbol comparison** — same-coordinate overlay, normalized to 100
-- **Symbol / name search** — per-domain online search (IBKR → yfinance Search for US/HK, EastMoney suggest for CN, yfinance Search for crypto); loose input in `kline` / `compare` auto-resolves via search
-- **Unified import pipeline** — IBKR account / LongPort account / EVM wallet (5 chains) / A-share broker CSV-Excel file, each with append-merge or overwrite mode (auto .bak backup); same logic drives the Streamlit「导入」page
+- **Unified import pipeline** — IBKR account / LongPort account / on-chain wallet (5 EVM chains + TRON) / A-share broker CSV-Excel file, each with append-merge or overwrite mode (auto .bak backup); same logic drives the Streamlit「导入」page
 - **Unified CLI** — 16 subcommands (snapshot, quote, watchlist, portfolio, report, export, fx, history, kline, search, compare, index-kline, import, longport-login, cache; `sync` / `import-wallet` kept as compat aliases); all support `--json`
 
 ### Quick Start

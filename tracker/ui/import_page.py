@@ -23,6 +23,7 @@ _CHAIN_LABELS = {
     "polygon": "Polygon",
     "arbitrum": "Arbitrum",
     "avalanche": "Avalanche",
+    "tron": "TRON",
 }
 _MODE_LABELS = {
     importer.MODE_APPEND: "追加合并",
@@ -192,7 +193,7 @@ def _longport_watchlist_section() -> None:
 def _wallet_section(mode: str, on_saved) -> None:
     st.caption(
         "通过链上公钥/地址查询余额后导入组合。仅读操作, 无需私钥。"
-        "支持: eth, bsc, polygon, arbitrum, avalanche"
+        "支持: eth, bsc, polygon, arbitrum, avalanche, tron"
     )
     from tracker import wallet as wallet_mod
 
@@ -203,7 +204,7 @@ def _wallet_section(mode: str, on_saved) -> None:
         key="imp_wallet_chain",
     )
     w_addr = st.text_input(
-        "地址 (0x + 40 位 hex)",
+        "地址 (EVM: 0x+40位hex; TRON: 'T'开头34字符)",
         placeholder="0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
         key="imp_wallet_addr",
     )

@@ -39,7 +39,7 @@ def _make_fake_requests(
             self._fail = fail
             self._idx = 0
 
-        def post(self, url, json=None, params=None, timeout=None, headers=None):
+        def _next(self, url):
             if self._fail:
                 raise ConnectionError(f"mock RPC error for {url[:40]}")
             if self._idx < len(self._resps):
@@ -49,6 +49,12 @@ def _make_fake_requests(
             raise ConnectionError(
                 f"no more mock responses (idx={self._idx}, url={url[:40]})"
             )
+
+        def post(self, url, json=None, params=None, timeout=None, headers=None):
+            return self._next(url)
+
+        def get(self, url, params=None, timeout=None, headers=None):
+            return self._next(url)
 
     return _FakeRequester(responses or [], always_error)
 
@@ -132,9 +138,14 @@ class TestSupportedChains:
     def test_tokenlist_addresses_well_formed(self):
         for chain, tokens in wallet_mod._BUILTIN_TOKENLIST.items():
             for contract, info in tokens.items():
-                assert re.fullmatch(r"0x[0-9a-fA-F]{40}", contract), (
-                    f"{chain} {contract}"
-                )
+                if chain == "tron":  # base58 合约地址 (区分大小写)
+                    assert re.fullmatch(r"T[1-9A-HJ-NP-Za-km-z]{33}", contract), (
+                        f"{chain} {contract}"
+                    )
+                else:
+                    assert re.fullmatch(r"0x[0-9a-fA-F]{40}", contract), (
+                        f"{chain} {contract}"
+                    )
                 assert info["decimals"] >= 0, f"{chain} {contract}"
 
     def test_tokenlist_symbols_are_valid_crypto_bases(self):
@@ -580,3 +591,78 @@ class TestSymbolForToken:
     def test_lowercase_normalized(self):
         result = wallet_mod._symbol_for_token("eth", "eth")
         assert result == "ETH-USD"
+
+# ---------------------------------------------------------------------------
+# TRON 链 (base58check 地址 + TronGrid /v1/accounts)
+# ---------------------------------------------------------------------------
+
+
+class TestTronWallet:
+    ADDR = "TNPeeaaFB7K9cmo4uQpcU32zGK8G1NYqeL"
+    USDT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+
+    def test_validate_address_valid(self):
+        assert wallet_mod._validate_address(self.ADDR, "tron") == self.ADDR
+
+    def test_validate_address_bad_checksum(self):
+        with pytest.raises(ValueError, match="地址格式无效"):
+            wallet_mod._validate_address(
+                "TNPeeaaFB7K9cmo4uQpcU32zGK8G1NYqeX", "tron"
+            )
+
+    def test_validate_address_evm_rejected(self):
+        with pytest.raises(ValueError, match="地址格式无效"):
+            wallet_mod._validate_address(
+                "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", "tron"
+            )
+
+    def test_import_native_and_trc20(self, monkeypatch):
+        body = {
+            "data": [
+                {
+                    "balance": 150_000_000,  # 150 TRX (sun)
+                    "trc20": [
+                        {self.USDT: "250000000"},          # 250 USDT (6 位)
+                        {"TMwFHYXLJaRUPeW6421aqXL4ZEzPRFGkGT": "0"},
+                    ],
+                }
+            ]
+        }
+        monkeypatch.setattr(
+            wallet_mod, "_tron_get", lambda hosts, path, timeout: body
+        )
+        result = wallet_mod.import_wallet("tron", self.ADDR)
+        assert result["chain"] == "tron"
+        assert result["address"] == self.ADDR
+        assert result["errors"] == []
+        by_symbol = {h["symbol"]: h for h in result["holdings"]}
+        assert by_symbol["TRX-USD"]["quantity"] == pytest.approx(150.0)
+        assert by_symbol["TRX-USD"]["source"] == "native"
+        assert by_symbol["USDT-USD"]["quantity"] == pytest.approx(250.0)
+        assert by_symbol["USDT-USD"]["source"] == "trc20"
+
+    def test_unknown_trc20_noted_not_imported(self, monkeypatch):
+        body = {"data": [{"trc20": [{"TUnknownContractxxxxxxxxxxxxxxxxxxx": "9"}]}]}
+        monkeypatch.setattr(
+            wallet_mod, "_tron_get", lambda hosts, path, timeout: body
+        )
+        result = wallet_mod.import_wallet("tron", self.ADDR)
+        assert result["holdings"] == []
+        assert result["errors"] and "不在 tokenlist" in result["errors"][0]
+
+    def test_unactivated_account_empty(self, monkeypatch):
+        monkeypatch.setattr(
+            wallet_mod, "_tron_get", lambda hosts, path, timeout: {"data": []}
+        )
+        result = wallet_mod.import_wallet("tron", self.ADDR)
+        assert result["holdings"] == []
+        assert result["errors"] == []
+
+    def test_api_failure_reported_in_errors(self, monkeypatch):
+        def _fail(hosts, path, timeout):
+            raise RuntimeError("全部 TRON 节点不可达")
+
+        monkeypatch.setattr(wallet_mod, "_tron_get", _fail)
+        result = wallet_mod.import_wallet("tron", self.ADDR)
+        assert result["holdings"] == []
+        assert result["errors"] and "TRON 账户查询失败" in result["errors"][0]

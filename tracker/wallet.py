@@ -1,16 +1,17 @@
-"""链上钱包余额查询: 轻钱包策略 (内置 tokenlist + balanceOf RPC 调用).
+"""链上钱包余额查询: 轻钱包策略 (内置 tokenlist + 只读余额调用).
 
-支持 EVM 链 (ETH / BSC / Polygon / Arbitrum / Avalanche):
-  - 主币余额: eth_getBalance
-  - ERC-20 余额: balanceOf(address) 批量调用
+支持 EVM 链 (ETH / BSC / Polygon / Arbitrum / Avalanche) 与 TRON:
+  - EVM: 主币 eth_getBalance + ERC-20 balanceOf 批量调用
+  - TRON: TronGrid HTTP API GET /v1/accounts/{addr} (一次返回 TRX + 全部 TRC-20)
   - 内置主流代币 tokenlist; 支持 --tokenlist 加载外部 JSON 覆盖
 
-不依赖 web3.py, 直接 HTTP JSON-RPC (requests); 无需 API key.
+不依赖 web3.py/tronpy, 直接 HTTP (requests); 无需 API key.
 公钥/地址只读查询, 不涉及私钥操作.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -115,6 +116,18 @@ _BUILTIN_TOKENLIST: dict[str, dict[str, dict[str, Any]]] = {
         },
         "0x6e84a6216eA6dACC71eE8E6b0a5B7322EEbC0fDd": {"symbol": "JOE", "decimals": 18},
     },
+    "tron": {
+        # 合约地址为 base58 形式 (区分大小写); symbol 经 Tronscan 核对
+        "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t": {"symbol": "USDT", "decimals": 6},
+        "TEkxiTehnzSmSe2XqrBj4w32RUN966rdz8": {"symbol": "USDC", "decimals": 6},
+        "TUpMhErZL2fhh4sVNULAbNKLokS4GjC1F4": {"symbol": "TUSD", "decimals": 18},
+        "TCFLL5dx5ZJdKnWuesXxi1VPwjLVmWZZy9": {"symbol": "JST", "decimals": 18},
+        "TAFjULxiVgT4qWk6UZwjqwZXTSaGaqnVp4": {"symbol": "BTT", "decimals": 18},
+        "TSSMHYeV2uE9qYH95DqyoCuNCzEL1NvU3S": {"symbol": "SUN", "decimals": 18},
+        "TMwFHYXLJaRUPeW6421aqXL4ZEzPRFGkGT": {"symbol": "USDJ", "decimals": 18},
+        "TFczxzPhnThNSqr5by8tvxsdCFRRz6cPNq": {"symbol": "NFT", "decimals": 6},
+        "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7": {"symbol": "WIN", "decimals": 6},
+    },
 }
 
 # ---------------------------------------------------------------------------
@@ -177,6 +190,18 @@ _CHAIN_CONFIG: dict[str, dict[str, Any]] = {
         ],
         "tokenlist": "avalanche",
     },
+    "tron": {
+        "label": "TRON",
+        "native_symbol": "TRX",
+        "native_decimals": 6,
+        # TronGrid 兼容 HTTP API (GET /v1/accounts/{address}), 非 JSON-RPC
+        "rpc": [
+            "https://api.trongrid.io",
+            "https://api.tronstack.io",
+        ],
+        "tokenlist": "tron",
+        "kind": "tron",
+    },
 }
 
 _SUPPORTED_CHAINS = set(_CHAIN_CONFIG)
@@ -184,6 +209,11 @@ _SUPPORTED_CHAINS = set(_CHAIN_CONFIG)
 # ERC-20 balanceOf 签名
 _ERC20_BALANCE_SIG = bytes.fromhex("70a08231")
 _ERC20_BALANCE_TOPIC = "0x" + _ERC20_BALANCE_SIG.hex()
+
+# TRON base58check 地址 ("T" 开头 34 字符, 25 字节载荷 + 4 字节 checksum)
+_B58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+_B58_INDEX = {c: i for i, c in enumerate(_B58_ALPHABET)}
+_TRON_ADDR_RE = re.compile(r"^T[1-9A-HJ-NP-Za-km-z]{33}$")
 
 # ---------------------------------------------------------------------------
 # HTTP helpers
@@ -231,11 +261,44 @@ def _try_rpc_hosts(hosts: list[str], payload: dict, timeout: float = 10.0) -> An
             last_err = e
     raise RuntimeError(f"全部 RPC 节点不可达 ({last_err})")
 
+def _tron_get(hosts: list[str], path: str, timeout: float = 10.0) -> Any:
+    """GET TronGrid 兼容接口, 依次尝试多个节点, 任一成功返回 JSON."""
+    req = _requests()
+    last_err: Exception | None = None
+    for host in hosts:
+        try:
+            r = req.get(host.rstrip("/") + path, timeout=timeout)
+            if r.status_code == 200:
+                return r.json()
+            last_err = RuntimeError(f"HTTP {r.status_code}: {r.text[:200]}")
+        except Exception as e:
+            last_err = e
+    raise RuntimeError(f"全部 TRON 节点不可达 ({last_err})")
+
 
 # ---------------------------------------------------------------------------
 # 地址校验
 # ---------------------------------------------------------------------------
 
+
+def _b58check_decode_tron(addr: str) -> bytes | None:
+    """base58check 解码 TRON 地址 → 21 字节载荷 (0x41 + 20B); 校验失败返回 None."""
+    if not _TRON_ADDR_RE.fullmatch(addr):
+        return None
+    num = 0
+    for ch in addr:
+        num = num * 58 + _B58_INDEX[ch]
+    try:
+        body = num.to_bytes(25, "big")
+    except OverflowError:
+        return None
+    payload, checksum = body[:-4], body[-4:]
+    if payload[0] != 0x41:
+        return None
+    digest = hashlib.sha256(hashlib.sha256(payload).digest()).digest()
+    if digest[:4] != checksum:
+        return None
+    return payload
 
 def _validate_address(address: str, chain: str) -> str:
     """校验地址格式, 返回规范化后的地址."""
@@ -247,6 +310,14 @@ def _validate_address(address: str, chain: str) -> str:
         raise ValueError(
             f"不支持的链 '{chain}', 支持: {', '.join(sorted(_SUPPORTED_CHAINS))}"
         )
+    if chain_cfg.get("kind") == "tron":
+        # base58 区分大小写, 校验通过后原样返回 (不 lower)
+        if _b58check_decode_tron(addr) is None:
+            raise ValueError(
+                f"地址格式无效 (TRON 地址需 base58check 的 'T' 开头 34 字符): "
+                f"{addr[:10]}..."
+            )
+        return addr
     if not re.fullmatch(r"0x[0-9a-fA-F]{40}", addr):
         raise ValueError(f"地址格式无效 (需 0x + 40 位十六进制字符): {addr[:10]}...")
     return addr.lower()
@@ -316,6 +387,14 @@ def _erc20_balance(
         "source": "erc20",
     }
 
+def _tron_account(
+    address: str, chain_cfg: dict[str, Any], timeout: float
+) -> dict[str, Any]:
+    """GET /v1/accounts/{address} → 账户对象; 未激活账户返回 {}."""
+    body = _tron_get(chain_cfg["rpc"], f"/v1/accounts/{address}", timeout)
+    data = body.get("data") or []
+    return data[0] if data else {}
+
 
 # ---------------------------------------------------------------------------
 # Tokenlist 加载
@@ -332,19 +411,22 @@ def _load_tokenlist(tokenlist_path: str | None) -> dict[str, dict[str, dict[str,
         loaded: dict[str, dict[str, dict[str, Any]]] = {}
         for chain_key, tokens in raw.items():
             # 链名统一小写: 上层按 chain.lower() 查表, 外部文件写 "ETH" 会静默查不到
-            key = chain_key.lower()
-            loaded[key] = {}
+            chain_l = chain_key.lower()
+            loaded[chain_l] = {}
             for contract, info in tokens.items():
-                loaded[key][contract.lower()] = {
+                # EVM 合约不区分大小写统一小写; TRON base58 地址区分大小写, 原样保留
+                ckey = contract.lower() if contract.startswith("0x") else contract
+                loaded[chain_l][ckey] = {
                     "symbol": info["symbol"],
                     "decimals": info["decimals"],
                 }
         return loaded
-    # 内置列表: 把混合-case 的合约地址统一归一化为小写, 方便上层匹配
+    # 内置列表: EVM 混合-case 合约归一化为小写; TRON base58 地址保留原样
     result: dict[str, dict[str, dict[str, Any]]] = {}
     for chain_key, tokens in _BUILTIN_TOKENLIST.items():
         result[chain_key] = {
-            contract.lower(): info for contract, info in tokens.items()
+            (contract.lower() if contract.startswith("0x") else contract): info
+            for contract, info in tokens.items()
         }
     return result
 
@@ -374,14 +456,14 @@ def import_wallet(
     base_currency: str = "USD",
     rpc_timeout: float = 12.0,
 ) -> dict[str, Any]:
-    """查询某 EVM 链地址的余额, 返回可直接写入 portfolio.json 的结构.
+    """查询链上地址余额 (EVM / TRON), 返回可直接写入 portfolio.json 的结构.
 
     Parameters
     ----------
     chain : str
-        链标识 (eth / bsc / polygon / arbitrum / avalanche).
+        链标识 (eth / bsc / polygon / arbitrum / avalanche / tron).
     address : str
-        EVM 公钥/地址 (0x + 40 hex chars).
+        EVM 地址 (0x + 40 hex) 或 TRON 地址 (base58check, "T" 开头 34 字符).
     tokenlist : str | None
         外部 tokenlist JSON 路径; None 使用内置列表.
     base_currency : str
@@ -415,6 +497,10 @@ def import_wallet(
     chain_cfg = _CHAIN_CONFIG[chain]
     token_data = _load_tokenlist(tokenlist)
     chain_tokens = token_data.get(chain, {})
+
+    if chain_cfg.get("kind") == "tron":
+        return _import_tron(chain, addr, chain_cfg, chain_tokens, base_currency,
+                            rpc_timeout)
 
     holdings: list[dict[str, Any]] = []
 
@@ -464,6 +550,84 @@ def import_wallet(
     return {
         "chain": chain,
         "address": addr,
+        "holdings": holdings,
+        "errors": errors,
+    }
+
+
+def _import_tron(
+    chain: str,
+    address: str,
+    chain_cfg: dict[str, Any],
+    chain_tokens: dict[str, dict[str, Any]],
+    base_currency: str,
+    timeout: float,
+) -> dict[str, Any]:
+    """TRON 导入: 单次 /v1/accounts 调用取回 TRX 原生余额 + 全部 TRC-20."""
+    holdings: list[dict[str, Any]] = []
+    errors: list[str] = []
+    try:
+        account = _tron_account(address, chain_cfg, timeout)
+    except RuntimeError as e:
+        errors.append(f"TRON 账户查询失败: {e}")
+        account = {}
+
+    # 原生 TRX: balance 单位为 sun (1 TRX = 1e6 sun), 未激活/零余额无该字段
+    try:
+        trx_sun = int(account.get("balance") or 0)
+    except (TypeError, ValueError):
+        trx_sun = 0
+    if trx_sun > 0:
+        holdings.append(
+            {
+                "symbol": _symbol_for_token(
+                    chain_cfg["native_symbol"], chain, base_currency
+                ),
+                "quantity": trx_sun / (10 ** chain_cfg["native_decimals"]),
+                "contract": None,
+                "source": "native",
+                "chain": chain,
+            }
+        )
+
+    # TRC-20: trc20 字段为 [{contract: raw_amount_str}, ...], 只纳入 tokenlist
+    # 内的代币 (Tron 上 air-drop 代币泛滥, 无 symbol/decimals 元数据的合约无法定价)
+    balances: dict[str, int] = {}
+    for item in account.get("trc20") or []:
+        if not isinstance(item, dict):
+            continue
+        for contract, raw in item.items():
+            try:
+                balances[contract] = balances.get(contract, 0) + int(raw)
+            except (TypeError, ValueError):
+                continue
+
+    unknown: list[str] = []
+    for contract, raw_amount in balances.items():
+        if raw_amount <= 0:
+            continue
+        info = chain_tokens.get(contract)
+        if info is None:
+            unknown.append(contract)
+            continue
+        holdings.append(
+            {
+                "symbol": _symbol_for_token(info["symbol"], chain, base_currency),
+                "quantity": raw_amount / (10 ** info["decimals"]),
+                "contract": contract,
+                "source": "trc20",
+                "chain": chain,
+            }
+        )
+    if unknown:
+        skipped = ", ".join(c[:12] + "…" for c in unknown[:5])
+        errors.append(
+            f"{len(unknown)} 个 TRC-20 代币不在 tokenlist, 已跳过: {skipped}"
+        )
+
+    return {
+        "chain": chain,
+        "address": address,
         "holdings": holdings,
         "errors": errors,
     }

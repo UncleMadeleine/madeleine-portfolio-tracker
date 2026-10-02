@@ -125,13 +125,14 @@ def test_crypto_domain_routing_and_suffixes():
 
 
 def test_crypto_quote_route_binance_first():
-    """crypto 源链固定 Binance → Hyperliquid (仅USD系) → yfinance."""
+    """crypto 源链固定 Binance → Gate.io 现货 → Hyperliquid (仅USD系) → yfinance."""
     p = parse("BTC-USD")
     provider = resolve(p.market)
     route = provider.quote_sources(p)
     assert route[0] is crypto_mod._binance_quote
-    assert route[1] is crypto_mod._hl_quote
-    assert route[2] is crypto_mod._yf_quote
+    assert route[1] is crypto_mod._gate_quote
+    assert route[2] is crypto_mod._hl_quote
+    assert route[3] is crypto_mod._yf_quote
 
 
 def test_binance_quote_from_ticker(monkeypatch):

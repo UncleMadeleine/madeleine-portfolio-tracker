@@ -1,7 +1,8 @@
 """加密货币 provider: 完全独立走加密货币 API, 不与股票数据源混用.
 
-优先 Binance 公开 REST API (spot, 无需 key), 失败降级 Hyperliquid 永续合约价
-(仅 USD 系计价代码, markPx  与现货价存在基差), 再降级 yfinance 直连
+优先 Binance 公开 REST API (spot, 无需 key), 失败降级 Gate.io 现货
+(免 key, 覆盖 OKB 等 Binance 未上线币种), 再降级 Hyperliquid 永续合约价
+(仅 USD 系计价代码, markPx 与现货价存在基差), 最后降级 yfinance 直连
 (OpenBB equity.quote 对 crypto 缺 last_price, 必须直连).
 代码规范: BASE-QUOTE (BTC-USD / ETH-USDT), 计价货币见 symbols._CRYPTO_QUOTES。
 """
@@ -27,6 +28,10 @@ _spot_cache: dict[str, tuple[float, dict]] = {}
 # Hyperliquid 永续合约 (第二数据源): 公开 info 端点免鉴权, 仅覆盖 USD 系计价代码。
 # HL 现货交易对为 @N/UBTC 等包装命名, 无法稳定映射, 故只用 perp (BTC/ETH 裸名)。
 _HL_URL = "https://api.hyperliquid.xyz/info"
+
+# Gate.io 现货 (第三数据源): 公开 REST 免 key, 交易对 BASE_QUOTE (OKB_USDT),
+# 覆盖 Binance 未上线的币种 (如 OKB/平台币); 境内网络可达性好于 OKX/CMC 等。
+_GATE_HOST = "https://api.gateio.ws"
 
 
 def _hl_usd_quote(quote: str) -> bool:
@@ -142,6 +147,28 @@ def binance_pair(p: ParsedSymbol) -> str:
     return f"{base.upper()}{q}"
 
 
+def gate_pair(p: ParsedSymbol) -> str:
+    """BTC-USD → BTC_USDT 形态的 Gate.io 现货交易对 (计价货币映射与 binance_pair 一致)."""
+    base, _, quote = p.yahoo.rpartition("-")
+    if not base:
+        raise ValueError(f"无效加密货币代码: {p.yahoo}")
+    q = {"USD": "USDT", "USDT": "USDT", "USDC": "USDC", "BUSD": "BUSD"}.get(
+        quote.upper(), quote.upper()
+    )
+    return f"{base.upper()}_{q}"
+
+
+def _gate_get(path: str, params: dict | None = None):
+    req = _requests()
+    r = req.get(f"{_GATE_HOST}{path}", params=params, timeout=_HTTP_TIMEOUT)
+    if r.status_code != 200:
+        raise RuntimeError(f"Gate.io {r.status_code}: {r.text[:120]}")
+    try:
+        return r.json()
+    except (json.JSONDecodeError, ValueError) as e:
+        raise RuntimeError("Gate.io 返回非 JSON") from e
+
+
 def _get(path: str, params: dict | None = None):
     req = _requests()
     last_err: Exception | None = None
@@ -206,6 +233,33 @@ def _binance_quote(p: ParsedSymbol) -> Quote:
         change_pct=chg,
         currency=p.currency,
         source="binance",
+    )
+
+
+def _gate_quote(p: ParsedSymbol) -> Quote:
+    pair = gate_pair(p)
+    data = _gate_get("/api/v4/spot/tickers", {"currency_pair": pair})
+    d = data[0] if isinstance(data, list) and data else None
+    if not d:
+        raise RuntimeError(f"{pair}: Gate.io 无此交易对")
+    price = float(d.get("last") or 0)
+    if price <= 0:
+        raise RuntimeError(f"{pair}: Gate.io 无有效最新价")
+    chg = None
+    try:
+        raw = d.get("change_percentage")
+        chg = float(raw) if raw not in (None, "") else None
+    except (TypeError, ValueError):
+        chg = None
+    prev = price / (1 + chg / 100) if chg is not None and chg != -100 else None
+    return Quote(
+        symbol=p.yahoo,
+        name=pair,
+        price=price,
+        prev_close=prev,
+        change_pct=chg,
+        currency=p.currency,
+        source="gate.io",
     )
 
 
@@ -287,6 +341,58 @@ def _binance_history(
     return df
 
 
+def _gate_history(
+    p: ParsedSymbol, start_date: str, end_date: str | None
+) -> pd.DataFrame:
+    """Gate.io 1d candlesticks → date/open/high/low/close/volume (升序).
+
+    candlesticks 行格式 [ts, quote_vol, close, high, low, open, base_vol, complete],
+    时间升序; from/to 为秒级时间戳, 单次上限 1000 根 (日K 约 2.7 年,
+    一般区间够用, 超过时按游标翻页)。
+    """
+    pair = gate_pair(p)
+    start_ts = int(pd.Timestamp(start_date, tz="UTC").timestamp())
+    end_ts = (
+        int(pd.Timestamp(end_date, tz="UTC").timestamp()) + 86_399
+        if end_date
+        else int(time.time())
+    )
+    rows: list[dict] = []
+    cursor = start_ts
+    while cursor < end_ts:
+        batch = _gate_get(
+            "/api/v4/spot/candlesticks",
+            {
+                "currency_pair": pair,
+                "interval": "1d",
+                "from": cursor,
+                "to": end_ts,
+                "limit": _KLINES_LIMIT,
+            },
+        )
+        if not batch:
+            break
+        for k in batch:
+            rows.append(
+                {
+                    "date": pd.Timestamp(int(k[0]), unit="s", tz="UTC").date(),
+                    "open": float(k[5]),
+                    "high": float(k[3]),
+                    "low": float(k[4]),
+                    "close": float(k[2]),
+                    "volume": float(k[6]),
+                }
+            )
+        cursor = int(batch[-1][0]) + 86_400
+        if len(batch) < _KLINES_LIMIT:
+            break
+    df = pd.DataFrame(rows)
+    if df.empty:
+        raise RuntimeError(f"{pair}: Gate.io 无历史K线")
+    df["date"] = pd.to_datetime(df["date"])
+    return df
+
+
 def _yf_history(p: ParsedSymbol, start_date: str, end_date: str | None) -> pd.DataFrame:
     """yfinance (OpenBB) 历史降级: equity.price.historical 支持 crypto."""
     obb_mod = _obb()
@@ -304,12 +410,12 @@ def _yf_history(p: ParsedSymbol, start_date: str, end_date: str | None) -> pd.Da
 
 
 class CryptoProvider(Provider):
-    """加密货币域: Binance 优先, Hyperliquid 永续次之 (仅USD系计价), yfinance 兜底; 与股票数据源完全隔离."""
+    """加密货币域: Binance 优先, Gate.io 现货次之, Hyperliquid 永续再次 (仅USD系计价), yfinance 兜底; 与股票数据源完全隔离."""
 
     name = "crypto"
 
     def quote_sources(self, p: ParsedSymbol, prefer_first: bool = False) -> list:
-        return [_binance_quote, _hl_quote, _yf_quote]
+        return [_binance_quote, _gate_quote, _hl_quote, _yf_quote]
 
     def history_sources(
         self,
@@ -320,6 +426,7 @@ class CryptoProvider(Provider):
     ) -> list:
         return [
             lambda: _binance_history(p, start_date, end_date),
+            lambda: _gate_history(p, start_date, end_date),
             lambda: _hl_history(p, start_date, end_date),
             lambda: _yf_history(p, start_date, end_date),
         ]

@@ -151,6 +151,7 @@ def cmd_export(args) -> None:
         prefer_akshare=args.akshare,
         use_ibkr=args.ibkr,
         use_longport=getattr(args, "longport", False),
+        crypto_source=getattr(args, "crypto_source", "auto"),
     )
     if args.format == "json":
         payload = snapshot_json(base, view, summary, wview, issues)

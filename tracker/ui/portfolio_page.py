@@ -40,12 +40,14 @@ def cached_quotes(
     prefer_akshare: bool,
     use_ibkr: bool,
     use_longport: bool = False,
+    crypto_source: str = "auto",
 ):
     return prices.get_quotes(
         list(symbols),
         prefer_akshare=prefer_akshare,
         use_ibkr=use_ibkr,
         use_longport=use_longport,
+        crypto_source=crypto_source,
     )
 
 
@@ -94,6 +96,7 @@ def render_portfolio_page() -> None:
     prefer_akshare = settings["prefer_akshare"]
     use_ibkr = settings["use_ibkr"]
     use_longport = bool(settings.get("use_longport"))
+    crypto_source = settings["crypto_source"]
 
     with st.sidebar:
         st.markdown(
@@ -340,7 +343,7 @@ def render_portfolio_page() -> None:
 
     with st.spinner("拉取行情 (首次加载需初始化数据引擎)..."):
         quotes, errors, notes = cached_quotes(
-            all_symbols, prefer_akshare, use_ibkr, use_longport
+            all_symbols, prefer_akshare, use_ibkr, use_longport, crypto_source
         )
     if not quotes:
         st.error(

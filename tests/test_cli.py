@@ -658,7 +658,12 @@ class TestReportCli:
         return f
 
     def _fake_quotes(
-        self, symbols, prefer_akshare=False, use_ibkr=False, use_longport=False
+        self,
+        symbols,
+        prefer_akshare=False,
+        use_ibkr=False,
+        use_longport=False,
+        crypto_source="auto",
     ):
         data = {
             "TSLA": Quote("TSLA", "Tesla", 500.0, 480.0, 4.17, "USD"),
@@ -831,7 +836,12 @@ class TestExportCli:
         return f
 
     def _fake_quotes(
-        self, symbols, prefer_akshare=False, use_ibkr=False, use_longport=False
+        self,
+        symbols,
+        prefer_akshare=False,
+        use_ibkr=False,
+        use_longport=False,
+        crypto_source="auto",
     ):
         data = {
             "AAPL": Quote("AAPL", "Apple", 200.0, 195.0, 2.56, "USD"),
@@ -975,7 +985,12 @@ class TestSnapshotCryptoMixed:
         return f
 
     def _fake_quotes(
-        self, symbols, prefer_akshare=False, use_ibkr=False, use_longport=False
+        self,
+        symbols,
+        prefer_akshare=False,
+        use_ibkr=False,
+        use_longport=False,
+        crypto_source="auto",
     ):
         data = {
             "AAPL": Quote("AAPL", "Apple", 200.0, 195.0, 2.56, "USD"),

@@ -127,10 +127,14 @@ def resolve(type_or_market) -> Provider:
     raise ValueError(f"未知域标记: {type_or_market}")
 
 
-def get_quote(symbol: str, prefer_akshare: bool = False) -> Quote:
-    """单代码实时行情: 按 parse 得到的权威 type 路由."""
+def get_quote(symbol: str, prefer_akshare: bool = False, crypto_source: str = "auto") -> Quote:
+    """单代码实时行情: 按 parse 得到的权威 type 路由.
+
+    prefer_akshare 仅影响港股源顺序; crypto 域读 crypto_source (auto=默认链).
+    """
     p = _parse_symbol(symbol)
-    return resolve(p.type).fetch_quote(p, prefer_first=prefer_akshare)
+    prefer = crypto_source if p.type == "crypto" else prefer_akshare
+    return resolve(p.type).fetch_quote(p, prefer_first=prefer)
 
 
 def get_quotes(
@@ -138,6 +142,7 @@ def get_quotes(
     prefer_akshare: bool = False,
     use_ibkr: bool = False,
     use_longport: bool = False,
+    crypto_source: str = "auto",
 ) -> tuple[dict[str, Quote], dict[str, str], list[str]]:
     """多代码批量行情 (按 provider 分域聚合). 见 orchestration.get_quotes."""
     from .orchestration import get_quotes as _impl
@@ -147,6 +152,7 @@ def get_quotes(
         prefer_akshare=prefer_akshare,
         use_ibkr=use_ibkr,
         use_longport=use_longport,
+        crypto_source=crypto_source,
     )
 
 
@@ -158,6 +164,7 @@ def get_history(
     prefer_akshare: bool = False,
     use_ibkr: bool = False,
     use_longport: bool = False,
+    crypto_source: str = "auto",
 ):
     """单代码历史K线: 自动路由到所属 provider. 见 orchestration.get_history."""
     from .orchestration import get_history as _impl
@@ -170,4 +177,5 @@ def get_history(
         prefer_akshare=prefer_akshare,
         use_ibkr=use_ibkr,
         use_longport=use_longport,
+        crypto_source=crypto_source,
     )

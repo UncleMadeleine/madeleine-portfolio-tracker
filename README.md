@@ -314,7 +314,7 @@ tracker/
 │   ├── base.py         Provider 基类 + Quote/SymbolEntry 数据结构 + resolve(type) 域路由
 │   ├── cn_stocks.py        A股/B股域（.SS/.SZ/.BJ）：akshare 固定优先, yfinance 兜底
 │   ├── global_stocks.py    全球股票域（美股/港股/欧股…）：yfinance 主源, 港股 akshare 兜底; 搜索走 IBKR → yfinance Search
-│   ├── crypto.py           加密货币域（BASE-QUOTE）：Binance → Hyperliquid(USD系) → yfinance
+│   ├── crypto.py           加密货币域（BASE-QUOTE）：Binance → Gate.io → Hyperliquid(USD系) → yfinance
 │   ├── index.py            指数域（IX.<KEY>）：中国指数 akshare 优先, 其余 yfinance 主源 + 新浪兜底
 │   ├── orchestration.py    批量编排：按域分组取数 → 聚合 quotes/errors/notes
 │   └── em_suggest.py       东财 suggest 搜索客户端（cn 域搜索底层 HTTP 封装 + 代码归一）
@@ -366,7 +366,7 @@ tests/                  单元测试（离线, mock）
 |----------|----------|----------------|----------------|
 | **global** | 裸代码（美股）、`.HK/.DE/.L/.TO/.AX…` | 长桥(可选) → IBKR(可选) → yfinance 批量 → 港股 akshare | 长桥(可选) → IBKR(可选) → yfinance（港股可 `--akshare` 翻转） |
 | **cn** | `.SS/.SZ/.BJ`（A/B股、北交所） | 长桥(可选前置) → **akshare 优先** → yfinance | 长桥(可选前置) → **akshare 优先** → yfinance |
-| **crypto** | `BASE-QUOTE`（`BTC-USD`） | **Binance API** → Hyperliquid 永续（仅USD系） → yfinance | **Binance klines** → Hyperliquid → yfinance |
+| **crypto** | `BASE-QUOTE`（`BTC-USD`） | **Binance API** → Gate.io 现货 → Hyperliquid 永续（仅USD系） → yfinance | **Binance klines** → Gate.io → Hyperliquid → yfinance |
 | **index** | `IX.<KEY>`（`IX.DXY` 美元指数 / `IX.VIX` 恐慌指数 / `IX.CSI300` 沪深 300 …） | —（指数无实时行情, 不参与持仓聚合） | 中国指数 **akshare 优先** → yfinance；其余 yfinance → akshare 新浪兜底 |
 
 - **type 即域**：`type` 字段由系统在保存/导入时按 `symbols.type_for_symbol()` 自动推导覆写，
@@ -374,6 +374,9 @@ tests/                  单元测试（离线, mock）
   测试用例、搜索结果、导入产出的代码均符合该规范。
 - 汇率：CFETS 一次拿全 XXX/CNY；直对/逆对/USD 桥接兜底
 - `--akshare` 开关仅影响港股数据源顺序（A股域固定 akshare 优先）；设置页同名开关全局生效
+- 加密货币域数据源可自选：`settings.json` `"crypto_source": "auto|binance|gate|hyperliquid|yfinance"`
+  或子命令 `--crypto-source <值>`；默认 `auto` = Binance → Gate.io → Hyperliquid(USD系) → yfinance，
+  指定源前置、失败自动落到链上其余源（Hyperliquid 为永续合约价，与现货有基差，仅 USD 系计价代码）
 - IBKR 行情可选叠加于任何域（需订阅）；英股 GBp 便士报价自动换算为 GBP；汇率缓存 10 分钟，行情缓存 5 分钟
 - IBKR 连接参数**从配置文件读取**（不写死在代码里）：优先 `ibkr.json`，其次 `ibkr.example.json` 模板兜底，也可用环境变量 `IBKR_CONFIG=/path/to/xxx.json` 指定；交易所映射在同一文件（A股默认 `SEHK`，B股可配置 `SHSE`/`SZSE`，因沪深港通合约挂在 HKEX 下，需配 `tradingClass`）
 - IBKR 断开时自动静默回退下一级数据源，不影响页面运行；持仓同步见下方
@@ -584,7 +587,7 @@ Quotes are fetched with a priority chain:
 4. **akshare** (East Money) — A-shares / HK spot + history (CN domain: akshare first)
 5. **FX** — CFETS for full XXX/CNY table, direct/inverse/USD bridge fallback
 6. **Indices** — `IX.<KEY>` historical only: CN indices via akshare (Sina), global via yfinance with Sina fallback
-7. **Crypto** — Binance klines → Hyperliquid perpetuals (USD-quoted only) → yfinance
+7. **Crypto** — Binance → Gate.io → Hyperliquid perpetuals (USD-quoted only) → yfinance; reorder with `settings.json` `crypto_source` or `--crypto-source`
 
 IBKR/LongPort disconnects silently fall back to the next source; the page continues running without interruption.
 

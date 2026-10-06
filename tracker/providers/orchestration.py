@@ -92,6 +92,7 @@ def _fetch_domain(
     plist: list[ParsedSymbol],
     prefer_akshare: bool,
     errors: dict[str, str],
+    crypto_source: str = "auto",
 ) -> dict[str, Quote]:
     """一个域内并发走源链: 返回 {yahoo: Quote}, 失败写 errors + 负缓存."""
     provider = resolve({"global": "GLOBAL", "cn": "CN", "crypto": "CRYPTO"}[domain])
@@ -99,6 +100,9 @@ def _fetch_domain(
     def _one(p: ParsedSymbol):
         # 单代码失败捕获为 Exception 值返回: pool.map 迭代时不中断其余代码
         try:
+            if domain == "crypto":
+                # crypto 域 prefer_akshare 无意义, 参数位复用为源偏好 (字符串)
+                return p.yahoo, provider.fetch_quote(p, prefer_first=crypto_source)
             if domain == "global":
                 # 批量已尝试 yfinance: 这里走完整源链 (港股 akshare 兜底)
                 return p.yahoo, provider.fetch_quote(p, prefer_first=prefer_akshare)
@@ -130,6 +134,7 @@ def get_quotes(
     prefer_akshare: bool = False,
     use_ibkr: bool = False,
     use_longport: bool = False,
+    crypto_source: str = "auto",
 ) -> tuple[dict[str, Quote], dict[str, str], list[str]]:
     """多代码实时行情: 缓存 → 长桥/IBKR 批量 (可选, IBKR 优先) → 按域 provider 取数 → 回写缓存."""
     quotes: dict[str, Quote] = {}
@@ -202,7 +207,9 @@ def get_quotes(
             plist = [p for p in plist if p.yahoo not in quotes]
             if not plist:
                 continue
-        quotes.update(_fetch_domain(domain, plist, prefer_akshare, errors))
+        quotes.update(
+            _fetch_domain(domain, plist, prefer_akshare, errors, crypto_source)
+        )
 
     # 只回写本次真正取到的新鲜行情 (IBKR/akshare/yahoo), 缓存命中项不重写,
     # 否则 set_cached 会刷新其 fetched_at, TTL 被无限延长
@@ -221,6 +228,7 @@ def get_history(
     prefer_akshare: bool = False,
     use_ibkr: bool = False,
     use_longport: bool = False,
+    crypto_source: str = "auto",
 ) -> pd.DataFrame:
     """单代码历史K线: 长桥/IBKR (可选) → 所属 provider 源链."""
     from datetime import date, timedelta
@@ -259,4 +267,6 @@ def get_history(
 
             warnings.warn(f"长桥历史数据异常: {e}")
     provider = _route_provider(p)
-    return provider.fetch_history(p, start_date, end_date, prefer_first=prefer_akshare)
+    # crypto 域: prefer_akshare 无意义, 复用参数位传源偏好 (字符串); 其它域原样布尔
+    prefer = crypto_source if p.type == "crypto" else prefer_akshare
+    return provider.fetch_history(p, start_date, end_date, prefer_first=prefer)

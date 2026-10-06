@@ -37,8 +37,10 @@ __all__ = [
 ]
 
 
-def get_quote(symbol: str, prefer_akshare: bool = False) -> Quote:
-    """单代码实时行情 (prefer_akshare 仅影响港股源顺序).
+def get_quote(
+    symbol: str, prefer_akshare: bool = False, crypto_source: str = "auto"
+) -> Quote:
+    """单代码实时行情 (prefer_akshare 仅影响港股源顺序; crypto 域读 crypto_source).
 
     与批量路径共用进程内负缓存: TTL 内全部源失败过的代码不再发起网络
     (单代码 OpenBB/yfinance 一次失败 8s+, CLI 循环多码查询会串行卡死)。
@@ -52,7 +54,8 @@ def get_quote(symbol: str, prefer_akshare: bool = False) -> Quote:
             f"{p.yahoo}: 近期全部数据源失败 (负缓存), 稍后自动重试"
         )
     try:
-        return resolve(p.type).fetch_quote(p, prefer_first=prefer_akshare)
+        prefer = crypto_source if p.type == "crypto" else prefer_akshare
+        return resolve(p.type).fetch_quote(p, prefer_first=prefer)
     except Exception:
         orch.neg_mark(p.yahoo)
         raise
@@ -67,6 +70,7 @@ def get_ohlc(
     use_longport: bool = False,
     start_date: str | None = None,
     end_date: str | None = None,
+    crypto_source: str = "auto",
 ) -> pd.DataFrame:
     """K线日线数据 (date/open/high/low/close/volume, 升序), 带磁盘缓存与清洗.
 
@@ -91,6 +95,7 @@ def get_ohlc(
             prefer_akshare=prefer_akshare,
             use_ibkr=use_ibkr,
             use_longport=use_longport,
+            crypto_source=crypto_source,
         )
     )
     if not df.empty and not is_range:

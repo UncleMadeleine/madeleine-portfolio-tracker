@@ -72,6 +72,7 @@ def cached_kline(
     prefer_akshare: bool,
     use_ibkr: bool = False,
     use_longport: bool = False,
+    crypto_source: str = "auto",
 ):
     """K线日线 (磁盘缓存 + 内存缓存双层, TTL 内切换参数不重复请求网络)."""
     return prices.get_ohlc(
@@ -80,6 +81,7 @@ def cached_kline(
         prefer_akshare=prefer_akshare,
         use_ibkr=use_ibkr,
         use_longport=use_longport,
+        crypto_source=crypto_source,
     )
 
 
@@ -89,6 +91,7 @@ def cached_kline_all(
     prefer_akshare: bool,
     use_ibkr: bool = False,
     use_longport: bool = False,
+    crypto_source: str = "auto",
 ):
     """上市以来全量日K (滑动模式唯一取数路径, 缓存键独立于范围模式月份参数)."""
     return prices.get_ohlc(
@@ -97,6 +100,7 @@ def cached_kline_all(
         prefer_akshare=prefer_akshare,
         use_ibkr=use_ibkr,
         use_longport=use_longport,
+        crypto_source=crypto_source,
     )
 
 
@@ -197,6 +201,7 @@ def render_compare_controls(
     quick_symbols: list[str],
     use_ibkr: bool = False,
     use_longport: bool = False,
+    crypto_source: str = "auto",
 ) -> None:
     """多股走势对比 (K线子功能): 任意代码同坐标系折线对比, 输入驱动无提交也拉取.
 
@@ -250,7 +255,9 @@ def render_compare_controls(
     with st.spinner(f"拉取 {len(sel)} 只代码近 {cmp_months} 个月 K线..."):
         for s in sel:
             try:
-                d = cached_kline(s, cmp_months, prefer_akshare, use_ibkr, use_longport)
+                d = cached_kline(
+                    s, cmp_months, prefer_akshare, use_ibkr, use_longport, crypto_source
+                )
                 if d.empty:
                     st.warning(f"{s}: 无有效K线数据")
                 else:
@@ -379,6 +386,7 @@ def _render_slide_mode(
     prefer_akshare: bool,
     use_ibkr: bool = False,
     use_longport: bool = False,
+    crypto_source: str = "auto",
 ) -> None:
     """滑动模式: 一次拉取上市以来全量历史, 图表内无限拖动 (纯前端, 不再取数).
 
@@ -387,9 +395,9 @@ def _render_slide_mode(
     state_key = "kline_slide_df"
     state_qid_key = "kline_slide_qid"
 
-    # 失效键含数据源三元组: 设置页切换 prefer_akshare/use_ibkr/use_longport 后
-    # 必须重取数, 否则继续展示旧源数据
-    qid = (yahoo, prefer_akshare, use_ibkr, use_longport)
+    # 失效键含数据源偏好组: 设置页切换 prefer_akshare/use_ibkr/use_longport/
+    # crypto_source 后必须重取数, 否则继续展示旧源数据
+    qid = (yahoo, prefer_akshare, use_ibkr, use_longport, crypto_source)
     qid_changed = st.session_state.get(state_qid_key) != qid
     if qid_changed:
         st.session_state[state_key] = None
@@ -399,7 +407,9 @@ def _render_slide_mode(
     if df_all is None:
         try:
             with st.spinner(f"拉取 {yahoo} 上市以来K线..."):
-                kdf = cached_kline_all(yahoo, prefer_akshare, use_ibkr, use_longport)
+                kdf = cached_kline_all(
+                    yahoo, prefer_akshare, use_ibkr, use_longport, crypto_source
+                )
         except Exception as e:
             st.warning(f"{yahoo}: {e}")
             return
@@ -437,6 +447,7 @@ def render_kline_controls(
     prefer_akshare: bool,
     use_ibkr: bool = False,
     use_longport: bool = False,
+    crypto_source: str = "auto",
 ) -> None:
     """查询控件 + 拉取/渲染 (滑动 / 范围双模式, 输入驱动)."""
     qs = quick_symbols()
@@ -589,6 +600,7 @@ def render_kline_controls(
             prefer_akshare,
             use_ibkr,
             use_longport,
+            crypto_source,
         )
         return
     # ---- 范围模式 (旧流程兜底) ----
@@ -602,13 +614,13 @@ def render_kline_controls(
         st.session_state.get("kline_current_symbol") != yahoo
         or st.session_state.get("kline_last_months") != kdepth
         or st.session_state.get("kline_last_src")
-        != (prefer_akshare, use_ibkr, use_longport)
+        != (prefer_akshare, use_ibkr, use_longport, crypto_source)
     )
     if data_changed or st.session_state.get("kline_current_df") is None:
         try:
             with st.spinner(f"拉取 {yahoo} K线..."):
                 kdf = cached_kline(
-                    yahoo, kdepth, prefer_akshare, use_ibkr, use_longport
+                    yahoo, kdepth, prefer_akshare, use_ibkr, use_longport, crypto_source
                 )
         except Exception as e:
             st.warning(f"{yahoo}: {e}")
@@ -619,7 +631,12 @@ def render_kline_controls(
         st.session_state["kline_current_df"] = kdf
         st.session_state["kline_current_symbol"] = yahoo
         st.session_state["kline_last_months"] = kdepth
-        st.session_state["kline_last_src"] = (prefer_akshare, use_ibkr, use_longport)
+        st.session_state["kline_last_src"] = (
+            prefer_akshare,
+            use_ibkr,
+            use_longport,
+            crypto_source,
+        )
         # 记录进最近查看; 列表有变时 rerun 一次让 pills 立即显示
         # (df 已存 session_state, rerun 走重绘分支, 不会重新取数)
         if record_recent(yahoo):
@@ -656,6 +673,7 @@ def _append_crypto_compare_symbol(code: str) -> None:
 
 def render_crypto_compare_controls(
     quick_symbols: list[str],
+    crypto_source: str = "auto",
 ) -> None:
     """加密货币K线对比 (K线子功能): 仅加密货币, 原始价格每币一个窗格, 共享时间轴.
 
@@ -721,7 +739,9 @@ def render_crypto_compare_controls(
     with st.spinner(f"拉取 {len(sel)} 个币种近 {ccmp_months} 个月 K线..."):
         for s in sel:
             try:
-                d = cached_kline(s, ccmp_months, False, False, False)
+                d = cached_kline(
+                    s, ccmp_months, False, False, False, crypto_source
+                )
                 if d.empty:
                     st.warning(f"{s}: 无有效K线数据")
                 else:
@@ -762,6 +782,7 @@ def render_kline_page(
     prefer_akshare: bool,
     use_ibkr: bool = False,
     use_longport: bool = False,
+    crypto_source: str = "auto",
 ) -> None:
     """「K线」页入口: 单只查询 + 走势对比 + 加密货币对比 三个子功能 (st.tabs)."""
     tab_single, tab_compare, tab_crypto = st.tabs(
@@ -772,16 +793,17 @@ def render_kline_page(
         ]
     )
     with tab_crypto:
-        render_crypto_compare_controls(quick_symbols())
+        render_crypto_compare_controls(quick_symbols(), crypto_source)
     with tab_compare:
         render_compare_controls(
             prefer_akshare,
             quick_symbols(),
             use_ibkr,
             use_longport,
+            crypto_source,
         )
     with tab_single:
-        render_kline_controls(prefer_akshare, use_ibkr, use_longport)
+        render_kline_controls(prefer_akshare, use_ibkr, use_longport, crypto_source)
 
 
 

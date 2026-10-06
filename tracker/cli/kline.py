@@ -71,6 +71,7 @@ def cmd_kline(args) -> None:
             refresh=args.refresh,
             use_ibkr=args.ibkr,
             use_longport=getattr(args, "longport", False),
+            crypto_source=getattr(args, "crypto_source", "auto"),
         )
     except Exception as e:
         _finish_with_error(f"{p.yahoo}: K线数据获取失败 ({e})")

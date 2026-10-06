@@ -153,6 +153,7 @@ def watchlist_list(args) -> None:
         prefer_akshare=args.akshare,
         use_ibkr=args.ibkr,
         use_longport=getattr(args, "longport", False),
+        crypto_source=getattr(args, "crypto_source", "auto"),
     )
     wview, wissues = build_watchlist_view(entries, quotes)
     trig = triggered_entries(wview)

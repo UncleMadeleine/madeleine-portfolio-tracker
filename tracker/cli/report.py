@@ -70,6 +70,7 @@ def _build_report(
         prefer_akshare=args.akshare,
         use_ibkr=args.ibkr,
         use_longport=getattr(args, "longport", False),
+        crypto_source=getattr(args, "crypto_source", "auto"),
     )
     wview = sort_watchlist(wview, args.sort)
     trig = triggered_entries(wview)

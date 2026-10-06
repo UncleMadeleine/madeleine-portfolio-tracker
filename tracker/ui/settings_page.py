@@ -55,13 +55,14 @@ def render_settings_page() -> None:
     hk_order = (
         "akshare → yfinance" if settings["prefer_akshare"] else "yfinance → akshare"
     )
+    crypto_order = S.CRYPTO_SOURCE_CHAINS[settings["crypto_source"]]
     st.caption(
         "当前生效链路 (失败自动落到下一源):  \n"
         + _chain("美股/港股/全球", front_txt + "yfinance", "港股 " + hk_order)
         + "  \n"
         + _chain("A股/北交所", "akshare (东财)", "yfinance")
         + "  \n"
-        + _chain("加密货币", "Binance", "Hyperliquid → yfinance")
+        + _chain("加密货币", crypto_order)
         + "  \n"
         + _chain("汇率", "IBKR" if settings["use_ibkr"] else "CFETS", "yfinance")
     )
@@ -91,6 +92,16 @@ def render_settings_page() -> None:
         on_change=_save_display,
         help="启用后优先从长桥 OpenAPI 获取美股/港股/沪深行情与历史K线, 失败自动回退默认源。"
         "需先登录: 在「导入」页长桥标签完成 OAuth 授权; 连接配置见 longport.json。",
+    )
+    st.selectbox(
+        "加密货币数据源优先",
+        list(S.CRYPTO_SOURCE_LABELS),
+        format_func=lambda v: S.CRYPTO_SOURCE_LABELS[v],
+        index=list(S.CRYPTO_SOURCE_LABELS).index(settings["crypto_source"]),
+        key="set_crypto_source",
+        on_change=_save_display,
+        help="只影响加密货币代码 (BTC-USD / ETH-USDT): 指定源前置, 失败自动落到链上其余源。"
+        "Hyperliquid 为永续合约价 (仅 USD 系计价, 与现货有基差)。",
     )
     with st.expander(
         "长桥账户登录",
@@ -124,16 +135,23 @@ def render_settings_page() -> None:
 def _save_display() -> None:
     """保存显示与数据源设置; 基础货币以外的改动只影响前端渲染."""
     old = storage.load_settings()
-    source_keys = ("prefer_akshare", "use_ibkr", "use_longport")
+    source_keys = ("prefer_akshare", "use_ibkr", "use_longport", "crypto_source")
+    crypto_source = str(st.session_state.get("set_crypto_source") or "auto")
+    if crypto_source not in storage.CRYPTO_SOURCES:
+        crypto_source = "auto"
     storage.save_settings(
         {
             "color_scheme": st.session_state.get("set_color_scheme", S.SCHEME_CN),
             "prefer_akshare": bool(st.session_state.get("set_prefer_akshare")),
             "use_ibkr": bool(st.session_state.get("set_use_ibkr")),
             "use_longport": bool(st.session_state.get("set_use_longport")),
+            "crypto_source": crypto_source,
         }
     )
-    if any(old.get(k) != st.session_state.get(f"set_{k}") for k in source_keys):
+    changed = {
+        k: st.session_state.get(f"set_{k}", old.get(k)) for k in source_keys
+    }
+    if any(old.get(k) != changed[k] for k in source_keys):
         # 数据源偏好变化: 清实时行情缓存 (保留K线/基本面), 下次取数按新链路执行
         # 并重新打标来源; 页面缓存 (st.cache_data) 由组合页「重载」或 TTL 兜底
         from tracker.cache import clear_quotes

@@ -382,6 +382,7 @@ class TestGetOhlc:
             prefer_akshare=False,
             use_ibkr=False,
             use_longport=False,
+            crypto_source="auto",
         ):
             calls["n"] += 1
             return raw_broken
@@ -407,6 +408,7 @@ class TestGetOhlc:
             prefer_akshare=False,
             use_ibkr=False,
             use_longport=False,
+            crypto_source="auto",
         ):
             calls["n"] += 1
             return _mk_df(base=100.0 + calls["n"])
@@ -430,6 +432,7 @@ class TestGetOhlc:
             prefer_akshare=False,
             use_ibkr=False,
             use_longport=False,
+            crypto_source="auto",
         ):
             calls["n"] += 1
             return _mk_df()

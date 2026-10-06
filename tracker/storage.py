@@ -293,11 +293,15 @@ def save_watchlist(data: dict, path: str | Path = WATCHLIST_PATH) -> None:
 # 涨跌配色: cn = 红涨绿跌 (A股软件习惯, 默认) / intl = 绿涨红跌 (国际配色)
 SCHEME_CN = "cn"
 SCHEME_INTL = "intl"
+# 加密货币域数据源偏好: auto = 默认链 (Binance→Gate.io→Hyperliquid→yfinance),
+# 其余值把对应源前置 (链内其余源按默认相对顺序兜底)
+CRYPTO_SOURCES = ("auto", "binance", "gate", "hyperliquid", "yfinance")
 DEFAULT_SETTINGS = {
     "color_scheme": SCHEME_CN,
     "prefer_akshare": False,
     "use_ibkr": False,
     "use_longport": False,
+    "crypto_source": "auto",
 }
 
 
@@ -317,6 +321,10 @@ def load_settings(path: str | Path = SETTINGS_PATH) -> dict:
     data["prefer_akshare"] = bool(data["prefer_akshare"])
     data["use_ibkr"] = bool(data["use_ibkr"])
     data["use_longport"] = bool(data.get("use_longport"))
+    crypto_source = str(data.get("crypto_source") or "auto").strip().lower()
+    if crypto_source not in CRYPTO_SOURCES:
+        crypto_source = "auto"
+    data["crypto_source"] = crypto_source
     return data
 
 

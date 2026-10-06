@@ -54,6 +54,7 @@ def run_snapshot(args) -> None:
         prefer_akshare=args.akshare,
         use_ibkr=args.ibkr,
         use_longport=getattr(args, "longport", False),
+        crypto_source=getattr(args, "crypto_source", "auto"),
     )
 
     if getattr(args, "json", False):

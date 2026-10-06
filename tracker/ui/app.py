@@ -37,6 +37,7 @@ def main() -> None:
             settings["prefer_akshare"],
             settings["use_ibkr"],
             bool(settings.get("use_longport")),
+            settings["crypto_source"],
         )
 
     pages = [

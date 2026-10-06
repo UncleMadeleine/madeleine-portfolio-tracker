@@ -21,6 +21,18 @@ _BINANCE_HOSTS = ("https://api.binance.com", "https://data-api.binance.vision")
 _HTTP_TIMEOUT = 8.0
 _KLINES_LIMIT = 1000
 
+# 加密货币域可选数据源 (settings crypto_source / CLI --crypto-source):
+# auto = 默认链 (Binance→Gate.io→Hyperliquid→yfinance), 其余把指定源前置,
+# 链内其余源按默认相对顺序兜底。索引与下方两个源链构造顺序一致 (单一定义点).
+CRYPTO_SOURCE_PREFERS = ("auto", "binance", "gate", "hyperliquid", "yfinance")
+_CRYPTO_SOURCE_INDEX = {
+    "binance": 0,
+    "gate": 1,
+    "gate.io": 1,
+    "hyperliquid": 2,
+    "yfinance": 3,
+}
+
 # 实时行情进程内缓存: 短 TTL, 批量混查同币对时合并请求
 _spot_ttl = 5.0
 _spot_cache: dict[str, tuple[float, dict]] = {}
@@ -414,22 +426,41 @@ class CryptoProvider(Provider):
 
     name = "crypto"
 
-    def quote_sources(self, p: ParsedSymbol, prefer_first: bool = False) -> list:
-        return [_binance_quote, _gate_quote, _hl_quote, _yf_quote]
+    def quote_sources(
+        self, p: ParsedSymbol, prefer_first: str | bool = False
+    ) -> list:
+        """行情源链; prefer_first 传 crypto 源偏好 (settings/CLI), 指定源前置。
+
+        bool (True/False) 走其它域 prefer_akshare 语义, 本域忽略 → 默认链。
+        """
+        chain = [_binance_quote, _gate_quote, _hl_quote, _yf_quote]
+        if isinstance(prefer_first, bool) or not prefer_first:
+            return chain
+        idx = _CRYPTO_SOURCE_INDEX.get(str(prefer_first).strip().lower())
+        if idx is None:
+            return chain
+        return [chain[idx]] + [fn for i, fn in enumerate(chain) if i != idx]
 
     def history_sources(
         self,
         p: ParsedSymbol,
         start_date: str,
         end_date: str | None,
-        prefer_first: bool = False,
+        prefer_first: str | bool = False,
     ) -> list:
-        return [
+        """历史源链; prefer_first 语义同 quote_sources (str=偏好, bool=忽略)."""
+        chain = [
             lambda: _binance_history(p, start_date, end_date),
             lambda: _gate_history(p, start_date, end_date),
             lambda: _hl_history(p, start_date, end_date),
             lambda: _yf_history(p, start_date, end_date),
         ]
+        if isinstance(prefer_first, bool) or not prefer_first:
+            return chain
+        idx = _CRYPTO_SOURCE_INDEX.get(str(prefer_first).strip().lower())
+        if idx is None:
+            return chain
+        return [chain[idx]] + [fn for i, fn in enumerate(chain) if i != idx]
 
     def search(self, query: str, limit: int = 10) -> list[SymbolEntry]:
         """加密域搜索: yfinance Search (CRYPTOCURRENCY 结果), 代码与名称模糊均可。

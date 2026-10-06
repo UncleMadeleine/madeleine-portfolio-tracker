@@ -47,6 +47,21 @@ from .wallet import cmd_import_wallet
 from .watchlist import cmd_watchlist
 from .longport_login import cmd_longport_login
 
+# 加密货币域数据源偏好 (与 tracker.storage.CRYPTO_SOURCES 同一组取值):
+# auto = 默认链, 其余指定源前置, 链内其余源按默认相对顺序兜底
+CRYPTO_SOURCE_CHOICES = ("auto", "binance", "gate", "hyperliquid", "yfinance")
+
+
+def _add_crypto_source_arg(p: argparse.ArgumentParser) -> None:
+    """给子命令注册 --crypto-source (加密货币域取数偏好; 只影响 crypto 代码)."""
+    p.add_argument(
+        "--crypto-source",
+        dest="crypto_source",
+        choices=CRYPTO_SOURCE_CHOICES,
+        default="auto",
+        help="加密货币数据源优先 (默认 auto: Binance→Gate.io→Hyperliquid→yfinance)",
+    )
+
 
 def build_parser() -> argparse.ArgumentParser:
     """构建顶层 argparse 解析器, 注册全部子命令."""
@@ -94,6 +109,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_snap.add_argument(
         "--longport", action="store_true", help="优先使用长桥行情 (需 longport.json)"
     )
+    _add_crypto_source_arg(p_snap)
     p_snap.add_argument("--json", action="store_true", help="输出 JSON")
     p_snap.set_defaults(func=cmd_snapshot)
 
@@ -113,6 +129,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_q.add_argument("--akshare", action="store_true")
     p_q.add_argument("--ibkr", action="store_true")
     p_q.add_argument("--longport", action="store_true")
+    _add_crypto_source_arg(p_q)
     p_q.add_argument("--json", action="store_true")
     p_q.set_defaults(func=cmd_quote)
 
@@ -163,6 +180,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_w.add_argument("--akshare", action="store_true")
     p_w.add_argument("--ibkr", action="store_true")
     p_w.add_argument("--longport", action="store_true")
+    _add_crypto_source_arg(p_w)
     p_w.add_argument(
         "--dry-run",
         dest="dry_run",
@@ -248,6 +266,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_r.add_argument("--akshare", action="store_true")
     p_r.add_argument("--ibkr", action="store_true")
     p_r.add_argument("--longport", action="store_true")
+    _add_crypto_source_arg(p_r)
     p_r.add_argument(
         "--output", "-o", default=None, help="输出文件路径 (缺省打印到终端)"
     )
@@ -290,6 +309,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_e.add_argument(
         "--longport", action="store_true", help="优先使用长桥行情 (需 longport.json)"
     )
+    _add_crypto_source_arg(p_e)
     p_e.add_argument(
         "--output", "-o", default=None, help="输出文件路径 (缺省打印到终端)"
     )
@@ -336,6 +356,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_h.add_argument(
         "--longport", action="store_true", help="优先使用长桥行情 (需 longport.json)"
     )
+    _add_crypto_source_arg(p_h)
     p_h.add_argument("--json", action="store_true")
     p_h.set_defaults(func=cmd_history)
 
@@ -375,6 +396,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_k.add_argument(
         "--longport", action="store_true", help="优先使用长桥行情 (需 longport.json)"
     )
+    _add_crypto_source_arg(p_k)
     p_k.add_argument(
         "--output",
         "-o",
@@ -450,6 +472,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_cmp.add_argument(
         "--longport", action="store_true", help="优先使用长桥行情 (需 longport.json)"
     )
+    _add_crypto_source_arg(p_cmp)
     p_cmp.add_argument(
         "--output",
         "-o",

@@ -70,6 +70,7 @@ def cmd_compare(args) -> None:
                 prefer_akshare=args.akshare,
                 use_ibkr=getattr(args, "ibkr", False),
                 use_longport=getattr(args, "longport", False),
+                crypto_source=getattr(args, "crypto_source", "auto"),
             )
             if df is None or df.empty:
                 print(f"⚠ {code}: 无有效K线数据, 已跳过", file=sys.stderr)

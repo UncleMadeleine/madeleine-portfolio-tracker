@@ -20,6 +20,25 @@ SCHEME_LABELS = {SCHEME_CN: "红涨绿跌 (A股习惯)", SCHEME_INTL: "绿涨红
 
 BASE_CURRENCIES = ["CNY", "USD", "EUR", "HKD"]
 
+# 加密货币域数据源偏好: 值 = settings.json crypto_source (与 storage.CRYPTO_SOURCES 一致),
+# 标签 = 生效链路 (指定源前置, 链内其余源按默认相对顺序兜底)
+CRYPTO_SOURCE_LABELS = {
+    "auto": "默认链 (Binance → Gate.io → Hyperliquid → yfinance)",
+    "binance": "Binance 优先 (Binance → Gate.io → Hyperliquid → yfinance)",
+    "gate": "Gate.io 优先 (Gate.io → Binance → Hyperliquid → yfinance)",
+    "hyperliquid": "Hyperliquid 优先 (Hyperliquid → Binance → Gate.io → yfinance)",
+    "yfinance": "yfinance 优先 (yfinance → Binance → Gate.io → Hyperliquid)",
+}
+
+# 设置页链路说明用的短链 (与 CRYPTO_SOURCE_LABELS 同序)
+CRYPTO_SOURCE_CHAINS = {
+    "auto": "Binance → Gate.io → Hyperliquid → yfinance",
+    "binance": "Binance → Gate.io → Hyperliquid → yfinance",
+    "gate": "Gate.io → Binance → Hyperliquid → yfinance",
+    "hyperliquid": "Hyperliquid → Binance → Gate.io → yfinance",
+    "yfinance": "yfinance → Binance → Gate.io → Hyperliquid",
+}
+
 
 def green_up(settings: dict | None = None) -> bool:
     """True = 绿涨红跌 (国际配色)."""

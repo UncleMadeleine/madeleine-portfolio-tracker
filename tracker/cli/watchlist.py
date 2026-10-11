@@ -139,7 +139,16 @@ def watchlist_list(args) -> None:
             parts = [str(e.get("symbol"))]
             if e.get("lists"):
                 parts.append("[" + ",".join(e["lists"]) + "]")
-            for k in ("metric", "upper_1", "upper_2", "lower_1", "lower_2"):
+            for k in (
+                "metric",
+                "upper_1",
+                "upper_2",
+                "lower_1",
+                "lower_2",
+                "mcap",
+                "market_cap",
+                "pb",
+            ):
                 if e.get(k) is not None:
                     parts.append(f"{k}={e[k]}")
             if e.get("note"):
@@ -181,6 +190,7 @@ def watchlist_list(args) -> None:
                 "metric",
                 "price",
                 "change_pct",
+                "base_value",
                 "status",
                 "upper_1",
                 "upper_2",
@@ -202,9 +212,15 @@ def watchlist_list(args) -> None:
     if not trig.empty:
         print(f"\n🔔 阈值提醒 ({len(trig)}):")
         for _, r in trig.iterrows():
-            print(
-                f"  {r['symbol']} {r['status']} 现价 {r['price']:,.2f} {r['currency']}"
-            )
+            metric = r.get("metric") or "price"
+            bv = r.get("base_value")
+            if metric == "pb" and bv is not None and pd.notna(bv):
+                base = f"PB {bv:,.2f}"
+            elif metric == "mcap" and bv is not None and pd.notna(bv):
+                base = f"市值 {bv:,.0f} {r['currency']}"
+            else:
+                base = f"现价 {r['price']:,.2f} {r['currency']}"
+            print(f"  {r['symbol']} {r['status']} {base}")
     else:
         print("\n自选中暂无阈值触发。")
     for i in issues:

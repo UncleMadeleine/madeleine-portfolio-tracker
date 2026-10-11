@@ -145,6 +145,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  tracker watchlist add AAPL --list 科技 --upper1 250 --note 苹果\n"
             "  tracker watchlist add 600519.SS --list 白酒 --lower1 1500\n"
             "  tracker watchlist add 600036.SS --metric pb --upper1 1.2 --lower1 0.8\n"
+            "  tracker watchlist add AAPL --metric mcap --upper1 4000000000000\n"
             "  tracker watchlist remove AAPL --list 科技       # 仅从「科技」列表移除\n"
             "  tracker watchlist import-longport --dry-run     # 预览长桥自选导入\n"
             "  tracker watchlist import-longport --overwrite   # 覆盖现有自选\n"
@@ -172,9 +173,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_w.add_argument("--lower2", type=float, help="下限 II")
     p_w.add_argument(
         "--metric",
-        choices=["price", "pb"],
+        choices=["price", "pb", "mcap"],
         default=None,
-        help="阈值基准指标: price=现价 (默认) / pb=市净率",
+        help="阈值基准指标: price=现价 (默认) / pb=市净率 / mcap=总市值",
     )
     p_w.add_argument("--note", help="备注")
     p_w.add_argument("--akshare", action="store_true")

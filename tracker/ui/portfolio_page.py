@@ -203,7 +203,8 @@ def render_portfolio_page() -> None:
             st.caption(
                 "同一个代码可属多个列表（「所属列表」列用逗号分隔，如: 科技,美股）。"
                 "阈值按当地货币; 两级: upper_1/upper_2、lower_1/lower_2; 可只设一侧。"
-                "指标基准 metric: price=现价 (默认) / pb=市净率 (阈值按 PB 倍数)。"
+                "指标基准 metric: price=现价 (默认) / pb=市净率 (阈值按 PB 倍数) / "
+                "mcap=总市值 (阈值按当地货币绝对金额)。"
                 "旧格式自动迁移。"
             )
             st.caption("现有列表: " + "、".join(list_names(watch)))
@@ -218,6 +219,7 @@ def render_portfolio_page() -> None:
                     "upper_2",
                     "lower_1",
                     "lower_2",
+                    "mcap",
                     "note",
                 ],
             )
@@ -240,13 +242,18 @@ def render_portfolio_page() -> None:
                     "lists": st.column_config.TextColumn("所属列表 (逗号分隔)"),
                     "metric": st.column_config.SelectboxColumn(
                         "指标基准",
-                        options=["", "price", "pb"],
-                        help="price=现价 (默认); pb=市净率",
+                        options=["", "price", "pb", "mcap"],
+                        help="price=现价 (默认); pb=市净率; mcap=总市值",
                     ),
                     "upper_1": st.column_config.NumberColumn("上限 I", format="%.2f"),
                     "upper_2": st.column_config.NumberColumn("上限 II", format="%.2f"),
                     "lower_1": st.column_config.NumberColumn("下限 I", format="%.2f"),
                     "lower_2": st.column_config.NumberColumn("下限 II", format="%.2f"),
+                    "mcap": st.column_config.NumberColumn(
+                        "市值覆盖",
+                        format="%.0f",
+                        help="手写总市值 (当地货币), 覆盖行情/数据源取值; 仅 metric=mcap 时生效",
+                    ),
                     "note": st.column_config.TextColumn("备注"),
                 },
             )
@@ -285,6 +292,7 @@ def render_portfolio_page() -> None:
                         "upper_2",
                         "lower_1",
                         "lower_2",
+                        "mcap",
                         "note",
                     ):
                         v = e.get(k)
@@ -591,13 +599,22 @@ def render_portfolio_page() -> None:
                 st.caption(f":material/warning: {i}")
             if not trig.empty:
                 for _, r in trig.iterrows():
-                    base_txt = (
-                        f"PB {r['base_value']:.2f}"
-                        if r.get("metric") == "pb"
-                        and r.get("base_value") is not None
-                        and pd.notna(r.get("base_value"))
-                        else f"现价 {r['price']:,.2f} {r['currency']}"
-                    )
+                    metric = r.get("metric") or "price"
+                    bv = r.get("base_value")
+                    if (
+                        metric == "pb"
+                        and bv is not None
+                        and pd.notna(bv)
+                    ):
+                        base_txt = f"PB {bv:.2f}"
+                    elif metric == "mcap" and bv is not None and pd.notna(bv):
+                        base_txt = (
+                            f"市值 {bv:,.0f} {r['currency']}"
+                            if abs(bv) < 1e12
+                            else f"市值 {bv / 1e12:,.2f}万亿 {r['currency']}"
+                        )
+                    else:
+                        base_txt = f"现价 {r['price']:,.2f} {r['currency']}"
                     st.warning(
                         f"**{r['symbol']}** {r['status']} · {base_txt}"
                         + (f" · {r['note']}" if r["note"] else ""),
@@ -606,8 +623,8 @@ def render_portfolio_page() -> None:
             else:
                 st.caption(":material/check_circle: 自选中暂无阈值触发")
             st.caption(
-                f"当前查看: {scope} · 阈值按当地货币 (基准=pb 时按市净率倍数); "
-                "I 为预警线 / II 为强提醒线; "
+                f"当前查看: {scope} · 阈值按当地货币 (基准=pb 时按市净率倍数, "
+                "基准=mcap 时按总市值); I 为预警线 / II 为强提醒线; "
                 "距离 = 还需变动百分之几才触发 (负值=已越过)。"
             )
             if not wview.empty:
@@ -649,6 +666,9 @@ def render_portfolio_page() -> None:
                         "currency": st.column_config.TextColumn("币种", width="small"),
                         "book_value": st.column_config.NumberColumn(
                             "每股净资产", format="%.2f", width="small"
+                        ),
+                        "market_cap": st.column_config.NumberColumn(
+                            "总市值", format="%.0f", width="small"
                         ),
                         "base_value": st.column_config.NumberColumn(
                             "基准值", format="%.2f", width="small"

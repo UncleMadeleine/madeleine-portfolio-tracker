@@ -54,7 +54,10 @@ def test_clear_quotes_keeps_other_tables():
     assert clear_quotes() >= 1
     assert get_cached(["AAPL"]) == {}
     assert cache_mod.get_ohlc_cached("AAPL", 12) is not None
-    assert cache_mod.get_fundamental_cached("AAPL") == {"book_value": 6.1}
+    assert cache_mod.get_fundamental_cached("AAPL") == {
+        "book_value": 6.1,
+        "market_cap": None,
+    }
 
 
 def _empty_ohlc() -> pd.DataFrame:

@@ -28,6 +28,7 @@ WATCH_COLS = [
     "upper_2",
     "lower_1",
     "lower_2",
+    "base_value",
     "status",
     "dist_upper_1_pct",
     "dist_upper_2_pct",
@@ -122,9 +123,15 @@ def run_snapshot(args) -> None:
         if not trig.empty:
             print(f"\n🔔 阈值提醒 ({len(trig)}):")
             for _, r in trig.iterrows():
-                print(
-                    f"  {r['symbol']} {r['status']} 现价 {r['price']:,.2f} {r['currency']}"
-                )
+                metric = r.get("metric") or "price"
+                bv = r.get("base_value")
+                if metric == "pb" and bv is not None and pd.notna(bv):
+                    base = f"PB {bv:,.2f}"
+                elif metric == "mcap" and bv is not None and pd.notna(bv):
+                    base = f"市值 {bv:,.0f} {r['currency']}"
+                else:
+                    base = f"现价 {r['price']:,.2f} {r['currency']}"
+                print(f"  {r['symbol']} {r['status']} {base}")
 
     if issues:
         print("\n⚠ 问题:")

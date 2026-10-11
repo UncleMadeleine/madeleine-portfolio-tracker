@@ -254,27 +254,29 @@ python -m tracker.cli kline 0700.HK --period weekly --open  # 周K + 自动打�
 
 ---
 
-## 自选股与阈值提醒 (价格 / 市净率)
+## 自选股与阈值提醒 (价格 / 市净率 / 市值)
 
-`watchlist.json` 为扁平条目列表，**一个代码可属于多个列表**（`lists` 数组，逗号分隔多归属），支持**两级阈值**（`upper_1`/`upper_2`、`lower_1`/`lower_2`）、**指标基准**（`metric`：`price`=现价，默认；`pb`=市净率）与备注。旧格式（扁平 `upper`/`lower`、嵌套 `{"watchlists": {...}}`）自动迁移：
+`watchlist.json` 为扁平条目列表，**一个代码可属于多个列表**（`lists` 数组，逗号分隔多归属），支持**两级阈值**（`upper_1`/`upper_2`、`lower_1`/`lower_2`）、**指标基准**（`metric`：`price`=现价，默认；`pb`=市净率；`mcap`=总市值）与备注。旧格式（扁平 `upper`/`lower`、嵌套 `{"watchlists": {...}}`）自动迁移：
 
 ```json
 {
   "watchlist": [
     { "symbol": "TSLA", "lists": ["科技", "美股"], "upper_1": 420, "upper_2": 450, "lower_1": 280, "lower_2": 250, "note": "两级提醒" },
     { "symbol": "600036.SS", "lists": ["银行", "A股"], "metric": "pb", "upper_1": 1.2, "lower_1": 0.8, "note": "PB提醒" },
+    { "symbol": "AAPL", "lists": ["美股"], "metric": "mcap", "upper_1": 4000000000000, "lower_1": 3000000000000, "note": "市值提醒" },
     { "symbol": "BRK-B", "lists": ["默认"], "note": "无阈值纯观察" }
   ]
 }
 ```
 
 - **同一代码属于多个列表**：如 TSLA 同时在「科技」和「美股」，配置集中在一处，改一次全生效
-- **阈值基准 `metric`**：`price`（默认，可省略）= 按现价判定，阈值按当地货币；`pb` = 按市净率（现价 ÷ 每股净资产）判定，阈值是 PB 倍数。每股净资产来源按优先级：条目手写 `pb` 键 (离线可用) > 行情自带 (长桥 calc_indexes / akshare 东财, 实时口径) > Yahoo Finance fundamentals (缓存 6 小时)；crypto 与无数据标的 PB 缺失时显示「指标无数据」，不误判触发
+- **阈值基准 `metric`**：`price`（默认，可省略）= 按现价判定，阈值按当地货币；`pb` = 按市净率（现价 ÷ 每股净资产）判定，阈值是 PB 倍数；`mcap` = 按总市值判定，阈值是当地货币绝对金额。每股净资产来源按优先级：条目手写 `pb` 键 (离线可用) > 行情自带 (长桥 calc_indexes / akshare 东财, 实时口径) > Yahoo Finance fundamentals (缓存 6 小时)；总市值来源同优先级：条目手写 `mcap` 键 > 行情自带 (akshare 东财 / 长桥) > fundamentals。crypto 与无数据标的指标缺失时显示「指标无数据」，不误判触发
 - 触发等级（从高到低）：`🔴 突破上限 II` / `🟠 突破上限 I` / `🟢 跌破下限 II` / `🟡 跌破下限 I`；触发项排在最前
 - 距离列：`距上限 I%` / `距上限 II%` / `距下限 I%` / `距下限 II%` = 还需变动百分之几才触发（负值 = 已越过）
 - 页面侧栏「所属列表」列用逗号分隔编辑多归属；「自选观察」tab 顶部「查看范围」选 `全部` 或单个列表
 - CLI：`--watchlist <列表名>` 只看某个列表（`全部` 合并去重）
 - CLI 添加 PB 提醒：`tracker watchlist add 600036.SS --metric pb --upper1 1.2 --lower1 0.8`
+- CLI 添加市值提醒：`tracker watchlist add AAPL --metric mcap --upper1 4000000000000`
 - 持仓与自选**共用一次批量行情请求**，多加自选不增加请求次数
 
 ---

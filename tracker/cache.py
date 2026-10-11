@@ -35,6 +35,7 @@ def _ensure_db() -> None:
                 change_pct REAL,
                 currency TEXT,
                 book_value REAL,
+                market_cap REAL,
                 source TEXT,
                 fetched_at REAL
             )
@@ -43,6 +44,10 @@ def _ensure_db() -> None:
         # 旧库无 book_value/source 列: 补列 (ALTER 失败说明已存在, 忽略)
         try:
             con.execute("ALTER TABLE quotes ADD COLUMN book_value REAL")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            con.execute("ALTER TABLE quotes ADD COLUMN market_cap REAL")
         except sqlite3.OperationalError:
             pass
         try:
@@ -65,10 +70,15 @@ def _ensure_db() -> None:
             CREATE TABLE IF NOT EXISTS fundamentals (
                 symbol TEXT PRIMARY KEY,
                 book_value REAL,
+                market_cap REAL,
                 fetched_at REAL
             )
             """
         )
+        try:
+            con.execute("ALTER TABLE fundamentals ADD COLUMN market_cap REAL")
+        except sqlite3.OperationalError:
+            pass
         con.commit()
 
 
@@ -132,46 +142,74 @@ def set_ohlc_cached(symbol: str, months: int, df: pd.DataFrame) -> None:
 
 
 def get_fundamental_cached(symbol: str, ttl: int = 21600) -> dict | None:
-    """读取缓存的每股净资产; 未命中/过期返回 None.
+    """读取缓存的基本面指标; 未命中/过期返回 None.
 
-    负缓存 (已确认无有效净资产的标的) 命中返回 {"book_value": None},
-    与「未缓存」(None) 区分, 避免 TTL 内重复网络请求。
+    负缓存 (已确认无有效值的标的) 命中返回
+    {"book_value": None, "market_cap": None}, 与「未缓存」(None) 区分,
+    避免 TTL 内重复网络请求。
     """
     _ensure_db()
     now = time.time()
     with sqlite3.connect(CACHE_DB) as con:
         row = con.execute(
-            "SELECT book_value, fetched_at FROM fundamentals WHERE symbol = ?",
+            "SELECT book_value, market_cap, fetched_at FROM fundamentals WHERE symbol = ?",
             (symbol,),
         ).fetchone()
     if row is None:
         return None
-    bv, fetched_at = row
+    bv, mc, fetched_at = row
     if fetched_at is None or now - fetched_at > ttl:
         return None
-    if isinstance(bv, (int, float)) and bv == bv and bv > 0:
-        return {"book_value": float(bv)}
-    return {"book_value": None}
+    return {
+        "book_value": (
+            float(bv) if isinstance(bv, (int, float)) and bv == bv and bv > 0 else None
+        ),
+        "market_cap": (
+            float(mc) if isinstance(mc, (int, float)) and mc == mc and mc > 0 else None
+        ),
+    }
 
 
-def set_fundamental_cached(symbol: str, book_value: float | None) -> None:
-    """写入每股净资产缓存; book_value 无效 (≤0/NaN) 时也落库 (负缓存, 6h 不重试)."""
+def set_fundamental_cached(
+    symbol: str, book_value: float | None, market_cap: float | None = None
+) -> None:
+    """写入基本面缓存; 指标无效 (≤0/NaN) 时也落库 (负缓存, 6h 不重试).
+
+    market_cap 为可选增量: 只补 BVPS 的旧调用方写 None, 由后续 mcap 请求覆盖。
+    """
     _ensure_db()
     now = time.time()
-    if book_value is None or book_value != book_value or book_value <= 0:
-        bv = None  # 负缓存: 该标的无有效净资产, TTL 内不再请求
-    else:
-        bv = float(book_value)
+
+    def _valid(v) -> float | None:
+        if v is None or v != v or v <= 0:
+            return None
+        return float(v)
+
+    bv = _valid(book_value)
+    mc = _valid(market_cap)
     with _lock, sqlite3.connect(CACHE_DB) as con:
-        con.execute(
-            """
-            INSERT INTO fundamentals (symbol, book_value, fetched_at)
-            VALUES (?, ?, ?)
-            ON CONFLICT(symbol) DO UPDATE SET
-                book_value=excluded.book_value, fetched_at=excluded.fetched_at
-            """,
-            (symbol, bv, now),
-        )
+        if mc is None:
+            # 不覆盖已有的有效市值 (BVPS 请求不应把 mcap 冲掉)
+            con.execute(
+                """
+                INSERT INTO fundamentals (symbol, book_value, market_cap, fetched_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(symbol) DO UPDATE SET
+                    book_value=excluded.book_value, fetched_at=excluded.fetched_at
+                """,
+                (symbol, bv, None, now),
+            )
+        else:
+            con.execute(
+                """
+                INSERT INTO fundamentals (symbol, book_value, market_cap, fetched_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(symbol) DO UPDATE SET
+                    book_value=excluded.book_value, market_cap=excluded.market_cap,
+                    fetched_at=excluded.fetched_at
+                """,
+                (symbol, bv, mc, now),
+            )
         con.commit()
 
 
@@ -187,12 +225,12 @@ def get_cached(symbols: list[str], ttl: int = CACHE_TTL) -> dict[str, "Quote"]:
     hits: dict[str, Quote] = {}
     with sqlite3.connect(CACHE_DB) as con:
         rows = con.execute(
-            f"SELECT symbol, name, price, prev_close, change_pct, currency, book_value, source "
+            f"SELECT symbol, name, price, prev_close, change_pct, currency, book_value, market_cap, source "
             f"FROM quotes "
             f"WHERE symbol IN ({','.join('?' * len(symbols))}) AND fetched_at > ?",
             [*symbols, now - ttl],
         ).fetchall()
-        for sym, name, price, prev, chg, ccy, bv, src in rows:
+        for sym, name, price, prev, chg, ccy, bv, mc, src in rows:
             if price is not None and price > 0:
                 hits[sym] = Quote(
                     symbol=sym,
@@ -202,6 +240,7 @@ def get_cached(symbols: list[str], ttl: int = CACHE_TTL) -> dict[str, "Quote"]:
                     change_pct=float(chg) if chg is not None else None,
                     currency=str(ccy),
                     book_value=float(bv) if bv is not None else None,
+                    market_cap=float(mc) if mc is not None else None,
                     source=str(src) if src else None,
                 )
     return hits
@@ -226,6 +265,7 @@ def set_cached(quotes: dict[str, "Quote"]) -> None:
                 q.change_pct,
                 q.currency,
                 q.book_value,
+                getattr(q, "market_cap", None),
                 getattr(q, "source", None),
                 now,
             )
@@ -233,12 +273,13 @@ def set_cached(quotes: dict[str, "Quote"]) -> None:
     with _lock, sqlite3.connect(CACHE_DB) as con:
         con.executemany(
             """
-            INSERT INTO quotes (symbol, name, price, prev_close, change_pct, currency, book_value, source, fetched_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO quotes (symbol, name, price, prev_close, change_pct, currency, book_value, market_cap, source, fetched_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(symbol) DO UPDATE SET
                 name=excluded.name, price=excluded.price,
                 prev_close=excluded.prev_close, change_pct=excluded.change_pct,
                 currency=excluded.currency, book_value=excluded.book_value,
+                market_cap=excluded.market_cap,
                 source=excluded.source, fetched_at=excluded.fetched_at
             """,
             rows,

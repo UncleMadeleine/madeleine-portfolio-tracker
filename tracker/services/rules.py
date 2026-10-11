@@ -15,12 +15,14 @@ STATUS_LOWER_1 = "🟡 跌破下限 I"
 STATUS_LOWER_2 = "🟢 跌破下限 II"
 STATUS_WITHIN = "⚪ 区间内"
 
-# 指标基准: price=现价 (默认) / pb=市净率。阈值键两级共用, 按基准解释数值。
+# 指标基准: price=现价 (默认) / pb=市净率 / mcap=市值。
+# 阈值键两级共用, 按基准解释数值 (pb 为倍数, mcap 为当地货币绝对金额)。
 METRIC_PRICE = "price"
 METRIC_PB = "pb"
+METRIC_MCAP = "mcap"
 STATUS_WITHIN = "⚪ 区间内"
 STATUS_NO_DATA = "⚫ 指标无数据"
-_METRICS = (METRIC_PRICE, METRIC_PB)
+_METRICS = (METRIC_PRICE, METRIC_PB, METRIC_MCAP)
 
 # 严重度排序 (与 evaluate_thresholds 判定顺序一致: II > I, 深跌破 > 浅跌破):
 # 上限 II > 上限 I > 下限 II > 下限 I > 区间内
@@ -35,15 +37,19 @@ STATUS_RANK = {
 
 _THRESHOLD_KEYS = ("upper_1", "upper_2", "lower_1", "lower_2")
 _PB_KEYS = ("pb", "price_to_book")  # 手写别名兼容
+_MCAP_KEYS = ("mcap", "market_cap")  # 手写市值别名兼容
 
 
 def metric_for_entry(entry: dict) -> str:
-    """条目 → 指标基准 (price/pb); 非法值回退 price."""
+    """条目 → 指标基准 (price/pb/mcap); 非法值回退 price."""
     raw = entry.get("metric")
     if raw is None:
         for k in _PB_KEYS:  # 手写 pb (每股净资产) 视为 PB 基准条目
             if entry.get(k) not in (None, ""):
                 return METRIC_PB
+        for k in _MCAP_KEYS:  # 手写 mcap/market_cap (市值) 视为市值基准条目
+            if entry.get(k) not in (None, ""):
+                return METRIC_MCAP
         return METRIC_PRICE
     s = str(raw).strip().lower()
     return s if s in _METRICS else METRIC_PRICE
@@ -52,6 +58,15 @@ def metric_for_entry(entry: dict) -> str:
 def entry_book_value(entry: dict) -> float | None:
     """条目自带每股净资产 (pb / price_to_book 键, 用户手写, 优先于数据源)."""
     for k in _PB_KEYS:
+        v = _num(entry.get(k))
+        if v is not None:
+            return v
+    return None
+
+
+def entry_market_cap(entry: dict) -> float | None:
+    """条目自带总市值 (mcap / market_cap 键, 用户手写, 优先于数据源)."""
+    for k in _MCAP_KEYS:
         v = _num(entry.get(k))
         if v is not None:
             return v
@@ -107,7 +122,7 @@ def evaluate_thresholds(
 
 
 def metric_value_for_quote(metric: str, q) -> float | None:
-    """Quote → 指标现值 (price→现价, pb→price/book_value); 缺数据返回 None."""
+    """Quote → 指标现值 (price→现价, pb→price/book_value, mcap→总市值); 缺数据 None."""
     if metric == METRIC_PB:
         bv = getattr(q, "book_value", None)
         if bv is None or not math.isfinite(bv) or bv <= 0:
@@ -115,6 +130,11 @@ def metric_value_for_quote(metric: str, q) -> float | None:
         if q.price is None or not math.isfinite(q.price) or q.price <= 0:
             return None
         return q.price / bv
+    if metric == METRIC_MCAP:
+        mc = getattr(q, "market_cap", None)
+        if mc is None or not math.isfinite(mc) or mc <= 0:
+            return None
+        return mc
     price = q.price
     if price is None or not math.isfinite(price) or price <= 0:
         return None

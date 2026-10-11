@@ -19,6 +19,34 @@ from ..services.watchlist import (
 from ..watchlist import load_watchlist, parse_lists
 from ._common import _fmt_num, _fmt_pct, _records, _sanitize, _sym
 
+# 指标基准 → 中文标签 (md 表 / 触发汇总)
+_METRIC_LABELS = {"price": "现价", "pb": "市净率", "mcap": "市值"}
+# 大数字友好格式: 亿/万亿缩写, 市值/天文数字阈值列用
+_METRIC_CELL_COLS = ("price", "upper_1", "upper_2", "lower_1", "lower_2")
+
+
+def _metric_base_text(r: dict) -> str:
+    """行记录 → 指标基准文案 (pb 倍数 / 市值 / 现价)."""
+    metric = r.get("metric") or "price"
+    bv = r.get("base_value")
+    if metric == "pb" and bv is not None:
+        return f"PB {bv:.2f}"
+    if metric == "mcap" and bv is not None:
+        return _fmt_mcap(bv)
+    return f"现价 {r['price']:,.2f} {r['currency']}"
+
+
+def _fmt_mcap(v) -> str:
+    """市值 → 亿/万亿缩写 (threshold 同为绝对金额, 展示口径一致)."""
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return "—"
+    v = float(v)
+    if abs(v) >= 1e12:
+        return f"{v / 1e12:,.2f}万亿"
+    if abs(v) >= 1e8:
+        return f"{v / 1e8:,.2f}亿"
+    return f"{v:,.0f}"
+
 _MD_COLS = [
     ("symbol", "代码"),
     ("price", "现价"),
@@ -49,6 +77,9 @@ _CSV_COLS = [
     "upper_2",
     "lower_1",
     "lower_2",
+    "market_cap",
+    "book_value",
+    "base_value",
     "status",
     "dist_upper_1_pct",
     "dist_upper_2_pct",
@@ -148,11 +179,7 @@ def _report_md(payload, wview, sym_lists, issues) -> str:
         for r in payload["triggered"]:
             note = f" · {r['note']}" if r.get("note") else ""
             metric = r.get("metric") or "price"
-            base = (
-                f"PB {r['base_value']:.2f}"
-                if metric == "pb" and r.get("base_value") is not None
-                else f"现价 {r['price']:,.2f} {r['currency']}"
-            )
+            base = _metric_base_text(r)
             lines.append(f"- **{r['symbol']}** {r['status']} — {base}{note}")
         lines.append("")
 
@@ -175,12 +202,17 @@ def _report_md(payload, wview, sym_lists, issues) -> str:
         lines.append(sep)
         for r in rows:
             cells = []
+            metric = r.get("metric") or "price"
             for col, _ in _MD_COLS:
                 v = r.get(col)
-                if col in ("price", "upper_1", "upper_2", "lower_1", "lower_2") or col == "base_value":
+                if col in _METRIC_CELL_COLS and metric == "mcap":
+                    cells.append(_fmt_mcap(v))
+                elif col == "base_value" and metric == "mcap":
+                    cells.append(_fmt_mcap(v))
+                elif col in ("price", "upper_1", "upper_2", "lower_1", "lower_2") or col == "base_value":
                     cells.append(_fmt_num(v))
                 elif col == "metric":
-                    cells.append({"pb": "市净率"}.get(v, "现价") if v else "现价")
+                    cells.append(_METRIC_LABELS.get(v, "现价") if v else "现价")
                 elif col == "change_pct" or col.startswith("dist_"):
                     cells.append(_fmt_pct(v))
                 else:

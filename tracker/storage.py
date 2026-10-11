@@ -182,13 +182,19 @@ def normalize_watch_entry(e: dict) -> dict:
 
     symbol 经 parse().yahoo 归一 (别名后缀 .SG→.SI, 港股补零 700→0700,
     .SH→.SS 等): 手写/导入的别名与规范形态不会在文件里裂成两条。
-    metric 归一为 price/pb; price 为缺省基准不落盘, 非法值剔除。
+    metric 归一为 price/pb/mcap; price 为缺省基准不落盘, 非法值剔除。
+    手写市值别名 market_cap 统一收敛为 mcap 键 (与 pb 口径一致), 覆盖值保留。
     parse 失败 (无法识别的代码) 时保留原串, 由取数/视图层报错。
     """
     out = dict(e)
     for old, new in (("upper", "upper_1"), ("lower", "lower_1")):
         if old in out and new not in out:
             out[new] = out.pop(old)
+    # 手写市值别名收敛: 保留数值, 去掉别名键 (mcap 为唯一形态)
+    if "market_cap" in out and out.get("market_cap") not in (None, ""):
+        out.setdefault("mcap", out.pop("market_cap"))
+    else:
+        out.pop("market_cap", None)
     metric = rules_metric_for_entry(out)
     if metric == "price":
         out.pop("metric", None)  # 缺省基准不落盘, 文件保持干净

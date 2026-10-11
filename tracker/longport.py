@@ -355,7 +355,7 @@ def get_quotes_longport(
     """批量实时行情 (QuoteContext.quote): 返回 {yahoo: Quote}, 不可用返回 ({}, reason).
 
     只认领长桥支持的市场 (美股/港股/沪深); 其它市场交回默认数据源。
-    附带 calc_indexes(PbRatio) 反推每股净资产; PB 拉取失败不影响行情本体。
+    附带 calc_indexes 反推每股净资产/总市值; 拉取失败不影响行情本体。
     """
     mappable = [(p, yahoo_to_longport(p.yahoo)) for p in parsed]
     mappable = [(p, lp) for p, lp in mappable if lp]
@@ -376,6 +376,7 @@ def get_quotes_longport(
             break
         by_lp = {str(getattr(sq, "symbol", "") or "").strip(): sq for sq in resp}
         pb_ratios = _pb_ratios_longport([lp for _, lp in chunk], cfg=cfg)
+        mcap_by_lp = _total_market_values_longport([lp for _, lp in chunk], cfg=cfg)
         for p, lp in chunk:
             sq = by_lp.get(lp)
             if sq is None:
@@ -395,6 +396,7 @@ def get_quotes_longport(
                 currency=_currency_for(p.yahoo),
                 # 长桥实时撮合口径 PB → 反推 BVPS (实测与 yfinance 口径一致)
                 book_value=price / pb if pb is not None and pb > 0 else None,
+                market_cap=mcap_by_lp.get(lp),
                 source="longport",
             )
     return quotes, reason
@@ -430,6 +432,39 @@ def _pb_ratios_longport(
         except (TypeError, ValueError):
             pb = None
         out[sym] = pb if pb is not None and math.isfinite(pb) and pb > 0 else None
+    return out
+
+
+def _total_market_values_longport(
+    symbols_lp: list[str], cfg: dict | None = None
+) -> dict[str, float | None]:
+    """calc_indexes(TotalMarketValue) → {lp_symbol: 总市值 (当地货币)}; 失败返回 {}.
+
+    与 PB 同为可选增强: 任何异常静默吞掉 (行情本体已到手)。
+    长桥直接给绝对值 (非倍数), 无需反推。
+    """
+    if not symbols_lp:
+        return {}
+    try:
+        from longport.openapi import CalcIndex
+
+        resp = _ctx_call(
+            lambda c, syms: c.calc_indexes(syms, [CalcIndex.TotalMarketValue]),
+            list(symbols_lp),
+            cfg=cfg,
+        )
+    except Exception:  # noqa: BLE001
+        return {}
+    out: dict[str, float | None] = {}
+    for r in resp or []:
+        sym = str(getattr(r, "symbol", "") or "").strip()
+        if not sym:
+            continue
+        try:
+            mc = float(getattr(r, "total_market_value", None))
+        except (TypeError, ValueError):
+            mc = None
+        out[sym] = mc if mc is not None and math.isfinite(mc) and mc > 0 else None
     return out
 
 

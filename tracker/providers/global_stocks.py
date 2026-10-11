@@ -256,6 +256,9 @@ def _akshare_quote(p: ParsedSymbol) -> Quote:
     # 供 PB 阈值提醒使用 (yfinance BVPS 为滞后财报, 东财口径更准)
     pb = _num(r.get("市净率")) if "市净率" in df.columns else None
     book_value = price / pb if pb is not None and pb > 0 else None
+    # spot 同样自带总市值 (本地币种口径), 供市值阈值提醒;
+    # 港股 spot 最终列已丢弃该字段, 由长桥/fundamentals 兜底
+    market_cap = _num(r.get("总市值")) if "总市值" in df.columns else None
     return Quote(
         symbol=p.yahoo,
         name=str(r.get("名称") or "") or None,
@@ -264,6 +267,7 @@ def _akshare_quote(p: ParsedSymbol) -> Quote:
         change_pct=_num(chg),
         currency=p.currency,
         book_value=book_value,
+        market_cap=market_cap if market_cap is not None and market_cap > 0 else None,
         source="akshare",
     )
 

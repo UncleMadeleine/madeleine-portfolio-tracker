@@ -457,25 +457,65 @@ def _tron_account(
 # ---------------------------------------------------------------------------
 
 
+def _validate_token_entry(info: Any, where: str) -> dict[str, Any]:
+    """单条 tokenlist 条目校验归一: symbol 非空字符串, decimals int >= 0.
+
+    畸形条目抛 ValueError (调用方统一转可读错误), 不让 KeyError/TypeError
+    在查询中途以 traceback 形式冒出; decimals 容忍 "18" 这类字符串写法。
+    """
+    if not isinstance(info, dict):
+        raise ValueError(f"tokenlist {where}: 条目必须是对象 (symbol/decimals)")
+    symbol = info.get("symbol")
+    if not isinstance(symbol, str) or not symbol.strip():
+        raise ValueError(f"tokenlist {where}: 缺少有效 symbol")
+    decimals = info.get("decimals")
+    try:
+        decimals = int(decimals)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"tokenlist {where}: decimals 必须是整数 (得到 {decimals!r})"
+        ) from None
+    if decimals < 0:
+        raise ValueError(f"tokenlist {where}: decimals 不能为负 ({decimals})")
+    return {"symbol": symbol.strip(), "decimals": decimals}
+
+
 def _load_tokenlist(tokenlist_path: str | None) -> dict[str, dict[str, dict[str, Any]]]:
-    """加载 tokenlist: 优先外部文件, 否则内置列表."""
+    """加载 tokenlist: 优先外部文件, 否则内置列表.
+
+    外部文件做结构校验 (链/代币条目必须是对象, decimals 可转 int 且 >= 0),
+    畸形文件抛 ValueError; 链名统一小写 (上层按 chain.lower() 查表)。
+    """
     if tokenlist_path:
         p = Path(tokenlist_path)
         if not p.exists():
             raise FileNotFoundError(f"tokenlist 文件不存在: {tokenlist_path}")
-        raw = json.loads(p.read_text(encoding="utf-8"))
+        try:
+            raw = json.loads(p.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as e:
+            raise ValueError(f"tokenlist 不是合法 JSON: {e}") from e
+        if not isinstance(raw, dict):
+            raise ValueError(
+                "tokenlist 顶层必须是 {链: {合约: {symbol, decimals}}} 对象"
+            )
         loaded: dict[str, dict[str, dict[str, Any]]] = {}
         for chain_key, tokens in raw.items():
-            # 链名统一小写: 上层按 chain.lower() 查表, 外部文件写 "ETH" 会静默查不到
-            chain_l = chain_key.lower()
+            if not isinstance(tokens, dict):
+                raise ValueError(
+                    f"tokenlist 链 {chain_key!r} 下必须是 {{合约: 条目}} 对象"
+                )
+            chain_l = str(chain_key).lower()
             loaded[chain_l] = {}
             for contract, info in tokens.items():
                 # EVM 合约不区分大小写统一小写; TRON base58 地址区分大小写, 原样保留
-                ckey = contract.lower() if contract.startswith("0x") else contract
-                loaded[chain_l][ckey] = {
-                    "symbol": info["symbol"],
-                    "decimals": info["decimals"],
-                }
+                ckey = (
+                    str(contract).lower()
+                    if str(contract).startswith("0x")
+                    else contract
+                )
+                loaded[chain_l][ckey] = _validate_token_entry(
+                    info, f"{chain_key}/{contract}"
+                )
         return loaded
     # 内置列表: EVM 混合-case 合约归一化为小写; TRON base58 地址保留原样
     result: dict[str, dict[str, dict[str, Any]]] = {}
@@ -638,7 +678,9 @@ def _import_tron(
     #   + 已委托质押 account_resource.delegated_frozenV2_balance_for_energy /
     #     delegated_frozenV2_balance_for_bandwidth (DelegateResource 转出的 TRX,
     #     所有权仍在原地址)
-    #   + unfrozen 解冻中 + canWithdrawUnfreezeAmount 已满14天可领取
+    #   + unfrozenV2 解冻中 (Stake 2.0 待领取; 协议字段名就是 unfrozenV2,
+    #     没有 unfrozen / canWithdrawUnfreezeAmount 字段, 到期未领取的条目
+    #     会一直挂列, 故全量累加才是正确口径)
     #   + Stake1.0 遗留 frozen / account_resource.frozen_balance_for_energy
     # 未激活/零余额无字段; 单位 sun (1 TRX = 1e6 sun)
     def _to_sun(v: Any) -> int:
@@ -656,7 +698,14 @@ def _import_tron(
     staked_sun += _to_sun(account.get("delegated_frozenV2_balance_for_bandwidth"))
     res = account.get("account_resource")
     if isinstance(res, dict):
-        staked_sun += _to_sun(res.get("frozen_balance_for_energy"))
+        # Stake1.0 能量冻结在协议里是 Frozen 消息 {frozen_balance, expire_time},
+        # 不是 int64: 直接 int(dict) 会 TypeError 被 _to_sun 吞成 0, 老质押漏记
+        fbe = res.get("frozen_balance_for_energy")
+        staked_sun += (
+            _to_sun(fbe.get("frozen_balance"))
+            if isinstance(fbe, dict)
+            else _to_sun(fbe)
+        )
         staked_sun += _to_sun(res.get("delegated_frozenV2_balance_for_energy"))
     staked_sun += sum(
         _to_sun(item.get("frozen_balance"))
@@ -665,10 +714,9 @@ def _import_tron(
     )
     unstaking_sun = sum(
         _to_sun(item.get("unfreeze_amount"))
-        for item in account.get("unfrozen") or []
+        for item in account.get("unfrozenV2") or []
         if isinstance(item, dict)
     )
-    unstaking_sun += _to_sun(account.get("canWithdrawUnfreezeAmount"))
     trx_sun = spendable_sun + staked_sun + unstaking_sun
     if trx_sun > 0:
         holdings.append(

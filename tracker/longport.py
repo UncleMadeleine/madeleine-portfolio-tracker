@@ -357,7 +357,14 @@ def get_quotes_longport(
     只认领长桥支持的市场 (美股/港股/沪深); 其它市场交回默认数据源。
     附带 calc_indexes 反推每股净资产/总市值; 拉取失败不影响行情本体。
     """
-    mappable = [(p, yahoo_to_longport(p.yahoo)) for p in parsed]
+    mappable = [
+        (p, yahoo_to_longport(p.yahoo))
+        for p in parsed
+        # crypto/index 无长桥合约: BASE-QUOTE 会被映射成 BTC.USD.US 这类伪
+        # 代码塞进 c.quote, 长桥对批内非法代码整批报错时会拖丢同批所有
+        # 股票行情 (IBKR 侧用 _claims_global 做同样的域过滤)
+        if p.type not in ("crypto", "index")
+    ]
     mappable = [(p, lp) for p, lp in mappable if lp]
     if not mappable:
         return {}, None
@@ -377,6 +384,7 @@ def get_quotes_longport(
         by_lp = {str(getattr(sq, "symbol", "") or "").strip(): sq for sq in resp}
         pb_ratios = _pb_ratios_longport([lp for _, lp in chunk], cfg=cfg)
         mcap_by_lp = _total_market_values_longport([lp for _, lp in chunk], cfg=cfg)
+        names_by_lp = static_names_longport([lp for _, lp in chunk], cfg=cfg)
         for p, lp in chunk:
             sq = by_lp.get(lp)
             if sq is None:
@@ -389,7 +397,7 @@ def get_quotes_longport(
             pb = pb_ratios.get(lp)
             quotes[p.yahoo] = Quote(
                 symbol=p.yahoo,
-                name=None,
+                name=names_by_lp.get(lp),
                 price=price,
                 prev_close=prev,
                 change_pct=chg,
@@ -556,7 +564,12 @@ def fetch_stock_positions(cfg: dict | None = None) -> list:
 
 
 def positions_to_rows(positions: list) -> tuple[list[dict], list[str]]:
-    """SDK StockPosition 列表 → 导入 rows (零/负数量跳过, 无法映射跳过)."""
+    """SDK StockPosition 列表 → 导入 rows (零数量跳过, 无法映射跳过).
+
+    空头 (quantity<0) 保留负数量入账 (与 IBKR 口径一致, analytics 按
+    abs(成本) 算收益率), 不再静默丢弃; 数量为 0 的条目跳过并记 skipped。
+    avg_cost=0 是合法成本 (赠股/并股), 保留 0 不当缺失。
+    """
     rows: list[dict] = []
     skipped: list[str] = []
     for pos in positions:
@@ -566,7 +579,9 @@ def positions_to_rows(positions: list) -> tuple[list[dict], list[str]]:
             skipped.append(f"{raw} 无法映射为内部代码 (市场不支持)")
             continue
         qty = _f(getattr(pos, "quantity", None))
-        if not qty or qty <= 0:
+        if qty is None or qty == 0:
+            if qty is None:
+                skipped.append(f"{raw}: 数量缺失或非法, 已跳过")
             continue
         cost = _f(getattr(pos, "cost_price", None))
         ccy = str(getattr(pos, "currency", "") or "").strip().upper()
@@ -575,7 +590,7 @@ def positions_to_rows(positions: list) -> tuple[list[dict], list[str]]:
                 "symbol": y,
                 "type": type_for_symbol(y),
                 "quantity": round(qty, 6),
-                "avg_cost": round(cost, 6) if cost else None,
+                "avg_cost": round(cost, 6) if cost is not None else None,
                 "currency": ccy or None,
             }
         )

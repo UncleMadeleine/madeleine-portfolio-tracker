@@ -6,14 +6,13 @@ import csv
 import io
 import json
 from datetime import datetime
-from pathlib import Path
 
 import pandas as pd
 
 from ..services.snapshot import snapshot_json, take_snapshot
 from ..storage import load_portfolio
 from ..watchlist import load_watchlist
-from ._common import _sanitize
+from ._common import _finish_with_error, _sanitize
 
 # 持仓 CSV 导出列 (按出现顺序)
 _CSV_COLS = [
@@ -161,7 +160,12 @@ def cmd_export(args) -> None:
     else:  # md
         text = _export_md(base, view, summary, issues)
     if args.output:
-        Path(args.output).write_text(text, encoding="utf-8")
+        from ._common import atomic_write_text
+
+        try:
+            atomic_write_text(args.output, text)
+        except OSError as e:
+            _finish_with_error(f"快照导出失败: {args.output} ({e})")
         print(f"✅ 快照已导出: {args.output}")
     else:
         print(text)

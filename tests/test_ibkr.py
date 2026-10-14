@@ -85,7 +85,9 @@ def test_load_config_falls_back_to_example(tmp_path, monkeypatch):
     cfg = load_config()
     assert cfg["host"] == "127.0.0.1"
     assert cfg["mode"] == "paper"
-    assert cfg["exchanges"]["CN"] == "SEHK"
+    # 键名与 contract_spec 实际读取的一致 (旧的 "CN" 是死键, 已从模板移除)
+    assert cfg["exchanges"]["CN_SH"] == "SEHKNTL"
+    assert cfg["exchanges"]["HK"] == "SEHK"
 
 
 def test_mode_port_resolution(tmp_path, monkeypatch):

@@ -125,6 +125,7 @@ def _quote_from_dump(p: ParsedSymbol, d: dict) -> Quote | None:
 
 
 _QUOTE_TIMEOUT = 5.0  # yfinance/OpenBB 偶发内部重试会把单码失败拖到 8s+; 硬超时快速降级
+_BATCH_TIMEOUT = 30.0  # 批量一次上百代码, 预算放大; 仍挂住则整批放弃走逐代码源链
 
 
 def _yahoo_quote(p: ParsedSymbol) -> Quote:
@@ -146,8 +147,14 @@ def _yahoo_batch(parsed: list[ParsedSymbol]) -> dict[str, Quote]:
         return out
     by_yahoo = {p.yahoo: p for p in parsed}
     try:
-        res = _obb().equity.price.quote(
-            symbol=[p.yahoo for p in parsed], provider="yfinance"
+        # 批量同样要硬超时: OpenBB/yfinance 偶发内部重试会把批量调用挂住,
+        # 而它跑在 get_quotes 主线程里 (域间串行), 一挂全批卡死。超时按
+        # 空结果处理, 后续逐代码源链还能兜底 (单代码 5s 硬超时)
+        res = with_timeout(
+            _obb().equity.price.quote,
+            _BATCH_TIMEOUT,
+            symbol=[p.yahoo for p in parsed],
+            provider="yfinance",
         )
         for item in res.results:
             d = item.model_dump()

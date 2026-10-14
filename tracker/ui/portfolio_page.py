@@ -281,6 +281,20 @@ def render_portfolio_page() -> None:
                         dups.append(key)
                         continue
                     seen.add(key)
+                    # 指标基准单元格留空 = price (缺省): 显式钉死。否则
+                    # normalize_watch_entry 会按 mcap/pb 覆盖键把基准推断为
+                    # mcap/pb, 与「市值覆盖仅 metric=mcap 时生效」的列说明相反,
+                    # 价格阈值会被当成市值/市净率比较 → 每次误报
+                    m_raw = r.get("metric")
+                    if m_raw is None or (
+                        isinstance(m_raw, float) and pd.isna(m_raw)
+                    ):
+                        m_raw = ""
+                    metric = str(m_raw).strip().lower()
+                    r = {
+                        **r,
+                        "metric": metric if metric in ("price", "pb", "mcap") else "price",
+                    }
                     e = normalize_watch_entry(r)
                     e["symbol"] = key
                     e["lists"] = parse_lists(e.get("lists"))
@@ -506,7 +520,7 @@ def render_portfolio_page() -> None:
                         "涨跌%", format="%+.2f%%", width="small"
                     ),
                     "quantity": st.column_config.NumberColumn(
-                        "数量", format="%,!.6f", width="small"
+                        "数量", format="%,.6f", width="small"
                     ),
                     "avg_cost": st.column_config.NumberColumn(
                         "成本(当地)", format="%.4f", width="small"
@@ -521,7 +535,9 @@ def render_portfolio_page() -> None:
                         f"盈亏({base})", format="%+,.0f", width="small"
                     ),
                     "pnl_pct": st.column_config.NumberColumn(
-                        "盈亏%", format="%+.2f%%", width="small"
+                        # pnl_pct 是小数比值 (0.5 = +50%), percent 预定义格式
+                        # 走 Intl percent 自动乘 100; 直套 "%+.2f%%" 会小 100 倍
+                        "盈亏%", format="percent", width="small"
                     ),
                     "weight": None,
                     "weight_pct": st.column_config.ProgressColumn(
@@ -582,14 +598,18 @@ def render_portfolio_page() -> None:
         else:
             names = list_names(watch)
             fl1, fl2 = st.columns([3, 2])
+            # key 显式指定: 「查看范围」的 options 随自选列表名变化, 无 key 时
+            # auto widget id 含 options, 列表名一变选中态就静默丢失
             scope = fl1.selectbox(
                 "查看范围",
                 ["全部"] + names,
+                key="watch_scope",
                 help="按所属列表过滤 (在左侧自选提醒中维护)",
             )
             sort_mode = fl2.selectbox(
                 "排序",
                 ["默认 (触发优先)", "阈值等级", "当日涨跌幅 ↓", "当日涨跌幅 ↑"],
+                key="watch_sort",
                 label_visibility="collapsed",
             )
             display_entries = entries_for(watch, None if scope == "全部" else scope)
@@ -625,7 +645,7 @@ def render_portfolio_page() -> None:
             st.caption(
                 f"当前查看: {scope} · 阈值按当地货币 (基准=pb 时按市净率倍数, "
                 "基准=mcap 时按总市值); I 为预警线 / II 为强提醒线; "
-                "距离 = 还需变动百分之几才触发 (负值=已越过)。"
+                "距离 = 触发还需变动百分之几 (上限为负 / 下限为正 = 已越过)。"
             )
             if not wview.empty:
                 mode_map = {

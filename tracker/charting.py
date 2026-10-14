@@ -190,6 +190,19 @@ def calc_boll(df: pd.DataFrame, period: int = 20, std: float = 2.0) -> pd.DataFr
     return pd.DataFrame({"upper": upper, "middle": middle, "lower": lower})
 
 
+def _price_precision(med: float) -> int:
+    """按价格中位数定显示精度: 大价 2 位; 低价币 (SHIB/PEPE ~1e-5) 逐级加细,
+    保证至少 3 位有效数字, 不至于显示成 0.0000 (单只K线与加密货币对比共用).
+    """
+    if med <= 0 or not math.isfinite(med):
+        return 4
+    if med >= 20:
+        return 2
+    if med >= 1:
+        return 3
+    return min(10, max(4, math.ceil(-math.log10(med)) + 3))
+
+
 def _to_line_data(dates: pd.Series, srs: pd.Series, precision: int = 6) -> list[dict]:
     """将 pandas Series 转为 lightweight-charts line data [{time, value}, ...], 跳过 NaN/inf.
 
@@ -783,6 +796,11 @@ export default function (component) {
     : isCrypto
       ? Math.max.apply(null, CFG.coins.map(function (cn) { return cn.candles.length; }).concat([1]))
       : CFG.candles.length;
+  // 视口锚点的索引空间: 单只K线用蜡烛数组; 对比/加密货币对比用全系列时间轴
+  // (payload 的 axis = 各系列时间的并集, 升序去重)。这两种模式 candles 恒为
+  // 空数组, 不换锚点空间的话锚点永远不写不读, 数据更新后拖动位置必然重置
+  var bars = CFG.candles.length ? CFG.candles
+    : (CFG.axis || []).map(function (t) { return { time: t }; });
   // 视口还原: 组件因数据更新重建时, 按「锚点 bar 时间 + 分数偏移 + 半宽」还原拖动位置
   // (bar 索引无关, 日/周/月K 通用)。锚点存 window 级 store (按 queryId 键):
   // Streamlit 更新 data 时会重建 .lwc-wrap DOM 节点, DOM 属性随之丢失;
@@ -790,12 +808,12 @@ export default function (component) {
   if (!window.__lwcViewStore) { window.__lwcViewStore = {}; }
   var viewStore = CFG.queryId ? window.__lwcViewStore[CFG.queryId] : null;
   var restored = null;
-  if (viewStore && viewStore.t && CFG.candles.length) {
-    var vlo = 0, vhi = CFG.candles.length - 1, vai = -1;
+  if (viewStore && viewStore.t && bars.length) {
+    var vlo = 0, vhi = bars.length - 1, vai = -1;
     while (vlo <= vhi) {
       var vmi = (vlo + vhi) >> 1;
-      if (CFG.candles[vmi].time === viewStore.t) { vai = vmi; break; }
-      if (CFG.candles[vmi].time < viewStore.t) { vlo = vmi + 1; } else { vhi = vmi - 1; }
+      if (bars[vmi].time === viewStore.t) { vai = vmi; break; }
+      if (bars[vmi].time < viewStore.t) { vlo = vmi + 1; } else { vhi = vmi - 1; }
     }
     if (vai >= 0) {
       restored = {
@@ -814,11 +832,11 @@ export default function (component) {
   // 每次视口变化先写锚点 (供数据更新后还原拖动位置)
   chart.timeScale().subscribeVisibleLogicalRangeChange(function (range) {
     if (!range) return;
-    if (!CFG.candles.length) return;
+    if (!bars.length) return;
     var mid = (range.from + range.to) / 2;
-    var fl = Math.max(0, Math.min(CFG.candles.length - 1, Math.floor(mid)));
+    var fl = Math.max(0, Math.min(bars.length - 1, Math.floor(mid)));
     window.__lwcViewStore[CFG.queryId] = {
-      t: CFG.candles[fl].time,
+      t: bars[fl].time,
       frac: mid - fl,
       half: (range.to - range.from) / 2,
     };
@@ -960,7 +978,7 @@ def kline_payload(
                 }
             )
     med = float(df["close"].median())
-    precision = 2 if med >= 20 else (3 if med >= 1 else 4)
+    precision = _price_precision(med)
     last = df.iloc[-1]
     title = f"{symbol} · {PERIOD_LABELS.get(period, '日K')}" + (
         f" · {currency}" if currency else ""
@@ -1125,6 +1143,9 @@ def compare_payload(
         "initBars": init_bars,
         "height": height,
         "lines": lines,
+        # 全系列时间轴 (并集, 升序去重): 视口锚点的索引空间 (对比模式
+        # candles 为空, 不提供 axis 的话拖动位置无法跨重绘还原)
+        "axis": sorted({p["time"] for ln in lines for p in ln["data"]}),
         "candles": [],
         "volume": [],
         "mas": [],
@@ -1170,10 +1191,7 @@ def crypto_compare_payload(
         if not candles:
             continue
         # 低价币 (SHIB/PEPE ~1e-5) 需要比单只K线更细的价格精度才不至于显示为 0.0000
-        med = float(d["close"].median())
-        precision = (
-            min(10, max(4, math.ceil(-math.log10(med)) + 3)) if med > 0 else 6
-        )
+        precision = _price_precision(float(d["close"].median()))
         coins.append(
             {
                 "name": sym,
@@ -1199,6 +1217,8 @@ def crypto_compare_payload(
         "initBars": init_bars,
         "height": height,
         "coins": coins,
+        # 全系列时间轴 (并集, 升序去重): 视口锚点的索引空间 (同 compare 模式)
+        "axis": sorted({c["time"] for cn in coins for c in cn["candles"]}),
         "candles": [],
         "volume": [],
         "mas": [],

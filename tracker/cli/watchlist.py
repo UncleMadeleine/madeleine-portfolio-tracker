@@ -166,7 +166,11 @@ def watchlist_list(args) -> None:
     )
     wview, wissues = build_watchlist_view(entries, quotes)
     trig = triggered_entries(wview)
-    issues = [f"{k}: {v}" for k, v in errors.items()] + wissues
+    # 与 fetch_watchlist_view 一致: 取数层与视图层可能对同一无法解析的代码
+    # 各记一次错, 按出现顺序去重
+    issues = list(
+        dict.fromkeys([f"{k}: {v}" for k, v in errors.items()] + wissues)
+    )
     if args.json:
         _print_json(
             {

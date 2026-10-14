@@ -6,7 +6,6 @@ import csv
 import io
 import json
 from datetime import datetime
-from pathlib import Path
 
 import pandas as pd
 
@@ -17,12 +16,12 @@ from ..services.watchlist import (
     triggered_entries,
 )
 from ..watchlist import load_watchlist, parse_lists
-from ._common import _fmt_num, _fmt_pct, _records, _sanitize, _sym
+from ._common import _finish_with_error, _fmt_num, _fmt_pct, _records, _sanitize, _sym
 
 # 指标基准 → 中文标签 (md 表 / 触发汇总)
 _METRIC_LABELS = {"price": "现价", "pb": "市净率", "mcap": "市值"}
-# 大数字友好格式: 亿/万亿缩写, 市值/天文数字阈值列用
-_METRIC_CELL_COLS = ("price", "upper_1", "upper_2", "lower_1", "lower_2")
+# 大数字友好格式: 亿/万亿缩写, 仅市值基准的阈值列用 (现价是每股价, 不套用)
+_METRIC_CELL_COLS = ("upper_1", "upper_2", "lower_1", "lower_2")
 
 
 def _metric_base_text(r: dict) -> str:
@@ -206,10 +205,9 @@ def _report_md(payload, wview, sym_lists, issues) -> str:
             for col, _ in _MD_COLS:
                 v = r.get(col)
                 if col in _METRIC_CELL_COLS and metric == "mcap":
+                    # 市值基准: 阈值同为绝对金额, 亿/万亿缩写展示
                     cells.append(_fmt_mcap(v))
-                elif col == "base_value" and metric == "mcap":
-                    cells.append(_fmt_mcap(v))
-                elif col in ("price", "upper_1", "upper_2", "lower_1", "lower_2") or col == "base_value":
+                elif col in ("price", "upper_1", "upper_2", "lower_1", "lower_2"):
                     cells.append(_fmt_num(v))
                 elif col == "metric":
                     cells.append(_METRIC_LABELS.get(v, "现价") if v else "现价")
@@ -248,7 +246,12 @@ def cmd_report(args) -> None:
             issues,
         )
     if args.output:
-        Path(args.output).write_text(text, encoding="utf-8")
+        from ._common import atomic_write_text
+
+        try:
+            atomic_write_text(args.output, text)
+        except OSError as e:
+            _finish_with_error(f"报告写入失败: {args.output} ({e})")
         print(f"✅ 报告已写入: {args.output}")
     else:
         print(text)

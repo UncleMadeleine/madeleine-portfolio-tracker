@@ -17,7 +17,6 @@ import time
 import pytest
 from streamlit.testing.v1 import AppTest
 
-import tracker.fx as fx_mod
 import tracker.prices as prices
 import tracker.storage as storage
 import tracker.ui.app as app_mod
@@ -69,8 +68,14 @@ def app_boot(monkeypatch, tmp_path):
         )
 
     monkeypatch.setattr(prices, "get_quotes", fake_quotes)
+    # FX 按持仓币种配对 (USD→CNY): 视图非空, 持仓明细表才真正渲染
+    # (此前只返回 CNY 且 patch 的是 fx 模块而页面是直接 import 函数, 从未
+    # 生效, view 为空, data_editor 整段不执行, 列格式问题被掩盖)
+    portfolio_page.cached_fx.clear()
     monkeypatch.setattr(
-        fx_mod, "get_fx_rates", lambda base, curs, **kw: ({"CNY": 7.1}, [])
+        portfolio_page,
+        "get_fx_rates",
+        lambda base, curs, **kw: ({"USD": 7.1}, []),
     )
     at = AppTest.from_file(app_mod.__file__).run(timeout=30)
     assert not at.exception, at.exception
@@ -98,9 +103,17 @@ def test_app_import_is_side_effect_free(monkeypatch):
 
 
 def test_portfolio_page_renders(app_boot):
-    """AppTest 跑真实 app.py: 默认页 (组合) 完整渲染 (KPI + 持仓 + 自选)."""
+    """AppTest 跑真实 app.py: 默认页 (组合) 完整渲染 (KPI + 持仓 + 自选).
+
+    持仓视图非空 (FX 按币种配对): KPI 与持仓明细表都走真实渲染路径,
+    列配置 (数量/盈亏% 等 format) 在该路径上生效 —— 曾因 view 为空整段
+    data_editor 不执行, 非法的 printf 格式被掩盖。
+    """
     assert any("组合总览" in m.value for m in app_boot.markdown)
     assert any("AAPL" in str(m.value) for m in app_boot.markdown)
+    # 总市值 = 2 股 × 150 USD × 7.1 = 2130 CNY (KPI 走非空视图; st.metric
+    # 在 AppTest 里是 metric 元素而非 markdown)
+    assert any("2,130" in str(m.value) for m in app_boot.metric)
 
 
 def test_navigation_registers_independent_urls(app_boot):

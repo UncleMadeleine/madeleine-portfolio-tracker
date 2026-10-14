@@ -383,7 +383,9 @@ def ibkr_to_yahoo(
     symbol: str, exchange: str, primary_exchange: str, currency: str
 ) -> str | None:
     raw = str(symbol).strip()
-    sym = raw.replace(" ", "-")
+    # LSE 合约 symbol 带尾点 (BP./HSBA./VOD., 本文件 contract_spec 依赖这一点):
+    # 不剥掉会拼出 "BP..L" (parse 不报错, 之后永远取不到行情)
+    sym = raw.replace(" ", "-").rstrip(".")
     ex = (exchange or "").upper()
     prim = (primary_exchange or "").upper()
     ccy = (currency or "").upper()

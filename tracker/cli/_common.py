@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
+from pathlib import Path
 
 import pandas as pd
 
@@ -37,6 +39,31 @@ def _finish_with_error(msg: str, code: int = 2) -> None:
     """打印错误到 stderr 并以指定退出码结束."""
     print(f"❌ {msg}", file=sys.stderr)
     raise SystemExit(code)
+
+
+def atomic_write_text(path: str | Path, text: str) -> None:
+    """原子写文本文件 (tmp + os.replace), 目录不存在则创建.
+
+    与 storage._write_json 同一策略: 写入中途中断不会留下半截文件,
+    目标目录不存在时自动建目录 (否则直接抛 FileNotFoundError traceback).
+    """
+    import tempfile
+
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=f".{p.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, p)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _sanitize(d: dict) -> dict:

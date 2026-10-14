@@ -23,7 +23,7 @@ from .cn_stocks import CNStocksProvider
 from .global_stocks import _yahoo_batch
 from .index import IndexProvider
 
-__all__ = ["get_quotes", "get_history"]
+__all__ = ["get_quotes", "get_history", "neg_clear_all"]
 
 
 def _parse_all(symbols) -> tuple[dict[str, ParsedSymbol], dict[str, str]]:
@@ -66,6 +66,17 @@ def neg_clear(yahoo: str) -> None:
         _neg_cache.pop(yahoo, None)
 
 
+def neg_clear_all() -> None:
+    """清空整个负缓存.
+
+    数据源偏好/开关变化 (crypto_source / prefer_akshare / IBKR / 长桥) 时调用:
+    负缓存只按代码记, 不记录失败发生在哪条源链下, 旧偏好下的失败会在 TTL 内
+    继续挡住新链路 (设置页 clear_quotes() 只清了磁盘缓存, 漏了这里)。
+    """
+    with _neg_lock:
+        _neg_cache.clear()
+
+
 
 
 def _neg_filtered(
@@ -98,7 +109,10 @@ def _fetch_domain(
     provider = resolve({"global": "GLOBAL", "cn": "CN", "crypto": "CRYPTO"}[domain])
 
     def _one(p: ParsedSymbol):
-        # 单代码失败捕获为 Exception 值返回: pool.map 迭代时不中断其余代码
+        # 单代码失败捕获为异常值返回: pool.map 迭代时不中断其余代码。
+        # 捕 BaseException 而非 Exception: util.with_timeout 会把 worker 里的
+        # SystemExit/CancelledError 等原样透传, 只捕 Exception 会让它冲出
+        # 收集循环, 把同批已成功的其它代码结果全部丢掉
         try:
             if domain == "crypto":
                 # crypto 域 prefer_akshare 无意义, 参数位复用为源偏好 (字符串)
@@ -107,7 +121,7 @@ def _fetch_domain(
                 # 批量已尝试 yfinance: 这里走完整源链 (港股 akshare 兜底)
                 return p.yahoo, provider.fetch_quote(p, prefer_first=prefer_akshare)
             return p.yahoo, provider.fetch_quote(p)
-        except Exception as e:  # noqa: BLE001 - 单代码失败记录 errors
+        except BaseException as e:  # noqa: BLE001 - 单代码失败记录 errors
             return p.yahoo, e
 
     out: dict[str, Quote] = {}
@@ -115,8 +129,8 @@ def _fetch_domain(
         for p, (yahoo, result_or_exc) in zip(
             plist, pool.map(_one, plist), strict=False
         ):
-            if isinstance(result_or_exc, Exception):
-                errors[yahoo] = str(result_or_exc)
+            if isinstance(result_or_exc, BaseException):
+                errors[yahoo] = str(result_or_exc) or repr(result_or_exc)
                 neg_mark(yahoo)
             else:
                 out[yahoo] = result_or_exc
@@ -147,6 +161,10 @@ def get_quotes(
     cached = cache_mod.get_cached(list(by_yahoo.keys()))
     if cached:
         quotes.update(cached)
+        # 磁盘缓存命中同样是取数成功: 清出负缓存, 别让 TTL 内的旧失败
+        # 继续挡住已能取到数的代码
+        for yahoo in cached:
+            neg_clear(yahoo)
     if len(quotes) == len(by_yahoo):
         return quotes, errors, notes
 
@@ -217,6 +235,10 @@ def get_quotes(
         sym: q for sym, q in quotes.items() if sym in by_yahoo and sym not in cached
     }
     cache_mod.set_cached(fresh)
+    # 统一的负缓存清除点: 逐代码源链 (_fetch_domain) 之外, yfinance 批量/
+    # IBKR/长桥路径拿到的成功行情同样要清, 否则源恢复后仍被 TTL 挡住
+    for yahoo in quotes:
+        neg_clear(yahoo)
     return quotes, errors, notes
 
 

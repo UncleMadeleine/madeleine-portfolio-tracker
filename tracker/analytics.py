@@ -46,7 +46,9 @@ def build_view(
         mv = mv_local * rate
         cost_base = qty * cost * rate if cost is not None else None
         pnl = mv - cost_base if cost_base is not None else None
-        pnl_pct = pnl / cost_base if cost_base else None
+        # 空头持仓 (IBKR 负数量) cost_base 为负: 收益率按成本绝对值算,
+        # 否则盈亏比例符号翻转 (空头盈利显示成亏损)
+        pnl_pct = pnl / abs(cost_base) if cost_base else None
         today = None
         if q.change_pct is not None and q.change_pct > -100:
             today = mv - mv / (1 + q.change_pct / 100)
@@ -106,7 +108,7 @@ def summarize(view: pd.DataFrame) -> dict:
         "total_value": total_value,
         "total_cost": total_cost,
         "total_pnl": total_pnl,
-        "total_pnl_pct": (total_pnl / total_cost) if total_cost else None,
+        "total_pnl_pct": (total_pnl / abs(total_cost)) if total_cost else None,
         "cost_coverage": cost_coverage,
         "today_pnl": today,
         "by_market": view.groupby("market")["market_value"]

@@ -92,8 +92,14 @@ def cached_kline_all(
     use_ibkr: bool = False,
     use_longport: bool = False,
     crypto_source: str = "auto",
+    refresh: bool = False,
 ):
-    """上市以来全量日K (滑动模式唯一取数路径, 缓存键独立于范围模式月份参数)."""
+    """上市以来全量日K (滑动模式唯一取数路径, 缓存键独立于范围模式月份参数).
+
+    refresh=True 跳过磁盘 OHLC 缓存 (其键只有 symbol+months, 不含数据源
+    偏好): 设置页切换 prefer_akshare/IBKR/长桥/crypto_source 后必须重取,
+    否则「重新取数」会被旧源的磁盘缓存短路, 继续展示上一个源的K线。
+    """
     return prices.get_ohlc(
         symbol,
         months=1200,
@@ -101,6 +107,7 @@ def cached_kline_all(
         use_ibkr=use_ibkr,
         use_longport=use_longport,
         crypto_source=crypto_source,
+        refresh=refresh,
     )
 
 
@@ -359,7 +366,9 @@ def _render_symbol_search(
         code_by_opt = dict(zip(options, [r["code"] for r in items]))
         key = f"{prefix}_search_select_{t}"
 
-        def _pick(t=t, code_by_opt=code_by_opt):
+        def _pick(t=t, key=key, code_by_opt=code_by_opt):
+            # key 必须绑默认参数: on_change 回调延迟执行时, 循环变量 key 已被
+            # 覆盖成最后一个非空域的 key, 不绑会读到别的下拉框的值 (选中失效)
             code = code_by_opt.get(st.session_state.get(key))
             if code:
                 on_pick(code)
@@ -407,8 +416,15 @@ def _render_slide_mode(
     if df_all is None:
         try:
             with st.spinner(f"拉取 {yahoo} 上市以来K线..."):
+                # qid 变化 (数据源偏好切换) 时绕过磁盘缓存重取: OHLC 磁盘
+                # 缓存键不含源偏好, 不 refresh 会直接命中旧源数据
                 kdf = cached_kline_all(
-                    yahoo, prefer_akshare, use_ibkr, use_longport, crypto_source
+                    yahoo,
+                    prefer_akshare,
+                    use_ibkr,
+                    use_longport,
+                    crypto_source,
+                    refresh=qid_changed,
                 )
         except Exception as e:
             st.warning(f"{yahoo}: {e}")

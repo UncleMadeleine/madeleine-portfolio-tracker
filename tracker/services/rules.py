@@ -96,6 +96,10 @@ def evaluate_thresholds(
 
     判定顺序: 上限 II > 上限 I > 下限 II > 下限 I, 边界取等号 (含)。
     dist 仅包含已设置阈值对应的距离键, 调用方须用 .get() 安全访问。
+
+    距离口径统一为「触发还需变动百分之几」: (阈值 / 现价 - 1) × 100。
+    上限为正 = 还需上涨; 下限为负 = 还需下跌; 上限为负 / 下限为正 = 已越过
+    (回落/回升至阈值所需的百分比)。
     """
     upper_1 = thresholds.get("upper_1")
     upper_2 = thresholds.get("upper_2")
@@ -116,8 +120,10 @@ def evaluate_thresholds(
         dist["dist_upper_1_pct"] = (upper_1 / price - 1) * 100
     if upper_2 is not None and price > 0:
         dist["dist_upper_2_pct"] = (upper_2 / price - 1) * 100
-    if lower_1 is not None and lower_1 > 0:
-        dist["dist_lower_1_pct"] = (price / lower_1 - 1) * 100
+    if lower_1 is not None and price > 0:
+        dist["dist_lower_1_pct"] = (lower_1 / price - 1) * 100
+    if lower_2 is not None and price > 0:
+        dist["dist_lower_2_pct"] = (lower_2 / price - 1) * 100
     return status, dist
 
 

@@ -86,13 +86,21 @@ class TestMetricNormalization:
         assert e["metric"] == "pb"
 
     def test_metric_price_dropped(self):
-        """缺省基准不落盘."""
-        e = normalize_watch_entry({"symbol": "AAPL", "metric": "price"})
+        """缺省基准 (无 metric 键) 不落盘, 文件保持干净."""
+        e = normalize_watch_entry({"symbol": "AAPL"})
         assert "metric" not in e
 
+    def test_metric_price_explicit_kept(self):
+        """显式 price 落盘钉死: 遗留 mcap/pb 覆盖键不会在下次加载时把基准推断回去."""
+        e = normalize_watch_entry({"symbol": "AAPL", "metric": "price", "mcap": 1e12})
+        assert e["metric"] == "price"
+        # 往返稳定: 对归一结果再归一一次仍是 price (修复前会被推断回 mcap)
+        assert normalize_watch_entry(e)["metric"] == "price"
+
     def test_metric_invalid_dropped(self):
+        """非法 metric 归一为 price 并落盘 (不再静默丢弃后靠按键推断)."""
         e = normalize_watch_entry({"symbol": "AAPL", "metric": "roe"})
-        assert "metric" not in e
+        assert e["metric"] == "price"
 
     def test_legacy_pb_key_gets_metric_stamped(self):
         e = normalize_watch_entry({"symbol": "AAPL", "pb": 5.0})

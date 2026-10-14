@@ -16,7 +16,7 @@ import pandas as pd
 
 from .. import prices
 from ..providers.base import Quote
-from ..storage import parse_lists, normalize_watch_entry
+from ..storage import dedupe_watch_entries, parse_lists, normalize_watch_entry
 from ..symbols import parse
 from .rules import (
     METRIC_MCAP,
@@ -43,27 +43,36 @@ def list_names(data: dict) -> list[str]:
 
 
 def merge_entries(data: dict) -> list[dict]:
-    """全部条目 (扁平, 一个代码一条, 天然去重)."""
-    return [
+    """全部条目 (扁平, 一个代码一条).
+
+    按归一后的 symbol 去重 (合并语义与 save_watchlist/load_watchlist 一致):
+    外部编辑/旧文件可能在同代码上留多条, 读路径若不去重会把同一提醒重复
+    计数 (report/snapshot/UI 均放大)。
+    """
+    entries = [
         e for e in (data or {}).get("watchlist", []) if str(e.get("symbol", "")).strip()
     ]
+    return dedupe_watch_entries(entries)
 
 
 def entries_for(data: dict, name: str | None = None) -> list[dict]:
     """按所属列表过滤条目; name 为空返回全部.
 
     name 支持逗号分隔多个列表 (与 add --list 一致), 命中任一即返回.
+    返回前按代码去重 (合并语义同 save_watchlist), 避免外部编辑造成的
+    同代码多条在过滤后依然重复计数。
     """
     if not name:
         return merge_entries(data)
     names = set(parse_lists(name))
     if not names:
         return merge_entries(data)
-    return [
+    matched = [
         e
         for e in (data or {}).get("watchlist", [])
         if names & set(e.get("lists", []) or [])
     ]
+    return dedupe_watch_entries(matched)
 
 
 def _note_str(v) -> str:
@@ -80,16 +89,26 @@ def build_watchlist_view(
     metric 决定基准值: price=现价 (默认), pb=现价/每股净资产, mcap=总市值
     (当地货币)。基本面条目的数据优先级: 条目手写 (离线可用) > 行情自带
     (长桥/akshare 实时口径) > fundamentals 数据源 (yfinance, 磁盘缓存 6h);
+    该优先级与有无阈值无关 (仅跟踪条目同样按此取值并回落 BVPS/市值列)。
     指标缺失时 (crypto/无数据源) 不判状态, 记 issue 并保留配置列, 阈值列留空。
+     fundamentals 拉取只发生在带阈值的 pb/mcap 条目上 (不为观察条目发请求)。
     """
     rows: list[dict] = []
     issues: list[str] = []
+    # 条目先统一归一 (symbol 规范化 + 旧阈值键迁移 + 权威 type), 后续键与
+    # 查找均以归一后的 symbol 为准 (别名 600519.SH → 600519.SS 不会取不到数)
+    norm_entries = [
+        ne
+        for ne in (normalize_watch_entry(dict(e)) for e in entries)
+        if str(ne.get("symbol", "")).strip()
+    ]
     # 基本面兜底 (PB→BVPS / mcap→总市值): 只收集真正需要的代码, 按指标分桶,
     # 无阈值仅跟踪的条目不在此列 (不为观察条目发基本面请求)
     fund_syms = {
-        str(e.get("symbol", "")).strip()
-        for e in entries
-        if metric_for_entry(e) in (METRIC_PB, METRIC_MCAP)
+        str(ne["symbol"]).strip()
+        for ne in norm_entries
+        if metric_for_entry(ne) in (METRIC_PB, METRIC_MCAP)
+        and any(v is not None for v in parse_thresholds(ne).values())
     }
     book_values: dict[str, float | None] = {}
     market_caps: dict[str, float | None] = {}
@@ -116,15 +135,14 @@ def build_watchlist_view(
         )
         pool.update(fetcher(missing))
 
-    for e in entries:
-        e = normalize_watch_entry(e)
+    for e in norm_entries:
         raw = str(e.get("symbol", "")).strip()
-        if not raw:
-            continue
         try:
             p = parse(raw)
         except ValueError as err:
-            issues.append(str(err))
+            # 与取数层 (orchestration._parse_all) 的错误格式保持一致
+            # (symbol: 原因), 供 fetch_watchlist_view 拼接时去重
+            issues.append(f"{raw}: {err}")
             continue
         metric = metric_for_entry(e)
         thresholds = parse_thresholds(e)
@@ -137,11 +155,13 @@ def build_watchlist_view(
         base_value = None
         effective_bv = None
         effective_mcap = None
-        if metric == METRIC_PB and has_thresholds:
+        if metric == METRIC_PB:
             # BVPS 优先级: 条目手写 (离线可用) > 行情自带 (akshare 东财实时
-            # 口径, 最准) > fundamentals 数据源 (yfinance 财报, 磁盘缓存 6h)
-            bv = entry_book_value(e) or q.book_value
-            if bv is None:
+            # 口径, 最准) > fundamentals 数据源 (yfinance 财报, 磁盘缓存 6h)。
+            # 优先级与有无阈值无关: 仅跟踪的 pb 条目同样按 手写>行情 取值,
+            # 并同样回落 effective_bv (book_value 列), 与预警条目口径一致
+            bv = entry_book_value(e) or getattr(q, "book_value", None)
+            if bv is None and has_thresholds:
                 _fetch_fundamentals(metric, p.yahoo)
                 bv = book_values.get(p.yahoo)
             effective_bv = bv
@@ -150,23 +170,23 @@ def build_watchlist_view(
                 if bv is not None and math.isfinite(bv) and bv > 0
                 else None
             )
-            if base_value is None:
+            if base_value is None and has_thresholds:
                 issues.append(f"{p.yahoo}: PB 缺失 (无每股净资产数据)")
-        elif metric == METRIC_MCAP and has_thresholds:
+        elif metric == METRIC_MCAP:
             # 总市值优先级: 条目手写 (离线可用) > 行情自带 (akshare 东财/
             # 长桥实时口径) > fundamentals 数据源 (yfinance, 磁盘缓存 6h)
             mc = entry_market_cap(e) or getattr(q, "market_cap", None)
-            if mc is None:
+            if mc is None and has_thresholds:
                 _fetch_fundamentals(metric, p.yahoo)
                 mc = market_caps.get(p.yahoo)
             effective_mcap = mc
             base_value = (
                 mc if mc is not None and math.isfinite(mc) and mc > 0 else None
             )
-            if base_value is None:
+            if base_value is None and has_thresholds:
                 issues.append(f"{p.yahoo}: 市值缺失 (无总市值数据)")
         else:
-            # price 基准, 或无阈值仅跟踪的 PB/mcap 条目: 直接取行情现值
+            # price 基准: 直接取行情现值
             base_value = metric_value_for_quote(metric, q)
         if has_thresholds and base_value is None:
             # 有阈值但指标无数据 (PB/市值缺失): 不判区间内, 标记无数据
@@ -246,5 +266,11 @@ def fetch_watchlist_view(
         crypto_source=crypto_source,
     )
     wview, wissues = build_watchlist_view(entries, quotes)
-    issues = [f"{k}: {v}" for k, v in errors.items()] + wissues + notes
+    # 无法解析的代码会在取数层 (errors) 与视图层 (wissues) 各记一次,
+    # 拼接前按出现顺序去重, 避免同一问题重复打扰
+    issues = list(
+        dict.fromkeys(
+            [f"{k}: {v}" for k, v in errors.items()] + wissues + notes
+        )
+    )
     return wview, issues

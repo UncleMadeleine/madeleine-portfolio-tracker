@@ -1,8 +1,9 @@
 {
-  "_说明": "示例配置: 复制为 watchlist.json 后修改。一个代码可属多个列表 (lists 数组); 两级阈值 upper_1/upper_2、lower_1/lower_2 按基准指标解释 (price=当地货币 / pb=倍数 / mcap=当地货币绝对金额); metric 指定阈值基准 (price=现价默认 / pb=市净率 / mcap=总市值, 省略即 price); type 由系统自动推导, 手改无效",
+  "_说明": "示例配置: 复制为 watchlist.json 后修改。一个代码可属多个列表 (lists 数组); 两级阈值 upper_1/upper_2、lower_1/lower_2 按基准指标解释 (price=当地货币 / pb=倍数 / mcap=当地货币绝对金额); metric 指定阈值基准 (price=现价默认 / pb=市净率 / mcap=总市值, 省略即 price); type 由系统自动推导, 手改无效。手写 pb/mcap 键是数据覆盖值 (仅在对应基准下生效), 键存在本身不改变基准",
   "watchlist": [
     { "symbol": "NVDA", "lists": ["科技", "美股"], "metric": "pb", "upper_1": 30, "lower_1": 15, "note": "PB提醒示例" },
     { "symbol": "AAPL", "lists": ["科技", "美股"], "metric": "mcap", "upper_1": 4000000000000, "lower_1": 3000000000000, "note": "市值提醒示例" },
+    { "symbol": "MSFT", "lists": ["科技", "美股"], "metric": "mcap", "mcap": 3800000000000, "upper_1": 4000000000000, "note": "市值覆盖示例 (手写值仅在 metric=mcap 时生效)" },
     { "symbol": "600036.SS", "lists": ["银行", "A股"], "upper_1": 55, "lower_1": 38, "note": "A股示例" },
     { "symbol": "BTC-USD", "lists": ["加密"], "note": "无阈值纯跟踪" }
   ]

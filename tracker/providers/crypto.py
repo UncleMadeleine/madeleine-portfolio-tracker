@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 
 import pandas as pd
@@ -20,22 +21,25 @@ from .base import Provider, Quote, SymbolEntry
 _BINANCE_HOSTS = ("https://api.binance.com", "https://data-api.binance.vision")
 _HTTP_TIMEOUT = 8.0
 _KLINES_LIMIT = 1000
+# Gate.io candlesticks 单请求数据点硬上限 (超出直接 HTTP 400, 与 limit 无关)
+_GATE_MAX_POINTS = 1000
 
 # 加密货币域可选数据源 (settings crypto_source / CLI --crypto-source):
 # auto = 默认链 (Binance→Gate.io→Hyperliquid→yfinance), 其余把指定源前置,
 # 链内其余源按默认相对顺序兜底。索引与下方两个源链构造顺序一致 (单一定义点).
 CRYPTO_SOURCE_PREFERS = ("auto", "binance", "gate", "hyperliquid", "yfinance")
+# 源偏好 → 源链中的位置索引; 从 CRYPTO_SOURCE_PREFERS 派生 (唯一权威顺序),
+# 新增数据源只改上面一处。gate.io 为 gate 的常见别名 (双写, 与 storage 一致)
 _CRYPTO_SOURCE_INDEX = {
-    "binance": 0,
-    "gate": 1,
-    "gate.io": 1,
-    "hyperliquid": 2,
-    "yfinance": 3,
+    src: i for i, src in enumerate(s for s in CRYPTO_SOURCE_PREFERS if s != "auto")
 }
+_CRYPTO_SOURCE_INDEX["gate.io"] = _CRYPTO_SOURCE_INDEX["gate"]
 
 # 实时行情进程内缓存: 短 TTL, 批量混查同币对时合并请求
 _spot_ttl = 5.0
 _spot_cache: dict[str, tuple[float, dict]] = {}
+_spot_lock = threading.Lock()
+_spot_inflight: dict[str, threading.Lock] = {}  # per-pair 并发首拉去重
 
 # Hyperliquid 永续合约 (第二数据源): 公开 info 端点免鉴权, 仅覆盖 USD 系计价代码。
 # HL 现货交易对为 @N/UBTC 等包装命名, 无法稳定映射, 故只用 perp (BTC/ETH 裸名)。
@@ -205,14 +209,41 @@ def _get(path: str, params: dict | None = None):
 
 
 def _binance_spot_raw(pair: str) -> dict:
-    """24hr ticker (含 lastPrice/prevClosePrice/priceChangePercent)."""
+    """24hr ticker (含 lastPrice/prevClosePrice/priceChangePercent).
+
+    同币对并发首拉以 per-key 锁去重 (BTC-USD 与 BTC-USDT 映射同一 pair,
+    8 个回退线程同时处理时只发一次请求); 只在解析出有效价格后才写缓存,
+    坏响应 (lastPrice<=0/缺失) 不占 TTL, 不会把错误连播 5 秒。
+    """
     now = time.time()
     hit = _spot_cache.get(pair)
     if hit and now - hit[0] < _spot_ttl:
         return hit[1]
-    d = _get("/api/v3/ticker/24hr", {"symbol": pair})
-    _spot_cache[pair] = (now, d)
-    return d
+    with _spot_lock:
+        gate = _spot_inflight.setdefault(pair, threading.Lock())
+    acquired = gate.acquire(blocking=False)
+    try:
+        if acquired:  # 本线程负责拉取; 其它线程等拉取方写回缓存后读结果
+            d = _get("/api/v3/ticker/24hr", {"symbol": pair})
+            try:
+                if float(d.get("lastPrice") or 0) > 0:
+                    _spot_cache[pair] = (now, d)
+            except (TypeError, ValueError):
+                pass  # 坏响应不缓存, 让调用方抛错走下一数据源
+            return d
+        gate.acquire()
+        gate.release()  # 拉取方已 pop 此 gate: 立即释放, 不留持有者
+    finally:
+        if acquired:
+            with _spot_lock:
+                if _spot_inflight.get(pair) is gate:
+                    _spot_inflight.pop(pair, None)
+            gate.release()
+    # 未获 gate: 拉取方已完成, 重读缓存; 仍未命中 (失败/坏响应) 则自发请求
+    hit = _spot_cache.get(pair)
+    if hit and now - hit[0] < _spot_ttl:
+        return hit[1]
+    return _get("/api/v3/ticker/24hr", {"symbol": pair})
 
 
 def _binance_quote(p: ParsedSymbol) -> Quote:
@@ -359,8 +390,9 @@ def _gate_history(
     """Gate.io 1d candlesticks → date/open/high/low/close/volume (升序).
 
     candlesticks 行格式 [ts, quote_vol, close, high, low, open, base_vol, complete],
-    时间升序; from/to 为秒级时间戳, 单次上限 1000 根 (日K 约 2.7 年,
-    一般区间够用, 超过时按游标翻页)。
+    时间升序; from/to 为秒级时间戳。单请求数据点有硬上限 (1000, 与 limit
+    参数无关, 超出直接 HTTP 400 "Candlestick range too broad"), 因此按上限
+    截断单次窗口、用游标翻页拼全区间。
     """
     pair = gate_pair(p)
     start_ts = int(pd.Timestamp(start_date, tz="UTC").timestamp())
@@ -372,13 +404,16 @@ def _gate_history(
     rows: list[dict] = []
     cursor = start_ts
     while cursor < end_ts:
+        # 单次窗口截到上限以内: 直接带全区间 [start, end] 会被 Gate.io 400
+        # 拒绝 (实测 1000 天即失败), 翻页逻辑永远跑不到第二次
+        page_to = min(end_ts, cursor + (_GATE_MAX_POINTS - 1) * 86_400)
         batch = _gate_get(
             "/api/v4/spot/candlesticks",
             {
                 "currency_pair": pair,
                 "interval": "1d",
                 "from": cursor,
-                "to": end_ts,
+                "to": page_to,
                 "limit": _KLINES_LIMIT,
             },
         )

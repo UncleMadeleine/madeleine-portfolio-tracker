@@ -12,6 +12,7 @@ CLI 与 Streamlit 页面共用同一组函数, 保证 schema 归一与权威 typ
 from __future__ import annotations
 
 import json
+import math
 import os
 import shutil
 import tempfile
@@ -126,13 +127,29 @@ def load_portfolio(path: str | Path = PORTFOLIO_PATH) -> dict:
 
 
 def _clean_rows(rows: list) -> list[dict]:
-    """剔除 NaN/None 单元格, 保证 allow_nan=False 可序列化 (data_editor 空单元格等)。"""
+    """剔除 NaN/None 单元格, 保证 allow_nan=False 可序列化 (data_editor 空单元格等).
+
+    ±Infinity 同样过不了 json.dumps(allow_nan=False); 嵌套 dict/list 里的
+    非有限值也会让整行炸掉 (如 source_quantities 台账), 故递归清洗:
+    顶层非有限值整键剔除 (原语义), 嵌套非有限值置 null。
+    """
+
+    def _clean(v):
+        if isinstance(v, float) and not math.isfinite(v):
+            return None
+        if isinstance(v, dict):
+            return {k: _clean(x) for k, x in v.items()}
+        if isinstance(v, list):
+            return [_clean(x) for x in v]
+        return v
+
     out = []
     for r in rows:
         clean = {}
         for k, v in dict(r).items():
-            if isinstance(v, float) and v != v:  # NaN
+            if v is None:
                 continue
+            v = _clean(v)
             if v is None:
                 continue
             clean[k] = v
@@ -196,10 +213,14 @@ def normalize_watch_entry(e: dict) -> dict:
     else:
         out.pop("market_cap", None)
     metric = rules_metric_for_entry(out)
-    if metric == "price":
-        out.pop("metric", None)  # 缺省基准不落盘, 文件保持干净
-    else:
+    raw_metric = out.get("metric")
+    if raw_metric not in (None, "") or metric != "price":
+        # 显式指定过基准 (含 price) 或推断出非 price: 落盘钉死。遗留的
+        # mcap/pb 覆盖键会在下次加载时被 metric_for_entry 按键推断, 不钉死
+        # 的话显式选的 price 基准会被推断回 mcap/pb (往返不稳定)
         out["metric"] = metric
+    else:
+        out.pop("metric", None)  # 缺省基准不落盘, 文件保持干净
     sym = str(out.get("symbol", "")).strip()
     if sym:
         try:
@@ -209,8 +230,44 @@ def normalize_watch_entry(e: dict) -> dict:
     return _stamp_type(out)
 
 
+def dedupe_watch_entries(entries: list[dict]) -> list[dict]:
+    """按归一 symbol 去重并合并 (lists 并集; 其余字段非空者补齐).
+
+    save/load 共用: 写侧去重保证文件不裂条, 读侧去重保证外部编辑/旧文件里
+    的同代码多条不会在 report/snapshot/UI 被重复计数 (同一提醒触发两次)。
+    条目内容保持原样 (只归一去重键), 不改变读路径既有语义。
+    """
+    by_symbol: dict[str, dict] = {}
+    for raw in entries:
+        e = dict(raw)
+        sym = str(e.get("symbol", "")).strip()
+        if not sym:
+            continue
+        try:
+            key = parse(sym).yahoo
+        except Exception:
+            key = sym.upper()
+        found = by_symbol.get(key)
+        if found is None:
+            by_symbol[key] = e
+            continue
+        for name in e.get("lists") or []:
+            if name not in (found.setdefault("lists", [])):
+                found["lists"].append(name)
+        for k, v in e.items():
+            if k in ("symbol", "lists", "type"):
+                continue
+            if v is not None and v != "" and (k not in found or not found[k]):
+                found[k] = v
+    return list(by_symbol.values())
+
+
 def load_watchlist(path: str | Path = WATCHLIST_PATH) -> dict:
-    """读取自选; 兼容旧扁平/分组格式并迁移为扁平条目, 读取侧补写权威 type。"""
+    """读取自选; 兼容旧扁平/分组格式并迁移为扁平条目, 读取侧补写权威 type.
+
+    读出去重 (合并语义同 save_watchlist): 外部编辑/旧文件可能在同代码上
+    留多条, 读路径若不去重会把同一提醒重复计数。
+    """
     p = Path(path)
     if not p.exists():
         return {"watchlist": []}
@@ -221,7 +278,7 @@ def load_watchlist(path: str | Path = WATCHLIST_PATH) -> dict:
             e = dict(e)
             e["lists"] = parse_lists(e.get("lists"))
             entries.append(normalize_watch_entry(e))
-        return {"watchlist": entries}
+        return {"watchlist": dedupe_watch_entries(entries)}
     if "watchlists" in raw:
         merged: dict[str, dict] = {}
         for name, lst in raw["watchlists"].items():
@@ -272,23 +329,9 @@ def save_watchlist(data: dict, path: str | Path = WATCHLIST_PATH) -> None:
             merged = {}
     else:
         merged = {}
-    by_symbol: dict[str, dict] = {}
-    for raw in data.get("watchlist", []):
-        e = normalize_watch_entry(dict(raw))
-        sym = str(e.get("symbol", "")).strip()
-        found = by_symbol.get(sym)
-        if found is None:
-            by_symbol[sym] = e
-            continue
-        for name in e.get("lists") or []:
-            if name not in (found.setdefault("lists", [])):
-                found["lists"].append(name)
-        for k, v in e.items():
-            if k in ("symbol", "lists", "type"):
-                continue
-            if v is not None and v != "" and (k not in found or not found[k]):
-                found[k] = v
-    merged["watchlist"] = list(by_symbol.values())
+    merged["watchlist"] = dedupe_watch_entries(
+        [normalize_watch_entry(dict(raw)) for raw in data.get("watchlist", [])]
+    )
     _write_json(merged, p)
 
 

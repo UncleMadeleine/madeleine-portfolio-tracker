@@ -48,7 +48,8 @@ def test_statuses_and_distances_backward_compat():
     assert m["CCC"] == STATUS_LOWER_1
     row = view.set_index("symbol").loc["BBB"]
     assert abs(row["dist_upper_1_pct"] - (200 / 150 - 1) * 100) < 1e-9
-    assert abs(row["dist_lower_1_pct"] - (150 / 100 - 1) * 100) < 1e-9
+    # 距离口径统一为「触发还需变动百分之几」: 下限为负 = 还需下跌
+    assert abs(row["dist_lower_1_pct"] - (100 / 150 - 1) * 100) < 1e-9
     assert view.iloc[-1]["symbol"] == "BBB"
     trig = triggered_entries(view)
     assert set(trig["symbol"]) == {"AAA", "CCC"}

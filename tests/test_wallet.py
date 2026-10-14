@@ -647,7 +647,11 @@ class TestTronWallet:
         assert by_symbol["USDT-USD"]["source"] == "trc20"
 
     def test_staked_and_unstaking_trx_merged(self, monkeypatch):
-        """frozenV2(质押中) + unfrozen(解冻中) 计入 TRX 总量; TRON_POWER 无 amount 跳过."""
+        """frozenV2(质押中) + unfrozenV2(解冻中) 计入 TRX 总量; TRON_POWER 无 amount 跳过.
+
+        字段名与 TronGrid /v1/accounts 实际返回一致: 协议里只有 unfrozenV2,
+        没有 unfrozen (旧 mock 凭空发明了该字段名, 导致漏记解冻中 TRX)。
+        """
         body = {
             "data": [
                 {
@@ -657,7 +661,7 @@ class TestTronWallet:
                         {"amount": 124_000_000, "type": "ENERGY"},
                         {"type": "TRON_POWER"},
                     ],
-                    "unfrozen": [{"unfreeze_amount": 10_000_000}],
+                    "unfrozenV2": [{"unfreeze_amount": 10_000_000}],
                 }
             ]
         }

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .. import prices
 from ..symbols import INDEX_CATALOG, index_groups, index_label, parse
-from ._common import _finish_with_error, _print_json
+from ._common import _finish_with_error, _print_json, _records
 
 VAR_DIR = Path(__file__).resolve().parent.parent.parent / "var"
 
@@ -63,7 +63,9 @@ def cmd_index_kline(args) -> None:
                 "months": args.months,
                 "bars": len(df),
                 "summary": s,
-                "data": recs.round(6).to_dict(orient="records"),
+                # _records 把 NaN/NaT 转 None: json.dumps 默认会输出裸 NaN,
+                # 不是合法 JSON (与 kline 子命令一致)
+                "data": _records(recs.round(6)),
             }
         )
         return

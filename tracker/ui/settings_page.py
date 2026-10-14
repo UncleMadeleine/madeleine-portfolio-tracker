@@ -157,6 +157,11 @@ def _save_display() -> None:
         from tracker.cache import clear_quotes
 
         clear_quotes()
+        # 进程内负缓存只按代码记、不记源链路: 旧偏好下失败的代码会在 TTL 内
+        # 继续挡住新链路 ("近期全部数据源失败 (负缓存)"), 必须一起清
+        from tracker.providers.orchestration import neg_clear_all
+
+        neg_clear_all()
         from tracker.ui.portfolio_page import cached_quotes
 
         cached_quotes.clear()

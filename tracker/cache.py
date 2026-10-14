@@ -176,6 +176,10 @@ def set_fundamental_cached(
     """写入基本面缓存; 指标无效 (≤0/NaN) 时也落库 (负缓存, 6h 不重试).
 
     market_cap 为可选增量: 只补 BVPS 的旧调用方写 None, 由后续 mcap 请求覆盖。
+    两个指标各自独立 COALESCE: 本次为 None 的字段保留库中旧值, 不被冲成
+    NULL —— 否则 yfinance 只回 marketCap 的那次会把已缓存的 BVPS 抹掉,
+    之后 6 小时 PB 提醒全部误报「PB 缺失」(且负缓存阻止重试)。
+    fetched_at 刷新即整行 TTL 重新计期 (负缓存语义保留)。
     """
     _ensure_db()
     now = time.time()
@@ -188,28 +192,17 @@ def set_fundamental_cached(
     bv = _valid(book_value)
     mc = _valid(market_cap)
     with _lock, sqlite3.connect(CACHE_DB) as con:
-        if mc is None:
-            # 不覆盖已有的有效市值 (BVPS 请求不应把 mcap 冲掉)
-            con.execute(
-                """
-                INSERT INTO fundamentals (symbol, book_value, market_cap, fetched_at)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(symbol) DO UPDATE SET
-                    book_value=excluded.book_value, fetched_at=excluded.fetched_at
-                """,
-                (symbol, bv, None, now),
-            )
-        else:
-            con.execute(
-                """
-                INSERT INTO fundamentals (symbol, book_value, market_cap, fetched_at)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(symbol) DO UPDATE SET
-                    book_value=excluded.book_value, market_cap=excluded.market_cap,
-                    fetched_at=excluded.fetched_at
-                """,
-                (symbol, bv, mc, now),
-            )
+        con.execute(
+            """
+            INSERT INTO fundamentals (symbol, book_value, market_cap, fetched_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(symbol) DO UPDATE SET
+                book_value=COALESCE(excluded.book_value, fundamentals.book_value),
+                market_cap=COALESCE(excluded.market_cap, fundamentals.market_cap),
+                fetched_at=excluded.fetched_at
+            """,
+            (symbol, bv, mc, now),
+        )
         con.commit()
 
 

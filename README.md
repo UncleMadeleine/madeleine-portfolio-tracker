@@ -8,11 +8,11 @@
 
 ## 项目目标
 
-1. **投资组合追踪** — 多数据源接入 A股 / B股 / 港股 / 美股 / 德股 / 英股 / 加股 / 澳股 / 新加坡股 / 加密货币
-2. **Watchlist 管理** — 多列表归属 + 两级阈值提醒 (价格 / 市净率 PB 双指标)
+1. **投资组合追踪** — 多数据源接入 A股 / B股 / 北交所 / 港股 / 美股 / 德股 / 英股 / 加股 / 澳股 / 新加坡股 / 巴西股 / 加密货币
+2. **Watchlist 管理** — 多列表归属 + 两级阈值提醒 (价格 / 市净率 PB / 总市值 mcap 三指标)
 3. **按代码或名称查询** — 模糊搜索代码/名称，一键查看 K 线与基本数据
 4. **双前端** — 人类用 Streamlit UI；Agent（hermes / openclaw 等）用统一 CLI，全部子命令支持 `--json`，解决手机上查看的问题
-5. **只读券商对接** — IBKR Gateway（TWS/IB Gateway）行情 + 持仓同步；长桥 (LongPort) 行情/持仓（OAuth 登录）；A股券商持仓文件导入；Hyperliquid 行情源（规划：HL/A股券商实时持仓对接）
+5. **只读券商对接** — IBKR Gateway（TWS/IB Gateway）行情 + 持仓同步；长桥 (LongPort) 行情/持仓（OAuth 登录）；A股券商持仓文件导入；Hyperliquid 永续行情源（规划：HL/A股券商实时持仓对接）
 6. **K 线对比与比值** — 多股同坐标系对比（归一化起点=100，已实现）；两标的收盘价比值画成一根 K 线（规划）
 
 ---
@@ -22,19 +22,20 @@
 Madeleine Portfolio Tracker 是一款**本地优先**的投资组合追踪工具，提供：
 
 - **多币种持仓追踪** — 自动汇率换算，统一基础货币展示
-- **自选股阈值提醒** — 价格与市净率 (PB) 双指标基准，两级上限/下限，触发分级，距离预测
+- **自选股阈值提醒** — 价格 / 市净率 (PB) / 总市值 (mcap) 三指标基准，两级上限/下限，触发分级，距离预测
 - **长桥 (LongPort) 行情接入** — 可选行情/历史/持仓源（OAuth 登录），自带 PB (calc_indexes 实时口径) 反推每股净资产，失败自动回退默认数据源
 - **K 线蜡烛图** — 日K / 周K / 月K，MA 均线，成交量，MACD / RSI / KDJ / 布林带，滑动模式默认加载上市以来全量历史
-- **宏观/风险指数K线** — 独立 IX.<KEY> 代码规范（美元指数 / VIX / 沪深 300 / 水泥网建材指数 等），独立页面与 `index-kline` 子命令，独立 provider 源链
+- **宏观/风险指数K线** — 独立 IX.<KEY> 代码规范（美元指数 / VIX / 沪深 300 / 碳酸锂主力连续 / 水泥网建材指数 等，共 30 个，`index-kline --list` 可查全部），独立页面与 `index-kline` 子命令，独立 provider 源链
 - **多股对比** — 任意代码同坐标系折线对比，归一化（起点=100）跨币种跨量级比较
 - **Streamlit 可视化页面** — 组合明细 / 资产配置 / 自选提醒 / K线查询（含多股走势对比）/ 指数K线 / 设置
-- **统一 CLI** — 16 个子命令（快照、报价、持仓、自选、汇率、历史、K线、搜索、对比、指数K线、导入、长桥登录、同步、缓存…），全部 `--json` 输出
-- **链上钱包导入** — EVM 五链地址余额只读查询，一键写入持仓
+- **统一 CLI** — 17 个子命令（快照、报价、持仓、自选、监控报告、导出、汇率、历史、K线、搜索、对比、指数K线、导入、长桥登录、同步、钱包导入、缓存），全部支持机器可读输出（`--json`，`report`/`export` 为 `-f json`）
+- **链上钱包导入** — EVM 五链 + TRON + Solana 共七条链地址余额只读查询，一键写入持仓
 - **A股券商持仓导入** — 解析券商客户端导出的 CSV/Excel 持仓文件
 
 > **核心设计**：数据层抽象为 **provider 层**（全球股票 / A股·B股 / 加密货币 / 指数四域，后缀即域、互不冲突），
-> 多级降级（长桥 / IBKR → yfinance → akshare / Binance → Hyperliquid），离线可用的 SQLite 磁盘缓存，
-> 所有配置为可编辑 JSON 文件，不依赖任何云服务。
+> 多级降级（长桥 / IBKR → yfinance → akshare / Binance → Gate.io → Hyperliquid），离线可用的 SQLite 磁盘缓存，
+> 所有配置为可编辑 JSON 文件，不依赖任何云服务。行情/历史取数经 **OpenBB** 平台统一封装
+> （`openbb>=4.7.0`，provider=yfinance/akshare），零 API Key。
 
 ---
 
@@ -185,7 +186,7 @@ python -m tracker.cli longport-login --json    # 长桥 OAuth 授权 URL（脚�
 ## 代码规范（自有后缀规范 + 内部 type 字段）
 
 后缀规范是**本项目自定义**的（恰好与 Yahoo Finance 兼容）；域的权威判据是系统内部维护的 **`type` 字段**
-（`global`/`cn`/`crypto`），在 portfolio/watchlist 保存与 IBKR/A股/钱包导入时自动推导覆写，用户不可见。
+（`global`/`cn`/`crypto`，指数域为 `index`），在 portfolio/watchlist 保存与 IBKR/A股/钱包导入时自动推导覆写，用户不可见。
 
 | 市场 | 后缀 | 示例 | 币种 | type | 说明 |
 |------|------|------|------|------|------|
@@ -199,10 +200,11 @@ python -m tracker.cli longport-login --json    # 长桥 OAuth 授权 URL（脚�
 | 加股 | `.TO` 等 | `RY.TO` | CAD | global | `.V`（TSXV）`.CN` `.NE` 均可 |
 | 澳股 | `.AX` | `BHP.AX` | AUD | global | |
 | 新加坡股 | `.SI` | `D05.SI` | SGD | global | SGX；`.SG` 别名自动归一为 `.SI`（yfinance 无 `.SG` 数据） |
+| 巴西股 | `.SA` | `PETR4.SA` | BRL | global | B3；IBKR 交易所代号 `BVMF` |
 | 加密货币 | `-QUOTE` | `BTC-USD` `ETH-USDT` | 计价货币 | crypto | 连字符 `BASE-QUOTE`（Yahoo crypto 规范）；无分隔符 `BTCUSD` 自动补全 |
 
 **互斥保证**：点后缀/裸代码永远是股票，连字符+计价货币永远是加密货币（单字母连字符 `BRK-B`
-是美股类别股，不是 crypto）。推导唯一入口 `symbols.type_for_symbol()`；测试用例、搜索结果、
+是美股类别股、`P+系列字母` 连字符如 `WFC-PL` 是美股优先股，都不是 crypto）。推导唯一入口 `symbols.type_for_symbol()`；测试用例、搜索结果、
 IBKR/A股/钱包导入产出的代码均符合该规范。
 
 `avg_cost`（成本）按**当地货币**填写；英股填**英镑**（如 `4.30 = £4.30`，不是便士）；
@@ -287,38 +289,46 @@ python -m tracker.cli kline 0700.HK --period weekly --open  # 周K + 自动打�
 tracker/ui/           Streamlit 页面包（streamlit run tracker/ui/app.py）
 ├── app.py              路由入口（st.navigation 多页面, 每页独立 URL, 刷新不丢页）
 ├── portfolio_page.py   「组合」页面（持仓编辑/明细/配置/自选提醒 + 行情/汇率缓存）
-├── kline_page.py       「K线」页面（搜索框 + lightweight-charts 组件 + 上市以来全量滑动 + 多股走势对比）
+├── kline_page.py       「K线」页面（搜索框 + lightweight-charts 组件 + 上市以来全量滑动 + 多股走势对比 + 加密货币对比）
 ├── index_page.py       「指数K线」页面（IX.<KEY> 分组下拉, 独立于股票 K线页）
 ├── import_page.py      「导入」页面（IBKR 账户 / 长桥账户 / 链上钱包 / 券商文件, 追加合并或覆盖）
 ├── settings_page.py    「设置」页面（配色 / 数据源 / 基础货币）
-└── settings.py         settings.json 读写（涨跌配色 / prefer_akshare / use_ibkr / use_longport）+ portfolio 读写助手
+├── longport_login.py   长桥 OAuth 登录引导（独立子进程, 状态文件 var/longport_oauth_state.json）
+└── settings.py         settings.json 读写（涨跌配色 / prefer_akshare / use_ibkr / use_longport / crypto_source）+ portfolio 读写助手
 tracker/
 ├── __main__.py         python -m tracker 入口（转发到 cli）
-├── cli/                CLI 包（python -m tracker.cli，16 个子命令各一个模块）
+├── cli/                CLI 包（python -m tracker.cli，17 个子命令各一个模块）
 │   ├── __init__.py       argparse 注册与分发
+│   ├── _common.py        JSON 序列化 / 代码归一化 / 原子写 / 错误退出
+│   ├── __main__.py       python -m tracker.cli 入口
 │   ├── snapshot.py       快照（持仓 + 自选 + 阈值触发）
-│   ├── index_kline.py    指数K线 HTML + 摘要（IX.<KEY>, --json / --list）
 │   ├── quote.py          实时行情
+│   ├── watchlist.py      自选管理（list/add/remove/import-longport）与阈值提醒
 │   ├── portfolio.py      持仓管理（list/add/remove/set-base）
-│   ├── watchlist.py      自选管理（list/add/remove）与阈值提醒
 │   ├── report.py         自选监控报告（md/csv/json）
 │   ├── export.py         组合快照导出（csv/json/md）
 │   ├── fx.py             汇率
 │   ├── history.py        历史价格
 │   ├── kline.py          K线 HTML + 摘要（--json 输出数据）
+│   ├── compare.py        多股走势对比（归一化折线, --raw 原价, --json 出序列）
+│   ├── search.py         代码/名称搜索 → 规范代码
+│   ├── index_kline.py    指数K线 HTML + 摘要（IX.<KEY>, --json / --list）
 │   ├── importer.py       统一导入（import ibkr / longport / wallet / file, 追加/覆盖）
-│   ├── sync.py           IBKR 持仓同步（兼容入口 → import ibkr）
-│   ├── wallet.py         链上钱包导入（兼容入口 → import wallet）
+│   ├── sync.py           IBKR 持仓同步（兼容入口 → import ibkr, 缺省覆盖全部持仓）
+│   ├── wallet.py         链上钱包导入（兼容入口 → import wallet, 缺省只查询不写盘）
 │   ├── longport_login.py 长桥 OAuth 登录（浏览器授权, token 自动缓存与刷新）
 │   └── cache.py          磁盘缓存管理
+├── storage.py          所有 JSON 配置唯一读写口（portfolio/watchlist/settings, 原子写 + 损坏 .bak 恢复）
 ├── symbols.py          自有代码规范、市场域识别、type_for_symbol() 权威域推导（唯一入口）
+├── symbol_migrations.py 退市/改码 → 接替代码迁移表（长桥导入时自动迁移）
+├── util.py             with_timeout 硬超时等工具
 ├── providers/          **数据 provider 层**（按权威 type 域隔离）
 │   ├── base.py         Provider 基类 + Quote/SymbolEntry 数据结构 + resolve(type) 域路由
 │   ├── cn_stocks.py        A股/B股域（.SS/.SZ/.BJ）：akshare 固定优先, yfinance 兜底
-│   ├── global_stocks.py    全球股票域（美股/港股/欧股…）：yfinance 主源, 港股 akshare 兜底; 搜索走 IBKR → yfinance Search
+│   ├── global_stocks.py    全球股票域（美股/港股/欧股…）：yfinance 主源, 港股 akshare 兜底; 搜索走 IBKR → 东财 suggest → yfinance Search → 代码直查
 │   ├── crypto.py           加密货币域（BASE-QUOTE）：Binance → Gate.io → Hyperliquid(USD系) → yfinance
-│   ├── index.py            指数域（IX.<KEY>）：中国指数 akshare 优先, 其余 yfinance 主源 + 新浪兜底
-│   ├── orchestration.py    批量编排：按域分组取数 → 聚合 quotes/errors/notes
+│   ├── index.py            指数域（IX.<KEY>）：中国指数 akshare 优先, 其余 yfinance 主源 + 新浪兜底; 水泥网/商品期货为专属源
+│   ├── orchestration.py    批量编排：按域分组取数 → 聚合 quotes/errors/notes; 进程内负缓存
 │   └── em_suggest.py       东财 suggest 搜索客户端（cn 域搜索底层 HTTP 封装 + 代码归一）
 ├── prices.py           行情门面（历史 API 保持不变, 全部路由到 providers）
 ├── search.py           搜索聚合层：search_grouped() 按域调 provider.search() 保持分组；纯在线接口，失败即该域空结果 + 合法代码直查兜底
@@ -331,20 +341,20 @@ tracker/
 │   ├── rules.py          阈值规则（纯函数：两级上下限状态判定 + 距离）
 │   ├── watchlist.py      自选视图组装 + 取数用例（watchlist list / report 复用）
 │   └── snapshot.py       快照用例（take_snapshot / snapshot_json, 存储剥离）
-├── fundamentals.py     基本面取数门面（每股净资产, 6h 磁盘缓存）— PB 提醒数据源
+├── fundamentals.py     基本面取数门面（每股净资产/总市值, 6h 磁盘缓存）— PB/市值提醒数据源
 ├── ibkr.py             IBKR 行情接入 + 持仓读取（可选依赖 ib_async，失败静默回退）
 ├── longport.py         长桥行情/历史/持仓接入（可选依赖 longport，失败静默回退）
 ├── longport_oauth.py   长桥 OAuth 授权子进程（独立进程运行, 状态写 var/longport_oauth_state.json）
 ├── importer.py         **统一导入管道**：四来源采集 → 追加/覆盖合并 → 备份写盘
-├── ibkr_sync.py        IBKR 持仓导入兼容入口（委托 importer，等价 import ibkr）
-├── ashare_sync.py      A股券商文件解析 + 兼容入口（等价 import file）
-└── wallet.py           链上钱包余额查询（EVM 五链 + TRON, 只读）
+├── ibkr_sync.py        IBKR 持仓导入兼容入口（委托 importer，等价 import ibkr，缺省覆盖）
+├── ashare_sync.py      A股券商文件解析 + 兼容入口（等价 import file，缺省追加合并）
+└── wallet.py           链上钱包余额查询（EVM 五链 + TRON + Solana, 只读）
 portfolio.json          持仓配置（页面可直接编辑保存; type 字段由系统自动维护, 手改无效;
                         用户本地数据, 已 gitignore, 模板 portfolio.example.json）
 watchlist.json          自选股配置（页面可直接编辑保存; type 字段由系统自动维护, 手改无效;
                         用户本地数据, 已 gitignore, 模板 watchlist.example.json）
-settings.json           显示与数据源设置（配色 / prefer_akshare / use_ibkr / use_longport;
-                        已 gitignore, 模板 settings.example.json）
+settings.json           显示与数据源设置（配色 / prefer_akshare / use_ibkr / use_longport /
+                        crypto_source; 已 gitignore, 模板 settings.example.json）
 *.example.json          各配置模板（随仓库提交: 首次使用 cp <名>.example.json <名>.json）
 ibkr.example.json       IBKR 配置模板（随仓库提交）
 ibkr.json               IBKR 真实配置（已 gitignore，不随仓库提交）
@@ -354,6 +364,7 @@ var/                    运行时生成产物（行情缓存 quotes_cache.db、k
                         longport_oauth_state.json 长桥登录状态）,
                         已 gitignore, 可随时整目录删除（重建即自动再生成）
 docs/                   研究笔记（如 A股券商导入方案调研）
+skills/                 随仓库分发的 agent 技能手册（portfolio-tracker/SKILL.md: CLI 速查/代码规范/数据源/配置/操作流程）
 tests/                  单元测试（离线, mock）
 ```
 
@@ -366,32 +377,33 @@ tests/                  单元测试（离线, mock）
 
 | type | 覆盖代码 | 实时行情优先级 | 历史K线优先级 |
 |----------|----------|----------------|----------------|
-| **global** | 裸代码（美股）、`.HK/.DE/.L/.TO/.AX…` | 长桥(可选) → IBKR(可选) → yfinance 批量 → 港股 akshare | 长桥(可选) → IBKR(可选) → yfinance（港股可 `--akshare` 翻转） |
+| **global** | 裸代码（美股）、`.HK/.DE/.L/.TO/.AX/.SI/.SA…` | 长桥(可选) → IBKR(可选) → yfinance 批量 → 港股 akshare | IBKR(可选) → 长桥(可选) → yfinance（港股可 `--akshare` 翻转） |
 | **cn** | `.SS/.SZ/.BJ`（A/B股、北交所） | 长桥(可选前置) → **akshare 优先** → yfinance | 长桥(可选前置) → **akshare 优先** → yfinance |
 | **crypto** | `BASE-QUOTE`（`BTC-USD`） | **Binance API** → Gate.io 现货 → Hyperliquid 永续（仅USD系） → yfinance | **Binance klines** → Gate.io → Hyperliquid → yfinance |
-| **index** | `IX.<KEY>`（`IX.DXY` 美元指数 / `IX.VIX` 恐慌指数 / `IX.CSI300` 沪深 300 …） | —（指数无实时行情, 不参与持仓聚合） | 中国指数 **akshare 优先** → yfinance；其余 yfinance → akshare 新浪兜底 |
+| **index** | `IX.<KEY>`（`IX.DXY` 美元指数 / `IX.VIX` 恐慌指数 / `IX.CSI300` 沪深 300 / `IX.LC` 碳酸锂主力连续 / `IX.CEMPI` 水泥价格指数 …） | —（指数无实时行情, 不参与持仓聚合） | 中国指数 **akshare 优先** → yfinance；美股 SPX/NDX/DJI 有新浪兜底；水泥网/商品期货指数为专属源（无兜底） |
 
 - **type 即域**：`type` 字段由系统在保存/导入时按 `symbols.type_for_symbol()` 自动推导覆写，
   手改 JSON 无效。点后缀/裸代码永远是股票，连字符+计价货币永远是加密货币，同一代码不会映射两个域。
   测试用例、搜索结果、导入产出的代码均符合该规范。
+- **长桥与 IBKR 同开时**：实时行情两者都拉、IBKR 结果覆盖长桥（IBKR 优先）；历史K线先试 IBKR、失败再试长桥
 - 汇率：CFETS 一次拿全 XXX/CNY；直对/逆对/USD 桥接兜底
 - `--akshare` 开关仅影响港股数据源顺序（A股域固定 akshare 优先）；设置页同名开关全局生效
 - 加密货币域数据源可自选：`settings.json` `"crypto_source": "auto|binance|gate|hyperliquid|yfinance"`
   或子命令 `--crypto-source <值>`；默认 `auto` = Binance → Gate.io → Hyperliquid(USD系) → yfinance，
   指定源前置、失败自动落到链上其余源（Hyperliquid 为永续合约价，与现货有基差，仅 USD 系计价代码）
 - IBKR 行情可选叠加于任何域（需订阅）；英股 GBp 便士报价自动换算为 GBP；汇率缓存 10 分钟，行情缓存 5 分钟
-- IBKR 连接参数**从配置文件读取**（不写死在代码里）：优先 `ibkr.json`，其次 `ibkr.example.json` 模板兜底，也可用环境变量 `IBKR_CONFIG=/path/to/xxx.json` 指定；交易所映射在同一文件（A股默认 `SEHK`，B股可配置 `SHSE`/`SZSE`，因沪深港通合约挂在 HKEX 下，需配 `tradingClass`）
+- IBKR 连接参数**从配置文件读取**（不写死在代码里）：优先 `ibkr.json`，其次 `ibkr.example.json` 模板兜底，也可用环境变量 `IBKR_CONFIG=/path/to/xxx.json` 指定；交易所映射在同一文件（A股经沪深港通通道：沪 `SEHKNTL`、深 `SEHKSZSE`、科创 `SEHKSTAR`，计价 CNH；B股走 `SHSE`/`SZSE` 并配 `tradingClass`；模板 `exchanges` 键名与代码读取一致，删键即用内置默认路由）
 - IBKR 断开时自动静默回退下一级数据源，不影响页面运行；持仓同步见下方
 - 长桥 (LongPort) 可选前置行情/历史源：`settings.json` `"use_longport": true` 或子命令 `--longport` 启用；
   两源都启用时 IBKR 优先级更高，长桥不可用自动回退默认源（详见下方「长桥 (LongPort) 账户」）
-- Hyperliquid 永续价为 Binance 之后的第二加密源（markPx 与现货存在基差，仅 USD 系计价代码）
+- Hyperliquid 永续价为 Binance、Gate.io 之后的第三加密源（markPx 与现货存在基差，仅 USD 系计价代码）
 
 ---
 
 ## 配置 IBKR 连接
 
 - `ibkr.json` 含连接参数与**交易所映射**（`exchanges`）。Gateway 模式：`"mode": "paper"` 模拟盘（4002）/ `"live"` 实盘（4001），默认 paper；写 `"port"` 可显式指定任意端口（如 TWS 7496/7497）。环境变量 `IBKR_MODE=live` 可临时覆盖
-- 配置文件缺字段时自动继承模板/兜底值；`_comment` 开头的字段会被忽略
+- 配置文件缺字段时自动继承模板/兜底值；所有下划线开头的字段（`_comment` / `_说明`）会被忽略
 - 不想在项目目录放配置文件时，可用环境变量指向其他路径：
 
 ```bash
@@ -428,7 +440,7 @@ python -m tracker.cli import ibkr --overwrite        # 覆盖全部持仓
 - 自动将 IBKR 账户股票持仓转换为规范代码并写入 `portfolio.json`
 - 保留原有 `base_currency`；`avg_cost` 取自 IBKR（合约货币每股均价，含佣金）
 - 无法映射为规范代码的标的（权证/期权/基金等）会跳过并在控制台提示
-- 反向映射规则：`SEHK + CNY → .SS/.SZ`（沪深港通，6 位代码；`8` 开头 5 位为港股人民币柜台，归 `.HK`）；`SHSE + USD → .SS (B股)`；`SZSE + HKD → .SZ (B股)`；`SEHK + HKD → .HK`；`IBIS/FWB + EUR → .DE`；`LSE + GBP → .L`；`TSE + CAD → .TO`；`TSXV + CAD → .V`；`CSE + CAD → .CN`；`NEOEX + CAD → .NE`；`ASX + AUD → .AX`；`SMART + USD → 原码`
+- 反向映射规则：`SEHK + CNY/CNH → .SS/.SZ`（沪深港通，6 位代码；`8` 开头 5 位为港股人民币柜台，归 `.HK`）；`SHSE + USD → .SS (B股)`；`SZSE + HKD → .SZ (B股)`；`SEHK + HKD → .HK`；`IBIS/FWB/GETX/SWB + EUR → .DE`（仅认德国交易所，泛欧所落 skipped）；`LSE + GBP/GBX → .L`；`TSE + CAD → .TO`；`TSXV + CAD → .V`；`CSE + CAD → .CN`；`NEO/NEOE + CAD → .NE`；`ASX + AUD → .AX`；`SGX/SES + SGD → .SI`；`BVMF/BOVESPA + BRL → .SA`；`SMART + USD → 原码`
 - 兼容入口：`python -m tracker.cli sync` / `python -m tracker.ibkr_sync`（默认覆盖，加 `--append` 追加）
 
 ### 长桥 (LongPort) 账户
@@ -447,7 +459,9 @@ python -m tracker.cli watchlist import-longport --overwrite  # 覆盖现有自�
 `600519.SH→600519.SS`、`G13.SG→G13.SI`、`AAPL.US→AAPL`、类别股/优先股
 `TAP.A.US→TAP-A` / `WFC.PR.L.US→WFC-PL`）。同一代码在多个分组的 lists 并集合并；
 已有条目的阈值/备注保留，仅补列表归属；重复导入幂等。无法映射的标的
-（长桥独有 ADR/优先股等 Yahoo 无对应代码）跳过并报告原因。
+（长桥独有 ADR/优先股等 Yahoo 无对应代码）跳过并报告原因。账户里的退市/改码
+旧代码（`ERJ→EMBJ`、`BRFS→MBRF3.SA` 等，见 `tracker/symbol_migrations.py`）会自动
+迁移到接替代码，无接替码的跳过并说明。
 
 - 认证配置在 `longport.json`（模板 `longport.example.json`，已 gitignore）：推荐 `auth: oauth`
   （填入 OAuth 客户端注册返回的 `client_id`），也支持 `auth: apikey`（开发者中心 app_key/app_secret/access_token，90 天过期）
@@ -472,7 +486,7 @@ python -m tracker.cli import file 持仓.csv --overwrite --json
 
 - 列名模糊匹配（代码/数量/成本列，各家券商叫法不同也能识别）；CSV 自动尝试 utf-8/gbk/gb18030 编码
 - 仅识别 6 位 A股代码，非 A股行跳过并提示
-- 兼容入口：`python -m tracker.ashare_sync 持仓.csv`（默认覆盖，加 `--append` 追加）
+- 兼容入口：`python -m tracker.ashare_sync 持仓.csv`（默认追加合并，加 `--overwrite` 覆盖）
 - 页面端：「导入」页 → 「券商文件」tab 上传 CSV/Excel 预览后导入
 
 ### 链上钱包导入（加密资产）
@@ -500,6 +514,10 @@ python -m tracker.cli import wallet polygon 0x... --tokenlist my_tokens.json
 `python -m tracker.cli <子命令> --json` 即可获取与页面完全一致的数据（持仓/自选/行情/K线/汇率/导出），
 无需打开浏览器。建议 Agent 默认使用 `snapshot --json` 作为「现在怎么样了」的一站式入口。
 
+**给 AI 的完整操作手册**（子命令速查、代码规范、数据源优先级、配置文件字段、常见操作流程、
+注意事项）随仓库分发在 [`skills/portfolio-tracker/SKILL.md`](skills/portfolio-tracker/SKILL.md)，
+兼容各 agent 的 skill 加载格式（frontmatter + 正文），新对话的 AI 读它即可上手操作本项目。
+
 ---
 
 ## 已知限制
@@ -522,7 +540,7 @@ python -m tracker.cli import wallet polygon 0x... --tokenlist my_tokens.json
 - [x] IBKR 行情接入 + 持仓同步（只读）
 - [x] 长桥 (LongPort) 行情/持仓接入（OAuth 登录，可选前置源）
 - [x] A股券商持仓文件导入（CSV/Excel）
-- [x] 链上钱包余额导入（EVM 五链）
+- [x] 链上钱包余额导入（EVM 五链 + TRON + Solana）
 - [x] 多股 K 线对比（同坐标系 + 归一化）
 - [ ] **K 线比值模式** — 两标的收盘价比值画成 K 线（如腾讯 / 南非报业）
 - [ ] Hyperliquid / A股券商实时**持仓**对接（当前 HL 仅为行情源）
@@ -537,12 +555,12 @@ python -m tracker.cli import wallet polygon 0x... --tokenlist my_tokens.json
 
 > **Local-first multi-market portfolio tracker. Human-facing Streamlit UI + agent-facing CLI (`--json`). Zero API keys. Completely free.**
 
-A **local-first** portfolio tracker supporting **A-shares / B-shares / Beijing SE / HK / US / DE / GB / CA / AU / SG (SGX)** and **crypto**. Data layer is split into four isolated **providers** (global stocks / CN stocks / crypto / macro-risk indices) that only meet at the portfolio & watchlist aggregation level.
+A **local-first** portfolio tracker supporting **A-shares / B-shares / Beijing SE / HK / US / DE / GB / CA / AU / SG (SGX) / BR (B3)** and **crypto**. Data layer is split into four isolated **providers** (global stocks / CN stocks / crypto / macro-risk indices) that only meet at the portfolio & watchlist aggregation level.
 
 ### Goals
 
-1. Multi-source portfolio tracking (A/B/CN-HK/US/DE/GB/CA/AU + crypto; SGX planned)
-2. Watchlist management with two-level price-threshold alerts
+1. Multi-source portfolio tracking (A/B/Beijing SE/HK/US/DE/GB/CA/AU/SG/BR + crypto)
+2. Watchlist management with two-level price / PB / market-cap threshold alerts
 3. Look up K-line & fundamentals by symbol **or name** (fuzzy search)
 4. Dual frontends — Streamlit for humans, unified JSON CLI for agents (hermes / openclaw)
 5. Read-only broker integration — IBKR Gateway, LongPort (OAuth login), A-share broker file import, Hyperliquid quotes
@@ -551,14 +569,14 @@ A **local-first** portfolio tracker supporting **A-shares / B-shares / Beijing S
 ### Features
 
 - **Multi-currency portfolio tracking** — automatic FX conversion, unified base currency
-- **Watchlist with price threshold alerts** — two-level upper/lower thresholds, severity levels, distance prediction
+- **Watchlist with price / PB / market-cap threshold alerts** — two-level upper/lower thresholds, severity levels, distance prediction
 - **IBKR integration** — TWS / IB Gateway snapshots + position sync, automatic fallback
 - **LongPort integration** — optional quotes/history/positions source (OAuth login), silent fallback to default sources
 - **K-line charts** — daily/weekly/monthly, MA overlays, volume, MACD/RSI/KDJ/Bollinger; slide mode loads full listing history by default
-- **Macro/risk index K-lines** — dedicated `IX.<KEY>` symbol space (USD index, VIX, CSI 300, ...), separate page & `index-kline` subcommand, dedicated provider source chain
+- **Macro/risk index K-lines** — dedicated `IX.<KEY>` symbol space (USD index, VIX, CSI 300, lithium-carbonate main-continuous futures, cement indices, ...), separate page & `index-kline` subcommand, dedicated provider source chain
 - **Multi-symbol comparison** — same-coordinate overlay, normalized to 100
-- **Unified import pipeline** — IBKR account / LongPort account / on-chain wallet (5 EVM chains + TRON) / A-share broker CSV-Excel file, each with append-merge or overwrite mode (auto .bak backup); same logic drives the Streamlit「导入」page
-- **Unified CLI** — 16 subcommands (snapshot, quote, watchlist, portfolio, report, export, fx, history, kline, search, compare, index-kline, import, longport-login, cache; `sync` / `import-wallet` kept as compat aliases); all support `--json`
+- **Unified import pipeline** — IBKR account / LongPort account / on-chain wallet (5 EVM chains + TRON + Solana) / A-share broker CSV-Excel file, each with append-merge or overwrite mode (auto .bak backup); same logic drives the Streamlit「导入」page
+- **Unified CLI** — 17 subcommands (snapshot, quote, watchlist, portfolio, report, export, fx, history, kline, search, compare, index-kline, import, longport-login, cache; `sync` / `import-wallet` kept as compat aliases); all support machine-readable output (`--json`, or `-f json` for report/export)
 
 ### Quick Start
 
@@ -585,10 +603,10 @@ Quotes are fetched with a priority chain:
 
 1. **LongPort** (optional, `use_longport` / `--longport`) — HK/US/CN quotes & history, silent fallback
 2. **IBKR** (TWS / IB Gateway) — real-time if subscribed, delayed otherwise, batch snapshot (higher priority than LongPort when both enabled)
-3. **yfinance** — batch quote (1 request) + individual retry
+3. **yfinance** (via OpenBB) — batch quote (1 request) + individual retry
 4. **akshare** (East Money) — A-shares / HK spot + history (CN domain: akshare first)
 5. **FX** — CFETS for full XXX/CNY table, direct/inverse/USD bridge fallback
-6. **Indices** — `IX.<KEY>` historical only: CN indices via akshare (Sina), global via yfinance with Sina fallback
+6. **Indices** — `IX.<KEY>` historical only: CN indices via akshare (Sina), US SPX/NDX/DJI via yfinance with Sina fallback, cement & commodity-futures indices on dedicated sources (no fallback)
 7. **Crypto** — Binance → Gate.io → Hyperliquid perpetuals (USD-quoted only) → yfinance; reorder with `settings.json` `crypto_source` or `--crypto-source`
 
 IBKR/LongPort disconnects silently fall back to the next source; the page continues running without interruption.
@@ -596,10 +614,11 @@ IBKR/LongPort disconnects silently fall back to the next source; the page contin
 ### Project Structure
 
 ```
-tracker/ui/        Streamlit dashboard (app.py + kline/index/import/settings pages + settings)
-tracker/           Core package: cli/ subcommands, providers/, symbols, prices, fx,
-                   search, cache, charting, analytics, watchlist, services/,
-                   importer, ibkr, longport, ibkr_sync, ashare_sync, wallet
+tracker/ui/        Streamlit dashboard (app.py + kline/index/import/settings pages + longport login + settings)
+tracker/           Core package: cli/ subcommands, providers/, symbols, symbol_migrations,
+                   storage, prices, fx, search, cache, charting, analytics, watchlist,
+                   services/, importer, ibkr, longport, longport_oauth, ibkr_sync,
+                   ashare_sync, wallet
 portfolio.json     Holdings config (editable via page)
 watchlist.json     Watchlist config (editable via page)
 settings.json      Display & data-source settings

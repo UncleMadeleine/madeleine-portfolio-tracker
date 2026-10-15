@@ -9,6 +9,9 @@ IX.CSI300 沪深 300 ...)。源链:
 追加一个 _xxx_history 函数并插入 history_sources 源链。
 中国水泥网 (IX.CEMPI 等, 目录条目带 ccement 字段): 前端 AJAX 接口免登录,
 仅全国口径; 区域分解与水泥大数据中心需会员, 不接入。
+商品期货 (IX.LC 等, 目录条目带 futures 字段): akshare futures_main_sina
+新浪主力连续 (LC0=广期所碳酸锂), 返回全量历史后本地切片; 主力连续含换月
+跳空 (新浪标准构造), 单合约历史可改用 futures_zh_daily_sina (未接入)。
 """
 
 from __future__ import annotations
@@ -174,6 +177,37 @@ def _yf_history(
     return df[keep]
 
 
+# ---------- akshare 源 (新浪商品期货主力连续) ----------
+
+
+def _ak_futures_history(
+    p: ParsedSymbol, start_date: str, end_date: str | None = None
+) -> pd.DataFrame:
+    """新浪期货主力连续 (目录 futures 字段, 如 LC0=碳酸锂): 全量历史, 本地切片.
+
+    主力连续按新浪规则拼接 (近月合约序列), 换月处有跳空, 属正常构造;
+    单合约历史不在目录口径内 (futures_zh_daily_sina 需指定具体合约月).
+    """
+    symbol = _catalog(p)["futures"]
+    raw = _ak().futures_main_sina(symbol=symbol)
+    if raw is None or raw.empty:
+        raise RuntimeError(f"主力连续 {symbol}: akshare 返回空数据")
+    df = raw.rename(
+        columns={
+            "日期": "date",
+            "开盘价": "open",
+            "最高价": "high",
+            "最低价": "low",
+            "收盘价": "close",
+            "成交量": "volume",
+        }
+    )
+    keep = [
+        c for c in ("date", "open", "high", "low", "close", "volume") if c in df.columns
+    ]
+    return _slice_range(df[keep], start_date, end_date)
+
+
 # ---------- akshare 源 (新浪指数) ----------
 
 
@@ -209,7 +243,10 @@ _AK_US_SINA = {
 
 
 class IndexProvider(Provider):
-    """宏观/风险指数域: 中国指数 akshare 优先, 其余 yfinance 主源 + 新浪兜底."""
+    """宏观/风险指数域: 中国指数 akshare 优先, 其余 yfinance 主源 + 新浪兜底.
+
+    商品期货 (futures 字段) 与水泥网 (ccement 字段) 为各自专属源, 无兜底.
+    """
 
     name = "index"
 
@@ -232,9 +269,15 @@ class IndexProvider(Provider):
         def cc():
             return _ccement_history(p, start_date, end_date)
 
+        def ft():
+            return _ak_futures_history(p, start_date, end_date)
+
         # 水泥网指数: 目录带 ccement 字段, 专属源 (无第二数据源)
         if _catalog(p).get("ccement"):
             return [cc]
+        # 商品期货: 目录带 futures 字段 (新浪主力连续), 专属源 (无第二数据源)
+        if _catalog(p).get("futures"):
+            return [ft]
         ak_supported = bool(_catalog(p).get("ak")) or index_key(p.yahoo) in _AK_US_SINA
         if not ak_supported:
             return [yf]

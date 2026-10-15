@@ -102,6 +102,11 @@ INDEX_GROUPS: dict[str, dict[str, dict[str, str]]] = {
         "CYB": {"name": "创业板指", "ak": "sz399006", "currency": "点"},
         "KECHUANG50": {"name": "科创 50", "ak": "sh000688", "currency": "点"},
     },
+    # 商品期货 (新浪主力连续, akshare futures_main_sina; 见 providers/index.py)
+    # LC = 广期所碳酸锂期货主力连续 (2023-07-21 上市), 单位 元/吨
+    "商品/新能源": {
+        "LC": {"name": "碳酸锂主力连续", "futures": "LC0", "currency": "元/吨"},
+    },
     # 中国水泥网 (index.ccement.com, 免登录前端接口; 见 providers/index.py)
     "水泥网": {
         "CEMPI": {

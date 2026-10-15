@@ -95,6 +95,71 @@ def test_ccement_source_chain_is_exclusive():
     assert [f.__name__ for f in chains] == ["cc"]
 
 
+# ---------- 商品期货源 (碳酸锂主力连续) ----------
+
+
+def test_futures_catalog_entries_parse_to_index_domain():
+    """商品期货指数: 目录合法 + 统一带 futures 路由字段 (无 ak/yf/ccement 源)."""
+    futures_keys = [k for k, e in INDEX_CATALOG.items() if "futures" in e]
+    assert futures_keys == ["LC"]
+    for key in futures_keys:
+        p = parse(f"IX.{key}")
+        assert p.type == "index"
+        assert p.market is Market.INDEX
+        e = INDEX_CATALOG[key]
+        assert "ak" not in e and "yf" not in e and "ccement" not in e
+
+
+def test_futures_source_chain_is_exclusive():
+    """商品期货源链只有专属 ft 源 (主力连续无第二数据源)."""
+    provider = IndexProvider()
+    chains = provider.history_sources(parse("IX.LC"), "2025-01-01", None)
+    assert [f.__name__ for f in chains] == ["ft"]
+
+
+def test_futures_history_renames_sina_columns(monkeypatch):
+    """新浪中文列名 → date/open/high/low/close/volume, 持仓量/动态结算价丢弃."""
+    from tracker.providers import index as idx_mod
+
+    class FakeAk:
+        @staticmethod
+        def futures_main_sina(symbol):
+            assert symbol == "LC0"
+            return pd.DataFrame(
+                {
+                    "日期": pd.date_range("2026-10-13", periods=3, freq="D"),
+                    "开盘价": [104200.0, 106000.0, 99980.0],
+                    "最高价": [108260.0, 106700.0, 102480.0],
+                    "最低价": [102000.0, 101000.0, 98000.0],
+                    "收盘价": [105480.0, 102800.0, 100540.0],
+                    "成交量": [314846.0, 339357.0, 307605.0],
+                    "持仓量": [422392.0, 427300.0, 418547.0],
+                    "动态结算价": [105480.0, 102800.0, 100540.0],
+                }
+            )
+
+    monkeypatch.setattr(idx_mod, "_ak", lambda: FakeAk)
+    df = idx_mod._ak_futures_history(parse("IX.LC"), "2026-10-14", None)
+    assert list(df.columns) == ["date", "open", "high", "low", "close", "volume"]
+    assert len(df) == 2  # 本地切片: 只保留 >= start_date
+    assert df.iloc[-1]["close"] == pytest.approx(100540.0)
+    assert df.iloc[-1]["volume"] == pytest.approx(307605.0)
+
+
+def test_futures_history_rejects_empty_series(monkeypatch):
+    """接口返回空数据必须报错, 不能产出空 DataFrame 静默通过."""
+    from tracker.providers import index as idx_mod
+
+    class FakeAk:
+        @staticmethod
+        def futures_main_sina(symbol):
+            return pd.DataFrame()
+
+    monkeypatch.setattr(idx_mod, "_ak", lambda: FakeAk)
+    with pytest.raises(RuntimeError, match="空数据"):
+        idx_mod._ak_futures_history(parse("IX.LC"), "2025-01-01", None)
+
+
 def test_ccement_points_parses_dynamic_index_all(monkeypatch):
     """getPriceIndex 聚合载荷用 dynamicIndexAll (独立端点用 dynamicIndex), 都要能解析."""
     from tracker.providers import index as idx_mod

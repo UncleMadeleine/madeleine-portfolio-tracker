@@ -77,7 +77,9 @@ INDEX_GROUPS: dict[str, dict[str, dict[str, str]]] = {
     "美元/利率": {
         "DXY": {"name": "美元指数", "yf": "DX-Y.NYB", "currency": "USD"},
         "US10Y": {"name": "美债 10 年收益率", "yf": "^TNX", "currency": "%"},
-        "US02Y": {"name": "美债 2 年收益率", "yf": "^IRX", "currency": "%"},
+        # ^IRX 是 Cboe 13 周国库券收益率 (Yahoo 无 2 年期); 原错标为"2 年",
+        # 按数据实际口径正名为 3 个月, 避免把 3 个月收益率当 2 年读
+        "US3M": {"name": "美债 3 个月收益率", "yf": "^IRX", "currency": "%"},
     },
     "美股": {
         "SPX": {"name": "标普 500", "yf": "^GSPC", "currency": "点"},

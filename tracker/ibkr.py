@@ -400,9 +400,10 @@ def ibkr_to_yahoo(
             return f"{raw}.SS"
         if raw.startswith("200"):
             return f"{raw}.SZ"
-    if ccy == "CNY":
-        # 沪深港通 A 股经 IBKR 交易挂 SEHK 通道但报 CNY (见 contract_spec);
-        # 港股人民币柜台 (HKEX RMB counter, 8 开头 5 位如 82318) 也以 CNY 交易。
+    if ccy in ("CNY", "CNH"):
+        # 沪深港通 A 股经 IBKR 交易挂 SEHK 通道但报 CNY/CNH (见 contract_spec
+        # 用 CNH 请求); 港股人民币柜台 (HKEX RMB counter, 8 开头 5 位如 82318)
+        # 也以 CNY 交易。CNH (离岸人民币) 与 CNY 都要认, 否则 A股持仓全落 skipped。
         # 两者都要先于代码前缀判定: 柜台 82318+SEHK 的 8 恰在北交所前缀里,
         # 误判会落成 82318.BJ。通道与柜台以「交易所 + 代码形态」区分:
         # 沪深港通代码 6 位, 柜台 lstrip 后 ≤5 位且 8 开头 (与北交所 830/430/920 不重叠)。
@@ -419,7 +420,10 @@ def ibkr_to_yahoo(
             return f"{sym}.SZ"
         code = raw.lstrip("0") or "0"
         return f"{code.zfill(4)}.HK"
-    if ccy == "EUR" or exkey in ("IBIS", "IBISX", "FWB", "GETX", "SWB"):
+    # 仅德国交易所 (IBIS/Xetra, FWB/法兰克福, GETX, SWB/斯图加特等) 映射 .DE;
+    # 不再用裸 ccy=="EUR" 兜底 —— 那会把泛欧所 (SBF/AEB/EBR/MTA) 也错映射到
+    # 一个错误或不存在的德国代码, 本项目只支持德股, 其余欧元所应落 None 进 skipped
+    if exkey in ("IBIS", "IBISX", "FWB", "GETX", "GETXEX", "SWB"):
         return f"{sym}.DE"
     if ccy in ("GBP", "GBX") or exkey in ("LSE", "LSEETF"):
         return f"{sym}.L"
@@ -475,6 +479,7 @@ def get_history_ibkr(
         return {}, reason
     m = _ib_module()
     results: dict[str, pd.DataFrame] = {}
+    first_err: str | None = None
     for p in claimed:
         spec = contract_spec(p, cfg.get("exchanges"))
         c = m.Contract()
@@ -495,7 +500,9 @@ def get_history_ibkr(
                 end_tm = datetime.fromisoformat(end_dt + "T23:59:59")
                 # 闭区间天数: end-start 差 1, 补 +1 (2024-01-01→2024-01-31 = 31 D)
                 days = (end_tm.date() - date.fromisoformat(start_date)).days + 1
-                duration = f"{max(days, 1)} D"
+                # IBKR 1 日K单次请求上限 365 D: 超限会被拒 (进而静默回落 yfinance),
+                # 故封顶 365 (取最近一年; 更长的区间需分块, 暂不实现)
+                duration = f"{min(max(days, 1), 365)} D"
             else:
                 end_tm = None
                 duration = f"{months} M"
@@ -527,9 +534,12 @@ def get_history_ibkr(
             df = pd.DataFrame(rows)
             if not df.empty:
                 results[p.yahoo] = df
-        except Exception:
+        except Exception as e:  # noqa: BLE001 - 单代码失败不拖垮整批
+            # 记录首个失败原因, 避免全部落空时调用方拿到空结果却无 reason 可感知
+            if first_err is None:
+                first_err = f"{p.yahoo}: {e}" or type(e).__name__
             continue
-    return results, None
+    return results, first_err
 
 
 def get_fx_rate_ibkr(

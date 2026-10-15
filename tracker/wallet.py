@@ -448,6 +448,10 @@ def _tron_account(
 ) -> dict[str, Any]:
     """GET /v1/accounts/{address} → 账户对象; 未激活账户返回 {}."""
     body = _tron_get(chain_cfg["rpc"], f"/v1/accounts/{address}", timeout)
+    # 兜底节点可能返 200 + 非对象 body (list/str): 不校验会让 .get 抛 AttributeError
+    # 逃出 except RuntimeError, 用户看到裸 traceback 而非可读错误
+    if not isinstance(body, dict):
+        raise RuntimeError(f"TRON 响应格式异常: {str(body)[:100]}")
     data = body.get("data") or []
     return data[0] if data else {}
 
@@ -689,13 +693,18 @@ def _import_tron(
         except (TypeError, ValueError):
             return 0
 
-    spendable_sun = _to_sun(account.get("balance"))
+    # 负 balance (如 TRON 黑洞地址的协议层溢出) 会把 trx_sun 压到 ≤0 而整行丢弃,
+    # 掩盖正常正质押: spendable 截到 0 下限
+    spendable_sun = max(0, _to_sun(account.get("balance")))
     staked_sun = sum(
         _to_sun(item.get("amount"))
         for item in account.get("frozenV2") or []
         if isinstance(item, dict)
     )
     staked_sun += _to_sun(account.get("delegated_frozenV2_balance_for_bandwidth"))
+    # Stake1.0 委托出去的带宽质押 (与 V2 委托、frozen[] 自冻结分属不同协议字段,
+    # 不重叠); java-tron AccountCapsule.getTronPower() 亦计入此项, 漏记会少算老钱包 TRX
+    staked_sun += _to_sun(account.get("delegated_frozen_balance_for_bandwidth"))
     res = account.get("account_resource")
     if isinstance(res, dict):
         # Stake1.0 能量冻结在协议里是 Frozen 消息 {frozen_balance, expire_time},
@@ -707,6 +716,8 @@ def _import_tron(
             else _to_sun(fbe)
         )
         staked_sun += _to_sun(res.get("delegated_frozenV2_balance_for_energy"))
+        # Stake1.0 委托出去的能量质押 (与 V2 委托、frozen_balance_for_energy 自冻结不重叠)
+        staked_sun += _to_sun(res.get("delegated_frozen_balance_for_energy"))
     staked_sun += sum(
         _to_sun(item.get("frozen_balance"))
         for item in account.get("frozen") or []

@@ -169,6 +169,19 @@ def _yahoo_batch(parsed: list[ParsedSymbol]) -> dict[str, Quote]:
     return out
 
 
+def _yahoo_quote_currency(yahoo: str) -> str:
+    """LSE 等代码的报价币种 (yfinance fast_info); 失败/缺失返回 ""。
+
+    仅用于历史K线的便士折算判定, 任何异常都安全返回空串 (调用方按便士兜底)。
+    """
+    try:
+        import yfinance as yf
+
+        return str(yf.Ticker(yahoo).fast_info.get("currency") or "").strip()
+    except Exception:
+        return ""
+
+
 def _yahoo_history(
     p: ParsedSymbol, start_date: str, end_date: str | None = None
 ) -> pd.DataFrame:
@@ -184,9 +197,15 @@ def _yahoo_history(
     ]
     df = df[keep]
     if p.market is Market.GB:
-        for c in ("open", "high", "low", "close"):
-            if c in df.columns:
-                df[c] = df[c].astype(float) / 100
+        # LSE 惯例: 报价币种为 GBP (价在便士) / GBX / 便士变体 / 未知时 ÷100 折成
+        # 英镑; 仅当确证为其它币种 (美元/欧元计价的 LSE ETF/ADR, 如 CSPX.L/VWRA.L)
+        # 才不折算 —— 与报价路径 _quote_from_dump 的 is_pence 判据对齐, 避免同一
+        # 代码行情与K线单位不一致 (历史曾无条件 ÷100, 把美元计价 LSE 缩错 100 倍)
+        ccy = _yahoo_quote_currency(p.yahoo).upper()
+        if ccy in ("", "GBP", "GBX") or is_pence(ccy):
+            for c in ("open", "high", "low", "close"):
+                if c in df.columns:
+                    df[c] = df[c].astype(float) / 100
     return df
 
 
@@ -248,9 +267,6 @@ def _akshare_quote(p: ParsedSymbol) -> Quote:
     if row.empty:
         raise RuntimeError(f"akshare 未找到 {code}")
     r = row.iloc[0]
-    price = float(r["最新价"])
-    prev = r.get("昨收")
-    chg = r.get("涨跌幅")
 
     def _num(v):
         try:
@@ -258,6 +274,14 @@ def _akshare_quote(p: ParsedSymbol) -> Quote:
             return f if pd.notna(f) else None
         except (TypeError, ValueError):
             return None
+
+    # 停牌/无成交股东财快照最新价可能为 0 或 NaN: 与其余行情源一致地守卫,
+    # 无效即抛错回退 yfinance, 不让 0/NaN 报价污染盈亏/PB/涨跌幅
+    price = _num(r["最新价"])
+    if price is None or price <= 0:
+        raise RuntimeError(f"{p.yahoo}: akshare 无有效最新价 ({r['最新价']!r})")
+    prev = r.get("昨收")
+    chg = r.get("涨跌幅")
 
     # A股/北交 spot 自带市净率 (东财实时口径, HK spot 最终列已丢弃): 反推每股净资产,
     # 供 PB 阈值提醒使用 (yfinance BVPS 为滞后财报, 东财口径更准)

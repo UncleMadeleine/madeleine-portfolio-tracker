@@ -193,10 +193,12 @@ def run_sync(args) -> None:
     except (ValueError, RuntimeError) as e:
         _finish_with_error(f"{args.file}: 解析失败 ({e})")
 
+    # 与统一入口 tracker import file 一致: 缺省追加合并, --overwrite 才覆盖全部。
+    # (旧版缺省为覆盖, 会让按「导入默认追加」文档走的用户静默丢掉其它持仓)
     mode = (
-        importer.MODE_APPEND
-        if getattr(args, "append", False)
-        else importer.MODE_OVERWRITE
+        importer.MODE_OVERWRITE
+        if getattr(args, "overwrite", False)
+        else importer.MODE_APPEND
     )
     result = importer.apply_import(
         rows, args.portfolio, mode=mode, dry_run=args.dry_run
@@ -254,9 +256,14 @@ def main(argv=None) -> None:
     ap.add_argument("--portfolio", default=str(DEFAULT_PORTFOLIO))
     ap.add_argument("--dry-run", action="store_true", help="仅打印, 不写入")
     ap.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="覆盖全部持仓 (缺省追加合并, 与 tracker import file 一致)",
+    )
+    ap.add_argument(
         "--append",
         action="store_true",
-        help="追加合并 (按代码更新/新增); 缺省覆盖全部持仓",
+        help="追加合并 (缺省行为, 保留以兼容旧用法)",
     )
     ap.add_argument("--json", action="store_true", help="输出 JSON 而非表格")
     args = ap.parse_args(argv)

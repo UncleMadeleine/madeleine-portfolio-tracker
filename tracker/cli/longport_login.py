@@ -61,14 +61,16 @@ def cmd_longport_login(args) -> None:
             url = None
             for _ in range(30):
                 _time.sleep(1)
-                if proc.poll() is not None and not os.path.exists(url_file):
-                    break
                 try:
                     content = open(url_file, encoding="utf-8").read().strip()
                 except FileNotFoundError:
-                    continue
+                    content = ""
                 if content:
                     url = content
+                    break
+                # 子进程已退出但仍无内容 (启动即崩/被 kill): 不必等满 30s。
+                # (url_file 由父进程预创建, 整个轮询期始终存在, 不能拿它判存在性)
+                if proc.poll() is not None:
                     break
         finally:
             proc.kill()

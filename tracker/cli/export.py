@@ -102,7 +102,16 @@ def _export_md(base: str, view: pd.DataFrame, summary: dict, issues: list[str]) 
     lines.append(header)
     lines.append(sep)
     for _, r in view.iterrows():
-        cells = [_fmt_cell(r.get(c)) for c in cols]
+        cells = []
+        for c in cols:
+            v = r.get(c)
+            # pnl_pct 是小数比值 (0.1111 = +11.11%), 按百分数显示, 与汇总行
+            # total_pnl_pct:+.2% 及 UI 的 format="percent" 口径一致;
+            # change_pct 本身即百分数 (2.56), 走普通格式化, 不可混用
+            if c == "pnl_pct" and isinstance(v, (int, float)) and not pd.isna(v):
+                cells.append(f"{v:+.2%}")
+            else:
+                cells.append(_fmt_cell(v))
         lines.append("| " + " | ".join(cells) + " |")
     lines.append("")
 

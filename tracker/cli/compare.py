@@ -82,8 +82,9 @@ def cmd_compare(args) -> None:
         _finish_with_error("取到数据的代码不足 2 个, 无法对比")
 
     period = args.period
+    raw = getattr(args, "raw", False)
     if args.json:
-        payload = charting.compare_payload(frames, normalize=True, period=period)
+        payload = charting.compare_payload(frames, normalize=not raw, period=period)
         lines = []
         for ln in payload["lines"]:
             vals = [p["value"] for p in ln["data"]]
@@ -102,7 +103,7 @@ def cmd_compare(args) -> None:
             {
                 "period": period,
                 "months": args.months,
-                "normalized": True,
+                "normalized": not raw,
                 "codes": list(frames.keys()),
                 "lines": lines,
             }

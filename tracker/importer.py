@@ -183,7 +183,9 @@ def merge_holdings(
         src = str(r.get("import_source") or "")
         if key in index:
             target = merged[index[key]]
-            if "avg_cost" in r:
+            # 仅当新行带有效 avg_cost 时才覆盖: 上游 (如长桥 cost_price 解析失败)
+            # 会写 avg_cost=None, 用 `"avg_cost" in r` 判定会把已手填的成本抹成 None
+            if r.get("avg_cost") is not None:
                 target["avg_cost"] = r["avg_cost"]
             # 同来源幂等: 只替换该来源分量, 其它来源分量保留, 总量按分量重算。
             # 台账只在条目已入来源记账时延续 (plain→plain 不生成台账);

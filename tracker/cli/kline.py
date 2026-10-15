@@ -75,6 +75,10 @@ def cmd_kline(args) -> None:
         )
     except Exception as e:
         _finish_with_error(f"{p.yahoo}: K线数据获取失败 ({e})")
+    # 空表校验: 源返回非空但 clean_ohlc 清空 (停牌/价格<=0) 时 get_ohlc 给空表,
+    # 直接进 summarize_ohlc 会因空表只返 {"bars":0} 而在 s["change_pct"] 崩 KeyError
+    if df.empty:
+        _finish_with_error(f"{p.yahoo}: 无有效K线数据")
     # 数据驱动兜底: 请求周期细于数据原生粒度 (周K源请求日K等) 时降级并明示
     period = charting.resolve_period(df, args.period)
     if period != args.period:

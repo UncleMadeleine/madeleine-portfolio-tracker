@@ -22,18 +22,29 @@ def build_view(
         try:
             p = parse(raw)
         except ValueError as e:
-            issues.append(str(e))
+            # 与取数层口径统一 (symbol: 原因), 便于 take_snapshot 去重
+            issues.append(f"{raw}: {e}")
             continue
         # Streamlit data_editor 清空单元格会产生 NaN; `NaN or 0` 仍得 NaN, 需显式判
         raw_qty = h.get("quantity")
         if raw_qty is None or (isinstance(raw_qty, float) and math.isnan(raw_qty)):
             raw_qty = 0
-        qty = float(raw_qty or 0)
+        try:
+            qty = float(raw_qty or 0)
+        except (TypeError, ValueError):
+            # 手改 JSON 成非数字字符串 (Excel 粘贴 "N/A" 等): 记 issue 跳过该行,
+            # 不让 ValueError 穿透 snapshot/export/UI 变裸 traceback
+            issues.append(f"{p.yahoo}: 数量无法解析 ({raw_qty!r}), 跳过")
+            continue
         cost = h.get("avg_cost")
         if cost is None or (isinstance(cost, float) and math.isnan(cost)) or cost == "":
             cost = None
         else:
-            cost = float(cost)
+            try:
+                cost = float(cost)
+            except (TypeError, ValueError):
+                issues.append(f"{p.yahoo}: 成本无法解析 ({cost!r}), 按缺失处理")
+                cost = None
         q = quotes.get(p.yahoo)
         if q is None or q.price is None or not math.isfinite(q.price):
             issues.append(f"{p.yahoo}: 行情缺失")
@@ -60,6 +71,7 @@ def build_view(
                 "currency": q.currency,
                 "price": q.price,
                 "change_pct": q.change_pct,
+                "quantity": qty,
                 "source": getattr(q, "source", None),
                 "avg_cost": cost,
                 "market_value": mv,

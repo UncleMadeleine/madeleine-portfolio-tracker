@@ -88,4 +88,6 @@ def take_snapshot(
         + wissues
         + [f"汇率缺失: {c}" for c in fx_missing]
     )
-    return base, view, summarize(view), wview, all_issues + notes
+    # 同一坏代码可能在取数层 errors 与 build_view issues 各记一条 (格式现已统一),
+    # 按首现去重, 避免快照「问题」里重复且格式不一
+    return base, view, summarize(view), wview, list(dict.fromkeys(all_issues + notes))

@@ -219,6 +219,7 @@ def render_portfolio_page() -> None:
                     "upper_2",
                     "lower_1",
                     "lower_2",
+                    "pb",
                     "mcap",
                     "note",
                 ],
@@ -253,6 +254,11 @@ def render_portfolio_page() -> None:
                         "市值覆盖",
                         format="%.0f",
                         help="手写总市值 (当地货币), 覆盖行情/数据源取值; 仅 metric=mcap 时生效",
+                    ),
+                    "pb": st.column_config.NumberColumn(
+                        "每股净资产覆盖",
+                        format="%.4f",
+                        help="手写每股净资产 (BVPS), 覆盖行情/数据源取值; 仅 metric=pb 时生效",
                     ),
                     "note": st.column_config.TextColumn("备注"),
                 },
@@ -306,6 +312,7 @@ def render_portfolio_page() -> None:
                         "upper_2",
                         "lower_1",
                         "lower_2",
+                        "pb",
                         "mcap",
                         "note",
                     ):

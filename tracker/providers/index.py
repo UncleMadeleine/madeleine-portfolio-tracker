@@ -199,11 +199,12 @@ def _ak_index_history(
 
 
 # 美股主要指数的新浪代码 (index_us_stock_sina); 标普 500 新浪用 .INX
+# 注意: index_us_stock_sina 仅支持 {.IXIC, .DJI, .INX, .NDX}, 故不收 RUT
+# (Yahoo 无对应新浪码, 收了也只会在兜底时失败)
 _AK_US_SINA = {
     "SPX": ".INX",
     "NDX": ".IXIC",
     "DJI": ".DJI",
-    "RUT": ".RUT",
 }
 
 

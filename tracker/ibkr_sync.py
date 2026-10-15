@@ -66,7 +66,9 @@ def run_sync(args) -> None:
         return
 
     if result["written"]:
-        print(f"\n已备份原文件: {Path(args.portfolio).name}.bak")
+        # 仅当确有备份 (目标文件原本存在) 时才提示, 否则会报一个不存在的 .bak
+        if result.get("backup"):
+            print(f"\n已备份原文件: {Path(args.portfolio).name}.bak")
         print(
             f"✅ 已写入 {args.portfolio} "
             f"({'追加合并' if mode == importer.MODE_APPEND else '覆盖'}; "

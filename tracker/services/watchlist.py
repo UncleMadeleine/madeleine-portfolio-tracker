@@ -160,7 +160,9 @@ def build_watchlist_view(
             # 口径, 最准) > fundamentals 数据源 (yfinance 财报, 磁盘缓存 6h)。
             # 优先级与有无阈值无关: 仅跟踪的 pb 条目同样按 手写>行情 取值,
             # 并同样回落 effective_bv (book_value 列), 与预警条目口径一致
-            bv = entry_book_value(e) or getattr(q, "book_value", None)
+            bv = entry_book_value(e)
+            if bv is None:
+                bv = getattr(q, "book_value", None)
             if bv is None and has_thresholds:
                 _fetch_fundamentals(metric, p.yahoo)
                 bv = book_values.get(p.yahoo)
@@ -175,7 +177,9 @@ def build_watchlist_view(
         elif metric == METRIC_MCAP:
             # 总市值优先级: 条目手写 (离线可用) > 行情自带 (akshare 东财/
             # 长桥实时口径) > fundamentals 数据源 (yfinance, 磁盘缓存 6h)
-            mc = entry_market_cap(e) or getattr(q, "market_cap", None)
+            mc = entry_market_cap(e)
+            if mc is None:
+                mc = getattr(q, "market_cap", None)
             if mc is None and has_thresholds:
                 _fetch_fundamentals(metric, p.yahoo)
                 mc = market_caps.get(p.yahoo)
@@ -188,6 +192,10 @@ def build_watchlist_view(
         else:
             # price 基准: 直接取行情现值
             base_value = metric_value_for_quote(metric, q)
+            if base_value is None and has_thresholds:
+                # 现价 <=0 (数据源返回 0/负价): 与 pb/mcap 分支一样记一条 issue,
+                # 否则用户无法区分是 crypto 无数据源还是行情异常
+                issues.append(f"{p.yahoo}: 现价非正或缺失 ({price})")
         if has_thresholds and base_value is None:
             # 有阈值但指标无数据 (PB/市值缺失): 不判区间内, 标记无数据
             status, dist = STATUS_NO_DATA, {}

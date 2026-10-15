@@ -67,7 +67,9 @@ def clean_ohlc(df: pd.DataFrame) -> pd.DataFrame:
         out[c] = pd.to_numeric(out[c], errors="coerce")
     if "volume" not in out.columns:
         out["volume"] = 0.0
-    out["volume"] = pd.to_numeric(out["volume"], errors="coerce").fillna(0.0)
+    # inf/负成交量与 NaN 一样污染绘图/统计/JSON 序列化: 非有限置 0, 负值截到 0
+    vol = pd.to_numeric(out["volume"], errors="coerce").fillna(0.0)
+    out["volume"] = vol.where(np.isfinite(vol), 0.0).clip(lower=0.0)
     out = out.dropna(subset=["date", "open", "high", "low", "close"])
     # inf 与 NaN 一样会污染绘图/统计/JSON 序列化 (指标与畸形源数据均可产出)
     out = out[np.isfinite(out[["open", "high", "low", "close"]]).all(axis=1)]
@@ -140,19 +142,39 @@ def calc_macd(
 def calc_rsi(df: pd.DataFrame, period: int = 14) -> pd.Series:
     """RSI 相对强弱指标 (Wilder 平滑法).
 
-    周期内平均涨幅 / (平均涨幅 + 平均跌幅) × 100, 取值 0~100.
-    首值无前日数据 → NaN; 全涨 (avg_loss=0) → 100; 无波动 → 50.
+    首 period 根为预热段 (涨跌幅样本不足) → NaN; 之后用 Wilder 递推:
+    avg = (prev_avg*(period-1) + 当期涨/跌) / period, 种子为前 period 个
+    涨/跌幅的简单平均。全涨 (avg_loss=0) → 100; 无波动 (两者均 0) → 50。
+
+    注: 不用 ewm(adjust=False) —— 它以首根单值播种, 会在预热段产出伪造值
+    且与 Wilder 口径长期偏差 (最多十余点)。
     """
     close = df["close"].astype(float)
     delta = close.diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
-    avg_gain = gain.ewm(alpha=1 / period, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1 / period, adjust=False).mean()
-    rs = avg_gain / avg_loss.replace(0, np.nan)
-    rsi = 100 - 100 / (1 + rs)
-    rsi[avg_loss == 0] = 100.0  # avg_loss=0 (全涨) → RSI=100 (NaN 不受影响)
-    rsi[(avg_gain == 0) & (avg_loss == 0)] = 50.0  # 无波动 → 50
+    n = len(close)
+    rsi = pd.Series(np.nan, index=close.index, dtype=float)
+    if n <= period:
+        return rsi
+    # Wilder 种子: 前 period 个涨/跌幅 (index 1..period) 的简单平均, 置于 index period
+    ag = float(gain.iloc[1 : period + 1].mean())
+    al = float(loss.iloc[1 : period + 1].mean())
+    avg_gain = [ag]
+    avg_loss = [al]
+    for i in range(period + 1, n):
+        ag = (ag * (period - 1) + float(gain.iloc[i])) / period
+        al = (al * (period - 1) + float(loss.iloc[i])) / period
+        avg_gain.append(ag)
+        avg_loss.append(al)
+    avg_gain = np.asarray(avg_gain, dtype=float)
+    avg_loss = np.asarray(avg_loss, dtype=float)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        rs = avg_gain / avg_loss
+        vals = 100 - 100 / (1 + rs)
+    vals[avg_loss == 0] = 100.0  # 全涨 → 100
+    vals[(avg_gain == 0) & (avg_loss == 0)] = 50.0  # 无波动 → 50
+    rsi.iloc[period:] = vals
     return rsi
 
 
@@ -395,7 +417,11 @@ def build_candlestick_fig(
             f" · {currency}" if currency else ""
         )
     last_close = float(df["close"].iloc[-1])
-    up_marker = "▲" if last_close >= float(df["open"].iloc[-1]) else "▼"
+    # 最新价方向惯例相对前一根收盘 (非本根 open): 低开高收时应 ▲
+    prev_close = (
+        float(df["close"].iloc[-2]) if len(df) > 1 else float(df["open"].iloc[-1])
+    )
+    up_marker = "▲" if last_close >= prev_close else "▼"
     fig.update_layout(
         template="plotly_dark",
         paper_bgcolor="#0e1117",
@@ -941,13 +967,19 @@ def kline_payload(
         (INTL_UP_COLOR, INTL_DOWN_COLOR) if green_up else (CN_UP_COLOR, CN_DOWN_COLOR)
     )
     dates = df["date"].dt.strftime("%Y-%m-%d")
+    # 精度按价格中位数定 (低价币 SHIB/PEPE ~1e-5 需 8~10 位): 硬编码 round(,6)
+    # 会把 1e-5 显示误差放大到百分之几、<1e-6 直接归零, 故蜡烛/MA 统一用
+    # nd=max(6, precision), 与对外声明的 priceFormat.precision 一致
+    med = float(df["close"].median())
+    precision = _price_precision(med)
+    nd = max(6, precision)
     candles = [
         {
             "time": t,
-            "open": round(float(o), 6),
-            "high": round(float(h), 6),
-            "low": round(float(lo), 6),
-            "close": round(float(c), 6),
+            "open": round(float(o), nd),
+            "high": round(float(h), nd),
+            "low": round(float(lo), nd),
+            "close": round(float(c), nd),
         }
         for t, o, h, lo, c in zip(dates, df["open"], df["high"], df["low"], df["close"])
     ]
@@ -965,7 +997,7 @@ def kline_payload(
     ma_series = []
     for i, (n, srs) in enumerate(compute_ma(df, mas).items()):
         data = [
-            {"time": t, "value": round(float(v), 6)}
+            {"time": t, "value": round(float(v), nd)}
             for t, v in zip(dates, srs)
             if pd.notna(v)
         ]
@@ -977,8 +1009,6 @@ def kline_payload(
                     "data": data,
                 }
             )
-    med = float(df["close"].median())
-    precision = _price_precision(med)
     last = df.iloc[-1]
     title = f"{symbol} · {PERIOD_LABELS.get(period, '日K')}" + (
         f" · {currency}" if currency else ""
@@ -1064,7 +1094,13 @@ def kline_payload(
             "borderVisible": False,
             "priceLineVisible": True,
             "priceLineStyle": 2,
-            "priceLineColor": _rgba(up if last["close"] >= last["open"] else down, 0.7),
+            "priceLineColor": _rgba(
+                up
+                if last["close"]
+                >= (float(df["close"].iloc[-2]) if len(df) > 1 else float(last["open"]))
+                else down,
+                0.7,
+            ),
             "priceFormat": {
                 "type": "price",
                 "precision": precision,
@@ -1104,15 +1140,23 @@ def compare_payload(
     便于不同币种/量级的代码同图比较; 交易日历不同的市场按各自数据点绘制.
     """
     lines = []
+    precisions = []
     for i, (sym, df) in enumerate(frames.items()):
         d = resample_ohlc(df, period) if period != "daily" else clean_ohlc(df)
         if d.empty:
             continue
         close = d["close"].astype(float)
         base = float(close.iloc[0])
-        vals = close / base * 100 if normalize and base > 0 else close
+        if normalize and base > 0:
+            vals = close / base * 100
+            nd = 4  # 归一化后 ~100 量级, 4 位足够
+        else:
+            vals = close
+            # 原始价格: 按自身中位数定精度, 避免低价币 (SHIB ~1e-5) 被 round(,4) 归零
+            nd = max(6, _price_precision(float(close.median())))
+        precisions.append(nd)
         data = [
-            {"time": t, "value": round(float(v), 4)}
+            {"time": t, "value": round(float(v), nd)}
             for t, v in zip(d["date"].dt.strftime("%Y-%m-%d"), vals)
             if pd.notna(v)
         ]
@@ -1132,14 +1176,16 @@ def compare_payload(
     up, down = (
         (INTL_UP_COLOR, INTL_DOWN_COLOR) if green_up else (CN_UP_COLOR, CN_DOWN_COLOR)
     )
+    # 原始价格模式按最细精度展示 (低价币), 归一化模式 ~100 量级用 2 位
+    payload_precision = (max(precisions) if precisions else 2) if not normalize else 2
     return {
         "mode": "compare",
         "title": f"{names} · {PERIOD_LABELS.get(period, '日K')}"
         + (" · 归一化" if normalize else ""),
         "up": up,
         "down": down,
-        "precision": 2,
-        "minMove": 0.01,
+        "precision": payload_precision,
+        "minMove": float(10 ** (-payload_precision)),
         "initBars": init_bars,
         "height": height,
         "lines": lines,

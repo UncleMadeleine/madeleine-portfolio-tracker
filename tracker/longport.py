@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import threading
 import time
 from datetime import date, datetime
@@ -343,6 +344,10 @@ def _f(v) -> float | None:
 
 
 def _currency_for(yahoo: str) -> str:
+    # 港股人民币柜台 (8 开头 5 位, 如 82318.HK 中国平安-R) 以 CNY 成交, 但
+    # parse 按 .HK 推成 HKD; 长桥 SecurityQuote 不带币种字段, 这里按代码形态纠正
+    if re.match(r"^[89]\d{4}\.HK$", yahoo):
+        return "CNY"
     try:
         return parse(yahoo).currency
     except ValueError:
@@ -391,7 +396,9 @@ def get_quotes_longport(
                 continue
             price = _f(getattr(sq, "last_done", None))
             prev = _f(getattr(sq, "prev_close", None))
-            if price is None:
+            # 停牌/无成交 last_done 可能为 0: 产出 price=0 会让快照市值归零并触发
+            # 所有下限阈值误报。与 IBKR quote_from_ticker 一致地拒绝 ≤0 (回落默认源)
+            if price is None or price <= 0:
                 continue
             chg = (price - prev) / prev * 100.0 if prev else None
             pb = pb_ratios.get(lp)
@@ -530,7 +537,10 @@ def get_history_longport(
         d = ts.date() if isinstance(ts, datetime) else pd.Timestamp(ts).date()
         rows.append(
             {
-                "date": d.isoformat(),
+                # date 对象 (非 isoformat 字符串): 与 IBKR 路径同构, 兼容
+                # cli/history 的 %Y-%m-%d 格式化、charting.clean_ohlc 的
+                # to_datetime 与 astype(str); 字符串会让 history 子命令崩
+                "date": d,
                 "open": _f(getattr(c, "open", None)),
                 "high": _f(getattr(c, "high", None)),
                 "low": _f(getattr(c, "low", None)),
@@ -574,9 +584,15 @@ def positions_to_rows(positions: list) -> tuple[list[dict], list[str]]:
     skipped: list[str] = []
     for pos in positions:
         raw = str(getattr(pos, "symbol", "") or "").strip()
-        y = longport_to_yahoo(raw)
-        if not y:
+        y_mapped = longport_to_yahoo(raw)
+        if not y_mapped:
             skipped.append(f"{raw} 无法映射为内部代码 (市场不支持)")
+            continue
+        # 退市/改码自动迁移到接替码 (无接替码则跳过), 与 watchlist_to_rows 口径
+        # 一致: 否则死码会被写进 portfolio.json 并被 append 合并反复带回
+        y, mig = migrate_symbol(y_mapped)
+        if mig and y == y_mapped:
+            skipped.append(f"{raw} 已退市: {mig}")
             continue
         qty = _f(getattr(pos, "quantity", None))
         if qty is None or qty == 0:

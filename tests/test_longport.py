@@ -307,7 +307,8 @@ def test_get_history_longport_returns_sorted_df(monkeypatch):
 
     with patch.object(lp, "_get_quote_ctx", return_value=FakeCtx()):
         df = lp.get_history_longport(parse("0700.HK"), "2026-09-01", "2026-09-30")
-    assert list(df["date"]) == ["2026-09-23", "2026-09-24"]  # 升序
+    # date 列为 date 对象 (非字符串): 兼容 history 的 %Y-%m-%d 格式化
+    assert [d.isoformat() for d in df["date"]] == ["2026-09-23", "2026-09-24"]  # 升序
     assert float(df["close"].iloc[-1]) == 2.0
     assert float(df["volume"].iloc[-1]) == 20
 

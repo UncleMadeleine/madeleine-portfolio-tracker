@@ -257,7 +257,11 @@ def dedupe_watch_entries(entries: list[dict]) -> list[dict]:
         for k, v in e.items():
             if k in ("symbol", "lists", "type"):
                 continue
-            if v is not None and v != "" and (k not in found or not found[k]):
+            # 仅当尚无该键或原值为空 (None/"") 时才覆盖; 显式 0 (如 upper_1=0)
+            # 是有效值, 不能被后一条的 truthy 判断当空值抹掉
+            if v is not None and v != "" and (
+                k not in found or found[k] in (None, "")
+            ):
                 found[k] = v
     return list(by_symbol.values())
 
@@ -360,7 +364,9 @@ def load_settings(path: str | Path = SETTINGS_PATH) -> dict:
     p = Path(path)
     if p.exists():
         try:
-            raw = json.loads(p.read_text(encoding="utf-8"))
+            # utf-8-sig: 兼容编辑器存成的带 BOM settings.json, 否则 json.loads
+            # 报错被吞 → 全部设置静默回退默认 (与 portfolio/watchlist 读取一致)
+            raw = json.loads(p.read_text(encoding="utf-8-sig"))
         except (json.JSONDecodeError, OSError):
             raw = None
         if isinstance(raw, dict):

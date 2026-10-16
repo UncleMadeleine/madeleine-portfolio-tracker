@@ -90,7 +90,7 @@ def test_build_config_apikey_missing_credentials(tmp_path, monkeypatch):
 
 def test_build_config_oauth_placeholder_fast_fails(tmp_path):
     # 模板占位 client_id 必须快速报错, 绝不能发起阻塞式授权流
-    cfg = lp.load_config("longport.example.json")
+    cfg = lp.load_config(lp.EXAMPLE_CONFIG)
     with pytest.raises(RuntimeError, match="client_id"):
         lp.build_config(cfg)
 

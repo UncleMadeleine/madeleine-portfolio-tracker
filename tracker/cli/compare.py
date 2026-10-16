@@ -5,10 +5,12 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from .. import prices
+from ..paths import var_dir
 from ..search import resolve_symbol
 from ._common import _finish_with_error, _print_json
 
-VAR_DIR = Path(__file__).resolve().parent.parent.parent / "var"
+# 对比图 HTML 默认输出目录 (数据目录 var/, 安装位置无关)
+VAR_DIR = var_dir()
 
 
 def resolve_inputs(symbols: list[str]) -> tuple[list[str], list[str]]:

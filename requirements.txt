@@ -1,3 +1,8 @@
+# 源码树开发环境依赖 (与 pyproject.toml 的 [all] + [dev] extras 等价)。
+# 打包安装请优先用 pyproject.toml:
+#   pip install .                # 核心 (CLI/取数)
+#   pip install ".[ui]"          # + Streamlit UI / plotly
+#   pip install ".[all,dev]"     # 全部 + 测试 (等价本文件)
 openbb>=4.7.0
 akshare>=1.14.0
 ib_async>=1.0.0

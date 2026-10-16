@@ -28,7 +28,7 @@ Madeleine Portfolio Tracker 是一款**本地优先**的投资组合追踪工具
 - **宏观/风险指数K线** — 独立 IX.<KEY> 代码规范（美元指数 / VIX / 沪深 300 / 碳酸锂主力连续 / 水泥网建材指数 等，共 30 个，`index-kline --list` 可查全部），独立页面与 `index-kline` 子命令，独立 provider 源链
 - **多股对比** — 任意代码同坐标系折线对比，归一化（起点=100）跨币种跨量级比较
 - **Streamlit 可视化页面** — 组合明细 / 资产配置 / 自选提醒 / K线查询（含多股走势对比）/ 指数K线 / 设置
-- **统一 CLI** — 17 个子命令（快照、报价、持仓、自选、监控报告、导出、汇率、历史、K线、搜索、对比、指数K线、导入、长桥登录、同步、钱包导入、缓存），全部支持机器可读输出（`--json`，`report`/`export` 为 `-f json`）
+- **统一 CLI** — 18 个子命令（快照、报价、持仓、自选、监控报告、导出、汇率、历史、K线、搜索、对比、指数K线、导入、长桥登录、同步、钱包导入、缓存、初始化），全部支持机器可读输出（`--json`，`report`/`export` 为 `-f json`）
 - **链上钱包导入** — EVM 五链 + TRON + Solana 共七条链地址余额只读查询，一键写入持仓
 - **A股券商持仓导入** — 解析券商客户端导出的 CSV/Excel 持仓文件
 
@@ -44,21 +44,37 @@ Madeleine Portfolio Tracker 是一款**本地优先**的投资组合追踪工具
 ### 环境要求
 
 - Python ≥ 3.10
-- pip / venv
+- pip / venv（或 pipx / Docker，见下方「打包与分发」）
 
 ### 安装
+
+**方式一：pip 安装（推荐，装完即有 `tracker` / `tracker-ui` 命令）**
+
+```bash
+pip install madeleine-tracker          # 核心: CLI + 取数 (openbb/akshare/pandas)
+pip install "madeleine-tracker[ui]"    # + Streamlit 页面 / plotly 图表
+pip install "madeleine-tracker[all]"   # + IBKR / 长桥 可选增强
+# 或 pipx (自动隔离环境, 命令全局可用): pipx install "madeleine-tracker[ui]"
+```
+
+**方式二：源码树（开发用）**
 
 ```bash
 cd ~/Project/madeleine-portfolio-tracker
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt        # 等价 pip install ".[all,dev]"
 ```
+
+两种方式数据目录规则一致：环境变量 `TRACKER_HOME` > 源码树仓库根 > 平台用户目录
+（Linux `~/.local/share/tracker` / macOS `~/Library/Application Support/tracker` /
+Windows `%APPDATA%\tracker`）。pip 安装后首次使用先 `tracker init` 生成配置模板。
 
 ### 启动 Streamlit 页面
 
 ```bash
-streamlit run tracker/ui/app.py
+streamlit run tracker/ui/app.py   # 源码树
+tracker-ui                        # pip 安装后 (等价, 参数透传给 streamlit)
 ```
 
 页面默认运行在 `http://localhost:8501`，五个页面各有独立 URL（刷新 / 书签 / 前进后退不丢页）：
@@ -161,6 +177,7 @@ python -m pytest -m network
 ```
 
 > 完整 CLI 帮助：`python -m tracker.cli --help`（或每个子命令 `--help`）。`python -m tracker` 等价。
+> pip 安装后可直接用 `tracker` 命令（`tracker --help`）；`tracker init` 首次生成配置模板。
 
 ---
 
@@ -286,21 +303,24 @@ python -m tracker.cli kline 0700.HK --period weekly --open  # 周K + 自动打�
 ## 架构
 
 ```
-tracker/ui/           Streamlit 页面包（streamlit run tracker/ui/app.py）
+tracker/ui/           Streamlit 页面包（streamlit run tracker/ui/app.py / 安装后 tracker-ui）
 ├── app.py              路由入口（st.navigation 多页面, 每页独立 URL, 刷新不丢页）
+│                          + cli_main(): tracker-ui 控制台入口（定位包内 app.py 转交 streamlit）
 ├── portfolio_page.py   「组合」页面（持仓编辑/明细/配置/自选提醒 + 行情/汇率缓存）
 ├── kline_page.py       「K线」页面（搜索框 + lightweight-charts 组件 + 上市以来全量滑动 + 多股走势对比 + 加密货币对比）
 ├── index_page.py       「指数K线」页面（IX.<KEY> 分组下拉, 独立于股票 K线页）
 ├── import_page.py      「导入」页面（IBKR 账户 / 长桥账户 / 链上钱包 / 券商文件, 追加合并或覆盖）
 ├── settings_page.py    「设置」页面（配色 / 数据源 / 基础货币）
-├── longport_login.py   长桥 OAuth 登录引导（独立子进程, 状态文件 var/longport_oauth_state.json）
+├── longport_login.py   长桥 OAuth 登录引导（独立子进程, 状态文件 <数据目录>/var/longport_oauth_state.json）
 └── settings.py         settings.json 读写（涨跌配色 / prefer_akshare / use_ibkr / use_longport / crypto_source）+ portfolio 读写助手
 tracker/
 ├── __main__.py         python -m tracker 入口（转发到 cli）
-├── cli/                CLI 包（python -m tracker.cli，17 个子命令各一个模块）
+├── paths.py            数据目录解析（TRACKER_HOME > 仓库根 > 平台用户目录）+ 包内资源定位
+├── cli/                CLI 包（python -m tracker.cli，18 个子命令各一个模块）
 │   ├── __init__.py       argparse 注册与分发
 │   ├── _common.py        JSON 序列化 / 代码归一化 / 原子写 / 错误退出
 │   ├── __main__.py       python -m tracker.cli 入口
+│   ├── init.py           首次使用: 包内模板 → 数据目录（pip 安装后必走一步）
 │   ├── snapshot.py       快照（持仓 + 自选 + 阈值触发）
 │   ├── quote.py          实时行情
 │   ├── watchlist.py      自选管理（list/add/remove/import-longport）与阈值提醒
@@ -349,24 +369,31 @@ tracker/
 ├── ibkr_sync.py        IBKR 持仓导入兼容入口（委托 importer，等价 import ibkr，缺省覆盖）
 ├── ashare_sync.py      A股券商文件解析 + 兼容入口（等价 import file，缺省追加合并）
 └── wallet.py           链上钱包余额查询（EVM 五链 + TRON + Solana, 只读）
+数据目录（$TRACKER_HOME > 源码树仓库根 > 平台用户目录, 规则见 tracker/paths.py;
+pip 安装后用户数据不再写进 site-packages, 升级/重装不丢）:
 portfolio.json          持仓配置（页面可直接编辑保存; type 字段由系统自动维护, 手改无效;
-                        用户本地数据, 已 gitignore, 模板 portfolio.example.json）
+                         用户本地数据, 已 gitignore, 模板 tracker/templates/portfolio.example.json）
 watchlist.json          自选股配置（页面可直接编辑保存; type 字段由系统自动维护, 手改无效;
-                        用户本地数据, 已 gitignore, 模板 watchlist.example.json）
+                         用户本地数据, 已 gitignore, 模板 tracker/templates/watchlist.example.json）
 settings.json           显示与数据源设置（配色 / prefer_akshare / use_ibkr / use_longport /
-                        crypto_source; 已 gitignore, 模板 settings.example.json）
-*.example.json          各配置模板（随仓库提交: 首次使用 cp <名>.example.json <名>.json）
-ibkr.example.json       IBKR 配置模板（随仓库提交）
-ibkr.json               IBKR 真实配置（已 gitignore，不随仓库提交）
-longport.example.json   长桥配置模板（随仓库提交: OAuth 客户端注册与认证说明）
-longport.json           长桥真实配置（已 gitignore，不随仓库提交）
+                         crypto_source; 已 gitignore, 模板 tracker/templates/settings.example.json）
+ibkr.json               IBKR 真实配置（已 gitignore; 模板 tracker/templates/ibkr.example.json,
+                         env IBKR_CONFIG 可指定其他路径）
+longport.json           长桥真实配置（已 gitignore; 模板 tracker/templates/longport.example.json,
+                         env LONGPORT_CONFIG 可指定其他路径）
 var/                    运行时生成产物（行情缓存 quotes_cache.db、kline/compare 图表 HTML、
-                        longport_oauth_state.json 长桥登录状态）,
-                        已 gitignore, 可随时整目录删除（重建即自动再生成）
+                         longport_oauth_state.json 长桥登录状态）, 位于数据目录下,
+                         可随时整目录删除（重建即自动再生成）
+tracker/templates/      包内配置模板 + streamlit 主题（随 wheel 分发; tracker init 的来源）
+tracker/assets/         vendored lightweight-charts standalone JS（离线内嵌, 随 wheel 分发）
+pyproject.toml           打包元数据（依赖 extras / console scripts / package-data）
+Dockerfile / docker-compose.yml   UI 容器镜像（数据落 /data 卷, 一键起）
 docs/                   研究笔记（如 A股券商导入方案调研）
 skills/                 随仓库分发的 agent 技能手册（portfolio-tracker/SKILL.md: CLI 速查/代码规范/数据源/配置/操作流程）
 tests/                  单元测试（离线, mock）
 ```
+
+首次使用（pip 安装后）：`tracker init` 把上述模板复制到数据目录，再按需修改。
 
 ---
 
@@ -392,7 +419,7 @@ tests/                  单元测试（离线, mock）
   或子命令 `--crypto-source <值>`；默认 `auto` = Binance → Gate.io → Hyperliquid(USD系) → yfinance，
   指定源前置、失败自动落到链上其余源（Hyperliquid 为永续合约价，与现货有基差，仅 USD 系计价代码）
 - IBKR 行情可选叠加于任何域（需订阅）；英股 GBp 便士报价自动换算为 GBP；汇率缓存 10 分钟，行情缓存 5 分钟
-- IBKR 连接参数**从配置文件读取**（不写死在代码里）：优先 `ibkr.json`，其次 `ibkr.example.json` 模板兜底，也可用环境变量 `IBKR_CONFIG=/path/to/xxx.json` 指定；交易所映射在同一文件（A股经沪深港通通道：沪 `SEHKNTL`、深 `SEHKSZSE`、科创 `SEHKSTAR`，计价 CNH；B股走 `SHSE`/`SZSE` 并配 `tradingClass`；模板 `exchanges` 键名与代码读取一致，删键即用内置默认路由）
+- IBKR 连接参数**从配置文件读取**（不写死在代码里）：优先数据目录下的 `ibkr.json`，其次包内模板 `tracker/templates/ibkr.example.json` 兜底（`tracker init` 生成后修改），也可用环境变量 `IBKR_CONFIG=/path/to/xxx.json` 指定；交易所映射在同一文件（A股经沪深港通通道：沪 `SEHKNTL`、深 `SEHKSZSE`、科创 `SEHKSTAR`，计价 CNH；B股走 `SHSE`/`SZSE` 并配 `tradingClass`；模板 `exchanges` 键名与代码读取一致，删键即用内置默认路由）
 - IBKR 断开时自动静默回退下一级数据源，不影响页面运行；持仓同步见下方
 - 长桥 (LongPort) 可选前置行情/历史源：`settings.json` `"use_longport": true` 或子命令 `--longport` 启用；
   两源都启用时 IBKR 优先级更高，长桥不可用自动回退默认源（详见下方「长桥 (LongPort) 账户」）
@@ -463,7 +490,7 @@ python -m tracker.cli watchlist import-longport --overwrite  # 覆盖现有自�
 旧代码（`ERJ→EMBJ`、`BRFS→MBRF3.SA` 等，见 `tracker/symbol_migrations.py`）会自动
 迁移到接替代码，无接替码的跳过并说明。
 
-- 认证配置在 `longport.json`（模板 `longport.example.json`，已 gitignore）：推荐 `auth: oauth`
+- 认证配置在数据目录下的 `longport.json`（模板 `tracker/templates/longport.example.json` 随包分发，`tracker init` 生成；已 gitignore）：推荐 `auth: oauth`
   （填入 OAuth 客户端注册返回的 `client_id`），也支持 `auth: apikey`（开发者中心 app_key/app_secret/access_token，90 天过期）
 - 行情接入：各取数子命令加 `--longport`（如 `quote AAPL --longport`），或 `settings.json` `"use_longport": true`；
   两源都启用时 IBKR 优先级更高，长桥失败自动回退默认数据源
@@ -551,6 +578,42 @@ python -m tracker.cli import wallet polygon 0x... --tokenlist my_tokens.json
 
 ---
 
+## 打包与分发
+
+项目是标准 Python 包（`pyproject.toml`，setuptools 后端），wheel / sdist / Docker 三种形态：
+
+```bash
+# 构建 (需 python -m build; 产物在 dist/)
+python -m build
+
+# 安装 (任选其一)
+pip install dist/madeleine_tracker-*.whl            # 核心: CLI + 取数
+pip install "dist/madeleine_tracker-*.whl[ui]"      # + Streamlit UI / plotly
+pipx install "madeleine-tracker[ui]"                # pipx: 自动隔离 venv, 命令全局可用
+
+# Docker (UI 容器, 数据落 /data 卷)
+docker build -t madeleine-tracker .
+docker compose up -d --build            # http://localhost:8501
+docker compose exec tracker tracker init   # 首次使用: 生成配置模板
+```
+
+分发设计要点：
+
+- **依赖拆 extras**（`pyproject.toml`）：核心只装 `openbb/akshare/pandas`；`[ui]` 才拖
+  streamlit/plotly；`[ibkr]`/`[longport]` 是可选增强（代码里本就惰性导入，未装自动回退）。
+  Agent 用户装核心即可，不必拖 ~1GB 的 UI 依赖
+- **两个 console scripts**：`tracker`（= `python -m tracker.cli`）与 `tracker-ui`
+  （= `streamlit run tracker/ui/app.py`，自动定位包内 app.py + 落深色主题）
+- **数据目录与安装位置解耦**（`tracker/paths.py`）：`TRACKER_HOME` > 仓库根 > 平台用户目录；
+  pip 安装后用户数据/缓存/图表全部落平台目录，升级重装不丢；`tracker init` 从包内模板
+  （`tracker/templates/`，随 wheel 分发）生成初始配置
+- **wheel 内容**：仅 `tracker` 包 + 模板 + vendored lightweight-charts JS；sdist 额外带
+  tests / skills / docs（MANIFEST.in）；用户数据文件（portfolio.json 等）一律不进包
+- **Docker**：非 root 运行，`TRACKER_HOME=/data` 挂卷持久化，`--build-arg EXTRAS=ui,ibkr,longport`
+  可选带券商依赖；健康检查打 `/_stcore/health`
+
+---
+
 ## Madeleine Portfolio Tracker (English)
 
 > **Local-first multi-market portfolio tracker. Human-facing Streamlit UI + agent-facing CLI (`--json`). Zero API keys. Completely free.**
@@ -576,26 +639,35 @@ A **local-first** portfolio tracker supporting **A-shares / B-shares / Beijing S
 - **Macro/risk index K-lines** — dedicated `IX.<KEY>` symbol space (USD index, VIX, CSI 300, lithium-carbonate main-continuous futures, cement indices, ...), separate page & `index-kline` subcommand, dedicated provider source chain
 - **Multi-symbol comparison** — same-coordinate overlay, normalized to 100
 - **Unified import pipeline** — IBKR account / LongPort account / on-chain wallet (5 EVM chains + TRON + Solana) / A-share broker CSV-Excel file, each with append-merge or overwrite mode (auto .bak backup); same logic drives the Streamlit「导入」page
-- **Unified CLI** — 17 subcommands (snapshot, quote, watchlist, portfolio, report, export, fx, history, kline, search, compare, index-kline, import, longport-login, cache; `sync` / `import-wallet` kept as compat aliases); all support machine-readable output (`--json`, or `-f json` for report/export)
+- **Unified CLI** — 18 subcommands (snapshot, quote, watchlist, portfolio, report, export, fx, history, kline, search, compare, index-kline, import, longport-login, cache, init; `sync` / `import-wallet` kept as compat aliases); all support machine-readable output (`--json`, or `-f json` for report/export)
 
 ### Quick Start
 
 ```bash
+# Option A: pip install (recommended — gives you the `tracker` / `tracker-ui` commands)
+pip install "madeleine-tracker[ui]"     # core + Streamlit UI; [all] adds IBKR/LongPort
+tracker init                            # first run: copy packaged templates to the data dir
+
+# Option B: from source (development)
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt         # == pip install ".[all,dev]"
 
 # Streamlit dashboard
-streamlit run tracker/ui/app.py
+tracker-ui                              # installed; or: streamlit run tracker/ui/app.py (source tree)
 
-# CLI examples
-python -m tracker.cli snapshot --json
-python -m tracker.cli quote AAPL 600519.SS BTC-USD
-python -m tracker.cli kline AAPL --months 12
-python -m tracker.cli import ibkr --dry-run
-python -m tracker.cli import file positions.csv --dry-run
-python -m tracker.cli longport-login && python -m tracker.cli import longport --dry-run
+# CLI examples (installed: `tracker ...`; source tree: `python -m tracker.cli ...`)
+tracker snapshot --json
+tracker quote AAPL 600519.SS BTC-USD
+tracker kline AAPL --months 12
+tracker import ibkr --dry-run
+tracker import file positions.csv --dry-run
+tracker longport-login && tracker import longport --dry-run
 ```
+
+User data (`portfolio.json`, `watchlist.json`, `settings.json`, quote cache, generated
+HTML) lives in the **data dir** — `$TRACKER_HOME`, else the repo root when running from
+source, else the platform user dir (`~/.local/share/tracker` on Linux). See `tracker/paths.py`.
 
 ### Data Source Fallback
 
@@ -614,19 +686,23 @@ IBKR/LongPort disconnects silently fall back to the next source; the page contin
 ### Project Structure
 
 ```
-tracker/ui/        Streamlit dashboard (app.py + kline/index/import/settings pages + longport login + settings)
-tracker/           Core package: cli/ subcommands, providers/, symbols, symbol_migrations,
-                   storage, prices, fx, search, cache, charting, analytics, watchlist,
-                   services/, importer, ibkr, longport, longport_oauth, ibkr_sync,
-                   ashare_sync, wallet
-portfolio.json     Holdings config (editable via page)
-watchlist.json     Watchlist config (editable via page)
-settings.json      Display & data-source settings
-ibkr.json          IBKR config (gitignored, copy from ibkr.example.json)
-longport.json      LongPort config (gitignored, copy from longport.example.json)
+tracker/ui/        Streamlit dashboard (app.py + cli_main() console entry + kline/index/import/settings pages + longport login + settings)
+tracker/           Core package: paths.py (data-dir resolution), cli/ subcommands (incl. init),
+                   providers/, symbols, symbol_migrations, storage, prices, fx, search,
+                   cache, charting, analytics, watchlist, services/, importer, ibkr,
+                   longport, longport_oauth, ibkr_sync, ashare_sync, wallet
+tracker/templates/ Packaged config templates + streamlit theme (shipped in the wheel; `tracker init` copies them into the data dir)
+tracker/assets/    Vendored lightweight-charts standalone JS (offline, no extra dependency)
+pyproject.toml     Packaging metadata (dependency extras, console scripts, package-data)
+Dockerfile         Container image for the UI (data in the /data volume; docker-compose.yml included)
+portfolio.json     Holdings config (editable via page; lives in the data dir)
+watchlist.json     Watchlist config (editable via page; lives in the data dir)
+settings.json      Display & data-source settings (lives in the data dir)
+ibkr.json          IBKR config (gitignored; template in tracker/templates/)
+longport.json      LongPort config (gitignored; template in tracker/templates/)
 tests/             Unit tests (offline, mocked)
 ```
 
 ### License
 
-MIT
+MIT — see [LICENSE](LICENSE)

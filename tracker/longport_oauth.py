@@ -14,13 +14,11 @@ from __future__ import annotations
 import json
 import sys
 import time
-from pathlib import Path
 
 from . import longport
+from .paths import var_dir
 
-_STATE_PATH = (
-    Path(__file__).resolve().parent.parent / "var" / "longport_oauth_state.json"
-)
+_STATE_PATH = var_dir() / "longport_oauth_state.json"
 
 
 def _write_state(payload: dict) -> None:

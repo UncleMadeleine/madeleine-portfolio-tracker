@@ -18,14 +18,16 @@ import shutil
 import tempfile
 from pathlib import Path
 
+from .paths import data_home
 from .symbols import parse, type_for_symbol
 from .services.rules import metric_for_entry as rules_metric_for_entry
 
-# 数据文件锚定仓库根 (包内目录会随部署位置漂移)
-_ROOT = Path(__file__).resolve().parent.parent
-PORTFOLIO_PATH = _ROOT / "portfolio.json"
-WATCHLIST_PATH = _ROOT / "watchlist.json"
-SETTINGS_PATH = _ROOT / "settings.json"
+# 数据文件锚定数据目录 (TRACKER_HOME > 源码树仓库根 > 平台用户目录, 见 paths.py:
+# pip 安装后不再写进 site-packages; 源码树跑法与旧版完全一致)
+_DATA_HOME = data_home()
+PORTFOLIO_PATH = _DATA_HOME / "portfolio.json"
+WATCHLIST_PATH = _DATA_HOME / "watchlist.json"
+SETTINGS_PATH = _DATA_HOME / "settings.json"
 
 DEFAULT_BASE_CURRENCY = "CNY"
 

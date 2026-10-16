@@ -8,7 +8,8 @@
 Quote.book_value, 供 PB 阈值提醒使用 (不依赖 yfinance fundamentals)。
 calc_indexes 失败静默跳过 (PB 提醒回落 fundamentals 链路)。
 
-认证两种方式 (配置文件 longport.json, 模板 longport.example.json):
+认证两种方式 (配置文件 longport.json, 数据目录下; 模板 longport.example.json
+随包分发在 tracker/templates/):
   - oauth: OAuthBuilder 浏览器授权, token 由 SDK 持久化在
     ~/.longport/openapi/tokens/<client_id> 并自动刷新 (推荐, UI 登录引导走此路径)
   - apikey: 开发者中心 User Center 的 app_key/app_secret/access_token (HMAC 由 SDK 处理)
@@ -31,12 +32,15 @@ from pathlib import Path
 
 import pandas as pd
 
+from .paths import TEMPLATES_DIR, data_home
 from .providers.base import Quote
 from .symbols import _is_us_preferred, parse, type_for_symbol
 from .symbol_migrations import migrate_symbol
 
-DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "longport.json"
-EXAMPLE_CONFIG = Path(__file__).resolve().parent.parent / "longport.example.json"
+# 用户真实配置落数据目录 (源码树即仓库根; pip 安装后 ~/.tracker/longport.json);
+# 模板随包分发, env LONGPORT_CONFIG 优先于两者
+DEFAULT_CONFIG = data_home() / "longport.json"
+EXAMPLE_CONFIG = TEMPLATES_DIR / "longport.example.json"
 
 # 兜底: 无任何配置文件时的非敏感默认 (auth=oauth 需用户在 longport.json 填 client_id)
 _FALLBACK: dict = {

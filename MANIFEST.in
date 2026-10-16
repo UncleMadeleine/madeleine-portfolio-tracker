@@ -1,0 +1,12 @@
+# sdist (源码分发) 额外内容: wheel 只含 tracker 包 (见 pyproject.toml package-data),
+# 源码包 additionally 带上测试 / agent 技能手册 / 研究笔记 / 开发脚本。
+
+include LICENSE README.md requirements.txt pytest.ini
+include .streamlit/config.toml
+include Dockerfile .dockerignore docker-compose.yml
+recursive-include tests *.py
+recursive-include skills *
+recursive-include docs *.md
+prune .venv
+global-exclude *.py[cod]
+global-exclude __pycache__

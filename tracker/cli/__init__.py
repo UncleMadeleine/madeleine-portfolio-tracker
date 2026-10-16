@@ -16,6 +16,7 @@
   longport-login 长桥 OAuth 登录 (浏览器授权, token 自动缓存刷新)
   sync      从 IB Gateway 账户同步持仓 (已并入 import ibkr, 保留兼容)
   index-kline 宏观/风险指数K线 (IX.<KEY>, 独立于股票 kline)
+  init      首次使用: 把包内配置模板复制到数据目录 (pip 安装后必走一步)
 
 所有子命令均支持 --json 输出机器可读结果, 便于脚本与 AI 消费。
 """
@@ -32,6 +33,7 @@ from ._common import VERSION, _finish_with_error
 from .cache import cmd_cache
 from .export import cmd_export
 from .compare import cmd_compare
+from .init import cmd_init
 from .search import cmd_search
 from .fx import cmd_fx
 from .history import cmd_history
@@ -774,6 +776,24 @@ def build_parser() -> argparse.ArgumentParser:
     p_c.add_argument("action", nargs="?", choices=["info", "clear"], default="info")
     p_c.add_argument("--json", action="store_true")
     p_c.set_defaults(func=cmd_cache)
+
+    # ---- init (首次使用: 模板落地到数据目录) ----
+    p_init = sub.add_parser(
+        "init",
+        help="把包内配置模板复制到数据目录 (首次使用)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "示例:\n"
+            "  tracker init            # 生成缺失的 portfolio/watchlist/settings/ibkr/longport.json\n"
+            "  tracker init --force    # 用模板覆盖已存在的配置\n"
+            "数据目录: $TRACKER_HOME > 源码树仓库根 > 平台用户目录 (~/.tracker)\n"
+        ),
+    )
+    p_init.add_argument(
+        "--force", action="store_true", help="用模板覆盖已存在的配置文件"
+    )
+    p_init.add_argument("--json", action="store_true", help="输出 JSON")
+    p_init.set_defaults(func=cmd_init)
 
     return ap
 

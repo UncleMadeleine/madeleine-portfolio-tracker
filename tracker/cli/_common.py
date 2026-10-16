@@ -9,9 +9,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from .. import __version__ as VERSION  # noqa: F401  (单一版本来源, 经 cli 再导出)
 from ..symbols import parse
-
-VERSION = "1.0.0"
 
 
 def _records(df: pd.DataFrame) -> list[dict]:

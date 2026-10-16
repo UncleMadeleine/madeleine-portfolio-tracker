@@ -78,7 +78,7 @@ def test_load_config_env_override(tmp_path, monkeypatch):
 
 
 def test_load_config_falls_back_to_example(tmp_path, monkeypatch):
-    # 无真实配置且无 env 时, 回退到仓库中的 ibkr.example.json 模板
+    # 无真实配置且无 env 时, 回退到包内模板 tracker/templates/ibkr.example.json
     monkeypatch.setattr(ibkr_mod, "DEFAULT_CONFIG", tmp_path / "nope.json")
     monkeypatch.delenv("IBKR_CONFIG", raising=False)
     monkeypatch.delenv("IBKR_MODE", raising=False)

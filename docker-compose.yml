@@ -1,0 +1,31 @@
+# Madeleine Portfolio Tracker — 本地一键起 UI
+#
+#   docker compose up -d --build        # 构建并启动 (http://localhost:8501)
+#   docker compose exec tracker tracker init      # 首次使用: 生成配置模板
+#   docker compose exec tracker tracker snapshot --json
+#   docker compose run --rm --entrypoint tracker tracker import file 持仓.csv
+#
+# 数据全部在命名卷 tracker-data (对应容器内 /data = $TRACKER_HOME),
+# 删容器不丢; 备份 = docker run --rm -v tracker-data:/data alpine tar czf - -C /data . > backup.tgz
+#
+# 想直接读写宿主机某目录 (如 ~/portfolio): 把 volumes 改成
+#   - ./tracker-data:/data   (相对路径即仓库外任意目录)
+
+services:
+  tracker:
+    build:
+      context: .
+      args:
+        # 需要 IBKR / 长桥时改 ui,ibkr,longport (镜像更大)
+        EXTRAS: ui
+    image: madeleine-tracker
+    ports:
+      - "8501:8501"
+    environment:
+      - TRACKER_HOME=/data
+    volumes:
+      - tracker-data:/data
+    restart: unless-stopped
+
+volumes:
+  tracker-data:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import time
 from pathlib import Path
@@ -11,11 +12,19 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
+from .paths import var_dir
+
 if TYPE_CHECKING:
     from .prices import Quote
 
 
-CACHE_DB = Path(__file__).resolve().parent.parent / "var" / "quotes_cache.db"
+# 行情缓存落在数据目录 var/ (安装位置无关); TRACKER_CACHE_DB 可显式指定
+# (测试隔离 / 只读挂载场景), 缺省 var/quotes_cache.db
+CACHE_DB = (
+    Path(os.environ["TRACKER_CACHE_DB"])
+    if os.environ.get("TRACKER_CACHE_DB")
+    else var_dir() / "quotes_cache.db"
+)
 CACHE_TTL = 300  # 秒, 实时行情缓存有效期
 OHLC_TTL = 1800  # 秒, 日线K线缓存有效期 (30 分钟; 收盘后数据不变, TTL 过期重取也准)
 

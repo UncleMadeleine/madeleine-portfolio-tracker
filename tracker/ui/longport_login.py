@@ -13,15 +13,13 @@ import json
 import subprocess
 import sys
 import time
-from pathlib import Path
 
 import streamlit as st
 
 from tracker import longport
+from tracker.paths import var_dir
 
-_STATE_PATH = (
-    Path(__file__).resolve().parent.parent.parent / "var" / "longport_oauth_state.json"
-)
+_STATE_PATH = var_dir() / "longport_oauth_state.json"
 _STALE_SECONDS = 600.0  # 状态文件超过 10 分钟视为过期流程
 
 
@@ -65,7 +63,6 @@ def _start_login() -> None:
     _write_state({"status": "starting"})
     proc = subprocess.Popen(
         [sys.executable, "-m", "tracker.longport_oauth"],
-        cwd=str(Path(__file__).resolve().parent.parent.parent),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -82,8 +79,9 @@ def render_login_section(key_prefix: str = "lp") -> None:
     """长桥登录状态卡片: 状态 + 登录/打开授权页/重试/取消操作."""
     if not _client_id_configured():
         st.warning(
-            "尚未配置长桥 OAuth 客户端: 复制 longport.example.json 为 longport.json, "
-            "按其中说明注册 OAuth 客户端并填入 client_id。",
+            "尚未配置长桥 OAuth 客户端: 运行 tracker init 生成配置模板 "
+            "(或复制包内 tracker/templates/longport.example.json 为数据目录下的 "
+            "longport.json), 按其中说明注册 OAuth 客户端并填入 client_id。",
             icon=":material/key_off:",
         )
         return

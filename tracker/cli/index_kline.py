@@ -7,10 +7,12 @@ import sys
 from pathlib import Path
 
 from .. import prices
+from ..paths import var_dir
 from ..symbols import INDEX_CATALOG, index_groups, index_label, parse
 from ._common import _finish_with_error, _print_json, _records
 
-VAR_DIR = Path(__file__).resolve().parent.parent.parent / "var"
+# 指数K线 HTML 默认输出目录 (数据目录 var/, 安装位置无关)
+VAR_DIR = var_dir()
 
 
 def cmd_index_kline(args) -> None:

@@ -23,8 +23,9 @@ def cmd_longport_login(args) -> None:
     if not client_id or "填入" in client_id:
         _finish_with_error(
             "longport.json 缺少有效 client_id。"
-            "请先注册 OAuth 客户端 (见 longport.example.json 中的注册命令), "
-            "把返回的 client_id 填入 longport.json。"
+            "请先运行 tracker init 生成配置 (模板见包内 "
+            "tracker/templates/longport.example.json, 内含 OAuth 客户端注册命令), "
+            "把返回的 client_id 填入数据目录下的 longport.json。"
         )
     if args.json:
         # JSON 模式: 不自动开浏览器, 只产出授权 URL。SDK build(on_open) 会占住
@@ -42,7 +43,9 @@ def cmd_longport_login(args) -> None:
             url_file = tf.name
         child_code = (
             "import os, sys\n"
-            "sys.path.insert(0, %r)\n"
+            "_root = %r\n"
+            "if os.path.exists(os.path.join(_root, 'tracker', '__init__.py')):\n"
+            "    sys.path.insert(0, _root)  # 源码树运行才需要; 已安装时 site-packages 已在 path\n"
             "from tracker import longport\n"
             "cfg = longport.load_config()\n"
             "try:\n"

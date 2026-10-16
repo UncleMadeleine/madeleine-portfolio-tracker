@@ -1,9 +1,11 @@
 """IBKR Gateway 行情接入: ib_async/ib_insync 可选依赖, 失败自动回退.
 
 配置从配置文件读取, 不在代码中写死:
-  优先 ibkr.json (真实配置, 已被 gitignore, 可含敏感信息)
-  其次 ibkr.example.json (随仓库提供的模板, 兜底保证开箱即用)
+  优先 ibkr.json (数据目录下的真实配置, 已被 gitignore, 可含敏感信息)
+  其次 ibkr.example.json (包内模板 tracker/templates/, 兜底保证开箱即用)
   亦可环境变量 IBKR_CONFIG 显式指定路径。
+  数据目录 = TRACKER_HOME > 源码树仓库根 > 平台用户目录 (见 tracker/paths.py);
+  pip 安装后首次使用 `tracker init` 可把模板复制到数据目录再改。
 
 Gateway 模式: "mode" 字段 paper(模拟, 4002) / live(实盘, 4001),
 env IBKR_MODE > 文件 mode > 默认 paper; 文件里显式 "port" 优先于模式端口。
@@ -21,11 +23,14 @@ from pathlib import Path
 
 import pandas as pd
 
+from .paths import TEMPLATES_DIR, data_home
 from .prices import Quote
 from .symbols import Market, ParsedSymbol, is_pence, type_for_symbol
 
-DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "ibkr.json"
-EXAMPLE_CONFIG = Path(__file__).resolve().parent.parent / "ibkr.example.json"
+# 用户真实配置落数据目录 (源码树即仓库根; pip 安装后 ~/.tracker/ibkr.json);
+# 模板随包分发, env IBKR_CONFIG 优先于两者
+DEFAULT_CONFIG = data_home() / "ibkr.json"
+EXAMPLE_CONFIG = TEMPLATES_DIR / "ibkr.example.json"
 
 # 兜底: 无任何配置文件时的最小非敏感连接默认 (IB Gateway 本机默认, 非凭据)
 _FALLBACK: dict = {

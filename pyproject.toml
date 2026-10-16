@@ -1,0 +1,85 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "madeleine-tracker"
+description = "本地多市场投资组合追踪: Streamlit 页面给人看, JSON CLI 给 Agent 用; 零 API Key"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "Madeleine" }]
+keywords = ["portfolio", "tracker", "streamlit", "cli", "stocks", "crypto"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Financial :: Investment",
+]
+# 单一版本来源: tracker/__init__.py 的 __version__
+dynamic = ["version"]
+
+# 核心依赖: 行情取数 (openbb 封装 yfinance/akshare) + 数据处理。
+# ib_async / longport 为可选增强 (用时惰性导入, 未装自动回退);
+# streamlit / plotly 仅 UI 与 CLI HTML 图表需要 → 拆 extras, CLI-only
+# 的 Agent 用户不必拖 ~1GB 的 UI 依赖。
+dependencies = [
+    "openbb>=4.7.0",
+    "akshare>=1.14.0",
+    "pandas>=2.0.0",
+]
+
+[project.optional-dependencies]
+ui = [
+    "streamlit>=1.40.0",
+    "plotly>=5.24.0",
+]
+ibkr = [
+    "ib_async>=1.0.0",
+]
+longport = [
+    "longport>=4.3.0",
+]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-timeout>=2.4.0",
+    "pytest-xdist>=3.8.0",
+    "build>=1.0",
+]
+# 全部功能 (源码树开发环境等价于 requirements.txt)
+all = [
+    "madeleine-tracker[ui,ibkr,longport]",
+]
+
+[project.scripts]
+# 安装后可直接使用 tracker / tracker-ui 命令 (等价 python -m tracker.cli)
+tracker = "tracker.cli:main"
+tracker-ui = "tracker.ui.app:cli_main"
+
+[tool.setuptools.dynamic]
+version = { attr = "tracker.__version__" }
+
+[tool.setuptools]
+packages = [
+    "tracker",
+    "tracker.cli",
+    "tracker.providers",
+    "tracker.services",
+    "tracker.ui",
+]
+include-package-data = true
+
+# 随 wheel 分发的包内资源: 配置模板 (tracker init 的来源) 与 vendored 前端资产
+# (lightweight-charts standalone JS, 离线内嵌, 无新增依赖)
+[tool.setuptools.package-data]
+tracker = [
+    "templates/*.json",
+    "templates/*.toml",
+    "assets/*.js",
+]

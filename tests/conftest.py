@@ -46,3 +46,43 @@ def _no_network(monkeypatch, request):
 
     monkeypatch.setattr(socket.socket, "connect", guarded_connect)
     monkeypatch.setattr(socket, "getaddrinfo", guarded_getaddrinfo)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_data_home(tmp_path, monkeypatch):
+    """数据隔离: 数据目录 / 磁盘缓存 / HTML 输出目录全部指向 tmp_path.
+
+    storage/cache/cli 的路径常量是 import 时解析的 (源码树 → 仓库根),
+    不隔离的话测试会读写开发者真实的 portfolio.json / quotes_cache.db。
+    TRACKER_HOME 一并置位, 覆盖测试期间新 import 模块的解析;
+    argparse 默认值在 build_parser() 时才读模块全局, 也要改。
+    """
+    home = tmp_path / "tracker-home"
+    var = home / "var"
+    monkeypatch.setenv("TRACKER_HOME", str(home))
+
+    import tracker.cache as cache_mod
+    import tracker.cli as cli_pkg
+    import tracker.cli.compare as cli_compare
+    import tracker.cli.index_kline as cli_index_kline
+    import tracker.cli.kline as cli_kline
+    import tracker.storage as storage
+    import tracker.watchlist as watchlist_mod
+    from tracker import longport_oauth
+    from tracker.ui import longport_login
+
+    monkeypatch.setattr(storage, "PORTFOLIO_PATH", home / "portfolio.json")
+    monkeypatch.setattr(storage, "WATCHLIST_PATH", home / "watchlist.json")
+    monkeypatch.setattr(storage, "SETTINGS_PATH", home / "settings.json")
+    monkeypatch.setattr(watchlist_mod, "DEFAULT_WATCHLIST", home / "watchlist.json")
+    monkeypatch.setattr(cache_mod, "CACHE_DB", var / "quotes_cache.db")
+    monkeypatch.setattr(cli_kline, "VAR_DIR", var)
+    monkeypatch.setattr(cli_compare, "VAR_DIR", var)
+    monkeypatch.setattr(cli_index_kline, "VAR_DIR", var)
+    monkeypatch.setattr(longport_oauth, "_STATE_PATH", var / "longport_oauth_state.json")
+    monkeypatch.setattr(
+        longport_login, "_STATE_PATH", var / "longport_oauth_state.json"
+    )
+    # argparse 默认值 (--portfolio / --watchlist-file / --file)
+    monkeypatch.setattr(cli_pkg, "DEFAULT_PORTFOLIO", home / "portfolio.json")
+    monkeypatch.setattr(cli_pkg, "DEFAULT_WATCHLIST", home / "watchlist.json")

@@ -10,13 +10,14 @@ from __future__ import annotations
 
 from functools import lru_cache
 import math
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 from pandas.tseries.frequencies import to_offset
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+
+if TYPE_CHECKING:  # 仅类型标注用 (运行时不依赖 plotly, 见构建函数内惰性导入)
+    import plotly.graph_objects as go
 
 OHLC_COLUMNS = ("date", "open", "high", "low", "close", "volume")
 DEFAULT_MA: tuple[int, ...] = (5, 20, 60)
@@ -334,6 +335,11 @@ def build_candlestick_fig(
     height: int = 680,
 ) -> go.Figure:
     """构建蜡烛图: 价格主图 + 成交量副图 + MA 均线 + 非交易日断轴 + 区间快捷按钮."""
+    # plotly 惰性导入: CLI 的 --json 数据路径 (无图表) 不需要它,
+    # 装核心依赖 (openbb/akshare/pandas) 的 Agent 用户无需拖 plotly
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+
     df = clean_ohlc(df)
     if df.empty:
         raise ValueError(f"{symbol}: 无有效K线数据")
@@ -526,15 +532,19 @@ def fig_to_html(fig: go.Figure) -> str:
 #   触控板双指横向滑动 = 平移 (wheel deltaX), 双指纵向/捏合 = 缩放 (deltaY);
 #   价格轴随可见区间自动缩放; 十字光标 + 顶部 OHLC 信息栏.
 
-_LWC_ASSET = (
-    Path(__file__).parent / "assets" / "lightweight-charts.standalone.production.js"
-)
-
-
 @lru_cache(maxsize=1)
 def _lwc_source() -> str:
-    """vendored lightweight-charts v5 standalone (Apache-2.0, 离线内嵌)."""
-    return _LWC_ASSET.read_text(encoding="utf-8")
+    """vendored lightweight-charts v5 standalone (Apache-2.0, 离线内嵌).
+
+    从包内 assets/ 读 (随 wheel 分发); importlib.resources 对 zip 安装
+    同样成立 (自动解到临时文件), 不再依赖 __file__ 相对路径。
+    """
+    from importlib.resources import files
+
+    asset = files(__package__).joinpath(
+        "assets", "lightweight-charts.standalone.production.js"
+    )
+    return asset.read_text(encoding="utf-8")
 
 
 def _rgba(hex_color: str, alpha: float) -> str:

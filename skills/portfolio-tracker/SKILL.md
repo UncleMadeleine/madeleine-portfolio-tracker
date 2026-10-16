@@ -20,9 +20,16 @@ description: Use when the user asks to check or manage their investment portfoli
 ## 运行入口
 
 ```bash
-cd ~/Project/madeleine-portfolio-tracker   # 仓库根目录
+# 源码树 (仓库根目录)
+cd ~/Project/madeleine-portfolio-tracker
 .venv/bin/python -m tracker.cli <子命令> [选项]     # 统一入口
 .venv/bin/python -m tracker <子命令>               # 等价别名
+
+# pip 安装后 (pip install madeleine-tracker / pipx): 直接有 tracker 命令,
+# 数据落平台用户目录 (见「配置文件」一节), 无需进入仓库目录
+tracker <子命令> [选项]
+tracker init        # 首次使用: 生成配置模板 (数据目录下)
+tracker-ui          # pip 安装后起 Streamlit 页面 (等价 streamlit run tracker/ui/app.py)
 ```
 
 ## 子命令速览
@@ -46,6 +53,7 @@ cd ~/Project/madeleine-portfolio-tracker   # 仓库根目录
 | `sync` | IBKR 同步 (兼容入口→import ibkr; **注意 sync 缺省覆盖全部持仓**, `--append` 才追加, 与 import ibkr 相反) | `sync --dry-run` |
 | `import-wallet` | 链上钱包导入 (兼容入口→import wallet; 缺省只查询, `--add`/`--overwrite` 才写盘) | `import-wallet eth 0x... --add` |
 | `cache` | 行情磁盘缓存 | `cache info`, `cache clear` |
+| `init` | 首次使用: 模板落地到数据目录 | `init`, `init --force` |
 
 `--help` 查看每个子命令的完整参数: `python -m tracker.cli snapshot --help`; `-v/--version` 看版本。
 `kline` / `compare` 接受宽松输入 (中文名/裸数字/非规范代码), 自动搜索回退到规范代码。
@@ -102,9 +110,17 @@ cd ~/Project/madeleine-portfolio-tracker   # 仓库根目录
 
 ## 配置文件
 
+数据目录 = 环境变量 `TRACKER_HOME` > 源码树仓库根 > 平台用户目录
+(Linux `~/.local/share/tracker` / macOS `~/Library/Application Support/tracker` /
+Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致); pip 安装
+(`pip install madeleine-tracker`) 后数据落平台目录, 不写进 site-packages。
+运行产物 (行情缓存 quotes_cache.db / K线 HTML / 长桥登录状态) 在数据目录的
+`var/` 子目录。首次使用 `tracker init` 把包内模板 `tracker/templates/*.example.json`
+复制成数据目录下的真实配置 (已存在则跳过, `--force` 覆盖)。
+
 - `portfolio.json`: `{"base_currency": "CNY", "holdings": [{"symbol", "type", "quantity", "avg_cost"}]}`
   `type` 为系统维护的内部域标记, 保存时自动按 `symbols.type_for_symbol()` 推导/覆写。
-  均为用户本地数据 (已 gitignore), 模板 `*.example.json` 随仓库提交, 首次使用 `cp <名>.example.json <名>.json`。
+  均为用户本地数据 (已 gitignore), 模板随包分发在 `tracker/templates/portfolio.example.json`。
 - `watchlist.json`: 扁平条目列表, 一个代码可属多个列表, 支持两级阈值与指标基准:
   ```json
   {"watchlist": [
@@ -123,27 +139,27 @@ cd ~/Project/madeleine-portfolio-tracker   # 仓库根目录
   覆盖键又用 price 基准需显式写 `metric: "price"`; 页面「指标基准」留空会钉为 price)。
   指标缺失 (crypto/无数据源) → 「指标无数据」, 不判区间内、不误报触发。
   `type` 由系统自动维护 (读取/保存时均会补写覆写), 手改无效。
-- `settings.json`: 页面显示与数据源偏好 (已 gitignore, 模板 `settings.example.json`):
+- `settings.json`: 页面显示与数据源偏好 (已 gitignore, 模板 `tracker/templates/settings.example.json`):
   `color_scheme` (cn 红涨绿跌 / intl 绿涨红跌, 默认 cn) · `prefer_akshare` (默认 false) ·
   `use_ibkr` (默认 false) · `use_longport` (默认 false) ·
   `crypto_source` (auto/binance/gate/hyperliquid/yfinance, 默认 auto; 指定源前置, 失败回落链上其余源)。
   设置页切换数据源即时生效 (连进程内负缓存一起清); 直接改文件则重启 streamlit 生效。
-- `ibkr.json`: IBKR 连接参数 + 交易所映射。**从配置文件读取, 不写死在代码里**：
-  - 模板 `ibkr.example.json` 随仓库提交; 真实配置 `ibkr.json` 已被 gitignore, 用
-    `cp ibkr.example.json ibkr.json` 生成后按需修改 (可含敏感信息, 不会误提交)
-  - 优先级: `ibkr.json` → `ibkr.example.json` 兜底; 也可用环境变量 `IBKR_CONFIG=/path` 指定
+- `ibkr.json`: IBKR 连接参数 + 交易所映射 (数据目录下)。**从配置文件读取, 不写死在代码里**：
+  - 模板随包分发 `tracker/templates/ibkr.example.json`; `tracker init` 可生成数据目录下的
+    真实配置 `ibkr.json` (可含敏感信息, 不会误提交; 源码树里该文件已 gitignore)
+  - 优先级: 显式 path > env `IBKR_CONFIG=/path` > 数据目录 `ibkr.json` > 包内模板兜底
   - 缺字段自动继承模板/兜底值; 所有下划线开头的键 (`_comment`/`_说明`) 被忽略
   - Gateway 端口由 `mode` 决定 (paper=4002 / live=4001), 显式 `"port"` 优先, env `IBKR_MODE` 可临时覆盖
   - **开发 IBKR 相关功能前必读 `docs/ibkr-readonly-api.md`**: 本项目只用只读 API
     (行情/K线/汇率/持仓), 禁写 API (下单/撤单/订单信息查询, 只读模式下不可得)
 - `longport.json`: 长桥 (LongPort) OpenAPI 接入 (`pip install longport` 后可用; env `LONGPORT_CONFIG` 可指定其他路径):
-  - 模板 `longport.example.json` 随仓库提交; 真实配置 `longport.json` 已 gitignore
+  - 模板随包分发 `tracker/templates/longport.example.json`; `tracker init` 生成数据目录下的真实配置
   - `auth: oauth` (推荐): 填入 OAuth 客户端注册返回的 `client_id` (注册命令见模板),
     然后 `tracker longport-login` 或 UI 导入页「长桥账户」标签登录; token 由 SDK
     缓存于 ~/.longport/openapi/tokens/<client_id> 并自动刷新
   - `auth: apikey`: 开发者中心 User Center 的 app_key/app_secret/access_token (90 天过期)
   - UI 登录引导在独立子进程运行 (SDK OAuth build 会冻结嵌入它的解释器), 状态文件
-    var/longport_oauth_state.json, 事件流: starting → waiting(含授权 URL) → ok/error
+    <数据目录>/var/longport_oauth_state.json, 事件流: starting → waiting(含授权 URL) → ok/error
   - 长桥代码映射: 内部 0700.HK ↔ 700.HK, 600519.SS ↔ 600519.SH, AAPL ↔ AAPL.US,
     D05.SI ↔ D05.SG, 000001.SZ 等深市代码原样支持, 类别股/优先股 TAP-A ↔ TAP.A.US /
     WFC-PL ↔ WFC.PR.L.US; 德英加澳/北交所不支持 (行情前置自动跳过, 回落默认源)
@@ -214,7 +230,7 @@ cd ~/Project/madeleine-portfolio-tracker   # 仓库根目录
    .venv/bin/python -m tracker.cli history AAPL --months 12 --rows 5
    ```
 
-8b. **看K线** (plotly 蜡烛图, 输出 `var/kline_<代码>.html` (点号转下划线, 如 `var/kline_0700_HK.html`); K线有独立磁盘缓存 TTL 30 分钟):
+8b. **看K线** (plotly 蜡烛图, 输出 <数据目录>/var/kline_<代码>.html (点号转下划线, 如 `var/kline_0700_HK.html`); K线有独立磁盘缓存 TTL 30 分钟):
    ```
    .venv/bin/python -m tracker.cli kline AAPL --months 12 --ma 5,20,60
    .venv/bin/python -m tracker.cli kline 600519.SS --period weekly --open   # 周K + 自动开浏览器

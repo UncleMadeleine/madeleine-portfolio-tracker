@@ -67,7 +67,7 @@ def build_parser() -> argparse.ArgumentParser:
     """构建顶层 argparse 解析器, 注册全部子命令."""
     ap = argparse.ArgumentParser(
         prog="tracker",
-        description="OpenBB Portfolio Tracker 命令行工具 (持仓 / 自选 / 行情 / 汇率 / 缓存)",
+        description="Madeleine Portfolio Tracker 命令行工具 (持仓 / 自选 / 行情 / 汇率 / 缓存)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"

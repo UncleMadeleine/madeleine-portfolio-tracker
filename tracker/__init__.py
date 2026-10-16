@@ -1,4 +1,4 @@
-"""本地多市场投资组合追踪 (OpenBB + akshare)."""
+"""Madeleine Portfolio Tracker — 本地多市场投资组合追踪 (多数据源 + Streamlit/CLI 双前端)."""
 
 from .analytics import build_view, summarize
 from .fx import get_fx_rates, get_rate

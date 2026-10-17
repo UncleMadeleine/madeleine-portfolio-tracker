@@ -443,6 +443,18 @@ def parse(symbol: str) -> ParsedSymbol:
         elif code.startswith("200"):
             is_b_share = True
             currency = "HKD"  # 深 B 以港币交易
+    elif market is Market.HK:
+        # 港股人民币柜台 (HKEX RMB counter): 8 开头 5 位码 (82318.HK 中国平安-R /
+        # 80737.HK 湾区发展-R / 83188.HK 华夏沪深三百-R), 以 CNY 成交。号段专用,
+        # 必须同时要求 5 位: GEM 的 08083 (有赞) 剥零后是 4 位 8083.HK, 不是柜台。
+        # 与 B 股同口径按代码形态推导, 供数据源不上报币种时兜底 (global_stocks
+        # ._quote_from_dump / _akshare_quote 的 p.currency); 无需像 B 股那样覆盖
+        # 数据源自报 —— yfinance 对人民币柜台报的就是 CNY (83188.HK)。
+        # 美元柜台 (09xxx/41xxx, 仅 ETF 三柜台) 无法按形态推导: normalize 剥前导零
+        # 后 9070.HK 与 9988.HK 阿里同形, 币种由数据源自报 (见 longport._currency_for)。
+        code = yahoo.split(".")[0]
+        if len(code) == 5 and code.startswith("8"):
+            currency = "CNY"
     return ParsedSymbol(
         raw=symbol.strip(),
         yahoo=yahoo,

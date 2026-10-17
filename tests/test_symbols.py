@@ -1,6 +1,6 @@
 import pytest
 
-from tracker.symbols import Market, normalize, parse
+from tracker.symbols import MARKET_META, Market, normalize, parse
 
 
 def test_normalize_hk_4digit():
@@ -80,6 +80,35 @@ def test_parse_hk_ak_code_5digit():
     assert p.market is Market.HK
     assert p.currency == "HKD"
     assert p.ak_code == "00700"
+
+
+def test_parse_hk_rmb_counter_currency():
+    """港股人民币柜台 (8 开头 5 位) 以 CNY 成交, 按代码形态推导.
+
+    82318.HK 中国平安-R / 80737.HK 湾区发展-R (全球首只双币双股) / 83188.HK
+    华夏沪深三百-R。必须同时要求 5 位: GEM 的 08083 (有赞) 剥零后是 4 位
+    8083.HK, 不属该号段。美元柜台 (09070.HK 平安香港高息-U) 剥零后与港币主板
+    代码同形 (9070.HK vs 9988.HK 阿里), 无法按形态推导 → HKD, 币种由数据源自报
+    (见 longport._currency_for)。
+    """
+    for sym in ("82318.HK", "80737.HK", "82800.HK", "83188.HK"):
+        p = parse(sym)
+        assert p.market is Market.HK
+        assert p.currency == "CNY", sym
+        assert p.is_b_share is False, sym
+        assert p.ak_code == sym.split(".")[0], sym
+    # 4 位 8 开头 (GEM 08083 有赞) 不是人民币柜台, 仍是港币
+    p = parse("8083.HK")
+    assert p.currency == "HKD"
+    assert p.ak_code == "08083"
+    # 港币主柜台 (含 9 开头四位) 一律 HKD
+    assert parse("0700.HK").currency == "HKD"
+    assert parse("9988.HK").currency == "HKD"  # 阿里
+    # 美元柜台: 不按形态猜
+    assert parse("09070.HK").currency == "HKD"
+    assert parse("09188.HK").currency == "HKD"
+    # 市场默认不变 (MARKET_META), 只是按号段覆盖
+    assert MARKET_META[Market.HK]["currency"] == "HKD"
 
 
 def test_parse_all_markets():

@@ -159,21 +159,24 @@ def test_get_quotes_longport_unavailable_without_config(monkeypatch, tmp_path):
 
 
 def test_currency_for_hk_counters():
-    """港股多柜台币种兜底: 只有人民币柜台 (8 开头 5 位) 可按代码形态判定 → CNY.
+    """港股多柜台币种兜底: 人民币柜台 (8 开头 5 位) → CNY, 美元柜台不猜.
 
     美元柜台 (09070.HK 平安香港高息-U / 09188.HK 华夏沪深三百-U) 经 normalize 剥
     前导零后与港币主板代码同形 (9070.HK vs 9988.HK 阿里 / 9888.HK 百度), 按形态
     猜必错其一, 故兜底不猜 USD —— 权威币种走 static_info.currency / IBKR
     contract.currency / yfinance 自报。原正则 `^9\\d{4}\\.HK$` 的号段在港交所不
     存在, 从未命中过; `^9\\d{3}` 则会把阿里/百度误判成 USD (~7.8 倍错误)。
+    形态规则收口在 symbols.parse, 这里只验证两者同口径。
     """
     # 人民币柜台: 8 开头 5 位, 号段专用
     assert lp._currency_for("82318.HK") == "CNY"  # 中国平安-R
+    assert lp._currency_for("80737.HK") == "CNY"  # 湾区发展-R (首只双币双股)
     assert lp._currency_for("83188.HK") == "CNY"  # 华夏沪深三百-R
     # 港币主柜台 (含 9 开头四位) 一律 HKD
     assert lp._currency_for("0700.HK") == "HKD"  # 腾讯
     assert lp._currency_for("9988.HK") == "HKD"  # 阿里: 9 开头但不是美元柜台
     assert lp._currency_for("9888.HK") == "HKD"  # 百度
+    assert lp._currency_for("8083.HK") == "HKD"  # GEM 08083 有赞: 4 位, 非柜台
     # 美元柜台: 兜底不猜 (拼错方向比不猜更贵)
     assert lp._currency_for("9070.HK") == "HKD"  # 平安香港高息-U
     assert lp._currency_for("9188.HK") == "HKD"  # 华夏沪深三百-U
@@ -181,6 +184,9 @@ def test_currency_for_hk_counters():
     # 非港股走 parse 的市场默认
     assert lp._currency_for("AAPL") == "USD"
     assert lp._currency_for("600519.SS") == "CNY"
+    # 与 parse 同口径: 形态判定只有一处, 不会在两模块间漂移
+    for sym in ("82318.HK", "83188.HK", "0700.HK", "9988.HK", "9070.HK", "AAPL"):
+        assert lp._currency_for(sym) == parse(sym).currency, sym
 
 
 def test_get_quotes_longport_hk_counters_without_static_info(monkeypatch):

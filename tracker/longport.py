@@ -348,25 +348,17 @@ def _f(v) -> float | None:
 
 
 def _currency_for(yahoo: str) -> str:
-    # 港股多柜台 (HKEX Multi-Counter) 币种兜底, 仅 static_info.currency 缺失时启用:
-    #   · 人民币柜台: 8 开头 5 位码 (82318.HK 中国平安-R / 83188.HK 华夏沪深三百-R),
-    #     以 CNY 成交 (IBKR 侧报 CNH, 已统一归一); 该号段专用, 可按形态判定。
-    #   · 美元柜台: 只属于 ETF 的港元/人民币/美元三柜台, 代码 09xxx (09070.HK
-    #     平安香港高息-U / 09188.HK 华夏沪深三百-U) 或 41xxx (41555.HK), 简称带
-    #     -U; 股票的港币-人民币双柜台 (2023-06-19 首批 24 只蓝筹) 没有美元柜台。
-    # 美元柜台无法按代码形态识别: normalize() 按 Yahoo 惯例剥前导零 (Yahoo 上美元
-    # 柜台就是 9070.HK / 9188.HK 四位码), 剥完与港币主板代码同形 —— 9070.HK 是美元
-    # 柜台, 9988.HK 是阿里港币主柜台, 9888.HK 是百度, 9834.HK 是安硕纳指一百-U
-    # (美元) 而 9888.HK 是百度 (港币)。原正则 `^9\d{4}\.HK$` 要的 9xxxx (5 位 9
-    # 开头) 不是港股任何柜台使用的号段 (美元柜台是 09xxx/41xxx), 对真实美元柜台一律
-    # 不命中 (死代码); 若放松成 `^9\d{3}` 则会把阿里/百度误判成 USD (~7.8 倍错误),
-    # 正是本函数要避免的事故。故美元柜台币种只认权威源: static_info.currency (调用处
-    # 首选) / IBKR contract.currency / yfinance 按码自报 (Yahoo: 9188.HK=USD,
-    # 3188.HK=HKD, 83188.HK=CNY)。兜底取市场默认 HKD —— 9 开头四位码里港币主板
-    # 代码远多于美元柜台, 猜 HKD 期望错误最小 (与 ibkr.contract_spec 对港股留空
-    # currency 同一原则: 猜错比不猜贵)。
-    if re.match(r"^8\d{4}\.HK$", yahoo):
-        return "CNY"
+    # 长桥 SecurityQuote 不带币种字段, parse() 对 .HK 只知市场默认 HKD, 这里按代码
+    # 形态纠正 (权威币种以 static_info.currency 为准, 见 get_quotes_longport):
+    #   · 人民币柜台 8 开头 5 位 (82318.HK 中国平安-R) → CNY;
+    #   · 美元柜台 (09xxx/41xxx, 仅 ETF 三柜台) 剥前导零后与港币主板代码同形
+    #     (9070.HK 是美元柜台, 9988.HK 是阿里, 9888.HK 是百度, 9834.HK 是安硕
+    #     纳指一百-U), 无法按形态推导 → 只能落市场默认 HKD, 等 static_info /
+    #     IBKR contract.currency / yfinance 按码自报 (Yahoo: 9188.HK=USD,
+    #     3188.HK=HKD, 83188.HK=CNY)。
+    # 形态规则统一收口在 symbols.parse (与 type_for_symbol 同原则: 同一代码在任何
+    # 路径下只有一个判定), 此处不再重复正则 —— 早先重复的 `^9\d{4}\.HK$` 号段在港股
+    # 不存在, 从未命中过; 放松成 `^9\d{3}` 则会把阿里/百度误判成 USD (~7.8 倍错误)。
     try:
         return parse(yahoo).currency
     except ValueError:

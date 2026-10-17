@@ -105,6 +105,8 @@ def _quote_from_dump(p: ParsedSymbol, d: dict) -> Quote | None:
     # B 股计价币种以本地规范为准 (沪B=USD / 深B=HKD): yfinance 对沪深 B 股
     # 常误报 currency=CNY, 按其转换会把美元/港币市值按 CNY 记账 (汇率差 7 倍)。
     # p.currency 由 symbols.parse 按 B 股代码段权威推导, 优先于数据源自报。
+    # (港股人民币柜台 8 开头 5 位同样在 parse 里推导成 CNY, 但 yfinance 对该号段
+    # 报的就是 CNY, 无需覆盖; 美元柜台 09xxx/41xxx 与港币主板代码同形, parse 不猜。)
     if p.is_b_share and raw_ccy.upper() == "CNY":
         raw_ccy = p.currency
     # 便士符号大小写混用 (GBp/GBX/gbx/…), 必须先判定再大写, 否则小写 "gbx"

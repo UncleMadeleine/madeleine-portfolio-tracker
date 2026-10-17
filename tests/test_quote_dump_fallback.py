@@ -103,3 +103,30 @@ def test_open_fallback_hk_currency_passthrough(hk_symbol):
     assert q is not None
     assert q.price == 4.288
     assert q.currency == "HKD"
+
+
+def test_iob_symbol_usd_quote_not_scaled(us_symbol):
+    """.IL (LSE 国际挂盘) 以 USD 计价: 不做 LSE 主板便士折算 (KAP.IL=USD 64.4)."""
+    p = parse("KAP.IL")
+    d = {
+        "symbol": "KAP.IL",
+        "last_price": 64.4,
+        "prev_close": 63.2,
+        "currency": "USD",
+        "name": "NATIONAL ATOMIC CO KAZATOMPROM",
+    }
+    q = _quote_from_dump(p, d)
+    assert q is not None
+    assert q.price == 64.4
+    assert q.currency == "USD"
+    assert q.change_pct == pytest.approx((64.4 / 63.2 - 1) * 100)
+
+
+def test_iob_symbol_missing_currency_not_pence(us_symbol):
+    """回归: .IL 币种字段缺失时兜底 USD, 不能按 LSE 惯例兜底 GBp (会错除 100)."""
+    p = parse("KAP.IL")
+    d = {"symbol": "KAP.IL", "last_price": 64.4, "prev_close": 63.2}
+    q = _quote_from_dump(p, d)
+    assert q is not None
+    assert q.price == 64.4
+    assert q.currency == "USD"

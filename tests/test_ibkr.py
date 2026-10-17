@@ -150,6 +150,8 @@ def test_contract_spec_all_markets():
         ("9804.HK", ContractSpec("9804", "SEHK", "")),
         ("SAP.DE", ContractSpec("SAP", "IBIS", "EUR")),
         ("BP.L", ContractSpec("BP.", "LSE", "GBP")),
+        # LSE 国际挂盘 (IOB): .IL symbol 不带尾点, 币种混杂 (KAP=USD) 故留空
+        ("KAP.IL", ContractSpec("KAP", "IOB", "")),
         ("RY.TO", ContractSpec("RY", "TSE", "CAD")),
         ("X.V", ContractSpec("X", "TSXV", "CAD")),
         ("ABC.CN", ContractSpec("ABC", "CSE", "CAD")),
@@ -252,6 +254,13 @@ def test_ibkr_to_yahoo_mappings():
         (("D01", "SGX", "", "USD"), "D01.SI"),
         # B3 现行交易所代号
         (("MBRF3", "B3", "", "BRL"), "MBRF3.SA"),
+        # LSE 国际挂盘 (IOB): Kazatomprom GDR (KAP.IL, IOB/USD)。落进 USD 兜底
+        # 会拼出裸 KAP 被当成美股, 而该代码在美股已退市 (KapStone) → 无行情
+        (("KAP", "IOB", "", "USD"), "KAP.IL"),
+        (("KAP", "IOB", "IOB", "USD"), "KAP.IL"),
+        # SMART 路由的 IOB 合约: 真实交易所只在 primaryExchange 上
+        (("KAP", "SMART", "IOB", "USD"), "KAP.IL"),
+        (("KAP", "IOB", "IOB", "GBP"), "KAP.IL"),
         (("ZZZ", "FOO", "", "ZZZ"), None),
     ]
     for args, expected in cases:
@@ -265,6 +274,8 @@ def test_positions_to_rows():
         FakePosition(FakeContract("600519", "SEHK", "CNY"), 5.0, 1400.0),
         FakePosition(FakeContract("900902", "SHSE", "USD"), 200.0, 12.5),
         FakePosition(FakeContract("200012", "SZSE", "HKD"), 300.0, 8.3),
+        # LSE 国际挂盘 GDR (Kazatomprom): IOB + USD → .IL, 不能落成裸 KAP (美股死代码)
+        FakePosition(FakeContract("KAP", "IOB", "USD"), 31.0, 63.86),
         FakePosition(FakeContract("WEIRD", "XX", "YY"), 1.0, 1.0),
         FakePosition(FakeContract("GONE", "SMART", "USD"), 0.0, 10.0),
     ]
@@ -275,6 +286,7 @@ def test_positions_to_rows():
         {"symbol": "600519.SS", "type": "cn", "quantity": 5.0, "avg_cost": 1400.0},
         {"symbol": "900902.SS", "type": "cn", "quantity": 200.0, "avg_cost": 12.5},
         {"symbol": "200012.SZ", "type": "cn", "quantity": 300.0, "avg_cost": 8.3},
+        {"symbol": "KAP.IL", "type": "global", "quantity": 31.0, "avg_cost": 63.86},
     ]
     assert len(skipped) == 1 and "WEIRD" in skipped[0]
 

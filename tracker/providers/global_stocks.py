@@ -93,7 +93,14 @@ def _quote_from_dump(p: ParsedSymbol, d: dict) -> Quote | None:
     # 避免回退到 p.currency(GBP) 导致价格放大 100 倍
     raw_ccy = _pick(d, "currency")
     if raw_ccy is None:
-        raw_ccy = "GBp" if p.market is Market.GB else p.currency
+        # .IL (LSE 国际挂盘) 证券以 USD/EUR 计价 (KAP.IL=USD): 币种缺失时不能按
+        # LSE 主板惯例兜底 GBp, 便士兜底会把价格再缩小 100 倍
+        if p.yahoo.endswith(".IL"):
+            raw_ccy = "USD"
+        elif p.market is Market.GB:
+            raw_ccy = "GBp"
+        else:
+            raw_ccy = p.currency
     raw_ccy = str(raw_ccy).strip()
     # B 股计价币种以本地规范为准 (沪B=USD / 深B=HKD): yfinance 对沪深 B 股
     # 常误报 currency=CNY, 按其转换会把美元/港币市值按 CNY 记账 (汇率差 7 倍)。
@@ -223,8 +230,15 @@ def _yahoo_history(
         # 英镑; 仅当确证为其它币种 (美元/欧元计价的 LSE ETF/ADR, 如 CSPX.L/VWRA.L)
         # 才不折算 —— 与报价路径 _quote_from_dump 的 is_pence 判据对齐, 避免同一
         # 代码行情与K线单位不一致 (历史曾无条件 ÷100, 把美元计价 LSE 缩错 100 倍)
+        # .IL (国际挂盘 IOB) 不适用该惯例, 见下方分支
         ccy = _yahoo_quote_currency(p.yahoo).upper()
-        if ccy in ("", "GBP", "GBX") or is_pence(ccy):
+        # .IL (LSE 国际挂盘, 如 KAP.IL) 以 USD/EUR 计价: 币种未知时不能按 LSE
+        # 主板惯例兜底 ÷100, 仅当确证为便士才折算 (与 _quote_from_dump 判据对齐)
+        if p.yahoo.endswith(".IL"):
+            pence = is_pence(ccy)
+        else:
+            pence = ccy in ("", "GBP", "GBX") or is_pence(ccy)
+        if pence:
             for c in ("open", "high", "low", "close"):
                 if c in df.columns:
                     df[c] = df[c].astype(float) / 100

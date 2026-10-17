@@ -263,6 +263,12 @@ def contract_spec(p: ParsedSymbol, exchanges: dict | None = None) -> ContractSpe
     if p.market is Market.DE:
         return ContractSpec(code, ex.get("DE", "IBIS"), "EUR")
     if p.market is Market.GB:
+        if suffix == "IL":
+            # LSE 国际挂盘 (IOB): Yahoo 后缀 .IL (KAP.IL Kazatomprom GDR)。IOB 合约
+            # symbol 不带尾点 (尾点是 LSE 主板合约库的怪癖), 且币种混杂 (KAP=USD,
+            # 亦有 GBP/EUR 计价线) —— 留空 currency 让 IBKR 按代码补全, 真实币种从
+            # ticker.contract.currency 读回 (同港股/SGX 多币种柜台的处理)
+            return ContractSpec(code, ex.get("GB_IOB", "IOB"), "")
         # LSE 合约 symbol 带尾点 (BP./HSBA./VOD.); 裸代码 qualify 查无合约
         return ContractSpec(code + ".", ex.get("GB", "LSE"), "GBP")
     if p.market is Market.CA:
@@ -480,6 +486,12 @@ def search_matches(pattern: str, cfg: dict | None = None) -> list[dict] | None:
 def ibkr_to_yahoo(
     symbol: str, exchange: str, primary_exchange: str, currency: str
 ) -> str | None:
+    """IBKR 合约四要素 → 内部规范 (Yahoo) 代码; 无法映射返回 None (进 skipped).
+
+    SMART/空 exchange 时以 primaryExchange 为准。IOB (LSE 国际挂盘) → .IL:
+    KAP.IL Kazatomprom GDR (IOB/USD) —— 不能落进 GBP/USD 兜底分支拼出
+    KAP.L / 裸 KAP, 两者在 yfinance 都取不到行情。
+    """
     raw = str(symbol).strip()
     # LSE 合约 symbol 带尾点 (BP./HSBA./VOD., 本文件 contract_spec 依赖这一点):
     # 不剥掉会拼出 "BP..L" (parse 不报错, 之后永远取不到行情)
@@ -523,6 +535,14 @@ def ibkr_to_yahoo(
     # 一个错误或不存在的德国代码, 本项目只支持德股, 其余欧元所应落 None 进 skipped
     if exkey in ("IBIS", "IBISX", "FWB", "GETX", "GETXEX", "SWB"):
         return f"{sym}.DE"
+    # LSE 国际挂盘 (IOB, International Order Book): Kazatomprom GDR (KAP.IL) 等
+    # 国际板证券, Yahoo 规范后缀 .IL。必须前置于下面的 GBP / USD 兜底分支:
+    # IOB 合约币种混杂 (KAP=USD, 亦有 GBP/EUR 计价线), 按 ccy 落进 GBP 分支会
+    # 拼出 .L (KAP.L, yfinance 无此代码)、落进 USD 分支会拼出裸代码 KAP 被当成
+    # 美股 —— 而该代码在美股早已退市 (KapStone), 取数必然无行情结果。
+    # SMART 路由的 IOB 合约经 exkey=primaryExchange 归一本分支。
+    if exkey == "IOB":
+        return f"{sym}.IL"
     if ccy in ("GBP", "GBX") or exkey in ("LSE", "LSEETF"):
         return f"{sym}.L"
     # 加拿大: Yahoo 后缀按交易所区分 (CSE=.CN, Cboe Canada/NEO=.NE, TSXV=.V, 其余=.TO);

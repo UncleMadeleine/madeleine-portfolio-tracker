@@ -76,7 +76,7 @@ tracker-ui          # pip 安装后起 Streamlit 页面 (等价 streamlit run tr
 | 北交所 | `.BJ` | `830799.BJ` | CNY | cn | |
 | 港股 | `.HK` | `0700.HK` (4位补零) | HKD / CNY / USD | global | 多柜台: 人民币柜台 8 开头 5 位码以 CNY 计价, 美元柜台 (如 `9804.HK`) 以 USD 计价 |
 | 德股 | `.DE` 等 | `SAP.DE` | EUR | global | `.F`/`.BE`/`.DU`/`.HM`/`.MU` |
-| 英股 | `.L` | `BP.L` | GBP | global | Yahoo 报价为便士, 系统自动 ÷100; `.IL`/`.AL` 同属伦交所 |
+| 英股 | `.L` | `BP.L` | GBP | global | Yahoo 报价为便士, 系统自动 ÷100; `.IL`=LSE 国际挂盘 (IOB, 如 `KAP.IL` Kazatomprom GDR, **USD 计价**), `.AL` 同属伦交所 |
 | 加股 | `.TO` 等 | `RY.TO` | CAD | global | `.V`/`.CN`/`.NE` |
 | 澳股 | `.AX` | `BHP.AX` | AUD | global | |
 | 新加坡股 | `.SI` | `D05.SI` | SGD / USD | global | `.SG` 别名自动归一为 `.SI` (yfinance 无 `.SG` 数据); SGX 有 SGD 与 USD 计价证券 |
@@ -150,6 +150,9 @@ Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致);
   - 优先级: 显式 path > env `IBKR_CONFIG=/path` > 数据目录 `ibkr.json` > 包内模板兜底
   - 缺字段自动继承模板/兜底值; 所有下划线开头的键 (`_comment`/`_说明`) 被忽略
   - Gateway 端口由 `mode` 决定 (paper=4002 / live=4001), 显式 `"port"` 优先, env `IBKR_MODE` 可临时覆盖
+  - `exchanges` 键名与 `contract_spec` 读取的一致: US/HK/CN_SH/CN_STAR/CN_SZ/BJ/DE/GB/GB_IOB
+    (LSE 国际挂盘 IOB, 默认 `IOB`, 对应 `.IL` 后缀)/CA/CA_V/CA_CN/CA_NE/AU/SG/BR;
+    删除某个键即用内置默认路由
   - **开发 IBKR 相关功能前必读 `docs/ibkr-readonly-api.md`**: 本项目只用只读 API
     (行情/K线/汇率/持仓), 禁写 API (下单/撤单/订单信息查询, 只读模式下不可得)
 - `longport.json`: 长桥 (LongPort) OpenAPI 接入 (`pip install longport` 后可用; env `LONGPORT_CONFIG` 可指定其他路径):

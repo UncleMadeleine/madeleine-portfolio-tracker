@@ -76,6 +76,20 @@ def test_parse_all_markets():
     assert parse("D05.SI").market is Market.SG
 
 
+def test_parse_lse_iob_suffix():
+    """.IL = LSE 国际挂盘 (IOB): KAP.IL Kazatomprom GDR (IOB/USD)。
+
+    裸 KAP 是美股已退市代码 (KapStone), 必须带 .IL 后缀才取得到行情;
+    parse 不归一掉该后缀 (与 .L 并存, 两者在 Yahoo 是不同交易所)。
+    """
+    p = parse("KAP.IL")
+    assert p.yahoo == "KAP.IL"
+    assert p.market is Market.GB
+    assert p.type == "global"
+    # normalize 保持原样 (不被改写成 .L 或剥成裸代码)
+    assert normalize("KAP.IL") == "KAP.IL"
+
+
 def test_parse_singapore_alias_and_normalization():
     """SGX: .SI 规范后缀 (SGD); .SG 别名归一为 .SI (yfinance 无 .SG 数据)。"""
     p = parse("D05.SI")

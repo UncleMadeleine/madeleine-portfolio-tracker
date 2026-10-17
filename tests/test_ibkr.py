@@ -2,6 +2,7 @@ import json
 import types
 
 import pandas as pd
+import pytest
 
 import tracker.ibkr as ibkr_mod
 import tracker.prices as prices_mod
@@ -592,3 +593,28 @@ class TestIbkrBatchChunking:
         """非连接类错误不附加排障提示 (避免误导)."""
         reason = ibkr_mod._conn_fail_reason(ValueError("boom"), {"mode": "paper"})
         assert reason == "ValueError: boom"
+
+    @pytest.fixture(autouse=True)
+    def _clear_no_data(self):
+        """每个用例前后清空「零行情」负缓存, 避免相互污染."""
+        ibkr_mod._no_data_until = 0.0
+        yield
+        ibkr_mod._no_data_until = 0.0
+
+    def test_no_data_negative_cache_skips_next_call(self, monkeypatch):
+        """全批零行情 (无订阅): 负缓存生效, 下次调用直接跳过不再请求."""
+        calls = self._fake_ib(monkeypatch, ticker_for=lambda c: FakeTicker())
+        q1, r1 = ibkr_mod.get_quotes_ibkr([parse(s) for s in self._syms(100)])
+        assert q1 == {} and r1 is None
+        n1 = len(calls["tickers"])
+        q2, r2 = ibkr_mod.get_quotes_ibkr([parse(s) for s in self._syms(100)])
+        assert q2 == {} and "稍后自动重试" in r2
+        assert len(calls["tickers"]) == n1, "TTL 内负缓存命中不得再请求 Gateway"
+
+    def test_partial_data_no_negative_cache(self, monkeypatch):
+        """有部分行情 (混合订阅) 不进负缓存: 下次仍走 IBKR 补数."""
+        self._fake_ib(monkeypatch, ticker_for=self._ticker_with_price)
+        q1, _ = ibkr_mod.get_quotes_ibkr([parse(s) for s in self._syms(100)])
+        assert len(q1) == 100
+        q2, r2 = ibkr_mod.get_quotes_ibkr([parse(s) for s in self._syms(100)])
+        assert len(q2) == 100 and r2 is None

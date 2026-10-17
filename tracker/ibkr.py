@@ -64,9 +64,13 @@ _unavailable: tuple[str, float] | None = None
 # 永远等不到 future (RequestTimeout 默认 0 = 无超时) → 整页挂死; 未订阅的
 # 合约则让 gather 抛错、整批结果全丢。按块发送 + 块内硬超时 + 总预算兜底。
 _IBKR_CHUNK = 50  # 每块合约数 (留在并发行情线限额内)
-_IBKR_CHUNK_TIMEOUT = 12.0  # 单块 (qualify+reqTickers) 硬超时 (s)
-_IBKR_TOTAL_BUDGET = 45.0  # 整个 IBKR 批量阶段总预算 (s), 超出剩余交回默认源
-_IBKR_EMPTY_GIVEUP = 3  # 连续空块 (无订阅/无数据): 放弃剩余块
+_IBKR_CHUNK_TIMEOUT = 8.0  # 单块 (qualify+reqTickers) 硬超时 (s)
+_IBKR_TOTAL_BUDGET = 25.0  # 整个 IBKR 批量阶段总预算 (s), 超出剩余交回默认源
+_IBKR_EMPTY_GIVEUP = 2  # 连续空块 (无订阅/无数据): 放弃剩余块
+# 连上但零行情 (典型: 账户无所查市场的行情订阅): TTL 内跳过整个 IBKR 阶段,
+# 否则每次冷启动都要白等块超时 (2×8s) 才落默认源
+_IBKR_NO_DATA_TTL = 300.0
+_no_data_until: float = 0.0
 
 
 def _resolve_config_path(path: str | Path | None = None) -> Path:
@@ -116,9 +120,10 @@ def load_config(path: str | Path | None = None) -> dict:
 
 
 def reset() -> None:
-    global _client, _unavailable
+    global _client, _unavailable, _no_data_until
     _client = None
     _unavailable = None
+    _no_data_until = 0.0
 
 
 def _ib_module():
@@ -335,6 +340,10 @@ def get_quotes_ibkr(
     claimed = [p for p in parsed if _claims_global(p)]
     if not claimed:
         return {}, None
+    global _no_data_until
+    # 刚检测过「连上但零行情」(无订阅): TTL 内跳过, 不重复白等块超时
+    if time.time() < _no_data_until:
+        return {}, "暂无行情数据 (刚检测过, 稍后自动重试), 已回退默认数据源"
     cfg = cfg or load_config()
     ib = _get_client(cfg)
     if ib is None:
@@ -354,6 +363,9 @@ def get_quotes_ibkr(
         empty_streak = 0 if got else empty_streak + 1
         if empty_streak >= _IBKR_EMPTY_GIVEUP:
             break  # 连续空块: 无订阅/无数据, 不再磨剩余块
+    if not quotes:
+        # 全批零行情: 负缓存, 之后 5 分钟的加载直接跳过 IBKR 阶段
+        _no_data_until = time.time() + _IBKR_NO_DATA_TTL
     return quotes, None
 
 

@@ -55,6 +55,20 @@ def test_selection_auto_fetches(index_app):
     assert index_app.info == []
 
 
+def test_range_offers_60_months(index_app):
+    """指数范围下拉最长 60 个月 (5 年), 与股票 K线页同口径."""
+    assert index_app.selectbox[1].options == [
+        "近 3 个月",
+        "近 6 个月",
+        "近 12 个月",
+        "近 24 个月",
+        "近 36 个月",
+        "近 60 个月",
+    ]
+    index_app.selectbox[1].set_value(60).run()
+    assert len(index_app.metric) == 4
+
+
 def test_switch_symbol_refetches(index_app):
     """切换指数/范围立即重新取数并保持图表可见."""
     assert len(index_app.metric) == 4

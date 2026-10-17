@@ -156,6 +156,21 @@ def test_range_mode_requires_query_or_symbol_change(kline_app):
     assert len(kline_app.metric) == 4
 
 
+def test_range_mode_offers_60_months(kline_app):
+    """范围模式最长 60 个月 (5 年): 数据源按 start/end 任意区间取数, 无 36 个月上限."""
+    kline_app.segmented_control[0].set_value("范围").run()
+    assert kline_app.selectbox[0].options == [
+        "近 3 个月",
+        "近 6 个月",
+        "近 12 个月",
+        "近 24 个月",
+        "近 36 个月",
+        "近 60 个月",
+    ]
+    kline_app.selectbox[0].set_value(60).run()  # 选中 5 年可正常取数渲染
+    assert len(kline_app.metric) == 4
+
+
 def test_range_mode_param_change_redraws_not_refetches(kline_app):
     """范围模式: 查询后改均线/周期只重绘; 改范围重取数.
 

@@ -17,7 +17,7 @@ import json
 import math
 import os
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -76,6 +76,13 @@ _IBKR_EMPTY_GIVEUP = 2  # 连续空块 (无订阅/无数据): 放弃剩余块
 # 否则每次冷启动都要白等块超时后才落默认源
 _IBKR_NO_DATA_TTL = 300.0
 _no_data_until: float = 0.0
+
+# 历史K线分块: IBKR 1 日K单次请求上限 365 D (超限直接拒单, 进而静默回落
+# yfinance), 5 年 (60 个月) 区间必须按此宽度分块从 end 往回拼。endDateTime
+# 含当日, 故每块回退 (窗口宽+1) 天, 块间天然无重叠; 仍按 date 去重兜底。
+_IBKR_MAX_HIST_DAYS = 365
+_IBKR_HIST_PAUSE = 0.2  # 块间退让 (s): IBKR 历史数据请求有频率限额
+_IBKR_HIST_EMPTY_GIVEUP = 2  # 连续空块: 放弃更早窗口 (标的上市晚于区间起点)
 
 
 def _resolve_config_path(path: str | Path | None = None) -> Path:
@@ -592,6 +599,66 @@ def ibkr_to_yahoo(
     return None
 
 
+def _ibkr_daily_bars(ib, contract, start_d: date, end_d: date) -> list[dict]:
+    """[start_d, end_d] 闭区间日K (dict 行, 按日期升序去重).
+
+    IBKR 1 日K单次请求上限 365 D (超限拒单): 更长区间按窗口从 end 往回分块
+    拉取后拼接, 5 年 (60 个月) 约 6 个请求。endDateTime 含当日 (传窗口末日
+    23:59:59, 未给时区按 TWS 登录时区解释), 故每块回退 (窗口宽+1) 天。
+    块内异常直接抛给调用方 (该代码整体回退默认源, 不返回半截区间冒充全量);
+    连续空块达 _IBKR_HIST_EMPTY_GIVEUP 即停 (标的上市晚于区间起点)。
+    """
+    rows: list[dict] = []
+    seen: set = set()
+    empty_streak = 0
+    window_end = end_d
+    first = True
+    while window_end >= start_d:
+        if not first:
+            time.sleep(_IBKR_HIST_PAUSE)
+        first = False
+        window_start = max(start_d, window_end - timedelta(days=_IBKR_MAX_HIST_DAYS - 1))
+        days = (window_end - window_start).days + 1
+        bars = ib.reqHistoricalData(
+            contract,
+            endDateTime=datetime(
+                window_end.year, window_end.month, window_end.day, 23, 59, 59
+            ),
+            durationStr=f"{days} D",
+            barSizeSetting="1 day",
+            whatToShow="TRADES",
+            useRTH=True,
+        )
+        if bars:
+            empty_streak = 0
+            for b in bars:
+                # 日K 的 bar.date 已被 ib_async 解析为 date; 兜底 parse 兼容
+                # 字符串/带时分秒形态, normalize 抹掉时区/时分秒差异再判重
+                key = pd.to_datetime(b.date).normalize()
+                if key in seen:
+                    continue
+                seen.add(key)
+                rows.append(
+                    {
+                        "date": b.date,
+                        "open": b.open,
+                        "high": b.high,
+                        "low": b.low,
+                        "close": b.close,
+                        "volume": getattr(b, "volume", 0) or 0,
+                    }
+                )
+        else:
+            empty_streak += 1
+            if empty_streak >= _IBKR_HIST_EMPTY_GIVEUP:
+                break
+        window_end = window_start - timedelta(days=1)
+    lo, hi = pd.Timestamp(start_d), pd.Timestamp(end_d)
+    out = [r for r in rows if lo <= pd.to_datetime(r["date"]).normalize() <= hi]
+    out.sort(key=lambda r: pd.to_datetime(r["date"]))
+    return out
+
+
 def get_history_ibkr(
     parsed: list[ParsedSymbol],
     months: int,
@@ -625,44 +692,17 @@ def get_history_ibkr(
             qualified = ib.qualifyContracts(c)
             if not qualified:
                 continue
-            # 显式区间优先 (endDateTime 为 IBKR 时区本地时间; 区间截断在调用方
-            # 之外的 orchestration 不做, 必须在此完成), 否则按 months 回看至今
+            # 显式区间优先; 否则按 months 回看至今 (months*31 与 orchestration
+            # 给 yfinance/akshare 的口径一致, 保证同一窗口各源数据可比)
             if start_date:
-                end_dt = end_date or date.today().isoformat()
-                end_tm = datetime.fromisoformat(end_dt + "T23:59:59")
-                # 闭区间天数: end-start 差 1, 补 +1 (2024-01-01→2024-01-31 = 31 D)
-                days = (end_tm.date() - date.fromisoformat(start_date)).days + 1
-                # IBKR 1 日K单次请求上限 365 D: 超限会被拒 (进而静默回落 yfinance),
-                # 故封顶 365 (取最近一年; 更长的区间需分块, 暂不实现)
-                duration = f"{min(max(days, 1), 365)} D"
+                start_d = date.fromisoformat(start_date)
+                end_d = date.fromisoformat(end_date) if end_date else date.today()
             else:
-                end_tm = None
-                duration = f"{months} M"
-            bars = ib.reqHistoricalData(
-                qualified[0],
-                endDateTime=end_tm or "",
-                durationStr=duration,
-                barSizeSetting="1 day",
-                whatToShow="TRADES",
-                useRTH=True,
-            )
-            if bars and start_date:
-                # IBKR 的 endDateTime 含当日: 过滤到 [start, end] 闭区间
-                bars = [b for b in bars if start_date <= b.date.isoformat() <= end_dt]
-            if not bars:
+                end_d = date.today()
+                start_d = end_d - timedelta(days=max(months, 1) * 31)
+            rows = _ibkr_daily_bars(ib, qualified[0], start_d, end_d)
+            if not rows:
                 continue
-            rows = []
-            for b in bars:
-                rows.append(
-                    {
-                        "date": b.date,
-                        "open": b.open,
-                        "high": b.high,
-                        "low": b.low,
-                        "close": b.close,
-                        "volume": getattr(b, "volume", 0) or 0,
-                    }
-                )
             df = pd.DataFrame(rows)
             if not df.empty:
                 results[p.yahoo] = df

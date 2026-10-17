@@ -239,7 +239,7 @@ def render_compare_controls(
     )
     cmp_months = c2.selectbox(
         "范围",
-        [3, 6, 12, 24, 36],
+        [3, 6, 12, 24, 36, 60],
         index=2,
         format_func=lambda m: f"近 {m} 个月",
         key="compare_months",
@@ -507,7 +507,7 @@ def render_kline_controls(
     else:
         kdepth = c2.selectbox(
             "范围",
-            [3, 6, 12, 24, 36],
+            [3, 6, 12, 24, 36, 60],
             index=2,
             format_func=lambda m: f"近 {m} 个月",
             key="kline_months",
@@ -743,7 +743,7 @@ def render_crypto_compare_controls(
     )
     ccmp_months = c2.selectbox(
         "范围",
-        [3, 6, 12, 24, 36],
+        [3, 6, 12, 24, 36, 60],
         index=2,
         format_func=lambda m: f"近 {m} 个月",
         key="crypto_compare_months",

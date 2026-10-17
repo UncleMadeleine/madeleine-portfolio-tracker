@@ -46,7 +46,7 @@ def render_index_page() -> None:
     )
     imonths = r1_col.selectbox(
         "范围",
-        [3, 6, 12, 24, 36],
+        [3, 6, 12, 24, 36, 60],
         index=2,
         format_func=lambda m: f"近 {m} 个月",
         key="index_months",

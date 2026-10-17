@@ -238,7 +238,7 @@ Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致);
    .venv/bin/python -m tracker.cli kline AAPL --months 12 --ma 5,20,60
    .venv/bin/python -m tracker.cli kline 600519.SS --period weekly --open   # 周K + 自动开浏览器
    ```
-   支持 `--period daily|weekly|monthly`、`--no-volume`、`--refresh`、`--json`。页面侧 K线是独立页面: `streamlit run tracker/ui/app.py` 后侧边栏「K线」, 可查任意代码, 输入后才取数 (不预加载)。
+   支持 `--period daily|weekly|monthly`、`--no-volume`、`--refresh`、`--json`。页面侧 K线是独立页面: `streamlit run tracker/ui/app.py` 后侧边栏「K线」, 可查任意代码, 输入后才取数 (不预加载)。页面「范围」模式与指数K线/对比页范围下拉为 3/6/12/24/36/60 个月 (最长 5 年; 滑动模式本就一次加载上市以来全量历史); IBKR 源历史K线按 ≤365 天窗口分块拼接 (单次请求上限), 5 年区间同样可用。
 
 8c. **多股对比 / 指数K线**:
    ```

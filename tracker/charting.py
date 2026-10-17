@@ -416,6 +416,7 @@ def build_candlestick_fig(
         dict(count=3, label="3个月", step="month", stepmode="backward"),
         dict(count=6, label="6个月", step="month", stepmode="backward"),
         dict(count=1, label="1年", step="year", stepmode="backward"),
+        dict(count=5, label="5年", step="year", stepmode="backward"),
         dict(step="all", label="全部"),
     ]
     if title is None:

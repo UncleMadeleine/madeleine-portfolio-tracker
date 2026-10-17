@@ -1,5 +1,6 @@
 import json
 import types
+from datetime import date, timedelta
 
 import pandas as pd
 import pytest
@@ -463,6 +464,155 @@ def test_get_history_ibkr_fallback(monkeypatch):
 
     df = prices_mod.get_history("AAPL", months=3, use_ibkr=True)
     assert len(df) == 2
+
+
+# ---------- 历史K线分块 (IBKR 1 日K单次上限 365 D → 5 年区间分块拼) ----------
+
+
+class FakeBar:
+    """ib_async BarData 的最小形态: 日K 的 date 已被 wrapper 解析为 date."""
+
+    def __init__(self, d, close):
+        self.date = d
+        self.open = close - 0.5
+        self.high = close + 0.5
+        self.low = close - 1.0
+        self.close = close
+        self.volume = 1000.0
+
+
+class FakeHistoryIB:
+    """假 IB: 按 endDateTime + durationStr 模拟 IBKR 日K窗口语义.
+
+    - endDateTime 含当日: 返回 [end - (N-1) 天, end] 内的交易日 (工作日)
+    - listed 之前无数据 (模拟上市晚于区间起点)
+    - calls 记录每次请求的 (durationStr 天数, endDateTime 日期), 供断言分块
+    """
+
+    def __init__(self, listed):
+        self.listed = listed
+        self.calls: list[tuple[int, date]] = []
+
+    def qualifyContracts(self, *contracts):
+        return list(contracts)
+
+    def reqHistoricalData(
+        self,
+        contract,
+        endDateTime,
+        durationStr,
+        barSizeSetting,
+        whatToShow,
+        useRTH,
+        **kw,
+    ):
+        days = int(str(durationStr).split()[0])
+        end_d = (
+            endDateTime.date()
+            if hasattr(endDateTime, "date")
+            else date.fromisoformat(str(endDateTime)[:10])
+        )
+        self.calls.append((days, end_d))
+        lo = max(end_d - timedelta(days=days - 1), self.listed)
+        out = []
+        d = lo
+        while d <= end_d:
+            if d.weekday() < 5:
+                out.append(FakeBar(d, 100.0))
+            d += timedelta(days=1)
+        return out
+
+
+def _hist_app(monkeypatch, listed):
+    """假 IB + 免睡眠; 返回 fake 供断言请求序列."""
+    fake = FakeHistoryIB(listed)
+    monkeypatch.setattr(ibkr_mod, "_get_client", lambda cfg: fake)
+    monkeypatch.setattr(ibkr_mod.time, "sleep", lambda s: None)
+    return fake
+
+
+def test_history_60_months_chunked_within_limit(monkeypatch):
+    """5 年区间: 分块请求且每块 ≤365 D, 相邻窗口首尾相接, 拼接覆盖全区间."""
+    fake = _hist_app(monkeypatch, listed=date.today() - timedelta(days=365 * 20))
+    data, reason = ibkr_mod.get_history_ibkr(
+        [parse("AAPL")], months=60, cfg={"exchanges": {}}
+    )
+    assert reason is None
+    assert len(fake.calls) >= 2, "60 个月 > 365 D 单次上限, 必须分块"
+    assert all(d <= ibkr_mod._IBKR_MAX_HIST_DAYS for d, _ in fake.calls)
+    # 从新到旧相邻窗口无重叠无空洞: 后一块 end = 前一块 start - 1 天
+    for i in range(len(fake.calls) - 1):
+        prev_days, prev_end = fake.calls[i]
+        prev_start = prev_end - timedelta(days=prev_days - 1)
+        assert fake.calls[i + 1][1] == prev_start - timedelta(days=1)
+    df = data["AAPL"]
+    dates = list(df["date"])
+    start_d = date.today() - timedelta(days=60 * 31)  # orchestration 同口径
+    assert dates == sorted(dates) and len(dates) == len(set(dates))
+    assert dates[0] >= start_d and dates[-1] <= date.today()
+    assert (dates[-1] - dates[0]).days >= 365 * 4, "拼接结果应覆盖约 5 年"
+
+
+def test_history_short_range_single_request(monkeypatch):
+    """≤365 D 区间仍单次请求 (旧行为不变, 不引入多余分块)."""
+    fake = _hist_app(monkeypatch, listed=date.today() - timedelta(days=365 * 20))
+    data, reason = ibkr_mod.get_history_ibkr(
+        [parse("AAPL")], months=6, cfg={"exchanges": {}}
+    )
+    assert reason is None
+    assert len(fake.calls) == 1
+    assert fake.calls[0][0] <= ibkr_mod._IBKR_MAX_HIST_DAYS
+    assert list(data["AAPL"]["date"])[-1] <= date.today()
+
+
+def test_history_explicit_two_year_range(monkeypatch):
+    """显式 2 年区间: 2 块, 边界日不重复, 全部落在 [start, end] 闭区间."""
+    start, end = "2021-01-01", "2022-12-31"
+    fake = _hist_app(monkeypatch, listed=date(2015, 1, 1))
+    data, reason = ibkr_mod.get_history_ibkr(
+        [parse("AAPL")],
+        months=24,
+        cfg={"exchanges": {}},
+        start_date=start,
+        end_date=end,
+    )
+    assert reason is None
+    assert len(fake.calls) == 2
+    dates = list(data["AAPL"]["date"])
+    assert dates == sorted(dates) and len(dates) == len(set(dates))
+    assert dates[0] >= date.fromisoformat(start)
+    assert dates[-1] <= date.fromisoformat(end)
+
+
+def test_history_empty_windows_stop_early(monkeypatch):
+    """标的上市晚于区间起点: 连续空块即停 (不空磨更早窗口), 已有数据保留."""
+    listed = date.today() - timedelta(days=400)  # 约 13 个月前上市
+    fake = _hist_app(monkeypatch, listed=listed)
+    data, _ = ibkr_mod.get_history_ibkr(
+        [parse("AAPL")], months=60, cfg={"exchanges": {}}
+    )
+    # 60 个月 ≈ 6 窗; 上市只覆盖最近 2 窗, 之后连空 2 窗即停 → 共 4 次请求
+    assert len(fake.calls) == 4
+    assert list(data["AAPL"]["date"])[0] >= listed
+
+
+def test_history_chunk_failure_falls_back(monkeypatch):
+    """任一分块失败: 该代码整体出局 (调用方回退默认源), 不返回半截区间."""
+
+    class FlakyIB(FakeHistoryIB):
+        def reqHistoricalData(self, *a, **kw):
+            if self.calls:  # 第一块 (最近窗口) 成功后, 第二块起失败
+                raise TimeoutError("pacing violation")
+            return super().reqHistoricalData(*a, **kw)
+
+    fake = FlakyIB(date.today() - timedelta(days=365 * 20))
+    monkeypatch.setattr(ibkr_mod, "_get_client", lambda cfg: fake)
+    monkeypatch.setattr(ibkr_mod.time, "sleep", lambda s: None)
+    data, reason = ibkr_mod.get_history_ibkr(
+        [parse("AAPL")], months=60, cfg={"exchanges": {}}
+    )
+    assert data == {}
+    assert reason and "AAPL" in reason and "pacing violation" in reason
 
 
 def test_get_fx_rate_ibkr(monkeypatch):

@@ -259,7 +259,7 @@ class TestBuildFig:
     def test_rangeselector_buttons(self):
         fig = charting.build_candlestick_fig(_mk_df(), "AAPL")
         labels = [b.label for b in fig.layout.xaxis.rangeselector.buttons]
-        assert "全部" in labels and "1年" in labels
+        assert "全部" in labels and "1年" in labels and "5年" in labels
 
     def test_empty_raises(self):
         with pytest.raises(ValueError):

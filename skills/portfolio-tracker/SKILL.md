@@ -74,7 +74,7 @@ tracker-ui          # pip 安装后起 Streamlit 页面 (等价 streamlit run tr
 | A股 | `.SS`/`.SZ` | `600519.SS` `000001.SZ` | CNY | cn | `.SH` 别名自动归一为 `.SS` |
 | B股 | `.SS`/`.SZ` | `900902.SS` `200012.SZ` | USD / HKD | cn | 沪 B 美元 / 深 B 港币 |
 | 北交所 | `.BJ` | `830799.BJ` | CNY | cn | |
-| 港股 | `.HK` | `0700.HK` (4位补零) | HKD / CNY / USD | global | 多柜台: 人民币柜台 8 开头 5 位码以 CNY 计价, 美元柜台 (如 `9804.HK`) 以 USD 计价 |
+| 港股 | `.HK` | `0700.HK` (4位补零) | HKD / CNY / USD | global | 多柜台: 人民币柜台 `8` 开头 5 位码以 CNY 计价 (如 `82318.HK` 中国平安-R); 美元柜台只属于 ETF 三柜台, 代码 `09xxx`/`41xxx` (如 `9804.HK` PP越南-U / `09070.HK` 平安香港高息-U / `09188.HK` 华夏沪深三百-U) 以 USD 计价。美元柜台币种由数据源自报, 不能按代码形态推导 (`normalize` 剥前导零后 `9070.HK` 与 `9988.HK` 阿里同形) |
 | 德股 | `.DE` 等 | `SAP.DE` | EUR | global | `.F`/`.BE`/`.DU`/`.HM`/`.MU` |
 | 英股 | `.L` | `BP.L` | GBP | global | Yahoo 报价为便士, 系统自动 ÷100; `.IL`=LSE 国际挂盘 (IOB, 如 `KAP.IL` Kazatomprom GDR, **USD 计价**), `.AL` 同属伦交所 |
 | 加股 | `.TO` 等 | `RY.TO` | CAD | global | `.V`/`.CN`/`.NE` |

@@ -158,6 +158,64 @@ def test_get_quotes_longport_unavailable_without_config(monkeypatch, tmp_path):
     assert isinstance(reason, str) and reason
 
 
+def test_currency_for_hk_counters():
+    """港股多柜台币种兜底: 只有人民币柜台 (8 开头 5 位) 可按代码形态判定 → CNY.
+
+    美元柜台 (09070.HK 平安香港高息-U / 09188.HK 华夏沪深三百-U) 经 normalize 剥
+    前导零后与港币主板代码同形 (9070.HK vs 9988.HK 阿里 / 9888.HK 百度), 按形态
+    猜必错其一, 故兜底不猜 USD —— 权威币种走 static_info.currency / IBKR
+    contract.currency / yfinance 自报。原正则 `^9\\d{4}\\.HK$` 的号段在港交所不
+    存在, 从未命中过; `^9\\d{3}` 则会把阿里/百度误判成 USD (~7.8 倍错误)。
+    """
+    # 人民币柜台: 8 开头 5 位, 号段专用
+    assert lp._currency_for("82318.HK") == "CNY"  # 中国平安-R
+    assert lp._currency_for("83188.HK") == "CNY"  # 华夏沪深三百-R
+    # 港币主柜台 (含 9 开头四位) 一律 HKD
+    assert lp._currency_for("0700.HK") == "HKD"  # 腾讯
+    assert lp._currency_for("9988.HK") == "HKD"  # 阿里: 9 开头但不是美元柜台
+    assert lp._currency_for("9888.HK") == "HKD"  # 百度
+    # 美元柜台: 兜底不猜 (拼错方向比不猜更贵)
+    assert lp._currency_for("9070.HK") == "HKD"  # 平安香港高息-U
+    assert lp._currency_for("9188.HK") == "HKD"  # 华夏沪深三百-U
+    assert lp._currency_for("9804.HK") == "HKD"  # PP越南-U
+    # 非港股走 parse 的市场默认
+    assert lp._currency_for("AAPL") == "USD"
+    assert lp._currency_for("600519.SS") == "CNY"
+
+
+def test_get_quotes_longport_hk_counters_without_static_info(monkeypatch):
+    """static_info 整体缺失 ( degraded ) 时: 人民币柜台仍判 CNY, 美元柜台不猜.
+
+    同一批里 82318.HK (RMB 柜台) / 9070.HK (09070.HK 平安香港高息-U, USD 成交) /
+    9988.HK (阿里, HKD 成交) 必须分别落 CNY / HKD / HKD —— 美元柜台与港币主板
+    代码同形, 兜底只能取市场默认 HKD, 绝不能为抓美元柜台把阿里一起猜成 USD。
+    """
+
+    class FakeCtx:
+        def quote(self, symbols):
+            assert list(symbols) == ["82318.HK", "9070.HK", "9988.HK"]
+            return [
+                SimpleNamespace(
+                    symbol=s,
+                    last_done=Decimal("10.0"),
+                    prev_close=Decimal("9.0"),
+                )
+                for s in symbols
+            ]
+
+        def calc_indexes(self, symbols, indexes):
+            return []
+
+    with patch.object(lp, "_get_quote_ctx", return_value=FakeCtx()):
+        quotes, reason = lp.get_quotes_longport(
+            [parse("82318.HK"), parse("09070.HK"), parse("9988.HK")]
+        )
+    assert reason is None
+    assert quotes["82318.HK"].currency == "CNY"
+    assert quotes["9070.HK"].currency == "HKD"  # 不猜 USD (权威源缺失时)
+    assert quotes["9988.HK"].currency == "HKD"
+
+
 def test_get_quotes_longport_maps_and_skips_unsupported(monkeypatch):
     captured = {}
 

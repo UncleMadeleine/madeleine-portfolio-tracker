@@ -9,6 +9,23 @@ def test_normalize_hk_4digit():
     assert normalize("80737.HK") == "80737.HK"
 
 
+def test_normalize_hk_counter_codes():
+    """港股 5 位柜台码按 Yahoo 惯例剥前导零补 4 位 (Yahoo 上就是此形态).
+
+    03188.HK → 3188.HK (Yahoo 3188.HK 港元行情), 09070.HK → 9070.HK (美元柜台),
+    83188.HK / 82318.HK / 41555.HK ≥5 位原样。剥零后美元柜台 (9070.HK) 与港币
+    主板代码 (9988.HK 阿里) 同形, 币种不可按代码形态推导 (见 longport._currency_for)。
+    """
+    assert normalize("03188.HK") == "3188.HK"
+    assert normalize("03070.HK") == "3070.HK"
+    assert normalize("09070.HK") == "9070.HK"
+    assert normalize("09188.HK") == "9188.HK"
+    assert normalize("09988.HK") == "9988.HK"
+    assert normalize("82318.HK") == "82318.HK"
+    assert normalize("83188.HK") == "83188.HK"
+    assert normalize("41555.HK") == "41555.HK"
+
+
 def test_normalize_sh_alias():
     assert normalize("600000.SH") == "600000.SS"
 

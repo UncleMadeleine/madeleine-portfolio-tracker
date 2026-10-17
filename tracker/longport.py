@@ -348,15 +348,25 @@ def _f(v) -> float | None:
 
 
 def _currency_for(yahoo: str) -> str:
-    # 港股多柜台: 人民币柜台 8 开头 5 位 (如 82318.HK 中国平安-R) 以 CNY 成交;
-    # 美元柜台 9 开头 5 位 (如 9085.HK) 以 USD 成交。parse 按 .HK 一律推成 HKD,
-    # 这里按代码形态纠正。权威币种以长桥 static_info.currency 为准 (见
-    # get_quotes_longport), 本函数仅作 static_info 缺失时的兜底 —— 早先正则
-    # `[89]` 把 9 开头美元柜台也误判成 CNY, 会导致约 7 倍的市值/汇率错误。
+    # 港股多柜台 (HKEX Multi-Counter) 币种兜底, 仅 static_info.currency 缺失时启用:
+    #   · 人民币柜台: 8 开头 5 位码 (82318.HK 中国平安-R / 83188.HK 华夏沪深三百-R),
+    #     以 CNY 成交 (IBKR 侧报 CNH, 已统一归一); 该号段专用, 可按形态判定。
+    #   · 美元柜台: 只属于 ETF 的港元/人民币/美元三柜台, 代码 09xxx (09070.HK
+    #     平安香港高息-U / 09188.HK 华夏沪深三百-U) 或 41xxx (41555.HK), 简称带
+    #     -U; 股票的港币-人民币双柜台 (2023-06-19 首批 24 只蓝筹) 没有美元柜台。
+    # 美元柜台无法按代码形态识别: normalize() 按 Yahoo 惯例剥前导零 (Yahoo 上美元
+    # 柜台就是 9070.HK / 9188.HK 四位码), 剥完与港币主板代码同形 —— 9070.HK 是美元
+    # 柜台, 9988.HK 是阿里港币主柜台, 9888.HK 是百度, 9834.HK 是安硕纳指一百-U
+    # (美元) 而 9888.HK 是百度 (港币)。原正则 `^9\d{4}\.HK$` 要的 9xxxx (5 位 9
+    # 开头) 不是港股任何柜台使用的号段 (美元柜台是 09xxx/41xxx), 对真实美元柜台一律
+    # 不命中 (死代码); 若放松成 `^9\d{3}` 则会把阿里/百度误判成 USD (~7.8 倍错误),
+    # 正是本函数要避免的事故。故美元柜台币种只认权威源: static_info.currency (调用处
+    # 首选) / IBKR contract.currency / yfinance 按码自报 (Yahoo: 9188.HK=USD,
+    # 3188.HK=HKD, 83188.HK=CNY)。兜底取市场默认 HKD —— 9 开头四位码里港币主板
+    # 代码远多于美元柜台, 猜 HKD 期望错误最小 (与 ibkr.contract_spec 对港股留空
+    # currency 同一原则: 猜错比不猜贵)。
     if re.match(r"^8\d{4}\.HK$", yahoo):
         return "CNY"
-    if re.match(r"^9\d{4}\.HK$", yahoo):
-        return "USD"
     try:
         return parse(yahoo).currency
     except ValueError:
@@ -502,8 +512,9 @@ def static_names_longport(
     """长桥代码 → (名称 dict, 币种 dict) (static_info); 失败返回 ({}, {}).
 
     名称与币种均为可选增强, 缺失不影响行情本体。币种取自
-    SecurityStaticInfo.currency —— 港股多柜台 RMB(8 开头)/USD(9 开头) 计价的
-    权威来源, 比 _currency_for 按代码形态猜可靠 (美元柜台猜错会致 ~7 倍错误)。
+    SecurityStaticInfo.currency —— 港股多柜台 RMB(8 开头 5 位)/USD(09xxx/41xxx,
+    ETF 专属) 计价的权威来源, 比 _currency_for 按代码形态猜可靠 (美元柜台剥前导
+    零后与港币主板代码同形, 猜错会致 ~7.8 倍错误, 详见 _currency_for 注释)。
     """
     if not symbols_lp:
         return {}, {}

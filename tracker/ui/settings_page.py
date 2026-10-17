@@ -171,9 +171,12 @@ def _save_display() -> None:
     if any(old.get(k) != changed[k] for k in source_keys):
         # 数据源偏好变化: 清实时行情缓存 (保留K线/基本面), 下次取数按新链路执行
         # 并重新打标来源; 页面缓存 (st.cache_data) 由组合页「重载」或 TTL 兜底
-        from tracker.cache import clear_quotes
+        from tracker.cache import clear_ohlc, clear_quotes
 
         clear_quotes()
+        # K线(OHLC) 磁盘缓存键只有 symbol+months、不含源偏好: 不清会命中上一个
+        # 源的旧K线 (含跨会话/刷新后的首次查询), 必须一并清
+        clear_ohlc()
         # 进程内负缓存只按代码记、不记源链路: 旧偏好下失败的代码会在 TTL 内
         # 继续挡住新链路 ("近期全部数据源失败 (负缓存)"), 必须一起清
         from tracker.providers.orchestration import neg_clear_all

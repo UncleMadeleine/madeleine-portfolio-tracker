@@ -111,6 +111,35 @@ def test_slide_mode_symbol_change_refetches(kline_app):
     assert kline_app._calls["n"] == 2
 
 
+def test_slide_mode_symbol_change_uses_disk_cache(monkeypatch):
+    """滑动模式换代码走磁盘/内存缓存 (get_ohlc refresh=False), 不每次全量重拉.
+
+    修复前 qid 含 yahoo → refresh=qid_changed 把"换代码"也当成"换源", 每次都
+    bypass 30min 磁盘 OHLC 缓存全量重拉; 现在仅数据源偏好变化才 refresh=True
+    (换代码 qid 变但 src 不变 → refresh=False)。
+    """
+    seen: list[bool] = []
+
+    def _spy(symbol, months=12, prefer_akshare=False, start_date=None, end_date=None, refresh=False, **kw):
+        seen.append(refresh)
+        idx = pd.date_range("2024-01-01", periods=360, freq="D")
+        close = [1.0 + (i % 50) * 0.01 for i in range(len(idx))]
+        return pd.DataFrame(
+            {"date": idx, "open": close, "high": [c + 0.1 for c in close],
+             "low": [c - 0.1 for c in close], "close": close, "volume": 100.0}
+        )
+
+    monkeypatch.setattr(prices, "get_ohlc", _spy)
+    monkeypatch.setattr(kline_page, "_KLINE_CHART", lambda **kw: {"stub": True})
+    kline_page.cached_kline_all.clear()
+    app = AppTest.from_string(_SCRIPT, default_timeout=30).run()
+    app.text_input[1].set_value("AAPL").run()
+    app.text_input[1].set_value("600519.SS").run()
+    app.text_input[1].set_value("MSFT").run()
+    assert seen, "应至少取数一次"
+    assert all(r is False for r in seen), f"换代码不应 refresh=True (会 bypass 磁盘缓存): {seen}"
+
+
 def test_slide_mode_full_history_single_fetch(kline_app):
     """滑动模式: 全量语义 = 一次取数渲染, 无渐进补数 (need_more 机制已删)."""
     kline_app.text_input[1].set_value("AAPL").run()

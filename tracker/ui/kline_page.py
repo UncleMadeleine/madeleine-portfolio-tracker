@@ -413,8 +413,15 @@ def _render_slide_mode(
 
     # 失效键含数据源偏好组: 设置页切换 prefer_akshare/use_ibkr/use_longport/
     # crypto_source 后必须重取数, 否则继续展示旧源数据
-    qid = (yahoo, prefer_akshare, use_ibkr, use_longport, crypto_source)
-    qid_changed = st.session_state.get(state_qid_key) != qid
+    src = (prefer_akshare, use_ibkr, use_longport, crypto_source)
+    qid = (yahoo, *src)
+    prev_qid = st.session_state.get(state_qid_key)
+    qid_changed = prev_qid != qid
+    # 仅**数据源偏好**变化才 bypass 磁盘 OHLC 缓存 (其键只有 symbol+months, 不含源),
+    # 单纯换代码应走磁盘缓存 (30min TTL) —— 否则每次切代码都全量重拉、磁盘缓存
+    # 形同虚设 (qid 含 yahoo, 曾让 refresh=qid_changed 把换代码也当成换源)。
+    # 跨会话的源变化由设置页 clear_ohlc 清磁盘缓存兜底, 这里只需管会话内。
+    src_changed = prev_qid is not None and prev_qid[1:] != src
     if qid_changed:
         st.session_state[state_key] = None
         st.session_state[state_qid_key] = qid
@@ -423,15 +430,15 @@ def _render_slide_mode(
     if df_all is None:
         try:
             with st.spinner(f"拉取 {yahoo} 上市以来K线..."):
-                # qid 变化 (数据源偏好切换) 时绕过磁盘缓存重取: OHLC 磁盘
-                # 缓存键不含源偏好, 不 refresh 会直接命中旧源数据
+                # 仅数据源偏好变化时绕过磁盘缓存重取: OHLC 磁盘缓存键不含源偏好,
+                # 不 refresh 会命中旧源数据; 换代码不 refresh, 命中即用
                 kdf = cached_kline_all(
                     yahoo,
                     prefer_akshare,
                     use_ibkr,
                     use_longport,
                     crypto_source,
-                    refresh=qid_changed,
+                    refresh=src_changed,
                 )
         except Exception as e:
             st.warning(f"{yahoo}: {e}")

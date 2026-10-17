@@ -330,6 +330,20 @@ def clear_quotes() -> int:
         return n
 
 
+def clear_ohlc() -> int:
+    """只清 K线(OHLC) 磁盘缓存: 数据源偏好切换后强制按新源链重取K线.
+
+    OHLC 缓存键只有 (symbol, months), 不含数据源偏好; 切换 prefer_akshare /
+    IBKR / 长桥 / crypto_source 后不清会命中上一个源的旧K线。与 clear_quotes
+    配套, 由设置页在源变化时调用 (clear 全清亦可, 但会连基本面一起清)。
+    """
+    _ensure_db()
+    with _lock, sqlite3.connect(CACHE_DB) as con:
+        n = con.execute("DELETE FROM ohlc_cache").rowcount
+        con.commit()
+        return n
+
+
 def info() -> dict:
     """缓存统计: 记录总数 / 有效条数 / 数据库大小."""
     _ensure_db()

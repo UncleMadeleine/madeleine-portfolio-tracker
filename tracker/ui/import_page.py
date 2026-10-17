@@ -102,7 +102,7 @@ def _ibkr_section(mode: str, on_saved) -> None:
         "imp_ibkr",
         mode,
         on_saved,
-        note="avg_cost 为 IBKR 报告的合约货币每股均价 (含佣金), 仅供估算。",
+        note="avg_cost 为 IBKR 报告的合约货币每股均价 (含佣金); 英股 (LSE 主板) IBKR 以便士报价, 已自动 ÷100 折成英镑。仅供估算。",
     )
 
 

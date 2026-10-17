@@ -115,11 +115,28 @@ def test_parse_all_markets():
     assert parse("SAP.DE").market is Market.DE
     assert parse("SAP.F").market is Market.DE
     assert parse("BP.L").market is Market.GB
+    assert parse("LSEG.L").market is Market.GB
     assert parse("BP.IL").market is Market.GB
     assert parse("RY.TO").market is Market.CA
     assert parse("X.V").market is Market.CA
     assert parse("BHP.AX").market is Market.AU
     assert parse("D05.SI").market is Market.SG
+
+
+def test_parse_lse_main_market():
+    """LSE 主板英股: LSEG.L 伦敦证券交易所集团。
+
+    parse 的 currency 是本地规范口径 (GBP 英镑, avg_cost 按 £88.00 记);
+    Yahoo 对 LSE 报价为便士 (GBp), ÷100 折算发生在 provider 层
+    (global_stocks._quote_from_dump / ibkr.quote_from_ticker)。
+    """
+    p = parse("LSEG.L")
+    assert p.yahoo == "LSEG.L"
+    assert p.market is Market.GB
+    assert p.currency == "GBP"
+    assert p.market_label == "英股"
+    assert p.type == "global"
+    assert normalize("lseg.l") == "LSEG.L"
 
 
 def test_parse_lse_iob_suffix():

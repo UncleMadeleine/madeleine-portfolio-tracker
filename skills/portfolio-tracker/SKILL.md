@@ -88,6 +88,7 @@ tracker-ui          # pip 安装后起 Streamlit 页面 (等价 streamlit run tr
   `P+系列字母` 连字符 (`WFC-PL`) 是美股优先股, 都不是 crypto。
 - 加密货币无分隔符写法 (`BTCUSD`/`ETHUSDT`/`BTCFDUSD`) 保存时自动补全为 `BASE-QUOTE`。
 - B股: 沪 B (900xxx.SS) 以**美元**交易, 深 B (200xxx.SZ) 以**港币**交易, `avg_cost` 按实际交易币种。
+- 英股 `.L`/`.AL` (LSE 主板/AIM): IBKR 与 Yahoo 均以**便士**报价, 行情与 IBKR 导入的 `avg_cost` 都由系统 ÷100 折成英镑; `.IL` (IOB) 币种由数据源自报 (KAP.IL=USD), 不折算。
 - 测试用例、搜索结果、IBKR 导入 (`ibkr_to_yahoo`) 产出的代码均符合本规范。
 - 无法识别的后缀报 `无法识别的交易所后缀`; 非法连字符代码报 `无法识别的代码`。
 

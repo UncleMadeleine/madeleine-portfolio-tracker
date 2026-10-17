@@ -466,7 +466,7 @@ python -m tracker.cli import ibkr --overwrite        # 覆盖全部持仓
 ```
 
 - 自动将 IBKR 账户股票持仓转换为规范代码并写入 `portfolio.json`
-- 保留原有 `base_currency`；`avg_cost` 取自 IBKR（合约货币每股均价，含佣金）
+- 保留原有 `base_currency`；`avg_cost` 取自 IBKR（合约货币每股均价，含佣金）；英股（LSE 主板/AIM）IBKR 与行情同以便士报价，已自动 ÷100 折成英镑（`.IL` 国际挂盘币种由 IBKR 自报，不折算）
 - 无法映射为规范代码的标的（权证/期权/基金等）会跳过并在控制台提示
 - 反向映射规则：`SEHK + CNY/CNH → .SS/.SZ`（沪深港通，6 位代码；`8` 开头 5 位为港股人民币柜台，归 `.HK`）；`SHSE + USD → .SS (B股)`；`SZSE + HKD → .SZ (B股)`；`SEHK + HKD/USD → .HK`（USD 为港股美元柜台）；`IBIS/FWB/GETX/SWB + EUR → .DE`（仅认德国交易所，泛欧所落 skipped）；`IOB → .IL`（LSE 国际挂盘，如 `KAP.IL` Kazatomprom GDR；币种 USD/GBP/EUR 混杂，不能落进 GBP/USD 兜底拼出 `KAP.L` 或裸 `KAP`）；`LSE + GBP/GBX → .L`；`TSE + CAD → .TO`；`TSXV + CAD → .V`；`CSE + CAD → .CN`；`NEO/NEOE + CAD → .NE`；`ASX + AUD → .AX`；`SGX/SES → .SI`（SGD 与 USD 计价证券均归 `.SI`）；`B3/BVMF/BOVESPA + BRL → .SA`；`SMART + USD → 原码`
 - 兼容入口：`python -m tracker.cli sync` / `python -m tracker.ibkr_sync`（默认覆盖，加 `--append` 追加）

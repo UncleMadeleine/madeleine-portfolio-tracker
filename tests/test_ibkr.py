@@ -151,6 +151,7 @@ def test_contract_spec_all_markets():
         ("9804.HK", ContractSpec("9804", "SEHK", "")),
         ("SAP.DE", ContractSpec("SAP", "IBIS", "EUR")),
         ("BP.L", ContractSpec("BP.", "LSE", "GBP")),
+        ("LSEG.L", ContractSpec("LSEG.", "LSE", "GBP")),
         # LSE 国际挂盘 (IOB): .IL symbol 不带尾点, 币种混杂 (KAP=USD) 故留空
         ("KAP.IL", ContractSpec("KAP", "IOB", "")),
         ("RY.TO", ContractSpec("RY", "TSE", "CAD")),
@@ -194,6 +195,76 @@ def test_quote_from_ticker_gbx_pence():
     assert q.currency == "GBP"
     assert abs(q.price - 5.397) < 1e-9
     assert abs(q.prev_close - 5.28) < 1e-9
+
+
+def test_quote_from_ticker_lseg_gbp_quote_is_pence():
+    """LSEG.L (伦交所集团): contract_spec 请求 GBP 柜台, IBKR 以便士报价、
+    currency 仍报 GBP —— 按市场判定 ÷100 (8768p = £87.68), 不能按币种字面放过。
+    """
+    q = quote_from_ticker(
+        "LSEG.L", FakeTicker(price=8768.0, close=8684.0, currency="GBP")
+    )
+    assert q.currency == "GBP"
+    assert abs(q.price - 87.68) < 1e-9
+    assert abs(q.prev_close - 86.84) < 1e-9
+
+
+def test_positions_to_rows_lse_avg_cost_pence_to_pounds():
+    """回归: LSE 主板英股 avgCost 与行情同为便士口径, 必须 ÷100 折成英镑.
+
+    IBKR 对英镑柜台以便士报价而 contract.currency 报 GBP (见 _is_pence_quote),
+    avgCost 是同单位的每股价格字段。项目规范 avg_cost 按英镑计 (README/模板
+    _说明), 不折算会把成本放大 100 倍 (LSEG.L 成本 £8768 vs 市价 £87.68,
+    盈亏率错到 -99%)。IOB (.IL) 币种由 IBKR 自报, 按面值不折算。
+    """
+    positions = [
+        # LSE 主板: 合约币种 GBP, 价/成本均为便士 (8768p = £87.68)
+        FakePosition(FakeContract("LSEG", "LSE", "GBP"), 20.0, 8768.0),
+        # LSE 显式报 GBX (便士符号) 同样折算
+        FakePosition(FakeContract("BP", "LSE", "GBX"), 100.0, 539.7),
+        # LSE 国际挂盘: IBKR 自报 USD, 成本按面值 (KAP.IL $64.4)
+        FakePosition(FakeContract("KAP", "IOB", "USD"), 31.0, 64.4),
+        # LSE 上市的美元计价 ETF (HEAL.L): 自报 USD, 按面值
+        FakePosition(FakeContract("HEAL", "LSEETF", "USD"), 50.0, 10.935),
+        # 非英股不受影响
+        FakePosition(FakeContract("AAPL", "SMART", "USD"), 10.0, 150.0),
+    ]
+    rows, skipped = positions_to_rows(positions)
+    assert skipped == []
+    by_sym = {r["symbol"]: r for r in rows}
+    assert by_sym["LSEG.L"]["avg_cost"] == pytest.approx(87.68)
+    assert by_sym["BP.L"]["avg_cost"] == pytest.approx(5.397)
+    assert by_sym["KAP.IL"]["avg_cost"] == 64.4
+    assert by_sym["HEAL.L"]["avg_cost"] == 10.935
+    assert by_sym["AAPL"]["avg_cost"] == 150.0
+
+
+def test_quote_from_ticker_iob_usd_not_scaled():
+    """回归: .IL (LSE 国际挂盘) 币种由 IBKR 自报 (KAP.IL=USD 64.4)。
+
+    此前把 .IL 也当便士市场, KAP.IL 被折成 0.644 GBP (跌 99%); yfinance 路径
+    一直正确, 仅 IBKR 路径有此错。contract_spec 对 IOB 请求空币种, IBKR 返回的
+    就是真实交易币种 (KAP=USD, 亦有 GBP/EUR 计价线), 不能按市场一律 ÷100。
+    """
+    q = quote_from_ticker("KAP.IL", FakeTicker(price=64.4, close=63.2, currency="USD"))
+    assert q.currency == "USD"
+    assert q.price == 64.4
+    assert q.prev_close == 63.2
+
+
+def test_quote_from_ticker_lse_usd_quoted_not_scaled():
+    """回归: LSE 主板线若 IBKR 自报 USD (如美元计价的 LSE ETF HEAL.L), 按面值。
+
+    contract_spec 对英股请求 GBP 柜台, 正常路径 IBKR 回报 GBP (便士口径);
+    自报其他币种时以币种为准, 不能再 ÷100 (此前 .L 一律 ÷100, 会把
+    HEAL.L 的 $10.935 折成 $0.109)。
+    """
+    q = quote_from_ticker(
+        "HEAL.L", FakeTicker(price=10.935, close=10.915, currency="USD")
+    )
+    assert q.currency == "USD"
+    assert q.price == 10.935
+    assert q.prev_close == 10.915
 
 
 def test_quote_from_ticker_no_data():
@@ -241,6 +312,9 @@ def test_ibkr_to_yahoo_mappings():
         (("SAP", "IBIS", "", "EUR"), "SAP.DE"),
         (("SAP", "FWB", "", "EUR"), "SAP.DE"),
         (("BP", "LSE", "", "GBX"), "BP.L"),
+        (("LSEG", "LSE", "", "GBP"), "LSEG.L"),
+        # LSE 合约 symbol 带尾点 (contract_spec 产出 "LSEG."): 不剥掉会拼出 LSEG..L
+        (("LSEG.", "LSE", "", "GBP"), "LSEG.L"),
         (("RY", "TSE", "", "CAD"), "RY.TO"),
         (("X", "TSXV", "", "CAD"), "X.V"),
         (("ABC", "CSE", "", "CAD"), "ABC.CN"),

@@ -75,7 +75,10 @@ def run_sync(args) -> None:
             f"新增 {len(result['added'])} · 更新 {len(result['updated'])}, "
             f"共 {result['total']} 条持仓, 基础货币保留)"
         )
-    print("提示: avg_cost 为 IBKR 报告的合约货币每股均价 (含佣金), 仅供估算。")
+    print(
+        "提示: avg_cost 为 IBKR 报告的合约货币每股均价 (含佣金); "
+        "英股 (LSE 主板) IBKR 以便士报价, 已自动 ÷100 折成英镑。仅供估算。"
+    )
 
 
 def main(argv=None) -> None:

@@ -311,6 +311,26 @@ def _f(v) -> float | None:
     return f if math.isfinite(f) else None
 
 
+def _is_pence_quote(yahoo_symbol: str, raw_ccy: str) -> bool:
+    """IBKR 对该合约的报价是否便士口径 (需 ÷100 折成英镑).
+
+    LSE 主板/AIM (.L/.AL): contract_spec 请求 currency=GBP 的英镑柜台, 而 IBKR
+    (同 LSE/Yahoo) 对英镑柜台以**便士**报价、currency 仍报 GBP; 显式 GBp/GBX
+    同理 (大小写混用)。IBKR 自报其他币种 (如 LSE 上市的美元计价 ETF HEAL.L)
+    时按面值, 不能再 ÷100。
+    .IL (LSE 国际挂盘 IOB) 不在此列: contract_spec 对其请求空币种, IBKR 自报
+    真实交易币种 (KAP.IL=USD 64.4, 亦有 GBP/EUR 计价线), 按市场一律 ÷100 会把
+    美元报价折成 1/100。
+    行情 (quote_from_ticker) 与成本 (positions_to_rows 的 avgCost) 共用本判定,
+    两者本就同单位 (IBKR 的每股价格字段)。
+    """
+    ccy = (raw_ccy or "").strip().upper()
+    if is_pence(ccy):
+        return True
+    suffix = yahoo_symbol.rsplit(".", 1)[-1].upper() if "." in yahoo_symbol else ""
+    return ccy == "GBP" and suffix in ("L", "AL")
+
+
 def quote_from_ticker(yahoo_symbol: str, ticker) -> Quote | None:
     price = None
     try:
@@ -334,15 +354,10 @@ def quote_from_ticker(yahoo_symbol: str, ticker) -> Quote | None:
     # LSE 便士口径: contract_spec 对英股请求 currency=GBP 的英镑柜台, 而 IBKR
     # (同 LSE/Yahoo) 对英镑柜台以**便士**报价、currency 仍报 GBP —— is_pence
     # ("GBP") 为假会漏掉 ÷100, 英股价格放大 100 倍。与 yfinance 路径
-    # (global_stocks: "GBP 报价 = 便士" 一律 ÷100) 对齐: GB 市场按市场判定便士。
-    # 用 elif 避免 IBKR 显式报 GBX 时被两条分支重复 ÷100。
-    _gb_suffix = yahoo_symbol.rsplit(".", 1)[-1].upper() if "." in yahoo_symbol else ""
-    if is_pence(raw_ccy):
-        currency = "GBP"
-        price = price / 100
-        if close:
-            close = close / 100
-    elif _gb_suffix in ("L", "IL", "AL"):
+    # (global_stocks: GB 市场缺币种时按便士兜底, 自报币种优先) 对齐:
+    # IBKR 自报 GBp/GBX 或 (GBP + LSE 主板/AIM 后缀) 才 ÷100, 自报 USD/EUR 的
+    # LSE 线 (如美元计价 ETF) 与 .IL (IOB) 按面值 (判定见 _is_pence_quote)。
+    if _is_pence_quote(yahoo_symbol, raw_ccy):
         currency = "GBP"
         price = price / 100
         if close:
@@ -774,11 +789,12 @@ def positions_to_rows(positions) -> tuple[list[dict], list[str]]:
         if qty == 0:
             continue
         raw = str(getattr(c, "symbol", "")).strip()
+        ccy = str(getattr(c, "currency", "") or "")
         y = ibkr_to_yahoo(
             raw,
             getattr(c, "exchange", ""),
             getattr(c, "primaryExchange", ""),
-            getattr(c, "currency", ""),
+            ccy,
         )
         if not y:
             skipped.append(
@@ -786,6 +802,14 @@ def positions_to_rows(positions) -> tuple[list[dict], list[str]]:
                 " 无法映射为 Yahoo 代码"
             )
             continue
+        # 英股 (LSE 主板/AIM) 的 avgCost 与行情同为便士口径 (IBKR 对英镑柜台以
+        # 便士报价而 currency 报 GBP, 见 _is_pence_quote): ÷100 折成英镑, 与
+        # quote_from_ticker 及项目规范 (avg_cost 按当地货币英镑计) 对齐。
+        # 不折算会把成本放大 100 倍, 盈亏率错到 -99%。.IL (IOB) 币种由 IBKR
+        # 自报 (KAP.IL=USD), 按面值不折算。
+        avg_cost = _f(getattr(pos, "avgCost", None))
+        if avg_cost is not None and _is_pence_quote(y, ccy):
+            avg_cost = avg_cost / 100
         rows.append(
             {
                 "symbol": y,
@@ -794,11 +818,7 @@ def positions_to_rows(positions) -> tuple[list[dict], list[str]]:
                 # avgCost 缺失/None 时不落该键: 让 importer.merge_holdings 的
                 # `if r.get("avg_cost") is not None` 守卫保留已手填/历史成本,
                 # 否则 None→0.0 会把成本抹成 0 且盈亏率静默消失 (与长桥口径一致)
-                **(
-                    {"avg_cost": round(avg_cost, 6)}
-                    if (avg_cost := _f(getattr(pos, "avgCost", None))) is not None
-                    else {}
-                ),
+                **({"avg_cost": round(avg_cost, 6)} if avg_cost is not None else {}),
             }
         )
     return rows, skipped

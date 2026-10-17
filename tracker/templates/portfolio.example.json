@@ -5,6 +5,7 @@
     { "symbol": "AAPL", "quantity": 10, "avg_cost": 180.0 },
     { "symbol": "0700.HK", "quantity": 100, "avg_cost": 330.0 },
     { "symbol": "600519.SS", "quantity": 10, "avg_cost": 1500.0 },
+    { "symbol": "LSEG.L", "quantity": 20, "avg_cost": 88.0 },
     { "symbol": "BTC-USD", "quantity": 0.1, "avg_cost": 50000.0 }
   ]
 }

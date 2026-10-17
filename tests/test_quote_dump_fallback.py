@@ -24,6 +24,11 @@ def hk_symbol():
     return parse("3032.HK")
 
 
+@pytest.fixture
+def gb_symbol():
+    return parse("LSEG.L")
+
+
 def test_full_dump_unchanged(us_symbol):
     """常规 dump (有 last_price): 输出与既往行为一致, 回退不改变取值顺序."""
     d = {
@@ -89,6 +94,59 @@ def test_open_fallback_respects_pence(us_symbol):
     assert q.currency == "GBP"
     assert q.price == pytest.approx(4.5)
     assert q.prev_close == pytest.approx(448.0)
+
+
+def test_open_fallback_lseg_pence(gb_symbol):
+    """英股主板样本 LSEG.L (伦交所集团): GBp 便士 → 英镑 (8768p = £87.68).
+
+    与 BP.L 同一路径, 锁定一个非能源类的 LSE 大盘股口径。
+    """
+    d = {
+        "symbol": "LSEG.L",
+        "open": 8768.0,
+        "prev_close": 8684.0,
+        "currency": "GBp",
+        "name": "London Stock Exchange Group plc",
+    }
+    q = _quote_from_dump(gb_symbol, d)
+    assert q is not None
+    assert q.currency == "GBP"
+    assert q.price == pytest.approx(87.68)
+    assert q.prev_close == pytest.approx(86.84)
+    assert q.change_pct == pytest.approx((8768.0 / 8684.0 - 1) * 100)
+    assert q.name == "London Stock Exchange Group plc"
+
+
+def test_lse_missing_currency_falls_back_to_pence(gb_symbol):
+    """回归: .L 主板币种字段缺失时按 LSE 惯例兜底 GBp, 不能透传 GBP 放大 100 倍."""
+    d = {"symbol": "LSEG.L", "last_price": 8768.0, "prev_close": 8684.0}
+    q = _quote_from_dump(gb_symbol, d)
+    assert q is not None
+    assert q.currency == "GBP"
+    assert q.price == pytest.approx(87.68)
+    assert q.prev_close == pytest.approx(86.84)
+
+
+def test_lse_usd_quoted_etf_not_scaled():
+    """.L 后缀 ≠ 一定便士: LSE 亦有美元计价的 UCITS ETF (HEAL.L, USD 10.935)。
+
+    注意 HEAL.L 是 iShares Healthcare Innovation UCITS ETF, 不是希思罗机场 ——
+    Heathrow Airport Holdings 2007 年已私有化退市, Yahoo 上无对应股票。
+    币种以数据源自报为准: USD 报价不能再 ÷100。
+    """
+    p = parse("HEAL.L")
+    d = {
+        "symbol": "HEAL.L",
+        "last_price": 10.935,
+        "prev_close": 10.915,
+        "currency": "USD",
+        "name": "iShares Healthcare Innovation UCITS ETF USD (Acc)",
+    }
+    q = _quote_from_dump(p, d)
+    assert q is not None
+    assert q.price == 10.935
+    assert q.currency == "USD"
+    assert q.change_pct == pytest.approx((10.935 / 10.915 - 1) * 100)
 
 
 def test_open_fallback_hk_currency_passthrough(hk_symbol):

@@ -14,6 +14,7 @@ from __future__ import annotations
 import importlib
 import time
 
+import pandas as pd
 import pytest
 from streamlit.testing.v1 import AppTest
 
@@ -33,6 +34,15 @@ _URL_PATHS = {
 
 @pytest.fixture
 def app_boot(monkeypatch, tmp_path):
+    return _boot_app(
+        monkeypatch,
+        tmp_path,
+        holdings=[{"symbol": "AAPL", "quantity": 2, "avg_cost": 100}],
+    )
+
+
+def _boot_app(monkeypatch, tmp_path, holdings):
+    """以指定持仓启动 app.py 并完整渲染默认页 (组合); 行情/FX 全部 mock."""
     wl = tmp_path / "watchlist.json"
     pf = tmp_path / "portfolio.json"
     storage.save_watchlist(
@@ -41,7 +51,7 @@ def app_boot(monkeypatch, tmp_path):
     storage.save_portfolio(
         {
             "base_currency": "CNY",
-            "holdings": [{"symbol": "AAPL", "quantity": 2, "avg_cost": 100}],
+            "holdings": holdings,
         },
         pf,
     )
@@ -140,3 +150,64 @@ def test_portfolio_page_module_renders_directly(app_boot):
     ).run()
     assert not at.exception, at.exception
     assert any("组合总览" in m.value for m in at.markdown)
+
+
+def test_asset_allocation_symbol_pie_top20_other(monkeypatch, tmp_path):
+    """25 个持仓: 「按代码」饼图走 Top 20 + 其他 聚合路径, 完整渲染不炸.
+
+    AppTest 拿不到 plotly figure, 这里守住的是渲染路径本身: by_symbol 聚合、
+    图题条件、切片标注计算与 st.plotly_chart 调用 (ZeroDivision/列名错等
+    都会以 exception 形式暴露)。
+    """
+    holdings = [
+        {"symbol": f"SY{i:02d}", "quantity": i + 1, "avg_cost": 10} for i in range(25)
+    ]
+    at = _boot_app(monkeypatch, tmp_path, holdings=holdings)
+    assert not at.exception, at.exception
+    # 总市值 = Σ(i+1) × 150 USD × 7.1 = 1065 × 325 = 346,125 CNY:
+    # 25 行全部流过 build_view (行情/汇率 mock 全覆盖), 饼图聚合路径真实执行
+    assert any("346,125" in str(m.value) for m in at.metric)
+
+
+def test_symbol_pie_top20_merges_tail_into_other():
+    """25 个代码: 饼图只留前 20 + 其他 (尾部求和), 图题标注聚合口径."""
+    view = pd.DataFrame(
+        {
+            "symbol": [f"S{i:02d}" for i in range(25)],
+            "market_value": [float(100 - i) for i in range(25)],
+        }
+    )
+    fig = portfolio_page._symbol_pie(view)
+    trace = fig.data[0]
+    assert list(trace.labels)[:20] == [f"S{i:02d}" for i in range(20)]
+    assert list(trace.labels)[-1] == "其他"
+    assert list(trace.values)[-1] == sum(float(100 - i) for i in range(20, 25))
+    assert fig.layout.title.text == "按代码 (Top 20 + 其他)"
+    # 图例 21 条: 字号调小, 避免 1/3 栏宽下挤压饼图
+    assert fig.layout.legend.font.size == 10
+
+
+def test_symbol_pie_small_portfolio_shows_all_symbols():
+    """代码数不超过 20: 全量展示, 无「其他」, 图题不带 Top 说明."""
+    view = pd.DataFrame({"symbol": ["AAPL", "MSFT"], "market_value": [100.0, 50.0]})
+    fig = portfolio_page._symbol_pie(view)
+    assert list(fig.data[0].labels) == ["AAPL", "MSFT"]
+    assert fig.layout.title.text == "按代码"
+
+
+def test_symbol_pie_labels_only_for_wide_slices():
+    """窄切片不标文字 (防压字): 仅占比 >= SYMBOL_LABEL_MIN_SHARE 的切片有标注."""
+    view = pd.DataFrame(
+        {"symbol": ["A", "B", "C"], "market_value": [100.0, 2.0, 1.0]}
+    )  # 97.1% / 1.9% / 1.0%
+    fig = portfolio_page._symbol_pie(view)
+    texts = list(fig.data[0].text)
+    assert texts == ["97.1%", "", ""]
+    assert fig.data[0].textinfo == "text"
+
+
+def test_symbol_pie_zero_market_value_no_crash():
+    """市值全 0 (数量清空): 跳过文字计算 (除零), 仍返回空饼不炸."""
+    view = pd.DataFrame({"symbol": ["AAPL"], "market_value": [0.0]})
+    fig = portfolio_page._symbol_pie(view)
+    assert list(fig.data[0].labels) == ["AAPL"]

@@ -1,6 +1,6 @@
 import pandas as pd
 
-from tracker.analytics import build_view, summarize
+from tracker.analytics import build_view, by_symbol, summarize
 from tracker.prices import Quote
 
 
@@ -249,3 +249,78 @@ def test_build_view_no_separator_crypto_input():
     assert issues == []
     assert view.iloc[0]["symbol"] == "BTC-USD"
     assert view.iloc[0]["market"] == "加密货币"
+
+
+# ---------- 按代码聚合 (资产配置饼图: Top N + 其他) ----------
+
+
+def _symbol_view(values: dict[str, float]) -> pd.DataFrame:
+    return pd.DataFrame({"symbol": list(values), "market_value": list(values.values())})
+
+
+def test_by_symbol_top_with_other():
+    """25 个代码只留前 20, 尾部 5 个合计为「其他」且恒在末位."""
+    view = _symbol_view({f"S{i:02d}": float(100 - i) for i in range(25)})
+    out = by_symbol(view, top=20)
+    assert list(out.columns) == ["symbol", "market_value"]
+    assert len(out) == 21
+    # 前 20 名 = 原视图市值前 20 大, 保持降序
+    assert out["symbol"].tolist()[:20] == [f"S{i:02d}" for i in range(20)]
+    assert out["market_value"].tolist()[:20] == sorted(
+        out["market_value"].tolist()[:20], reverse=True
+    )
+    assert out.iloc[-1]["symbol"] == "其他"
+    assert out.iloc[-1]["market_value"] == sum(float(100 - i) for i in range(20, 25))
+    # 聚合不重不漏: 总额守恒
+    assert out["market_value"].sum() == view["market_value"].sum()
+
+
+def test_by_symbol_custom_other_label():
+    view = _symbol_view({"AAPL": 10.0, "MSFT": 5.0, "NVDA": 1.0})
+    out = by_symbol(view, top=2, other_label="其它")
+    assert out["symbol"].tolist() == ["AAPL", "MSFT", "其它"]
+    assert out.iloc[-1]["market_value"] == 1.0
+
+
+def test_by_symbol_under_top_no_other():
+    """代码数不超过 top 时全量展示, 不产生「其他」行."""
+    view = _symbol_view({"AAPL": 100.0, "MSFT": 50.0, "BTC-USD": 25.0})
+    out = by_symbol(view)
+    assert out["symbol"].tolist() == ["AAPL", "MSFT", "BTC-USD"]
+    assert out["market_value"].tolist() == [100.0, 50.0, 25.0]
+    assert "其他" not in set(out["symbol"])
+
+
+def test_by_symbol_duplicate_rows_summed():
+    """同一代码多行 (重复持仓) 先求和再参与排名."""
+    view = pd.DataFrame(
+        {
+            "symbol": ["AAPL", "AAPL", "MSFT"],
+            "market_value": [60.0, 40.0, 50.0],
+        }
+    )
+    out = by_symbol(view)
+    assert out["symbol"].tolist() == ["AAPL", "MSFT"]
+    assert out["market_value"].tolist() == [100.0, 50.0]
+
+
+def test_by_symbol_empty():
+    out = by_symbol(pd.DataFrame())
+    assert out.empty
+    assert list(out.columns) == ["symbol", "market_value"]
+
+
+def test_by_symbol_from_built_view():
+    """接 build_view 的真实输出 (含 weight 等列): 只按 symbol/market_value 聚合."""
+    holdings = [
+        {"symbol": "AAPL", "quantity": 10, "avg_cost": 100.0},
+        {"symbol": "BTC-USD", "quantity": 0.5, "avg_cost": 30000.0},
+    ]
+    quotes = {
+        "AAPL": make_quote("AAPL", 150.0, ccy="USD"),
+        "BTC-USD": make_quote("BTC-USD", 60000.0, ccy="USD"),
+    }
+    view, _ = build_view(holdings, quotes, {"USD": 7.0})
+    out = by_symbol(view, top=1)
+    assert out["symbol"].tolist() == ["BTC-USD", "其他"]
+    assert out["market_value"].tolist() == [210000.0, 10500.0]

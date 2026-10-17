@@ -13,7 +13,7 @@ import plotly.express as px
 import streamlit as st
 
 from tracker import prices, storage
-from tracker.analytics import build_view, summarize
+from tracker.analytics import build_view, by_symbol, summarize
 from tracker.fx import get_fx_rates
 from tracker.symbols import parse
 from tracker.services.watchlist import (
@@ -32,6 +32,11 @@ from tracker.ui import settings as S
 from tracker.ui.kline_page import set_quick_symbols
 
 WATCHLIST_PATH = storage.WATCHLIST_PATH
+
+# 「按代码」饼图只展示市值前 N 大的代码, 其余合并为「其他」切片
+SYMBOL_TOP = 20
+# 饼图内标注占比的阈值: 低于该占比的切片太窄, 标签会互相压字 (改看图例/hover)
+SYMBOL_LABEL_MIN_SHARE = 0.035
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -82,6 +87,38 @@ def _pnl_color(v) -> str:
         return ""
     up_c, down_c = S.up_down_colors()
     return f"color: {up_c}" if v > 0 else f"color: {down_c}"
+
+
+def _symbol_pie(view: pd.DataFrame):
+    """「按代码」资产配置饼图: 市值前 SYMBOL_TOP 名逐个展示, 其余合并为「其他」.
+
+    代码维度动辄几十上百个, 全画进饼图不可读; 尾部合并后图例仍有 20+ 条,
+    故占比过小的切片不标文字 (改看图例/hover), 图例字号也随条目数调小,
+    避免 1/3 栏宽下把饼图本身挤没。
+    """
+    sym_view = by_symbol(view, top=SYMBOL_TOP)
+    fig = px.pie(
+        sym_view,
+        names="symbol",
+        values="market_value",
+        title=(
+            f"按代码 (Top {SYMBOL_TOP} + 其他)"
+            if view["symbol"].nunique() > SYMBOL_TOP
+            else "按代码"
+        ),
+    )
+    total_mv = float(sym_view["market_value"].sum())
+    if total_mv:
+        fig.update_traces(
+            text=[
+                f"{v / total_mv:.1%}" if v / total_mv >= SYMBOL_LABEL_MIN_SHARE else ""
+                for v in sym_view["market_value"]
+            ],
+            textinfo="text",
+        )
+    if len(sym_view) > 10:
+        fig.update_layout(legend=dict(font=dict(size=10)))
+    return fig
 
 
 def render_portfolio_page() -> None:
@@ -606,7 +643,7 @@ def render_portfolio_page() -> None:
         if view.empty:
             st.info("暂无持仓数据。")
         else:
-            c1, c2 = st.columns(2)
+            c1, c2, c3 = st.columns(3)
             with c1:
                 st.plotly_chart(
                     px.pie(view, names="market", values="market_value", title="按市场"),
@@ -622,6 +659,8 @@ def render_portfolio_page() -> None:
                     ),
                     width="stretch",
                 )
+            with c3:
+                st.plotly_chart(_symbol_pie(view), width="stretch")
             st.plotly_chart(
                 px.bar(
                     view.head(15),

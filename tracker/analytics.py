@@ -130,3 +130,23 @@ def summarize(view: pd.DataFrame) -> dict:
         .sum()
         .sort_values(ascending=False),
     }
+
+
+def by_symbol(
+    view: pd.DataFrame, top: int = 20, other_label: str = "其他"
+) -> pd.DataFrame:
+    """按股票代码聚合市值 (资产配置饼图用): 前 top 名, 其余合计为「其他」.
+
+    与 summarize 的 by_market/by_currency (返回 Series) 不同: 代码维度动辄
+    几十上百个, 全画进饼图不可读, 故只保留市值前 top 名, 尾部合并为一个
+    「其他」切片 (恒在末位). 同一代码多行 (重复持仓) 先求和.
+    返回列 symbol/market_value, 按市值降序, 可直接喂 px.pie.
+    """
+    if view.empty:
+        return pd.DataFrame(columns=["symbol", "market_value"])
+    s = view.groupby("symbol")["market_value"].sum().sort_values(ascending=False)
+    if len(s) <= top:
+        return s.reset_index()
+    tail = s.iloc[top:].sum()
+    out = pd.concat([s.head(top), pd.Series({other_label: tail})]).rename_axis("symbol")
+    return out.reset_index(name="market_value")

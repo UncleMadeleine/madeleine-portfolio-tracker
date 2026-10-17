@@ -211,13 +211,13 @@ python -m tracker.cli longport-login --json    # 长桥 OAuth 授权 URL（脚�
 | A股 | `.SS` / `.SZ` | `600519.SS` `000001.SZ` | CNY | cn | 也接受 `.SH` |
 | B股 | `.SS` / `.SZ` | `900902.SS` `200012.SZ` | USD / HKD | cn | 上海 B 股 `9` 开头以**美元**交易，深圳 B 股 `2` 开头以**港币**交易 |
 | 北交所 | `.BJ` | `830799.BJ` | CNY | cn | |
-| 港股 | `.HK` | `0700.HK` `82318.HK` | HKD / CNY | global | **4 位补零**（不足 4 位补前导零，`00700.HK` 自动归一）；人民币柜台为 `8` 开头 5 位码（如 `82318.HK` 中国平安-R），以 **CNY** 计价，原样支持、不截断 |
+| 港股 | `.HK` | `0700.HK` `82318.HK` `9804.HK` | HKD / CNY / USD | global | **4 位补零**（不足 4 位补前导零，`00700.HK` 自动归一）；多柜台模型下同一标的有独立代码：人民币柜台为 `8` 开头 5 位码（如 `82318.HK` 中国平安-R，以 **CNY** 计价）、美元柜台如 `9804.HK` PP越南-U（以 **USD** 计价），原样支持、不截断 |
 | 德股 | `.DE` 等 | `SAP.DE` | EUR | global | `.F` `.BE` `.DU` `.HM` `.MU` 均可 |
 | 英股 | `.L` | `BP.L` | GBP | global | Yahoo 报价单位为便士（GBp），系统自动 ÷100 换算为英镑；`.IL` `.AL` 同属伦交所 |
 | 加股 | `.TO` 等 | `RY.TO` | CAD | global | `.V`（TSXV）`.CN` `.NE` 均可 |
 | 澳股 | `.AX` | `BHP.AX` | AUD | global | |
-| 新加坡股 | `.SI` | `D05.SI` | SGD | global | SGX；`.SG` 别名自动归一为 `.SI`（yfinance 无 `.SG` 数据） |
-| 巴西股 | `.SA` | `PETR4.SA` | BRL | global | B3；IBKR 交易所代号 `BVMF` |
+| 新加坡股 | `.SI` | `D05.SI` `NIO.SI` | SGD / USD | global | SGX；`.SG` 别名自动归一为 `.SI`（yfinance 无 `.SG` 数据）；SGX 同时有 SGD 计价（`D05.SI`）与 USD 计价（`NIO.SI`）证券，IBKR 侧按代码自辨币种 |
+| 巴西股 | `.SA` | `PETR4.SA` | BRL | global | B3；IBKR 交易所代号 `B3`（旧 `BVMF` 已下线） |
 | 加密货币 | `-QUOTE` | `BTC-USD` `ETH-USDT` | 计价货币 | crypto | 连字符 `BASE-QUOTE`（Yahoo crypto 规范）；无分隔符 `BTCUSD` 自动补全 |
 
 **互斥保证**：点后缀/裸代码永远是股票，连字符+计价货币永远是加密货币（单字母连字符 `BRK-B`
@@ -467,7 +467,7 @@ python -m tracker.cli import ibkr --overwrite        # 覆盖全部持仓
 - 自动将 IBKR 账户股票持仓转换为规范代码并写入 `portfolio.json`
 - 保留原有 `base_currency`；`avg_cost` 取自 IBKR（合约货币每股均价，含佣金）
 - 无法映射为规范代码的标的（权证/期权/基金等）会跳过并在控制台提示
-- 反向映射规则：`SEHK + CNY/CNH → .SS/.SZ`（沪深港通，6 位代码；`8` 开头 5 位为港股人民币柜台，归 `.HK`）；`SHSE + USD → .SS (B股)`；`SZSE + HKD → .SZ (B股)`；`SEHK + HKD → .HK`；`IBIS/FWB/GETX/SWB + EUR → .DE`（仅认德国交易所，泛欧所落 skipped）；`LSE + GBP/GBX → .L`；`TSE + CAD → .TO`；`TSXV + CAD → .V`；`CSE + CAD → .CN`；`NEO/NEOE + CAD → .NE`；`ASX + AUD → .AX`；`SGX/SES + SGD → .SI`；`BVMF/BOVESPA + BRL → .SA`；`SMART + USD → 原码`
+- 反向映射规则：`SEHK + CNY/CNH → .SS/.SZ`（沪深港通，6 位代码；`8` 开头 5 位为港股人民币柜台，归 `.HK`）；`SHSE + USD → .SS (B股)`；`SZSE + HKD → .SZ (B股)`；`SEHK + HKD/USD → .HK`（USD 为港股美元柜台）；`IBIS/FWB/GETX/SWB + EUR → .DE`（仅认德国交易所，泛欧所落 skipped）；`LSE + GBP/GBX → .L`；`TSE + CAD → .TO`；`TSXV + CAD → .V`；`CSE + CAD → .CN`；`NEO/NEOE + CAD → .NE`；`ASX + AUD → .AX`；`SGX/SES → .SI`（SGD 与 USD 计价证券均归 `.SI`）；`B3/BVMF/BOVESPA + BRL → .SA`；`SMART + USD → 原码`
 - 兼容入口：`python -m tracker.cli sync` / `python -m tracker.ibkr_sync`（默认覆盖，加 `--append` 追加）
 
 ### 长桥 (LongPort) 账户

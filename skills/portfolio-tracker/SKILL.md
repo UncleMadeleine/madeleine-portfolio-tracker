@@ -74,13 +74,13 @@ tracker-ui          # pip 安装后起 Streamlit 页面 (等价 streamlit run tr
 | A股 | `.SS`/`.SZ` | `600519.SS` `000001.SZ` | CNY | cn | `.SH` 别名自动归一为 `.SS` |
 | B股 | `.SS`/`.SZ` | `900902.SS` `200012.SZ` | USD / HKD | cn | 沪 B 美元 / 深 B 港币 |
 | 北交所 | `.BJ` | `830799.BJ` | CNY | cn | |
-| 港股 | `.HK` | `0700.HK` (4位补零) | HKD | global | 人民币柜台 8 开头 5 位码以 CNY 计价 |
+| 港股 | `.HK` | `0700.HK` (4位补零) | HKD / CNY / USD | global | 多柜台: 人民币柜台 8 开头 5 位码以 CNY 计价, 美元柜台 (如 `9804.HK`) 以 USD 计价 |
 | 德股 | `.DE` 等 | `SAP.DE` | EUR | global | `.F`/`.BE`/`.DU`/`.HM`/`.MU` |
 | 英股 | `.L` | `BP.L` | GBP | global | Yahoo 报价为便士, 系统自动 ÷100; `.IL`/`.AL` 同属伦交所 |
 | 加股 | `.TO` 等 | `RY.TO` | CAD | global | `.V`/`.CN`/`.NE` |
 | 澳股 | `.AX` | `BHP.AX` | AUD | global | |
-| 新加坡股 | `.SI` | `D05.SI` | SGD | global | `.SG` 别名自动归一为 `.SI` (yfinance 无 `.SG` 数据) |
-| 巴西股 | `.SA` | `PETR4.SA` | BRL | global | B3; IBKR 交易所代号 `BVMF` |
+| 新加坡股 | `.SI` | `D05.SI` | SGD / USD | global | `.SG` 别名自动归一为 `.SI` (yfinance 无 `.SG` 数据); SGX 有 SGD 与 USD 计价证券 |
+| 巴西股 | `.SA` | `PETR4.SA` | BRL | global | B3; IBKR 交易所代号 `B3` (旧 `BVMF` 已下线) |
 | 加密货币 | `-QUOTE` | `BTC-USD` `ETH-USDT` | 计价货币 | crypto | 无分隔符 `BTCUSD` 自动补全 |
 | 指数 | `IX.<KEY>` | `IX.DXY` `IX.VIX` `IX.CEMPI` `IX.LC` | 各异 | index | 已收录 30 个, `index-kline --list` 可查 |
 

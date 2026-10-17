@@ -143,7 +143,11 @@ def test_contract_spec_all_markets():
         ("002594.SZ", ContractSpec("002594", "SEHKSZSE", "CNH")),
         ("900902.SS", ContractSpec("900902", "SHSE", "USD", "900902")),
         ("200012.SZ", ContractSpec("200012", "SZSE", "HKD", "200012")),
-        ("0700.HK", ContractSpec("700", "SEHK", "HKD")),
+        # 港股多柜台: currency 留空由 IBKR 按代码补全 (HKD 主柜台 / RMB 柜台 8xxxx
+        # → CNH / USD 柜台 9xxx → USD 代码上无法区分, 硬编码 HKD 会让后两者查无合约)
+        ("0700.HK", ContractSpec("700", "SEHK", "")),
+        ("82318.HK", ContractSpec("82318", "SEHK", "")),
+        ("9804.HK", ContractSpec("9804", "SEHK", "")),
         ("SAP.DE", ContractSpec("SAP", "IBIS", "EUR")),
         ("BP.L", ContractSpec("BP.", "LSE", "GBP")),
         ("RY.TO", ContractSpec("RY", "TSE", "CAD")),
@@ -151,6 +155,11 @@ def test_contract_spec_all_markets():
         ("ABC.CN", ContractSpec("ABC", "CSE", "CAD")),
         ("DEF.NE", ContractSpec("DEF", "NEOE", "CAD")),
         ("BHP.AX", ContractSpec("BHP", "ASX", "AUD")),
+        # SGX 有 SGD (D05 星展) 与 USD (D01/NIO) 计价证券: currency 留空由 IBKR 补全
+        ("D05.SI", ContractSpec("D05", "SGX", "")),
+        ("NIO.SI", ContractSpec("NIO", "SGX", "")),
+        # B3 现行交易所代号 (旧 BVMF 已下线)
+        ("MBRF3.SA", ContractSpec("MBRF3", "B3", "BRL")),
     ]
     for sym, expected in cases:
         assert contract_spec(parse(sym)) == expected, sym
@@ -187,6 +196,15 @@ def test_quote_from_ticker_gbx_pence():
 def test_quote_from_ticker_no_data():
     assert quote_from_ticker("X", FakeTicker(price=float("nan"))) is None
     assert quote_from_ticker("X", FakeTicker(price=None, last=None, close=None)) is None
+
+
+def test_quote_from_ticker_cnh_normalized_to_cny():
+    # 港股人民币柜台经 IBKR 报 CNH: 统一折算为项目口径 CNY (否则汇率层 missing)
+    q = quote_from_ticker(
+        "82318.HK", FakeTicker(price=42.64, close=43.0, currency="CNH")
+    )
+    assert q.currency == "CNY"
+    assert q.price == 42.64
 
 
 def test_quote_from_ticker_fallback_to_last_and_close():
@@ -228,6 +246,12 @@ def test_ibkr_to_yahoo_mappings():
         (("BRK B", "SMART", "", "USD"), "BRK-B"),
         (("AAPL", "SMART", "", "USD"), "AAPL"),
         (("AAPL", "", "NASDAQ", "USD"), "AAPL"),
+        # 港股美元柜台 (9804.HK PP越南-U): SEHK + USD 归 .HK, 不能落进美股分支
+        (("9804", "SEHK", "", "USD"), "9804.HK"),
+        # SGX USD 计价证券 (D01/NIO): SGX + USD 仍归 .SI (IBKR 报 USD 币种)
+        (("D01", "SGX", "", "USD"), "D01.SI"),
+        # B3 现行交易所代号
+        (("MBRF3", "B3", "", "BRL"), "MBRF3.SA"),
         (("ZZZ", "FOO", "", "ZZZ"), None),
     ]
     for args, expected in cases:

@@ -252,7 +252,14 @@ def contract_spec(p: ParsedSymbol, exchanges: dict | None = None) -> ContractSpe
             return ContractSpec(code, ex.get("CN_SH", "SEHKNTL"), "CNH")
         return ContractSpec(code, ex.get("CN_SZ", "SEHKSZSE"), "CNH")
     if p.market is Market.HK:
-        return ContractSpec(code.lstrip("0") or code, ex.get("HK", "SEHK"), "HKD")
+        # 港股是多柜台 (HKEX Multi-Counter): 同一标的有 HKD 主柜台 / RMB 柜台
+        # (8 开头 5 位, 如 82318.HK) / USD 柜台 (如 9804.HK PP越南-U) 三个独立代码,
+        # 分别以 HKD/CNH/USD 计价, 且 Yahoo 代码形态上无法区分 (9988.HK 是 HKD,
+        # 9804.HK 是 USD)。硬编码 currency=HKD 会让后两种柜台 qualify 查无合约
+        # (Error 200) 而整只回退 yfinance。留空 currency 让 IBKR 按代码自行补全
+        # (每个柜台代码在 SEHK 唯一, qualify 必得唯一合约), 真实币种由返回的
+        # ticker.contract.currency 读回 (见 quote_from_ticker)。
+        return ContractSpec(code.lstrip("0") or code, ex.get("HK", "SEHK"), "")
     if p.market is Market.DE:
         return ContractSpec(code, ex.get("DE", "IBIS"), "EUR")
     if p.market is Market.GB:
@@ -271,10 +278,15 @@ def contract_spec(p: ParsedSymbol, exchanges: dict | None = None) -> ContractSpe
     if p.market is Market.AU:
         return ContractSpec(code, ex.get("AU", "ASX"), "AUD")
     if p.market is Market.SG:
-        return ContractSpec(code, ex.get("SG", "SGX"), "SGD")
+        # SGX 同时存在 SGD 计价 (D05.SI 星展 / C6L.SI 新航) 与 USD 计价 (D01.SI /
+        # NIO.SI 等) 的证券, Yahoo 的 .SI 后缀不带币种信息。硬编码 SGD 会让 USD
+        # 证券 qualify 查无合约 (Error 200) 而回退 yfinance; 留空 currency 由 IBKR
+        # 按代码补全, 真实币种从 ticker.contract.currency 读回。
+        return ContractSpec(code, ex.get("SG", "SGX"), "")
     if p.market is Market.BR:
-        # B3 (圣保罗): Yahoo 后缀 .SA (PETR4.SA); IBKR 合约库交易代码无后缀数字
-        return ContractSpec(code, ex.get("BR", "BVMF"), "BRL")
+        # B3 (圣保罗): Yahoo 后缀 .SA (PETR4.SA); IBKR 合约库交易代码无后缀数字。
+        # 交易所代号现行为 "B3" (旧代号 BVMF 已下线, 直传会报「交易所无效」)
+        return ContractSpec(code, ex.get("BR", "B3"), "BRL")
     raise ValueError(f"不支持的市场: {p.market}")
 
 
@@ -313,6 +325,10 @@ def quote_from_ticker(yahoo_symbol: str, ticker) -> Quote | None:
             close = close / 100
     else:
         currency = raw_ccy.upper()
+    # 港股人民币柜台经 IBKR 报 CNH (离岸人民币), 与本项目 CNY 口径统一 (与长桥
+    # _currency_for 一致): 否则汇率层只认 CNY, CNH 会落 missing 无法折算。
+    if currency == "CNH":
+        currency = "CNY"
     return Quote(
         symbol=yahoo_symbol,
         name="",
@@ -521,7 +537,7 @@ def ibkr_to_yahoo(
         return f"{sym}.AX"
     if ccy == "SGD" or exkey in ("SGX", "SES"):
         return f"{sym}.SI"
-    if ccy == "BRL" or exkey in ("BVMF", "BOVESPA"):
+    if ccy == "BRL" or exkey in ("BVMF", "BOVESPA", "B3"):
         return f"{sym}.SA"
     if ccy == "CAD" or exkey in ("TSE", "TSXV", "TSX", "CDGX"):
         return f"{sym}.V" if exkey == "TSXV" else f"{sym}.TO"

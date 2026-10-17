@@ -118,6 +118,9 @@ def test_crypto_domain_routing_and_suffixes():
     assert resolve(parse("600519.SS").market).name == "cn"
     assert resolve(parse("200012.SZ").market).name == "cn"  # B股同属 CN 域
     assert resolve(parse("BTC-USD").market).name == "crypto"
+    # 新加坡 (SGX) / 巴西 (B3) 均属 global 股市场 (resolve 不得因市场枚举遗漏而抛错)
+    assert resolve(parse("D05.SI").market).name == "global"
+    assert resolve(parse("PETR4.SA").market).name == "global"
     assert parse("BTC-USD").market is Market.CRYPTO
     assert parse("FOO-USD").market is Market.CRYPTO  # 连字符+法币 → crypto 域
     # 同一字符串不会同时映射两个域: AAPL 是美股, 不是 crypto

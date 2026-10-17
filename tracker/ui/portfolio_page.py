@@ -365,14 +365,37 @@ def render_portfolio_page() -> None:
     holding_symbols = (
         [str(s) for s in holdings["symbol"].tolist()] if not holdings.empty else []
     )
-    watch_symbols = [str(e["symbol"]) for e in all_watch_entries]
-    all_symbols = tuple(dict.fromkeys(holding_symbols + watch_symbols))
+    # K线页「常用」pills 仍列全部代码 (只传代码, 不触发取数)
+    set_quick_symbols(
+        list(
+            dict.fromkeys(
+                holding_symbols + [str(e["symbol"]) for e in all_watch_entries]
+            )
+        )
+    )
 
-    set_quick_symbols(list(all_symbols))
+    # 查看范围前置到取数之前: 行情只拉「持仓 + 当前范围自选」。自选 600+ 时
+    # 全量冷启动既慢又会把 Yahoo 打到限流 (IP 级, 连累 K线页); 选具体列表
+    # 只拉该列表。cached_quotes 按 symbols 元组缓存, 5 分钟内切回原范围命中。
+    scope = st.selectbox(
+        "查看范围",
+        ["全部"] + list_names(watch),
+        key="watch_scope",
+        help="行情拉取范围 = 持仓 + 所选列表的自选股 (K线页「常用」仍含全部代码)",
+    )
+    watch_entries = entries_for(watch, None if scope == "全部" else scope)
+    fetch_symbols = tuple(
+        dict.fromkeys(holding_symbols + [str(e["symbol"]) for e in watch_entries])
+    )
+    if scope == "全部" and len(fetch_symbols) > 100:
+        st.caption(
+            f":material/info: 全部范围共 {len(fetch_symbols)} 个代码, 冷启动拉取需要一些时间; "
+            "选具体列表可显著加快 (行情 5 分钟内有效)。"
+        )
 
     with st.spinner("拉取行情 (首次加载需初始化数据引擎)..."):
         quotes, errors, notes = cached_quotes(
-            all_symbols, prefer_akshare, use_ibkr, use_longport, crypto_source
+            fetch_symbols, prefer_akshare, use_ibkr, use_longport, crypto_source
         )
     if not quotes:
         st.error(
@@ -403,9 +426,9 @@ def render_portfolio_page() -> None:
     else:
         view = pd.DataFrame()
 
-    wview_all, wissues_all = build_watchlist_view(all_watch_entries, quotes)
-    issues += wissues_all
-    trig_all = triggered_entries(wview_all)
+    wview, wissues = build_watchlist_view(watch_entries, quotes)
+    issues += wissues
+    trig_all = triggered_entries(wview)
 
     # ---- 顶部: 页头 + KPI 卡片 (券商 App 风格: 关键数字前置) ----
     head_l, head_r = st.columns([3, 1])
@@ -456,7 +479,7 @@ def render_portfolio_page() -> None:
             )
             st.metric(
                 "持仓 / 自选",
-                f"{len(view)} / {len(wview_all)}",
+                f"{len(view)} / {len(wview)}",
                 border=True,
             )
 
@@ -464,8 +487,9 @@ def render_portfolio_page() -> None:
     if not trig_all.empty:
         with st.container(border=True):
             top, more = st.columns([5, 1], vertical_alignment="center")
+            scope_tag = "" if scope == "全部" else f" ({scope})"
             top.markdown(
-                f":material/notifications_active: **{len(trig_all)} 只自选触及价格阈值** · "
+                f":material/notifications_active: **{len(trig_all)} 只自选触及价格阈值**{scope_tag} · "
                 + " · ".join(
                     f"**:{S.up_down_tags()[0]}[{r['symbol']}]** {r['status'].split(' ', 1)[1]}"
                     for _, r in trig_all.iterrows()
@@ -603,26 +627,17 @@ def render_portfolio_page() -> None:
         if not watch.get("watchlist"):
             st.info("自选为空。在左侧「自选提醒」中添加代码与价格阈值。")
         else:
-            names = list_names(watch)
-            fl1, fl2 = st.columns([3, 2])
-            # key 显式指定: 「查看范围」的 options 随自选列表名变化, 无 key 时
-            # auto widget id 含 options, 列表名一变选中态就静默丢失
-            scope = fl1.selectbox(
-                "查看范围",
-                ["全部"] + names,
-                key="watch_scope",
-                help="按所属列表过滤 (在左侧自选提醒中维护)",
-            )
-            sort_mode = fl2.selectbox(
+            # 「查看范围」已前置到取数处 (key=watch_scope, 行情按范围拉取),
+            # 视图 wview 与触发项 trig_all 均按同一范围构建, 此处只留排序
+            _, sort_col = st.columns([3, 2])
+            sort_mode = sort_col.selectbox(
                 "排序",
                 ["默认 (触发优先)", "阈值等级", "当日涨跌幅 ↓", "当日涨跌幅 ↑"],
                 key="watch_sort",
                 label_visibility="collapsed",
             )
-            display_entries = entries_for(watch, None if scope == "全部" else scope)
-            wview, wissues_scope = build_watchlist_view(display_entries, quotes)
-            trig = triggered_entries(wview)
-            for i in wissues_scope:
+            trig = trig_all
+            for i in wissues:
                 st.caption(f":material/warning: {i}")
             if not trig.empty:
                 for _, r in trig.iterrows():

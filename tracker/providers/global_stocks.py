@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import threading
+import time
 
 import pandas as pd
 
@@ -126,6 +127,9 @@ def _quote_from_dump(p: ParsedSymbol, d: dict) -> Quote | None:
 
 _QUOTE_TIMEOUT = 5.0  # yfinance/OpenBB 偶发内部重试会把单码失败拖到 8s+; 硬超时快速降级
 _BATCH_TIMEOUT = 30.0  # 批量一次上百代码, 预算放大; 仍挂住则整批放弃走逐代码源链
+_YAHOO_CHUNK = 50  # 单批代码数: 一次上千代码的 quote 请求会被 Yahoo 429/401 拒掉
+_CHUNK_PAUSE = 1.0  # 批间基础暂停 (s); 出现限流迹象 (空批) 时翻倍
+_EMPTY_STREAK_GIVEUP = 2  # 连续空批: 判定已被限流, 放弃剩余批次 (逐代码源链兜底)
 
 
 def _yahoo_quote(p: ParsedSymbol) -> Quote:
@@ -142,30 +146,48 @@ def _yahoo_quote(p: ParsedSymbol) -> Quote:
 
 
 def _yahoo_batch(parsed: list[ParsedSymbol]) -> dict[str, Quote]:
+    """yfinance 批量行情: 分块拉取 + 批间暂停 + 限流早停.
+
+    一次性把全部代码 (自选 600+ 时) 塞进单个 quote 请求, Yahoo 会以
+    429 (crumb rate-limited) / 401 (Invalid Crumb) 拒绝; 且限流是 IP 级 —
+    随后单代码行情/K线历史请求全部遭殃。按块拆分 + 批间暂停; 连续空批视为
+    已被限流, 放弃剩余块 (未取到的代码由逐代码源链兜底, 失败进负缓存,
+    TTL 内不重试), 不再持续撞击数据源。
+    """
     out: dict[str, Quote] = {}
     if not parsed:
         return out
     by_yahoo = {p.yahoo: p for p in parsed}
-    try:
-        # 批量同样要硬超时: OpenBB/yfinance 偶发内部重试会把批量调用挂住,
-        # 而它跑在 get_quotes 主线程里 (域间串行), 一挂全批卡死。超时按
-        # 空结果处理, 后续逐代码源链还能兜底 (单代码 5s 硬超时)
-        res = with_timeout(
-            _obb().equity.price.quote,
-            _BATCH_TIMEOUT,
-            symbol=[p.yahoo for p in parsed],
-            provider="yfinance",
-        )
-        for item in res.results:
-            d = item.model_dump()
-            p = by_yahoo.get(str(d.get("symbol")))
-            if p is None:
-                continue
-            q = _quote_from_dump(p, d)
-            if q is not None:
-                out[p.yahoo] = q
-    except Exception:
-        pass
+    empty_streak = 0
+    for start in range(0, len(parsed), _YAHOO_CHUNK):
+        if start:
+            time.sleep(_CHUNK_PAUSE * (2 if empty_streak else 1))
+        chunk = parsed[start : start + _YAHOO_CHUNK]
+        try:
+            # 批量同样要硬超时: OpenBB/yfinance 偶发内部重试会把批量调用挂住,
+            # 而它跑在 get_quotes 主线程里 (域间串行), 一挂全批卡死。超时按
+            # 空结果处理, 后续逐代码源链还能兜底 (单代码 5s 硬超时)
+            res = with_timeout(
+                _obb().equity.price.quote,
+                _BATCH_TIMEOUT,
+                symbol=[p.yahoo for p in chunk],
+                provider="yfinance",
+            )
+            got = 0
+            for item in res.results or []:
+                d = item.model_dump()
+                p = by_yahoo.get(str(d.get("symbol")))
+                if p is None:
+                    continue
+                q = _quote_from_dump(p, d)
+                if q is not None:
+                    out[p.yahoo] = q
+                    got += 1
+            empty_streak = 0 if got else empty_streak + 1
+        except Exception:
+            empty_streak += 1
+        if empty_streak >= _EMPTY_STREAK_GIVEUP:
+            break
     return out
 
 

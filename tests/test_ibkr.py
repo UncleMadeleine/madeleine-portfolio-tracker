@@ -576,9 +576,22 @@ class TestIbkrBatchChunking:
             ticker_for=self._ticker_with_price,
             fail_chunks=(1,),
         )
-        quotes, _ = ibkr_mod.get_quotes_ibkr([parse(s) for s in self._syms(150)])
-        # 3 块中第 2 块失败 → 第 1/3 块的 100 个合约仍拿到行情
+        # 250 合约 = 3 块 (100+100+50), 第 2 块失败 → 第 1/3 块仍拿到行情
+        quotes, _ = ibkr_mod.get_quotes_ibkr([parse(s) for s in self._syms(250)])
         assert len(calls["tickers"]) == 3
+        assert len(quotes) == 150
+
+    def test_wasted_budget_stops_early(self, monkeypatch):
+        """空块累计耗时超预算: 未达连空上限也停 (混合列表里及时收手)."""
+        monkeypatch.setattr(ibkr_mod, "_IBKR_WASTED_BUDGET", -1.0)
+        calls = self._fake_ib(
+            monkeypatch,
+            ticker_for=self._ticker_with_price,
+            fail_chunks=(1,),
+        )
+        # 块1 有数据 (wasted 清零), 块2 空 (wasted>预算) → 停, 不等连空=2
+        quotes, _ = ibkr_mod.get_quotes_ibkr([parse(s) for s in self._syms(250)])
+        assert len(calls["tickers"]) == 2, "空块超预算应在第 2 块后停"
         assert len(quotes) == 100
 
     def test_conn_fail_reason_includes_port_hint(self):

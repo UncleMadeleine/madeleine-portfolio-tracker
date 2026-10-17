@@ -501,3 +501,94 @@ def test_run_sync_json_dry_run_no_write(tmp_path, capsys, monkeypatch):
     payload = json.loads(capsys.readouterr().out)
     assert payload["written"] is False
     assert not p.exists()
+
+
+class TestIbkrBatchChunking:
+    """IBKR 批量分块 + 空批早停 + 连接排障提示 (离线, mock).
+
+    回归背景: get_quotes_ibkr 曾把全部认领合约 (自选 600+ 时约 675 个)
+    一次性发给 qualifyContracts/reqTickers — IBKR 账户并发行情线限额
+    (典型 100) 内超量的请求被静默忽略, ib_async 的 gather 无超时
+    (RequestTimeout 默认 0) 永远等不到 future → 整页挂死; 未订阅合约
+    则让 gather 抛错、整批结果全丢。修复: 分块 + 块间退让 + 空批早停。
+    """
+
+    @staticmethod
+    def _syms(n: int) -> list[str]:
+        return [f"S{i:03d}" for i in range(n)]
+
+    @staticmethod
+    def _ticker_with_price(c):
+        """带价格的假 ticker; contract 即请求的合约对象 (reqTickers 真实行为:
+        ticker.contract 就是传入的合约, 代码按 id() 匹配回 symbol)."""
+        t = FakeTicker(price=10.0, close=9.0, currency="USD")
+        t.contract = c
+        return t
+
+    def _fake_ib(self, monkeypatch, ticker_for=None, fail_chunks=()):
+        """假 IB: qualify 原样返回; reqTickers 按块记录, 可按脚本抛错/返回."""
+        calls = {"qualify": [], "tickers": []}
+
+        class FakeIB:
+            RequestTimeout = 0
+
+            def qualifyContracts(self, *contracts):
+                calls["qualify"].append(len(contracts))
+                return list(contracts)
+
+            def reqTickers(self, *contracts):
+                idx = len(calls["tickers"])
+                calls["tickers"].append(len(contracts))
+                if idx in fail_chunks:
+                    raise TimeoutError("chunk timed out")
+                if ticker_for is None:
+                    return []
+                return [ticker_for(c) for c in contracts]
+
+        monkeypatch.setattr(ibkr_mod, "_get_client", lambda cfg: FakeIB())
+        monkeypatch.setattr(ibkr_mod.time, "sleep", lambda s: None)
+        return calls
+
+    def test_reqtickers_chunked_under_limit(self, monkeypatch):
+        """核心回归: 120 合约必须分块请求, 单块不超过 _IBKR_CHUNK."""
+        calls = self._fake_ib(
+            monkeypatch,
+            ticker_for=self._ticker_with_price,
+        )
+        quotes, reason = ibkr_mod.get_quotes_ibkr([parse(s) for s in self._syms(120)])
+        assert reason is None
+        assert len(calls["tickers"]) > 1, "不得把全部合约塞进单个 reqTickers"
+        assert all(n <= ibkr_mod._IBKR_CHUNK for n in calls["tickers"])
+        assert len(quotes) == 120
+
+    def test_empty_chunks_stop_early(self, monkeypatch):
+        """连续空块 (无订阅/无价格): 达到上限即停, 不磨剩余块."""
+        calls = self._fake_ib(monkeypatch, ticker_for=lambda c: FakeTicker())
+        quotes, _ = ibkr_mod.get_quotes_ibkr([parse(s) for s in self._syms(300)])
+        assert quotes == {}
+        assert len(calls["tickers"]) == ibkr_mod._IBKR_EMPTY_GIVEUP
+
+    def test_chunk_failure_keeps_other_chunks(self, monkeypatch):
+        """单块失败 (超时/IBKR 报错) 不丢其余块的结果 (旧代码整批全丢)."""
+        calls = self._fake_ib(
+            monkeypatch,
+            ticker_for=self._ticker_with_price,
+            fail_chunks=(1,),
+        )
+        quotes, _ = ibkr_mod.get_quotes_ibkr([parse(s) for s in self._syms(150)])
+        # 3 块中第 2 块失败 → 第 1/3 块的 100 个合约仍拿到行情
+        assert len(calls["tickers"]) == 3
+        assert len(quotes) == 100
+
+    def test_conn_fail_reason_includes_port_hint(self):
+        """连接被拒: 提示附带 Gateway 运行检查与 mode→端口对照."""
+        err = ConnectionRefusedError(
+            "[Errno 111] Connect call failed ('127.0.0.1', 4001)"
+        )
+        reason = ibkr_mod._conn_fail_reason(err, {"mode": "live"})
+        assert "4001" in reason and "Gateway" in reason and "4002" in reason
+
+    def test_conn_fail_reason_plain_error_no_hint(self):
+        """非连接类错误不附加排障提示 (避免误导)."""
+        reason = ibkr_mod._conn_fail_reason(ValueError("boom"), {"mode": "paper"})
+        assert reason == "ValueError: boom"

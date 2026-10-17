@@ -59,6 +59,15 @@ _UNAVAILABLE_TTL = 60.0
 _client = None
 _unavailable: tuple[str, float] | None = None
 
+# IBKR 批量分块: 账户并发行情线有限额 (典型 100), 一次性 reqTickers 全部
+# 合约 (自选 600+ 时) 超量的请求会被 IBKR 静默忽略 → ib_async 的 gather
+# 永远等不到 future (RequestTimeout 默认 0 = 无超时) → 整页挂死; 未订阅的
+# 合约则让 gather 抛错、整批结果全丢。按块发送 + 块内硬超时 + 总预算兜底。
+_IBKR_CHUNK = 50  # 每块合约数 (留在并发行情线限额内)
+_IBKR_CHUNK_TIMEOUT = 12.0  # 单块 (qualify+reqTickers) 硬超时 (s)
+_IBKR_TOTAL_BUDGET = 45.0  # 整个 IBKR 批量阶段总预算 (s), 超出剩余交回默认源
+_IBKR_EMPTY_GIVEUP = 3  # 连续空块 (无订阅/无数据): 放弃剩余块
+
 
 def _resolve_config_path(path: str | Path | None = None) -> Path:
     if path:
@@ -161,12 +170,37 @@ def _get_client(cfg: dict):
             _mode_port(cfg),
             **kwargs,
         )
+        # ib_async 默认 RequestTimeout=0 (无超时): reqTickers 对不返回的合约
+        # 会永久挂起并拖死页面。统一给所有阻塞请求上硬超时。
+        ib.RequestTimeout = _IBKR_CHUNK_TIMEOUT
         ib.reqMarketDataType(int(cfg["market_data_type"]))
         _client = ib
         return ib
     except Exception as e:
-        _unavailable = (f"{type(e).__name__}: {e}"[:200], time.time())
+        _unavailable = (_conn_fail_reason(e, cfg), time.time())
         return None
+
+
+def _conn_fail_reason(err: Exception, cfg: dict) -> str:
+    """连接类失败附带排障提示: Gateway 是否运行 / 端口与 mode 是否匹配."""
+    ename = type(err).__name__
+    detail = str(err).strip()
+    msg = f"{ename}: {detail}"[:160] if detail else ename
+    text = detail.lower()
+    if (
+        "connectionrefuse" in ename.lower()
+        or "timeout" in ename.lower()
+        or "timeout" in text
+        or "connect call failed" in text
+    ):
+        port = _mode_port(cfg)
+        mode = str(cfg.get("mode") or "paper").strip().lower()
+        msg += (
+            f" — 请检查 IB Gateway/TWS 是否已运行且 API 已启用: "
+            f"当前 mode={mode} → 端口 {port} (live=4001 / paper=4002 / "
+            f"TWS=7496/7497; ibkr.json 可显式写 port)"
+        )
+    return msg[:400]
 
 
 @dataclass(frozen=True)
@@ -307,8 +341,30 @@ def get_quotes_ibkr(
         reason = _unavailable[0] if _unavailable else "不可用"
         return {}, reason
     m = _ib_module()
+    quotes: dict[str, Quote] = {}
+    empty_streak = 0
+    t0 = time.time()
+    for start in range(0, len(claimed), _IBKR_CHUNK):
+        if start:
+            time.sleep(0.3)  # 块间轻微退让, 避免打满 IBKR 消息频率
+        if time.time() - t0 > _IBKR_TOTAL_BUDGET:
+            break  # 总预算耗尽: 剩余合约交回默认数据源 (yfinance/akshare)
+        got = _ibkr_chunk_quotes(ib, m, claimed[start : start + _IBKR_CHUNK], cfg)
+        quotes.update(got)
+        empty_streak = 0 if got else empty_streak + 1
+        if empty_streak >= _IBKR_EMPTY_GIVEUP:
+            break  # 连续空块: 无订阅/无数据, 不再磨剩余块
+    return quotes, None
+
+
+def _ibkr_chunk_quotes(ib, m, chunk: list[ParsedSymbol], cfg: dict) -> dict[str, Quote]:
+    """一块合约的行情: qualify → reqTickers → 提价。
+
+    块内硬超时由 ib.RequestTimeout 保证 (连接时统一设置); 单块失败
+    (超时/IBKR 报错) 返回 {} 由调用方计数, 不中断其余块, 也不抛到页面。
+    """
     pairs = []
-    for p in claimed:
+    for p in chunk:
         spec = contract_spec(p, cfg.get("exchanges"))
         c = m.Contract()
         c.symbol = spec.symbol
@@ -323,25 +379,25 @@ def get_quotes_ibkr(
     # 因此按位过滤, 只保留 qualify 成功的合约
     try:
         qualified = ib.qualifyContracts(*[c for _, c in pairs])
-    except Exception as e:
-        return {}, f"qualifyContracts 失败: {e}"[:200]
+    except Exception:
+        return {}
     good = [(c, y) for c, y in zip(qualified, [yy for yy, _ in pairs]) if c is not None]
     if not good:
-        return {}, None
-    quotes: dict[str, Quote] = {}
+        return {}
     try:
         tickers = ib.reqTickers(*[c for c, _ in good])
-    except Exception as e:
-        return quotes, f"reqTickers 失败: {e}"[:200]
+    except Exception:
+        return {}
     by_id = {id(c): y for c, y in good}
+    out: dict[str, Quote] = {}
     for t in tickers:
         y = by_id.get(id(t.contract))
         if not y:
             continue
         q = quote_from_ticker(y, t)
         if q:
-            quotes[y] = q
-    return quotes, None
+            out[y] = q
+    return out
 
 
 _A_SHARE_SH_PREFIX = ("5", "6", "9")

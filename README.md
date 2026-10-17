@@ -79,8 +79,8 @@ tracker-ui                        # pip 安装后 (等价, 参数透传给 strea
 
 页面默认运行在 `http://localhost:8501`，五个页面各有独立 URL（刷新 / 书签 / 前进后退不丢页）：
 
-- **组合** (`/`) — 持仓编辑、明细表、资产配置饼图、自选提醒
-- **K线** (`/kline`) — 任意代码 K 线查询（支持按代码或名称模糊搜索）+ 多股走势对比（K线子功能）
+- **组合** (`/`) — 持仓编辑、明细表、资产配置（按市场 / 按币种 / 按代码三张饼图，按代码为市值 Top 20 + 其他 + 持仓市值 Top 15 柱图）、自选提醒
+- **K线** (`/kline`) — 任意代码 K 线查询（支持按代码或名称模糊搜索）+ 多股走势对比 + 加密货币对比（K线页子功能）
 - **指数K线** (`/index`) — 宏观/风险指数查询（IX.<KEY> 分组下拉，分组随目录维护；CLI `index-kline --list` 可查全部已收录指数）
 - **导入** (`/import`) — IBKR 账户 / 长桥账户 / 链上钱包 / A股券商文件导入
 - **设置** (`/settings`) — 涨跌配色（红涨绿跌/绿涨红跌）、数据源偏好（akshare / IBKR / 长桥）、基础货币
@@ -234,7 +234,7 @@ B 股按**实际交易币种**填写（沪 B 美元 / 深 B 港币，与行情�
 K线页支持两种输入方式：
 
 - **代码直查** — `AAPL` / `600519.SS` / `0700.HK` / `SAP.DE` / `BP.L` / `BTC-USD`
-- **名称模糊搜索（分域）** — 输入代码或名称片段（如「茅台」「Tencent」「BTC」「bitcoin」），每个 provider 提供自己的搜索接口，UI 按「A股/北交所 · 美股/港股 · 加密货币」三块下拉分组展示，互不混排；美股/港股走 IBKR 合约匹配（Gateway 在线时优先）→ yfinance Search，A股/北交所走东财 suggest（中文名/拼音），加密货币走 yfinance Search（返回即 Yahoo 规范代码 BTC-USD）；纯在线搜索接口封装 + 归一化，无本地目录、无缓存快照，接口失败即空结果 + 合法代码直查
+- **名称模糊搜索（分域）** — 输入代码或名称片段（如「茅台」「Tencent」「BTC」「bitcoin」），每个 provider 提供自己的搜索接口，UI 按「A股/北交所 · 美股/港股 · 加密货币」三块下拉分组展示，互不混排；美股/港股走 IBKR 合约匹配（Gateway 在线时优先）→ 东财 suggest（中文名/纯数字补零，只认领港股行，故「腾讯」「700」可命中 0700.HK）→ yfinance Search，A股/北交所走东财 suggest（中文名/拼音），加密货币走 yfinance Search（返回即 Yahoo 规范代码 BTC-USD）；纯在线搜索接口封装 + 归一化，无本地目录、无缓存快照，接口失败即空结果 + 合法代码直查
 - **快捷 pills** — 「常用 (持仓/自选)」只展示前 10 个（持仓在前），持仓/自选很多时页面保持整洁；「最近查看」记录本会话最近成功查询的 10 个代码（最新在前，点击即回填查询，与常用行去重不重复）
 
 页面端基于 TradingView 开源的 **lightweight-charts** 渲染（已 vendored，无新增依赖），券商 App 通用交互：
@@ -268,6 +268,10 @@ python -m tracker.cli kline 0700.HK --period weekly --open  # 周K + 自动打�
   （如对比腾讯与南非报业、A股与美股的相对走势）
 - 图下方给出各代码**区间涨跌**；复用 K线组件的拖动/缩放/十字光标交互
 - 日K / 周K / 月K 周期可切
+
+「K线」页还有第三个子功能「**加密货币对比**」（仅 UI 提供，无对应 CLI 子命令）：只接受
+`BASE-QUOTE` 加密货币代码，各币画**独立窗格蜡烛图**（BTC ~10 万 vs SHIB ~0.00002 量级悬殊，
+同轴归一化不可读，故不做归一化、保留原始价格），共享时间轴与十字光标，下方同样给出区间涨跌。
 
 > K 线**比值**模式（两标的收盘价相除画成一根 K 线，如 `0700.HK / NPN.L`）在 Roadmap 中，尚未实现。
 
@@ -388,7 +392,7 @@ tracker/templates/      包内配置模板 + streamlit 主题（随 wheel 分发
 tracker/assets/         vendored lightweight-charts standalone JS（离线内嵌, 随 wheel 分发）
 pyproject.toml           打包元数据（依赖 extras / console scripts / package-data）
 Dockerfile / docker-compose.yml   UI 容器镜像（数据落 /data 卷, 一键起）
-docs/                   研究笔记（如 A股券商导入方案调研）
+docs/                   研究笔记（A股券商导入方案调研 / IBKR 只读 API 笔记，后者为改 IBKR 前必读）
 skills/                 随仓库分发的 agent 技能手册（portfolio-tracker/SKILL.md: CLI 速查/代码规范/数据源/配置/操作流程）
 tests/                  单元测试（离线, mock）
 ```
@@ -552,7 +556,7 @@ python -m tracker.cli import wallet polygon 0x... --tokenlist my_tokens.json
 
 - 免费数据源：非美股行情普遍延迟 15–30 分钟；无 SLA，偶发限流（已内置批量请求 + 重试缓解）
 - akshare 东财 spot 接口对部分数据中心 IP 不友好（本项目所在机器即如此），此时自动回落 Yahoo
-- 搜索全部为在线接口（美股/港股：IBKR→yfinance Search；A股/北交所：东财 suggest；crypto：yfinance Search）；中文查询仅东财支持，美股/港股/crypto 搜中文名无结果；接口失败即该域空结果 + 合法代码直查
+- 搜索全部为在线接口（美股/港股：IBKR→东财 suggest→yfinance Search；A股/北交所：东财 suggest；crypto：yfinance Search）；中文查询仅东财 suggest 支持（A股/北交所全量；美股/港股域只认领港股行，故「腾讯」可命中 0700.HK，美股/crypto 直接搜中文名基本无结果）；接口失败即该域空结果 + 合法代码直查
 - CFETS 汇率为中间价，与离岸 CNH 有细微差异，组合展示场景可忽略
 - `今日估算` 按各持仓 `涨跌幅 × 当前市值` 近似，非精确日内盯市
 - IBKR 行情需本机运行 IB Gateway 且 API 已启用；A股/港股/B股数据若无市场数据订阅，`reqTickers` 可能返回空值，自动回退 Yahoo/akshare
@@ -638,7 +642,7 @@ A **local-first** portfolio tracker supporting **A-shares / B-shares / Beijing S
 - **LongPort integration** — optional quotes/history/positions source (OAuth login), silent fallback to default sources
 - **K-line charts** — daily/weekly/monthly, MA overlays, volume, MACD/RSI/KDJ/Bollinger; slide mode loads full listing history by default
 - **Macro/risk index K-lines** — dedicated `IX.<KEY>` symbol space (USD index, VIX, CSI 300, lithium-carbonate main-continuous futures, cement indices, ...), separate page & `index-kline` subcommand, dedicated provider source chain
-- **Multi-symbol comparison** — same-coordinate overlay, normalized to 100
+- **Multi-symbol comparison** — same-coordinate overlay normalized to 100; plus a crypto-only sub-tab on the K-line page (independent per-coin candle panes, raw prices, shared time axis)
 - **Unified import pipeline** — IBKR account / LongPort account / on-chain wallet (5 EVM chains + TRON + Solana) / A-share broker CSV-Excel file, each with append-merge or overwrite mode (auto .bak backup); same logic drives the Streamlit「导入」page
 - **Unified CLI** — 18 subcommands (snapshot, quote, watchlist, portfolio, report, export, fx, history, kline, search, compare, index-kline, import, longport-login, cache, init; `sync` / `import-wallet` kept as compat aliases); all support machine-readable output (`--json`, or `-f json` for report/export)
 

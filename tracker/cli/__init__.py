@@ -733,7 +733,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  tracker import-wallet eth 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045\n"
             "  tracker import-wallet bsc 0x... --base-currency USDT\n"
             "  tracker import-wallet tron T... --add --json\n"
-            "  tracker import-wallet solana H... --dry-run --json\n"
+            "  tracker import-wallet solana H... --json               # 仅查询不写入 (缺省)\n"
             "  tracker import-wallet polygon 0x... --tokenlist my_tokens.json --add\n"
         ),
     )

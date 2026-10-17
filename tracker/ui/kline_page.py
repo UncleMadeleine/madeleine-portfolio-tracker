@@ -73,8 +73,14 @@ def cached_kline(
     use_ibkr: bool = False,
     use_longport: bool = False,
     crypto_source: str = "auto",
+    refresh: bool = False,
 ):
-    """K线日线 (磁盘缓存 + 内存缓存双层, TTL 内切换参数不重复请求网络)."""
+    """K线日线 (磁盘缓存 + 内存缓存双层, TTL 内切换参数不重复请求网络).
+
+    refresh=True 跳过磁盘 OHLC 缓存 (其键只有 symbol+months, 不含数据源偏好):
+    数据源偏好切换后必须重取, 否则被旧源的磁盘缓存短路, 继续展示上一个源的K线
+    (与滑动模式 cached_kline_all 同口径)。
+    """
     return prices.get_ohlc(
         symbol,
         months=months,
@@ -82,6 +88,7 @@ def cached_kline(
         use_ibkr=use_ibkr,
         use_longport=use_longport,
         crypto_source=crypto_source,
+        refresh=refresh,
     )
 
 
@@ -625,18 +632,28 @@ def render_kline_controls(
         st.info("输入代码后回车或点「查询」获取数据 —— 页面启动不会预加载任何 K线。")
         return
     st.session_state["kline_last_symbol"] = ksym
+    src = (prefer_akshare, use_ibkr, use_longport, crypto_source)
     # 范围模式: 代码/范围/数据源设置变化才重新取数; 其余参数变化只重绘。
     data_changed = (
         st.session_state.get("kline_current_symbol") != yahoo
         or st.session_state.get("kline_last_months") != kdepth
-        or st.session_state.get("kline_last_src")
-        != (prefer_akshare, use_ibkr, use_longport, crypto_source)
+        or st.session_state.get("kline_last_src") != src
     )
+    # 仅数据源变化才需 bypass 磁盘 OHLC 缓存: 其键只有 symbol+months, 换源后
+    # 同键会命中上一个源的旧K线 (settings 页 clear_quotes 只清实时行情、保留K线)。
+    # 换代码/范围本就换磁盘键, 无需 refresh。
+    src_changed = st.session_state.get("kline_last_src") != src
     if data_changed or st.session_state.get("kline_current_df") is None:
         try:
             with st.spinner(f"拉取 {yahoo} K线..."):
                 kdf = cached_kline(
-                    yahoo, kdepth, prefer_akshare, use_ibkr, use_longport, crypto_source
+                    yahoo,
+                    kdepth,
+                    prefer_akshare,
+                    use_ibkr,
+                    use_longport,
+                    crypto_source,
+                    refresh=src_changed,
                 )
         except Exception as e:
             st.warning(f"{yahoo}: {e}")
@@ -647,12 +664,7 @@ def render_kline_controls(
         st.session_state["kline_current_df"] = kdf
         st.session_state["kline_current_symbol"] = yahoo
         st.session_state["kline_last_months"] = kdepth
-        st.session_state["kline_last_src"] = (
-            prefer_akshare,
-            use_ibkr,
-            use_longport,
-            crypto_source,
-        )
+        st.session_state["kline_last_src"] = src
         # 记录进最近查看; 列表有变时 rerun 一次让 pills 立即显示
         # (df 已存 session_state, rerun 走重绘分支, 不会重新取数)
         if record_recent(yahoo):
@@ -672,6 +684,7 @@ def render_kline_controls(
         green_up=kgreen,
         currency=kcur,
         indicators=indicators or None,
+        query_id=yahoo,
     )
 
 
@@ -800,17 +813,23 @@ def render_kline_page(
     use_longport: bool = False,
     crypto_source: str = "auto",
 ) -> None:
-    """「K线」页入口: 单只查询 + 走势对比 + 加密货币对比 三个子功能 (st.tabs)."""
-    tab_single, tab_compare, tab_crypto = st.tabs(
-        [
-            ":material/candlestick_chart: 单只查询",
-            ":material/show_chart: 走势对比",
-            ":material/currency_bitcoin: 加密货币对比",
-        ]
+    """「K线」页入口: 单只查询 + 走势对比 + 加密货币对比 三个子功能.
+
+    用 segmented_control 切换子功能而非 st.tabs: st.tabs 会把**所有** tab body 都
+    渲染 (仅用 CSS 隐藏非激活项), 于是每次打开 / rerun K线页都替隐藏的「走势对比 /
+    加密货币对比」各发一批全量K线请求 (默认各选前两个代码 ×12 个月) —— Yahoo 限流
+    是 IP 级, 会连累单只查询, 违背组合页冷启动规避限流的设计目标。segmented_control
+    只渲染当前激活子功能, 未激活的控件不实例化 → 不发请求; 各子功能内部状态靠显式
+    key 存 session_state, 切回不丢。
+    """
+    st.session_state.setdefault("kline_subview", "单只查询")
+    view = st.segmented_control(
+        "K线功能",
+        ["单只查询", "走势对比", "加密货币对比"],
+        key="kline_subview",
+        label_visibility="collapsed",
     )
-    with tab_crypto:
-        render_crypto_compare_controls(quick_symbols(), crypto_source)
-    with tab_compare:
+    if view == "走势对比":
         render_compare_controls(
             prefer_akshare,
             quick_symbols(),
@@ -818,7 +837,9 @@ def render_kline_page(
             use_longport,
             crypto_source,
         )
-    with tab_single:
+    elif view == "加密货币对比":
+        render_crypto_compare_controls(quick_symbols(), crypto_source)
+    else:
         render_kline_controls(prefer_akshare, use_ibkr, use_longport, crypto_source)
 
 

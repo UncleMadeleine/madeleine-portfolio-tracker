@@ -88,7 +88,9 @@ def cmd_longport_login(args) -> None:
         if args.output:
             from pathlib import Path
 
-            Path(args.output).write_text(url + "\n", encoding="utf-8")
+            _out = Path(args.output)
+            _out.parent.mkdir(parents=True, exist_ok=True)
+            _out.write_text(url + "\n", encoding="utf-8")
         print(
             _json.dumps({"status": "ok", "authorization_url": url}, ensure_ascii=False)
         )

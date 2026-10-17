@@ -53,11 +53,12 @@ def _collect(args: argparse.Namespace) -> tuple[list[dict], list[str], str]:
         return rows, skipped, label
     try:
         rows, skipped = importer.collect_ashare_file(args.file)
-    except (FileNotFoundError, RuntimeError, ValueError) as e:
-        # ValueError 覆盖 pandas 的 EmptyDataError(空文件)/ParserError(坏 CSV)/
-        # "Excel file format cannot be determined"(伪造 xlsx) —— 全是其子类,
-        # 漏捕会裸 traceback (与 legacy ashare_sync.run_sync 口径一致)
-        _finish_with_error(str(e))
+    except (OSError, RuntimeError, ValueError) as e:
+        # OSError 覆盖 FileNotFoundError(不存在)/IsADirectoryError(传了目录,
+        # Tab 补全极常见)/PermissionError(无读取权限); ValueError 覆盖 pandas 的
+        # EmptyDataError(空文件)/ParserError(坏 CSV)/"Excel file format cannot be
+        # determined"(伪造 xlsx) —— 全是其子类, 漏捕会裸 traceback
+        _finish_with_error(f"{args.file}: 解析失败 ({e})")
     return rows, skipped, f"券商文件 {Path(args.file).name}"
 
 

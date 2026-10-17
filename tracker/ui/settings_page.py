@@ -13,6 +13,21 @@ _COLOR_SAMPLE_PCT = "+2.35%"
 def render_settings_page() -> None:
     """设置页: 即改即存 (on_change 回调落盘), 其余页面每次 rerun 读 settings.json."""
     settings = storage.load_settings()
+    # 带 key 的 widget 一旦进入 session_state, 之后每次渲染都忽略 value=/index=,
+    # 只用 session_state 里的值。若 settings.json 被别处改动 (另一标签页 / CLI /
+    # 手改文件), 不同步就会显示旧值, 且 on_change 回调按 session_state 旧值写回,
+    # 把别处的改动静默覆盖。这里在渲染前用最新 settings 校正 session_state:
+    # 本会话 on_change 是「即改即存 + rerun」, 重读的 settings 已与 session_state
+    # 一致 (同步为 no-op); 只有外部改动才会触发校正, 不会回退用户正在做的修改。
+    for _k, _v in (
+        ("set_color_scheme", settings["color_scheme"]),
+        ("set_prefer_akshare", settings["prefer_akshare"]),
+        ("set_use_ibkr", settings["use_ibkr"]),
+        ("set_use_longport", bool(settings.get("use_longport"))),
+        ("set_crypto_source", settings["crypto_source"]),
+    ):
+        if st.session_state.get(_k) != _v:
+            st.session_state[_k] = _v
     st.markdown("### :material/settings: 设置")
     st.caption(
         "设置保存到项目根目录 settings.json, 全部页面生效; 基础货币另存于 portfolio.json。"
@@ -116,6 +131,8 @@ def render_settings_page() -> None:
     st.markdown("#### 基础货币")
     portfolio = storage.load_portfolio(storage.PORTFOLIO_PATH)
     saved_base = portfolio.get("base_currency", "CNY")
+    if st.session_state.get("set_base_currency") != saved_base:
+        st.session_state["set_base_currency"] = saved_base
     st.selectbox(
         "基础货币",
         S.BASE_CURRENCIES,

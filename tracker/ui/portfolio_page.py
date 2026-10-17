@@ -119,7 +119,9 @@ def render_portfolio_page() -> None:
                     "symbol": st.column_config.TextColumn(
                         "代码", help="Yahoo 规范代码"
                     ),
-                    "quantity": st.column_config.NumberColumn("数量", min_value=0.0),
+                    "quantity": st.column_config.NumberColumn(
+                        "数量", help="可填负数表示空头 (IBKR 空头持仓)"
+                    ),
                     "avg_cost": st.column_config.NumberColumn(
                         "成本 (当地货币)", min_value=0.0
                     ),
@@ -336,6 +338,11 @@ def render_portfolio_page() -> None:
                         st.toast("自选已保存 (重复行已移除)")
                     else:
                         st.toast("自选已保存")
+                    # 本次 run 的 watch 是脚本开头从磁盘读的旧快照: 保存后不 rerun
+                    # 的话, 下方自选表/查看范围仍用旧数据, 且 cached_quotes.clear()
+                    # 让本次按旧符号集重取 → 新代码 quotes.get 为 None, 冒出一条
+                    # 幻觉的「行情缺失」告警。rerun 后 watch 重新读盘即一致。
+                    st.rerun()
             if c4.button(
                 "重载",
                 icon=":material/refresh:",
@@ -357,6 +364,9 @@ def render_portfolio_page() -> None:
 
     all_watch_entries = merge_entries(watch)
     if holdings.empty and not all_watch_entries:
+        # 先清空 K线页「常用」pills 再停: 否则删掉最后一个持仓/自选后, 已打开的
+        # K线页仍残留被删代码 (quick_symbols 未更新), 用户点 pill 会查已删除的标的
+        set_quick_symbols([])
         st.info(
             "在左侧添加持仓或自选股并保存。支持 A股/港股/美股/德股/英股/加股/澳股/新加坡股/加密货币。"
         )

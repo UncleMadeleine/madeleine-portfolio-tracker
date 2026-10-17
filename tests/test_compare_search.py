@@ -50,43 +50,43 @@ def app(monkeypatch):
     return AppTest.from_string(_SCRIPT, default_timeout=30).run()
 
 
-def _compare_tab(app):
-    return app.tabs[1]
+def _compare_view(app):
+    """切到「走势对比」子功能并返回 app (懒加载: 仅激活时才渲染其控件)."""
+    next(
+        s for s in app.segmented_control if s.key == "kline_subview"
+    ).set_value("走势对比").run()
+    return app
 
 
 def test_search_pick_appends_to_compare(app):
-    """对比 tab: 搜索下拉选中 NVDA → 自动追加进对比代码并取数渲染."""
+    """走势对比子功能: 搜索下拉选中 NVDA → 自动追加进对比代码并取数渲染."""
+    app = _compare_view(app)
     app.text_input("cmp_search_query").set_value("NVIDIA").run()
-    tab = _compare_tab(app)
-    glb = next(s for s in tab.selectbox if any("NVDA" in o for o in s.options))
+    glb = next(s for s in app.selectbox if any("NVDA" in o for o in s.options))
     glb.set_value(next(o for o in glb.options if "NVDA" in o)).run()
-    tab = _compare_tab(app)
-    ms = tab.multiselect[0]
+    ms = app.multiselect[0]
     assert "NVDA" in ms.value
-    assert any("NVDA" in m.value for m in tab.markdown)
+    assert any("NVDA" in m.value for m in app.markdown)
 
 
 def test_repick_same_result_no_dup(app):
     """同一搜索结果二次选中: 不产生重复代码."""
+    app = _compare_view(app)
     app.text_input("cmp_search_query").set_value("NVIDIA").run()
-    tab = _compare_tab(app)
-    glb = next(s for s in tab.selectbox if any("NVDA" in o for o in s.options))
+    glb = next(s for s in app.selectbox if any("NVDA" in o for o in s.options))
     glb.set_value(next(o for o in glb.options if "NVDA" in o)).run()
     app.text_input("cmp_search_query").set_value("NVIDIA").run()
-    tab = _compare_tab(app)
-    glb = next(s for s in tab.selectbox if any("NVDA" in o for o in s.options))
+    glb = next(s for s in app.selectbox if any("NVDA" in o for o in s.options))
     if glb.value is not None:
         glb.set_value(next(o for o in glb.options if "NVDA" in o)).run()
-    tab = _compare_tab(app)
-    ms = tab.multiselect[0]
+    ms = app.multiselect[0]
     assert ms.value.count("NVDA") == 1
 
 
 def test_single_tab_search_unchanged(app):
-    """单只查询 tab 搜索行为不变: 选中回填代码输入框 (kline_symbol)."""
+    """单只查询子功能搜索行为不变: 选中回填代码输入框 (kline_symbol)."""
     app.text_input("kline_search_query").set_value("NVIDIA").run()
-    tab = app.tabs[0]
-    glb = next(s for s in tab.selectbox if any("NVDA" in o for o in s.options))
+    glb = next(s for s in app.selectbox if any("NVDA" in o for o in s.options))
     glb.set_value(next(o for o in glb.options if "NVDA" in o)).run()
     ti = [t for t in app.text_input if t.key == "kline_symbol"][0]
     assert ti.value == "NVDA"

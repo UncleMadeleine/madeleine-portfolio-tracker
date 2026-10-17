@@ -48,8 +48,17 @@ def compare_app(monkeypatch):
     return AppTest.from_string(_SCRIPT, default_timeout=30).run()
 
 
+def _subview(app, name: str):
+    """切到指定 K线子功能 (懒加载: 仅激活时才渲染其控件, 返回 app)."""
+    next(
+        s for s in app.segmented_control if s.key == "kline_subview"
+    ).set_value(name).run()
+    return app
+
+
 def test_compare_renders_chart(compare_app):
-    """走势对比 tab 默认选中前两个候选代码, 直接取数渲染 (区间涨跌 + 归一化说明)."""
+    """走势对比子功能: 默认选中前两个候选代码, 激活后取数渲染 (区间涨跌 + 归一化说明)."""
+    _subview(compare_app, "走势对比")
     captions = [c.value for c in compare_app.caption]
     assert any("区间首个收盘归一化" in c for c in captions)
     assert any("区间涨跌" in m.value for m in compare_app.markdown)

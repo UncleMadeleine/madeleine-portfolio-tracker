@@ -31,64 +31,96 @@ OHLC_TTL = 1800  # 秒, 日线K线缓存有效期 (30 分钟; 收盘后数据不
 _lock = Lock()
 
 
+def _create_schema(con) -> None:
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS quotes (
+            symbol TEXT PRIMARY KEY,
+            name TEXT,
+            price REAL,
+            prev_close REAL,
+            change_pct REAL,
+            currency TEXT,
+            book_value REAL,
+            market_cap REAL,
+            source TEXT,
+            fetched_at REAL
+        )
+        """
+    )
+    # 旧库无 book_value/source 列: 补列 (ALTER 失败说明已存在, 忽略)
+    try:
+        con.execute("ALTER TABLE quotes ADD COLUMN book_value REAL")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        con.execute("ALTER TABLE quotes ADD COLUMN market_cap REAL")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        con.execute("ALTER TABLE quotes ADD COLUMN source TEXT")
+    except sqlite3.OperationalError:
+        pass
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ohlc_cache (
+            symbol TEXT NOT NULL,
+            months INTEGER NOT NULL,
+            payload TEXT NOT NULL,
+            fetched_at REAL NOT NULL,
+            PRIMARY KEY (symbol, months)
+        )
+        """
+    )
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS fundamentals (
+            symbol TEXT PRIMARY KEY,
+            book_value REAL,
+            market_cap REAL,
+            fetched_at REAL
+        )
+        """
+    )
+    try:
+        con.execute("ALTER TABLE fundamentals ADD COLUMN market_cap REAL")
+    except sqlite3.OperationalError:
+        pass
+    con.commit()
+
+
 def _ensure_db() -> None:
     CACHE_DB.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(CACHE_DB) as con:
-        con.execute(
-            """
-            CREATE TABLE IF NOT EXISTS quotes (
-                symbol TEXT PRIMARY KEY,
-                name TEXT,
-                price REAL,
-                prev_close REAL,
-                change_pct REAL,
-                currency TEXT,
-                book_value REAL,
-                market_cap REAL,
-                source TEXT,
-                fetched_at REAL
-            )
-            """
-        )
-        # 旧库无 book_value/source 列: 补列 (ALTER 失败说明已存在, 忽略)
+    try:
+        with sqlite3.connect(CACHE_DB) as con:
+            _create_schema(con)
+    except sqlite3.DatabaseError:
+        # 缓存库损坏 (写入中途断电/磁盘满/误写文本): 行情/K线/基本面缓存全是可再生
+        # 的派生数据。若不处理, snapshot/quote/kline 与 cache info/clear 全链路都会
+        # 因一个坏文件裸 traceback —— 连用户想「cache clear 自愈」的那条路也崩。
+        # 备份损坏文件并重建空库, 缓存自然重取。
+        stamp = int(time.time())
+        quarantined = False
         try:
-            con.execute("ALTER TABLE quotes ADD COLUMN book_value REAL")
-        except sqlite3.OperationalError:
-            pass
+            os.replace(CACHE_DB, CACHE_DB.with_name(f"{CACHE_DB.name}.corrupt-{stamp}"))
+            quarantined = True
+        except OSError:
+            try:
+                CACHE_DB.unlink()
+            except OSError:
+                pass
         try:
-            con.execute("ALTER TABLE quotes ADD COLUMN market_cap REAL")
-        except sqlite3.OperationalError:
-            pass
-        try:
-            con.execute("ALTER TABLE quotes ADD COLUMN source TEXT")
-        except sqlite3.OperationalError:
-            pass
-        con.execute(
-            """
-            CREATE TABLE IF NOT EXISTS ohlc_cache (
-                symbol TEXT NOT NULL,
-                months INTEGER NOT NULL,
-                payload TEXT NOT NULL,
-                fetched_at REAL NOT NULL,
-                PRIMARY KEY (symbol, months)
-            )
-            """
-        )
-        con.execute(
-            """
-            CREATE TABLE IF NOT EXISTS fundamentals (
-                symbol TEXT PRIMARY KEY,
-                book_value REAL,
-                market_cap REAL,
-                fetched_at REAL
-            )
-            """
-        )
-        try:
-            con.execute("ALTER TABLE fundamentals ADD COLUMN market_cap REAL")
-        except sqlite3.OperationalError:
-            pass
-        con.commit()
+            with sqlite3.connect(CACHE_DB) as con:
+                _create_schema(con)
+        except sqlite3.DatabaseError:
+            # 重建仍失败 (如目录只读/磁盘满): 放弃建库, 让调用方按「无缓存」继续
+            if quarantined:
+                try:
+                    CACHE_DB.with_name(
+                        f"{CACHE_DB.name}.corrupt-{stamp}"
+                    ).replace(CACHE_DB)
+                except OSError:
+                    pass
 
 
 # ---------- K线 (OHLC) 缓存 ----------

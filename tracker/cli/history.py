@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import pandas as pd
 
 from .. import prices
@@ -36,7 +38,12 @@ def cmd_history(args) -> None:
         print(f"⚠ {args.symbol}: 无历史数据")
         return
     close = df["close"].astype(float)
-    change = (close.iloc[-1] / close.iloc[0] - 1) * 100 if len(close) >= 2 else None
+    first = float(close.iloc[0])
+    change = (
+        (float(close.iloc[-1]) / first - 1) * 100
+        if len(close) >= 2 and first > 0 and math.isfinite(first)
+        else None
+    )
     print(
         f"\n=== 历史行情 {args.symbol} (近 {args.months} 个月, 共 {len(df)} 个交易日) ==="
     )

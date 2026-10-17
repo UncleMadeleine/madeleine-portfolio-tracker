@@ -324,7 +324,18 @@ def quote_from_ticker(yahoo_symbol: str, ticker) -> Quote | None:
     chg = None
     if close and close > 0:
         chg = (price / close - 1) * 100
+    # LSE 便士口径: contract_spec 对英股请求 currency=GBP 的英镑柜台, 而 IBKR
+    # (同 LSE/Yahoo) 对英镑柜台以**便士**报价、currency 仍报 GBP —— is_pence
+    # ("GBP") 为假会漏掉 ÷100, 英股价格放大 100 倍。与 yfinance 路径
+    # (global_stocks: "GBP 报价 = 便士" 一律 ÷100) 对齐: GB 市场按市场判定便士。
+    # 用 elif 避免 IBKR 显式报 GBX 时被两条分支重复 ÷100。
+    _gb_suffix = yahoo_symbol.rsplit(".", 1)[-1].upper() if "." in yahoo_symbol else ""
     if is_pence(raw_ccy):
+        currency = "GBP"
+        price = price / 100
+        if close:
+            close = close / 100
+    elif _gb_suffix in ("L", "IL", "AL"):
         currency = "GBP"
         price = price / 100
         if close:
@@ -380,6 +391,7 @@ def get_quotes_ibkr(
     quotes: dict[str, Quote] = {}
     empty_streak = 0
     wasted = 0.0  # 空块累计耗时 (有数据的块不计): 无订阅/超限额时及时收手
+    exhausted = True  # 是否跑完所有块 (提前 break = False)
     for start in range(0, len(claimed), _IBKR_CHUNK):
         if start:
             time.sleep(0.3)  # 块间轻微退让, 避免打满 IBKR 消息频率
@@ -393,9 +405,11 @@ def get_quotes_ibkr(
             empty_streak += 1
             wasted += time.time() - t_chunk
             if empty_streak >= _IBKR_EMPTY_GIVEUP or wasted > _IBKR_WASTED_BUDGET:
+                exhausted = False
                 break  # 连续空块/空块耗时超预算: 剩余合约交回默认数据源
-    if not quotes:
-        # 全批零行情: 负缓存, 之后 5 分钟的加载直接跳过 IBKR 阶段
+    if not quotes and exhausted:
+        # 仅当**所有块都试过仍零行情** (确认账户无所查市场订阅) 才负缓存;
+        # 提前 break (前几块无订阅但后面可能有) 不写, 否则误伤后续 5 分钟全部请求
         _no_data_until = time.time() + _IBKR_NO_DATA_TTL
     return quotes, None
 
@@ -737,7 +751,14 @@ def positions_to_rows(positions) -> tuple[list[dict], list[str]]:
                 "symbol": y,
                 "type": type_for_symbol(y),
                 "quantity": qty,
-                "avg_cost": round(float(getattr(pos, "avgCost", 0) or 0), 6),
+                # avgCost 缺失/None 时不落该键: 让 importer.merge_holdings 的
+                # `if r.get("avg_cost") is not None` 守卫保留已手填/历史成本,
+                # 否则 None→0.0 会把成本抹成 0 且盈亏率静默消失 (与长桥口径一致)
+                **(
+                    {"avg_cost": round(avg_cost, 6)}
+                    if (avg_cost := _f(getattr(pos, "avgCost", None))) is not None
+                    else {}
+                ),
             }
         )
     return rows, skipped

@@ -111,6 +111,8 @@ def cmd_index_kline(args) -> None:
         else VAR_DIR / f"index_kline_{p.yahoo.replace('.', '_')}.html"
     )
     out.parent.mkdir(parents=True, exist_ok=True)
+    if out.is_dir():
+        _finish_with_error(f"输出路径是一个目录, 请指定文件: {out}")
     out.write_text(charting.fig_to_html(fig), encoding="utf-8")
     print(f"\n✅ 指数K线图已生成: {out}")
     if args.open_browser:

@@ -348,10 +348,15 @@ def _f(v) -> float | None:
 
 
 def _currency_for(yahoo: str) -> str:
-    # 港股人民币柜台 (8 开头 5 位, 如 82318.HK 中国平安-R) 以 CNY 成交, 但
-    # parse 按 .HK 推成 HKD; 长桥 SecurityQuote 不带币种字段, 这里按代码形态纠正
-    if re.match(r"^[89]\d{4}\.HK$", yahoo):
+    # 港股多柜台: 人民币柜台 8 开头 5 位 (如 82318.HK 中国平安-R) 以 CNY 成交;
+    # 美元柜台 9 开头 5 位 (如 9085.HK) 以 USD 成交。parse 按 .HK 一律推成 HKD,
+    # 这里按代码形态纠正。权威币种以长桥 static_info.currency 为准 (见
+    # get_quotes_longport), 本函数仅作 static_info 缺失时的兜底 —— 早先正则
+    # `[89]` 把 9 开头美元柜台也误判成 CNY, 会导致约 7 倍的市值/汇率错误。
+    if re.match(r"^8\d{4}\.HK$", yahoo):
         return "CNY"
+    if re.match(r"^9\d{4}\.HK$", yahoo):
+        return "USD"
     try:
         return parse(yahoo).currency
     except ValueError:
@@ -371,8 +376,10 @@ def get_quotes_longport(
         for p in parsed
         # crypto/index 无长桥合约: BASE-QUOTE 会被映射成 BTC.USD.US 这类伪
         # 代码塞进 c.quote, 长桥对批内非法代码整批报错时会拖丢同批所有
-        # 股票行情 (IBKR 侧用 _claims_global 做同样的域过滤)
-        if p.type not in ("crypto", "index")
+        # 股票行情 (IBKR 侧用 _claims_global 做同样的域过滤)。
+        # B 股 (900xxx.SS / 200xxx.SZ) 长桥无柜台 (仅沪深港通 A 股), 混入同批
+        # 会让整批 quote 报错 → 同批所有股票行情作废; 排除后 B 股回落 akshare/yf
+        if p.type not in ("crypto", "index") and not p.is_b_share
     ]
     mappable = [(p, lp) for p, lp in mappable if lp]
     if not mappable:
@@ -393,7 +400,9 @@ def get_quotes_longport(
         by_lp = {str(getattr(sq, "symbol", "") or "").strip(): sq for sq in resp}
         pb_ratios = _pb_ratios_longport([lp for _, lp in chunk], cfg=cfg)
         mcap_by_lp = _total_market_values_longport([lp for _, lp in chunk], cfg=cfg)
-        names_by_lp = static_names_longport([lp for _, lp in chunk], cfg=cfg)
+        names_by_lp, ccy_by_lp = static_names_longport(
+            [lp for _, lp in chunk], cfg=cfg
+        )
         for p, lp in chunk:
             sq = by_lp.get(lp)
             if sq is None:
@@ -412,7 +421,7 @@ def get_quotes_longport(
                 price=price,
                 prev_close=prev,
                 change_pct=chg,
-                currency=_currency_for(p.yahoo),
+                currency=ccy_by_lp.get(lp) or _currency_for(p.yahoo),
                 # 长桥实时撮合口径 PB → 反推 BVPS (实测与 yfinance 口径一致)
                 book_value=price / pb if pb is not None and pb > 0 else None,
                 market_cap=mcap_by_lp.get(lp),
@@ -489,11 +498,17 @@ def _total_market_values_longport(
 
 def static_names_longport(
     symbols_lp: list[str], cfg: dict | None = None
-) -> dict[str, str]:
-    """长桥代码 → 名称 (static_info); 失败返回空 dict (名称为可选增强)."""
+) -> tuple[dict[str, str], dict[str, str]]:
+    """长桥代码 → (名称 dict, 币种 dict) (static_info); 失败返回 ({}, {}).
+
+    名称与币种均为可选增强, 缺失不影响行情本体。币种取自
+    SecurityStaticInfo.currency —— 港股多柜台 RMB(8 开头)/USD(9 开头) 计价的
+    权威来源, 比 _currency_for 按代码形态猜可靠 (美元柜台猜错会致 ~7 倍错误)。
+    """
     if not symbols_lp:
-        return {}
+        return {}, {}
     names: dict[str, str] = {}
+    currencies: dict[str, str] = {}
     for i in range(0, len(symbols_lp), _BATCH):
         chunk = symbols_lp[i : i + _BATCH]
         try:
@@ -504,11 +519,15 @@ def static_names_longport(
                     or str(getattr(info, "name_en", "") or "").strip()
                     or str(getattr(info, "name_hk", "") or "").strip()
                 )
-                if lp and name:
-                    names[lp] = name
-        except Exception:  # noqa: BLE001 - 名称缺失不阻塞行情
+                ccy = str(getattr(info, "currency", "") or "").strip().upper()
+                if lp:
+                    if name:
+                        names[lp] = name
+                    if ccy:
+                        currencies[lp] = ccy
+        except Exception:  # noqa: BLE001 - 名称/币种缺失不阻塞行情
             break
-    return names
+    return names, currencies
 
 
 def get_history_longport(

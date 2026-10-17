@@ -13,8 +13,13 @@ import pandas as pd
 
 from ..services.snapshot import snapshot_json, take_snapshot
 from ..services.watchlist import triggered_entries
-from ..storage import PORTFOLIO_PATH as DEFAULT_PORTFOLIO, load_portfolio
+from ..storage import (
+    PORTFOLIO_PATH as DEFAULT_PORTFOLIO,
+    CorruptDataError,
+    load_portfolio,
+)
 from ..watchlist import DEFAULT_WATCHLIST, load_watchlist
+from ._common import _finish_with_error
 
 WATCH_COLS = [
     "symbol",
@@ -153,7 +158,12 @@ def main(argv=None) -> None:
     )
     ap.add_argument("--json", action="store_true", help="输出 JSON 而非表格")
     args = ap.parse_args(argv)
-    run_snapshot(args)
+    try:
+        run_snapshot(args)
+    except CorruptDataError as e:
+        # 与主 CLI (tracker.cli.main) 口径一致: 数据文件损坏给可读错误 + 退出码 2,
+        # 而非裸 traceback (docstring 宣传支持 python -m tracker.cli.snapshot 直跑)
+        _finish_with_error(str(e))
 
 
 if __name__ == "__main__":

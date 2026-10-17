@@ -613,8 +613,7 @@ class TestUiFixes:
         """从第一个非空域 (cn) 的下拉选中: 回填代码 (修复前 key 漂移到最后域)."""
         app = kline_app
         app.text_input("kline_search_query").set_value("茅台").run()
-        tab = app.tabs[0]
-        cn = next(s for s in tab.selectbox if any("600519" in o for o in s.options))
+        cn = next(s for s in app.selectbox if any("600519" in o for o in s.options))
         cn.set_value(next(o for o in cn.options if "600519" in o)).run()
         ti = [t for t in app.text_input if t.key == "kline_symbol"][0]
         assert ti.value == "600519.SS"

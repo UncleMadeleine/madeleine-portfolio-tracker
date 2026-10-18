@@ -135,16 +135,32 @@ def get_rate(src: str, dst: str, use_ibkr: bool = False) -> float | None:
 def get_fx_rates(
     base: str, currencies, use_ibkr: bool = False
 ) -> tuple[dict[str, float], list[str]]:
+    """即期汇率 (磁盘读穿): 新鲜期内的直接返回, 缺失/过期才走源链并回写.
+
+    首屏 stale-while-revalidate 的另一半: akshare 首次 import + CFETS 一锤子
+    请求 ~10s, 冷进程每屏都付; 落盘后 CLI/页面重复调用秒回。回写只含本次
+    新取的汇率, 缓存命中项不重写 (否则 fetched_at 被无限刷新)。
+    """
+    from . import cache as cache_mod
+
     base = base.upper()
+    curs = list(dict.fromkeys(str(c).upper() for c in currencies))
+    cached, _ages = cache_mod.get_fx_cached(base, curs, ttl=cache_mod.FX_FRESH_TTL)
     rates: dict[str, float] = {}
     missing: list[str] = []
-    for ccy in dict.fromkeys(str(c).upper() for c in currencies):
+    for ccy in curs:
         if ccy == base:
             rates[ccy] = 1.0
+            continue
+        if ccy in cached:
+            rates[ccy] = cached[ccy]
             continue
         rate = get_rate(ccy, base, use_ibkr=use_ibkr)
         if rate:
             rates[ccy] = rate
         else:
             missing.append(ccy)
+    fresh = {c: r for c, r in rates.items() if c != base and c not in cached}
+    if fresh:
+        cache_mod.set_fx_cached(base, fresh)
     return rates, missing

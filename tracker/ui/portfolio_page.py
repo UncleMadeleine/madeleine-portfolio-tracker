@@ -2,17 +2,24 @@
 
 从 app.py 拆出: app.py 只做 st.navigation 路由 (每页独立 URL, 刷新不丢页),
 本模块承载组合页全部渲染逻辑与行情/汇率缓存.
+
+首屏行情走 stale-while-revalidate (见 _load_quotes): 磁盘缓存 30 分钟内的
+旧数据先渲染秒开, 后台线程静默重取, 看门狗片段 (_first_screen_watchdog)
+在刷新完成后 rerun 换新; 只有冷启动 (无任何可用缓存) 才阻塞转圈。汇率
+同理 (见 _load_fx): akshare/CFETS 冷启 ~10s 的即期查询同样落盘先用后刷。
 """
 
 from __future__ import annotations
 
+import threading
+import time
 from datetime import datetime
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from tracker import prices, storage
+from tracker import cache as cache_mod, prices, storage
 from tracker.analytics import build_view, by_symbol, summarize
 from tracker.fx import get_fx_rates
 from tracker.symbols import parse
@@ -59,6 +66,228 @@ def cached_quotes(
 @st.cache_data(ttl=600, show_spinner=False)
 def cached_fx(base: str, currencies: tuple[str, ...], use_ibkr: bool = False):
     return get_fx_rates(base, list(currencies), use_ibkr=use_ibkr)
+
+
+# ---------- 首屏数据: stale-while-revalidate (先渲染旧数据, 后台静默刷新) ----------
+# 磁盘缓存 (行情 + 汇率) 两档有效期 (见 cache.py):
+# - 新鲜期 (5min): 渲染即最终结果, 不发网络;
+# - 陈旧期 (30min): 先渲染旧数据秒开首屏, 后台线程按新鲜期重取, 取完看门狗
+#   片段 rerun 换新 —— 非美股行情本身延迟 15-30 分钟, 先看到数比干等 30s+
+#   更可用 (冷进程下 akshare/CFETS 一次即期汇率就要 ~10s, 更不能挡首屏);
+# 两档都 miss (冷启动/设置页清了磁盘缓存) 才阻塞转圈: 此时没有任何可展示的
+# 数据, 等是唯一选择。
+QUOTE_FRESH_TTL = cache_mod.CACHE_TTL
+QUOTE_STALE_TTL = cache_mod.STALE_TTL
+# 同一数据面两次后台刷新的最短间隔: 刷新失败 (网络中断/代码失效) 时避免看门狗
+# 高频重试 (失败项在 providers 层另有 5min 负缓存兜底)
+_REFRESH_MIN_INTERVAL = 60.0
+# 看门狗片段轮询间隔 (秒): 后台刷新完成后尽快 rerun 换新数据
+_REFRESH_POLL = 2.0
+# _refresh_done_at 保留的最近完成记录数 (超出按时间戳淘汰, 防长驻服务内存增长)
+_REFRESH_HISTORY = 64
+# session_state 里的首屏刷新计划 (每次渲染重建, 看门狗据此调度)
+_PLAN_KEY = "_first_screen_plan"
+
+_refresh_lock = threading.Lock()
+# key → 是否正在刷新 (进程内跨会话共享: 同数据面多个标签页只发一次网络)
+_refresh_inflight: set[tuple] = set()
+# key → 最近一次刷新完成时间戳 (看门狗据此 rerun / 节流重试)
+_refresh_done_at: dict[tuple, float] = {}
+
+
+def _plan_reset() -> None:
+    """每次渲染重建刷新计划 (行情/汇率两个槽位由各自 loader 填写).
+
+    原地更新而非替换 dict: seen (已消费的刷新完成时间戳) 必须跨渲染保留,
+    否则一次完成事件会被反复当成"新完成"触发 rerun, 数据仍脏时形成热循环。
+    """
+    plan = st.session_state.setdefault(
+        _PLAN_KEY, {"quotes": None, "fx": None, "dirty": False, "seen": 0.0}
+    )
+    plan.update(quotes=None, fx=None, dirty=False)
+
+
+def _plan_set(kind: str, args) -> None:
+    """填写计划槽位: args=None 表示该数据面已同步取完 (无需后台刷新)."""
+    plan = st.session_state.setdefault(
+        _PLAN_KEY, {"quotes": None, "fx": None, "dirty": False, "seen": 0.0}
+    )
+    plan[kind] = args
+    plan["dirty"] = bool(plan.get("quotes") or plan.get("fx"))
+
+
+def _plan_key(plan: dict) -> tuple:
+    """刷新任务键: 行情参数 + 汇率参数 (任一变化都是新任务)."""
+    return (plan.get("quotes"), plan.get("fx"))
+
+
+def _refresh_state(key: tuple) -> tuple[bool, float | None]:
+    with _refresh_lock:
+        return key in _refresh_inflight, _refresh_done_at.get(key)
+
+
+def _start_refresh(key: tuple, plan: dict) -> bool:
+    """启动一次后台刷新 (行情 + 汇率); 返回是否真正发起.
+
+    同 key 不并发 (多标签页/连续 rerun 只发一次网络) + 最短重试间隔 (刷新
+    失败后避免看门狗高频重试)。线程内只跑纯取数链路 (providers/akshare +
+    SQLite, 不碰任何 st.* API): st.cache_data 依赖 ScriptRunner 上下文, 后台
+    线程调用会炸; 磁盘缓存的读取在 get_quotes/get_fx_rates 内部, 新鲜项
+    仍秒回不发网络。
+    """
+    q_args = plan.get("quotes")
+    f_args = plan.get("fx")
+    now = time.time()
+    with _refresh_lock:
+        if key in _refresh_inflight:
+            return False
+        if now - _refresh_done_at.get(key, 0.0) < _REFRESH_MIN_INTERVAL:
+            return False
+        _refresh_inflight.add(key)
+        # 长驻服务里键会随切范围/改持仓无限累积: 只留最近 _REFRESH_HISTORY 个
+        if len(_refresh_done_at) > _REFRESH_HISTORY:
+            for old in sorted(_refresh_done_at, key=_refresh_done_at.get)[
+                : len(_refresh_done_at) - _REFRESH_HISTORY
+            ]:
+                _refresh_done_at.pop(old, None)
+
+    def _run() -> None:
+        try:
+            if q_args:
+                symbols, prefer_akshare, use_ibkr, use_longport, crypto_source = q_args
+                prices.get_quotes(
+                    list(symbols),
+                    prefer_akshare=prefer_akshare,
+                    use_ibkr=use_ibkr,
+                    use_longport=use_longport,
+                    crypto_source=crypto_source,
+                )
+            if f_args:
+                base, currencies, use_ibkr = f_args
+                get_fx_rates(base, list(currencies), use_ibkr=use_ibkr)
+        except Exception:  # noqa: BLE001 - 刷新失败: 陈旧数据继续展示, 下轮重试
+            pass
+        finally:
+            with _refresh_lock:
+                _refresh_inflight.discard(key)
+                _refresh_done_at[key] = time.time()
+
+    threading.Thread(target=_run, name="first-screen-refresh", daemon=True).start()
+    return True
+
+
+def _local_quote_errors(fetch_symbols) -> dict[str, str]:
+    """纯本地计算的低级错误 (代码无法识别), 不依赖刷新结果.
+
+    首屏秒渲染路径上没有 get_quotes 的 errors 产出, 但 parse 失败是本地判断,
+    补一遍让「无法识别」提示不丢失 (缺行情的代码仍由 build_view 报缺失)。
+    """
+    errors: dict[str, str] = {}
+    for s in fetch_symbols:
+        try:
+            parse(s)
+        except ValueError as e:
+            errors[str(s)] = str(e)
+    return errors
+
+
+def _load_quotes(
+    fetch_symbols: tuple[str, ...],
+    prefer_akshare: bool,
+    use_ibkr: bool,
+    use_longport: bool,
+    crypto_source: str,
+) -> tuple[dict, dict, list]:
+    """首屏行情加载 (stale-while-revalidate), 返回 (quotes, errors, notes).
+
+    - 磁盘全部新鲜: 直接渲染 (读盘即返回, 不发网络);
+    - 有陈旧缓存: 立即返回旧数据, 刷新计划交给看门狗片段调度 (不在此起线程
+      —— 汇率计划随后才知情, 一个后台任务同时刷两者);
+    - 无任何可用缓存: 阻塞拉取 (没有可展示的数据, 只能等).
+
+    无法识别的代码永远取不到数, 不进刷新计划 (否则计划永久 dirty, 看门狗
+    每间隔空转); 它们的报错由 errors 给出。
+    """
+    hits, ages = cache_mod.get_cached_with_age(
+        list(fetch_symbols), ttl=QUOTE_STALE_TTL
+    )
+    errors = _local_quote_errors(fetch_symbols)
+    fetchable = [s for s in fetch_symbols if str(s) not in errors]
+    stale = [s for s in fetchable if ages.get(s, float("inf")) > QUOTE_FRESH_TTL]
+    if not stale:
+        _plan_set("quotes", None)
+        return hits, errors, []
+    if not hits:
+        with st.spinner("拉取行情 (首次加载需初始化数据引擎)..."):
+            out = cached_quotes(
+                fetch_symbols, prefer_akshare, use_ibkr, use_longport, crypto_source
+            )
+        _plan_set("quotes", None)
+        return out
+    # 陈旧数据秒渲染 + 挂后台刷新
+    _plan_set(
+        "quotes",
+        (tuple(fetchable), prefer_akshare, use_ibkr, use_longport, crypto_source),
+    )
+    return hits, errors, []
+
+
+def _load_fx(
+    base: str, currencies: tuple[str, ...], use_ibkr: bool
+) -> tuple[dict, list]:
+    """首屏汇率加载 (stale-while-revalidate), 返回 (rates, missing).
+
+    与 _load_quotes 同构: 磁盘陈旧期内秒取 (含部分缺失 —— 缺失币种报
+    「缺少汇率」, 后台补齐), 全空才阻塞拉取。base 自身恒为 1.0, 不落盘,
+    因此不参与陈旧/缺失判定 (否则持有本币资产时计划永久 dirty)。
+    """
+    need = tuple(c for c in currencies if c != base)
+    if not need:
+        _plan_set("fx", None)
+        return ({base: 1.0} if currencies else {}), []
+    hits, ages = cache_mod.get_fx_cached(base, list(need), ttl=QUOTE_STALE_TTL)
+    missing = [c for c in need if c not in hits]
+    stale = [c for c in need if ages.get(c, float("inf")) > QUOTE_FRESH_TTL]
+    if not stale:
+        _plan_set("fx", None)
+        return ({**hits, base: 1.0}), missing
+    if not hits:
+        with st.spinner("拉取汇率..."):
+            out = cached_fx(base, currencies, use_ibkr)
+        _plan_set("fx", None)
+        return out
+    # 陈旧汇率秒取 + 挂后台刷新
+    _plan_set("fx", (base, need, use_ibkr))
+    return ({**hits, base: 1.0}), missing
+
+
+@st.fragment(run_every=_REFRESH_POLL)
+def _first_screen_watchdog() -> None:
+    """首屏数据 (行情+汇率) 后台刷新看门狗 (独立片段, 轮询不阻塞其它交互).
+
+    - 刷新完成 (且本次完成事件还没消费过) → st.rerun() 全量重渲染换新;
+      完成事件按 plan["seen"] 只消费一次, 避免数据仍脏时反复 rerun 成热循环;
+    - 已消费过完成事件但数据仍陈旧 (全部源失败/负缓存/代码失效) → 按最短
+      间隔补刷, 不热重试;
+    - 无待处理刷新 → 直接返回 (仅一次 session_state 读取).
+    """
+    plan = st.session_state.get(_PLAN_KEY)
+    if not plan or not plan.get("dirty"):
+        return
+    key = _plan_key(plan)
+    inflight, done = _refresh_state(key)
+    if inflight:
+        st.caption(":material/sync: 数据后台刷新中, 先展示缓存数据…")
+        return
+    if done is not None and done > (plan.get("seen") or 0.0):
+        plan["seen"] = done
+        st.rerun()
+        return
+    # 完成事件已消费但数据仍脏 (网络中断/代码失效): 到最短间隔才补刷
+    if done is None or time.time() - done >= _REFRESH_MIN_INTERVAL:
+        if _start_refresh(key, plan):
+            plan["base"] = time.time()
+            st.caption(":material/sync: 数据后台刷新中, 先展示缓存数据…")
 
 
 def _post_import() -> None:
@@ -122,7 +351,11 @@ def _symbol_pie(view: pd.DataFrame):
 
 
 def render_portfolio_page() -> None:
-    """组合页入口: 侧边栏编辑器 + 主区渲染 (行情一次批量拉取, 持仓/自选共用)."""
+    """组合页入口: 侧边栏编辑器 + 主区渲染 (行情一次批量拉取, 持仓/自选共用).
+
+    首屏行情经 _load_quotes 走 stale-while-revalidate: 旧缓存秒渲染 + 后台
+    刷新, 不再每次打开都干等网络; 冷启动 (无缓存) 才阻塞拉取。
+    """
     watch = storage.load_watchlist(WATCHLIST_PATH)
     if not watch.get("watchlist"):
         watch["watchlist"] = []
@@ -436,14 +669,16 @@ def render_portfolio_page() -> None:
     )
     if scope == "全部" and len(fetch_symbols) > 100:
         st.caption(
-            f":material/info: 全部范围共 {len(fetch_symbols)} 个代码, 冷启动拉取需要一些时间; "
-            "选具体列表可显著加快 (行情 5 分钟内有效)。"
+            f":material/info: 全部范围共 {len(fetch_symbols)} 个代码; "
+            "无缓存冷启动拉取需要一些时间, 选具体列表可显著加快 "
+            "(行情 5 分钟内有效, 30 分钟内的旧数据先展示后后台刷新)。"
         )
 
-    with st.spinner("拉取行情 (首次加载需初始化数据引擎)..."):
-        quotes, errors, notes = cached_quotes(
-            fetch_symbols, prefer_akshare, use_ibkr, use_longport, crypto_source
-        )
+    # 首屏刷新计划每次渲染重建 (行情/汇率各自判定陈旧), 看门狗片段据此刻度调度
+    _plan_reset()
+    quotes, errors, notes = _load_quotes(
+        fetch_symbols, prefer_akshare, use_ibkr, use_longport, crypto_source
+    )
     if not quotes:
         st.error(
             "未能获取任何行情。请检查网络: Yahoo 需可访问 finance.yahoo.com; "
@@ -465,13 +700,17 @@ def render_portfolio_page() -> None:
             if key in quotes:
                 holding_currencies.add(quotes[key].currency)
         currencies = tuple(sorted(holding_currencies))
-        fx, fx_missing = cached_fx(base, currencies, use_ibkr)
+        fx, fx_missing = _load_fx(base, currencies, use_ibkr)
         view, view_issues = build_view(holdings.to_dict("records"), quotes, fx)
         issues += view_issues + [f"汇率缺失: {c}" for c in fx_missing]
         summary = summarize(view)
         m = summary
     else:
         view = pd.DataFrame()
+
+    # 看门狗片段: 后台刷新完成即 rerun 换新; 无刷新任务时零开销。放在行情/汇率
+    # 都判定完之后 —— 一个后台任务同时刷两者, 避免分两轮刷新
+    _first_screen_watchdog()
 
     wview, wissues = build_watchlist_view(watch_entries, quotes)
     issues += wissues

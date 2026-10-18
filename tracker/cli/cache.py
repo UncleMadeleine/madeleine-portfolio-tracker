@@ -24,8 +24,18 @@ def cmd_cache(args) -> None:
         return
     print("\n=== 行情缓存 ===")
     print(f"  数据库: {info['db']}")
-    print(f"  TTL: {info['ttl_seconds']}s")
-    print(f"  总条数: {info['total']} (有效 {info['fresh']} / 过期 {info['stale']})")
+    print(
+        f"  TTL: {info['ttl_seconds']}s "
+        f"(陈旧 {info['stale_ttl_seconds']}s 内首屏可先渲染后刷新)"
+    )
+    print(
+        f"  总条数: {info['total']} (新鲜 {info['fresh']} / 陈旧 {info['stale']}, "
+        f"其中可渲染 {info['usable'] - info['fresh']})"
+    )
+    print(
+        f"  汇率缓存: {info['fx_total']} 组 (新鲜 {info['fx_fresh']}"
+        f" / TTL {info['fx_ttl_seconds']}s, 陈旧可渲染 {info['fx_stale_ttl_seconds']}s)"
+    )
     print(
         f"  K线缓存: {info['ohlc_total']} 组 (有效 {info['ohlc_fresh']}"
         f" / TTL {info['ohlc_ttl_seconds']}s)"

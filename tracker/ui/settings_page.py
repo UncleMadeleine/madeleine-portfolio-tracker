@@ -171,9 +171,12 @@ def _save_display() -> None:
     if any(old.get(k) != changed[k] for k in source_keys):
         # 数据源偏好变化: 清实时行情缓存 (保留K线/基本面), 下次取数按新链路执行
         # 并重新打标来源; 页面缓存 (st.cache_data) 由组合页「重载」或 TTL 兜底
-        from tracker.cache import clear_ohlc, clear_quotes
+        from tracker.cache import clear_fx, clear_ohlc, clear_quotes
 
         clear_quotes()
+        # 汇率磁盘缓存同 key 不含数据源偏好: IBKR 开关变化后不清会继续用
+        # CFETS/yfinance 旧汇率, 必须一并清
+        clear_fx()
         # K线(OHLC) 磁盘缓存键只有 symbol+months、不含源偏好: 不清会命中上一个
         # 源的旧K线 (含跨会话/刷新后的首次查询), 必须一并清
         clear_ohlc()
@@ -182,9 +185,12 @@ def _save_display() -> None:
         from tracker.providers.orchestration import neg_clear_all
 
         neg_clear_all()
-        from tracker.ui.portfolio_page import cached_quotes
+        from tracker.ui.portfolio_page import cached_fx, cached_quotes
 
         cached_quotes.clear()
+        # 汇率页面缓存 (st.cache_data) 同样要清: 磁盘汇率缓存已清, 不清这个
+        # 的话 IBKR 开关切换后 10 分钟内仍返回旧源 (CFETS/yfinance) 汇率
+        cached_fx.clear()
     st.toast("设置已保存")
 
 

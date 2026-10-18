@@ -27,12 +27,19 @@ from tracker import storage  # noqa: E402
 from tracker.ui.import_page import render_import_page  # noqa: E402
 from tracker.ui.index_page import render_index_page  # noqa: E402
 from tracker.ui.kline_page import render_kline_page  # noqa: E402
-from tracker.ui.portfolio_page import _post_import, render_portfolio_page  # noqa: E402
+from tracker.ui.portfolio_page import (  # noqa: E402
+    _post_import,
+    ensure_background_refresher,
+    render_portfolio_page,
+)
 from tracker.ui.settings_page import render_settings_page  # noqa: E402
 
 
 def main() -> None:
     st.set_page_config(page_title="投资组合追踪", page_icon="📈", layout="wide")
+    # 进程级后台保温: 服务长期运行时持续刷新行情/汇率磁盘缓存 (没有任何页面
+    # 打开也更新, 后来者打开即是新鲜数据)。幂等, 每次 rerun 重复调用无副作用
+    ensure_background_refresher()
 
     def _run_kline() -> None:
         settings = storage.load_settings()

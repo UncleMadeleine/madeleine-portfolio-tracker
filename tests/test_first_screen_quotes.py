@@ -32,14 +32,28 @@ import tracker.ui.portfolio_page as portfolio_page
 from tracker.prices import Quote
 
 
-def _wait_for(pred, timeout: float = 10.0) -> bool:
-    """轮询等待后台条件 (测试里替代 sleep 定长)."""
+def _wait_for(pred, timeout: float = 10.0, sleep_fn=None) -> bool:
+    """轮询等待后台条件 (测试里替代 sleep 定长).
+
+    sleep_fn 可注入: 打桩了 time.sleep 的用例 (如保温循环测试) 传真实 sleep,
+    否则等待本身会踩到打桩函数。
+    """
+    sleep_fn = sleep_fn or time.sleep
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if pred():
             return True
-        time.sleep(0.05)
+        sleep_fn(0.05)
     return False
+
+
+class _StopLoop(BaseException):
+    """跳出保温线程 while True 的信号.
+
+    派生自 BaseException 而非 Exception: 循环体内 except Exception 捕不掉,
+    才能穿透出来; 也不用 KeyboardInterrupt/SystemExit —— 那俩会被 pytest 和
+    xdist 当成"中断整个会话"。
+    """
 
 
 @pytest.fixture
@@ -104,13 +118,27 @@ def _seed_fx(base: str, rates: dict[str, float], age_seconds: float) -> None:
         con.commit()
 
 
+def _reset_coordinator() -> None:
+    """清空刷新协调器状态 (同一测试内多场景间隔离, 避开最短重试间隔)."""
+    with portfolio_page._refresh_lock:
+        portfolio_page._refresh_inflight.clear()
+        portfolio_page._refresh_done_at.clear()
+
+
+def _wait_coordinator_idle(sleep_fn) -> bool:
+    """等所有后台刷新线程跑完 (done_at 落账), 避免场景间状态竞争."""
+    return _wait_for(
+        lambda: not portfolio_page._refresh_inflight,
+        sleep_fn=sleep_fn,
+    )
+
+
 def _recording_quotes(price: float):
     """复刻真实 get_quotes 契约的 mock: 返回行情 + 落库 (后台线程会调用).
 
     挂在函数属性上的 calls 记录 (符号集, 调用时刻), 供断言刷新确已发生。
     """
     calls: list[tuple[tuple[str, ...], float]] = []
-
     def fake(symbols, **_kw):
         calls.append((tuple(symbols), time.monotonic()))
         quotes = {
@@ -340,29 +368,73 @@ class TestFirstScreenStaleWhileRevalidate:
     def test_stale_fx_renders_instantly_then_background_refresh(
         self, monkeypatch, tmp_path, _clean_quote_state
     ):
-        """汇率陈旧 (行情全新): 旧汇率秒算市值, 后台只刷汇率, 看门狗 rerun 换新."""
+        """汇率陈旧 (行情全新): 旧汇率秒算市值, 后台刷汇率后看门狗 rerun 换新.
+
+        合并任务会同时刷行情+汇率两个槽位: 行情槽位此时是零网络成本的空转
+        (磁盘全新, get_quotes 读盘即返回), 用 spy 委托真实实现来证明不打网络。
+        """
         _seed_quotes({"AAPL": 100.0}, age_seconds=30)  # 行情全新
         _seed_fx("CNY", {"USD": 5.0}, age_seconds=600)  # 汇率陈旧
         fake_fx = _recording_fx(7.1)
+        real_get_quotes = prices.get_quotes
+        q_calls: list[tuple] = []
 
-        def boom_quotes(symbols, **_kw):
-            raise AssertionError("行情全新不应触发取数")
+        def spy_quotes(symbols, **kw):
+            q_calls.append(tuple(symbols))
+            return real_get_quotes(symbols, **kw)  # 磁盘全命中, 不打网络
 
-        at = _boot(
-            monkeypatch, tmp_path, get_quotes=boom_quotes, get_fx=fake_fx
-        )
+        at = _boot(monkeypatch, tmp_path, get_quotes=spy_quotes, get_fx=fake_fx)
 
         # 旧汇率 2 × 100 × 5.0 = 1,000 (若阻塞等刷新会是 1,420)
         assert any("1,000" in str(m.value) for m in at.metric)
         assert _plan_dirty(at)
 
-        # 后台只刷汇率 (不动行情), 落库后看门狗 rerun → 新汇率 1,420
+        # 后台任务刷汇率 (行情槽位空转), 落库后看门狗 rerun → 新汇率 1,420
         assert _wait_for(lambda: fake_fx.calls), "后台汇率刷新未被触发"
+        assert q_calls == [("AAPL",)]  # 行情槽位确实跑了, 但没打网络
         rates, _ = cache_mod.get_fx_cached("CNY", ["USD"])
         assert rates["USD"] == 7.1
         at.run(timeout=60)
         assert any("1,420" in str(m.value) for m in at.metric)
         assert not _plan_dirty(at)
+
+    def test_periodic_keep_warm_updates_open_page(
+        self, monkeypatch, tmp_path, _clean_quote_state
+    ):
+        """页面级周期保温: 数据 250s 龄 (仍新鲜但已过 240s 保温周期).
+
+        首屏按新鲜数据渲染 (不走 SWR 脏路径), 看门狗到时主动重取 → 完成后
+        rerun 换新 —— 页面一直开着数据也持续滚动更新。
+        """
+        _seed_quotes({"AAPL": 100.0}, age_seconds=250)
+        fake = _recording_quotes(200.0)
+        at = _boot(monkeypatch, tmp_path, get_quotes=fake)
+
+        # 250s < 300s 新鲜期: 首屏直接渲染这批数据 (2×100×7.1=1,420)
+        assert any("1,420" in str(m.value) for m in at.metric)
+        # 但已过保温周期 → 看门狗挂上刷新任务并给提示
+        assert any("后台刷新中" in c.value for c in at.caption)
+        assert _wait_for(lambda: fake.calls), "周期保温未触发刷新"
+        hits, _ = cache_mod.get_cached_with_age(["AAPL"])
+        assert hits["AAPL"].price == 200.0
+
+        # 完成 → rerun → 换新 (2×200×7.1=2,840), 计划归位
+        at.run(timeout=60)
+        assert any("2,840" in str(m.value) for m in at.metric)
+        assert not _plan_dirty(at)
+        # 数据刚刷新生效, 不会立刻再刷一次 (无热循环)
+        assert not any("后台刷新中" in c.value for c in at.caption)
+
+    def test_no_periodic_refresh_while_data_is_young(
+        self, monkeypatch, tmp_path, _clean_quote_state
+    ):
+        """数据 30s 龄 (远未到保温周期): 页面安静, 不发起任何刷新."""
+        _seed_quotes({"AAPL": 100.0}, age_seconds=30)
+        fake = _recording_quotes(200.0)
+        at = _boot(monkeypatch, tmp_path, get_quotes=fake)
+        assert any("1,420" in str(m.value) for m in at.metric)
+        assert fake.calls == []
+        assert not any("后台刷新中" in c.value for c in at.caption)
 
     def test_cold_start_blocks_and_fetches(
         self, monkeypatch, tmp_path, _clean_quote_state
@@ -435,6 +507,173 @@ class TestFirstScreenStaleWhileRevalidate:
         assert plan["dirty"] is True  # 数据仍陈旧, 计划仍脏
         assert plan["seen"] > 0  # 完成事件已消费 (不会反复 rerun)
         assert not any("后台刷新中" in c.value for c in at.caption)
+
+
+class TestPeriodicKeepWarm:
+    """周期保温: 页面长期打开数据滚动更新 + 进程级线程在无页面时刷缓存.
+
+    判定口径是磁盘数据年龄 (不是距上次刷新的时间): 冷启动刚取完数 / 全新
+    打开都不触发, 数据临近过期才刷 —— 与首屏 SWR 的新鲜期天然衔接。
+    """
+
+    def test_period_scales_with_symbol_count(self):
+        # 100 个代码: 100*2=200 < 基准 240 → 仍为基准
+        assert portfolio_page._refresh_period(100) == 240.0
+        # 685 个代码: 685*2=1370, 介于基准与上限之间
+        assert portfolio_page._refresh_period(685) == 1370.0
+        # 超大组合封顶在上限 (= 陈旧期)
+        assert portfolio_page._refresh_period(10**6) == (
+            portfolio_page._REFRESH_PERIOD_MAX
+        )
+        assert portfolio_page._refresh_period(1) == portfolio_page._REFRESH_PERIOD
+
+    def test_cache_age_missing_means_inf(self):
+        assert portfolio_page._cache_age() == 0.0
+        assert portfolio_page._cache_age(symbols=["AAPL"]) == float("inf")
+        _seed_quotes({"AAPL": 100.0}, age_seconds=120)
+        assert 100 <= portfolio_page._cache_age(symbols=["AAPL"]) <= 180
+        # 行情在、汇率缺 → inf (必须刷)
+        assert portfolio_page._cache_age(
+            symbols=["AAPL"], fx=("CNY", ("USD",), False)
+        ) == float("inf")
+        _seed_fx("CNY", {"USD": 7.1}, age_seconds=60)
+        age = portfolio_page._cache_age(symbols=["AAPL"], fx=("CNY", ("USD",), False))
+        assert 100 <= age <= 180  # 取两者最旧
+
+    def test_disk_refresh_plan_derives_from_storage(self, monkeypatch, tmp_path):
+        """后台线程的取数参数从磁盘数据推导 (持仓+自选+设置), 币种取自行情缓存."""
+        wl = tmp_path / "watchlist.json"
+        pf = tmp_path / "portfolio.json"
+        storage.save_portfolio(
+            {
+                "base_currency": "CNY",
+                "holdings": [{"symbol": "AAPL", "quantity": 1, "avg_cost": 100}],
+            },
+            pf,
+        )
+        storage.save_watchlist(
+            {"watchlist": [{"symbol": "600519.SS", "lists": ["测试"]}]}, wl
+        )
+        monkeypatch.setattr(portfolio_page, "WATCHLIST_PATH", wl)
+        monkeypatch.setattr(storage, "PORTFOLIO_PATH", pf)
+        _seed_quotes(
+            {"AAPL": 100.0, "600519.SS": 1500.0},
+            age_seconds=60,
+            currencies={"AAPL": "USD", "600519.SS": "CNY"},
+        )
+        plan = portfolio_page._disk_refresh_plan()
+        symbols, prefer, ibkr, lp, crypto = plan["quotes"]
+        assert symbols == ("AAPL", "600519.SS")
+        # load_settings() 默认参数定义时绑定, 读的是真实 settings.json;
+        # 这里只验证透传一致, 不断言具体开关值
+        s = storage.load_settings()
+        assert (prefer, ibkr, lp, crypto) == (
+            s["prefer_akshare"],
+            s["use_ibkr"],
+            bool(s.get("use_longport")),
+            s["crypto_source"],
+        )
+        base, currencies, _use_ibkr = plan["fx"]
+        assert base == "CNY"
+        assert currencies == ("USD",)  # CNY 是 base, 不进汇率槽位
+
+    def test_disk_refresh_plan_none_when_empty(self, monkeypatch, tmp_path):
+        wl = tmp_path / "watchlist.json"
+        pf = tmp_path / "portfolio.json"
+        storage.save_portfolio({"base_currency": "CNY", "holdings": []}, pf)
+        storage.save_watchlist({"watchlist": []}, wl)
+        monkeypatch.setattr(portfolio_page, "WATCHLIST_PATH", wl)
+        monkeypatch.setattr(storage, "PORTFOLIO_PATH", pf)
+        assert portfolio_page._disk_refresh_plan() is None
+
+    def test_background_loop_refreshes_only_when_data_old(
+        self, monkeypatch, tmp_path, _clean_quote_state
+    ):
+        """保温循环: 数据新 → 跳过; 数据旧 → 刷新 (patch sleep 跳出 while)."""
+        wl = tmp_path / "watchlist.json"
+        pf = tmp_path / "portfolio.json"
+        storage.save_portfolio(
+            {
+                "base_currency": "CNY",
+                "holdings": [{"symbol": "AAPL", "quantity": 2, "avg_cost": 100}],
+            },
+            pf,
+        )
+        storage.save_watchlist({"watchlist": []}, wl)
+        monkeypatch.setattr(portfolio_page, "WATCHLIST_PATH", wl)
+        monkeypatch.setattr(storage, "PORTFOLIO_PATH", pf)
+        fake = _recording_quotes(200.0)
+        monkeypatch.setattr(prices, "get_quotes", fake)
+        # 汇率也要 mock: 否则合并任务会真去跑 CFETS/IBKR (仓库 settings 里
+        # IBKR 开着, 连接拒绝 + akshare 兜底要 10s+)
+        monkeypatch.setattr(
+            portfolio_page,
+            "get_fx_rates",
+            lambda base, curs, **kw: ({c: 7.1 for c in curs if c != base}, []),
+        )
+
+        sleeps = {"n": 0}
+        real_sleep = time.sleep
+
+        def fake_sleep(_sec):
+            sleeps["n"] += 1
+            if sleeps["n"] >= 2:  # 第二周期前跳出 while True
+                raise _StopLoop
+
+        monkeypatch.setattr(time, "sleep", fake_sleep)
+
+        # 数据很新 (行情 60s + 汇率 60s, 均 < 240s 周期): 第一周期跳过
+        _reset_coordinator()
+        _seed_quotes({"AAPL": 100.0}, age_seconds=60)
+        _seed_fx("CNY", {"USD": 7.1}, age_seconds=60)
+        sleeps["n"] = 0  # 每次调用只允许跑完一个周期 body
+        with pytest.raises(_StopLoop):
+            portfolio_page._background_refresher_loop()
+        assert fake.calls == [], "数据还新不该刷新"
+
+        # 行情旧了 (600s > 240s 周期): 第一周期即刷新
+        _reset_coordinator()
+        fake.calls.clear()
+        _seed_quotes({"AAPL": 100.0}, age_seconds=600)
+        _seed_fx("CNY", {"USD": 7.1}, age_seconds=60)
+        sleeps["n"] = 0
+        with pytest.raises(_StopLoop):
+            portfolio_page._background_refresher_loop()
+        assert _wait_for(lambda: fake.calls, sleep_fn=real_sleep), "数据旧了应刷新"
+        assert _wait_coordinator_idle(real_sleep), "后台线程未跑完"
+
+        # 汇率缺失 (行情新): 同样视为必须刷 —— 缺数据比旧数据更要补
+        _reset_coordinator()
+        fake.calls.clear()
+        _seed_quotes({"AAPL": 100.0}, age_seconds=60)
+        with sqlite3.connect(cache_mod.CACHE_DB) as con:
+            con.execute("DELETE FROM fx_rates")
+            con.commit()
+        sleeps["n"] = 0
+        with pytest.raises(_StopLoop):
+            portfolio_page._background_refresher_loop()
+        assert _wait_for(lambda: fake.calls, sleep_fn=real_sleep), "汇率缺失应刷新"
+        assert _wait_coordinator_idle(real_sleep), "后台线程未跑完"
+
+    def test_ensure_background_refresher_is_idempotent(self):
+        """首次调用恰好起一条守护线程; 重复调用不再新增 (进程内幂等)."""
+
+        def _count() -> int:
+            return len(
+                [t for t in threading.enumerate() if t.name == "quote-refresher"]
+            )
+
+        # 同一进程里前面的用例可能已启动过 (app.py main 会调), 重置标志位
+        # 回到"未启动"态, 才能确定性地验证"起一条 + 不新增"
+        portfolio_page._refresher_started = False
+        before = _count()
+        portfolio_page.ensure_background_refresher()
+        portfolio_page.ensure_background_refresher()
+        portfolio_page.ensure_background_refresher()
+        assert _count() == before + 1
+        for t in threading.enumerate():
+            if t.name == "quote-refresher":
+                assert t.daemon is True  # 守护线程, 不阻碍进程退出
 
 
 class TestRefreshCoordinator:

@@ -7,6 +7,11 @@
 旧数据先渲染秒开, 后台线程静默重取, 看门狗片段 (_first_screen_watchdog)
 在刷新完成后 rerun 换新; 只有冷启动 (无任何可用缓存) 才阻塞转圈。汇率
 同理 (见 _load_fx): akshare/CFETS 冷启 ~10s 的即期查询同样落盘先用后刷。
+
+数据持续更新由两路互补: 看门狗片段 (页面开着) 在磁盘数据临近过期时主动
+重取, 用户看到的数据滚动更新; 进程级保温线程 (ensure_background_refresher,
+app.py 入口启动) 在没有任何页面打开时照常刷磁盘缓存, 后来者打开即是新鲜
+数据。两路共用刷新协调器 (_start_refresh), 同数据面不并发、失败有节流。
 """
 
 from __future__ import annotations
@@ -88,32 +93,74 @@ _REFRESH_HISTORY = 64
 # session_state 里的首屏刷新计划 (每次渲染重建, 看门狗据此调度)
 _PLAN_KEY = "_first_screen_plan"
 
+# ---------- 周期保温: 服务长期运行时数据持续更新 ----------
+# 页面开着 → 看门狗片段按周期主动重取 (用户看到的数据滚动更新);
+# 页面全关 → 进程级保温线程照常刷磁盘缓存 (后来者打开即是新鲜数据)。
+# 基准周期小于行情新鲜期 (300s), 保证磁盘缓存常新; 符号集越大周期越长
+# (大组合一轮刷新就要数分钟, 周期不拉长会把刷新器拖到常驻满负荷, Yahoo
+# 限流是 IP 级的, 连累 K线页), 上限 = 陈旧期。
+_REFRESH_PERIOD = 240.0
+_REFRESH_PERIOD_PER_SYMBOL = 2.0
+_REFRESH_PERIOD_MAX = 1800.0
+
 _refresh_lock = threading.Lock()
 # key → 是否正在刷新 (进程内跨会话共享: 同数据面多个标签页只发一次网络)
 _refresh_inflight: set[tuple] = set()
-# key → 最近一次刷新完成时间戳 (看门狗据此 rerun / 节流重试)
+# key → 最近一次刷新完成时间戳 (看门狗据此 rerun / 节流重试 / 周期保温)
 _refresh_done_at: dict[tuple, float] = {}
+# 进程级保温线程只启一次 (模块级标志 + 锁; importlib.reload 会重置, 无害)
+_refresher_lock = threading.Lock()
+_refresher_started = False
+
+
+def _refresh_period(n_symbols: int) -> float:
+    """保温周期 (秒): 基准 240s 起, 按符号集规模拉长, 上限 30min."""
+    return min(
+        max(_REFRESH_PERIOD, n_symbols * _REFRESH_PERIOD_PER_SYMBOL),
+        _REFRESH_PERIOD_MAX,
+    )
+
+
+def _plan() -> dict:
+    """当前会话的首屏刷新计划 (惰性创建; 原地更新, 字段跨渲染保留).
+
+    - quotes/fx: 取数参数 (周期保温刷新要用)
+    - dirty: 是否有待后台刷新的数据面
+    - seen: 已消费的刷新完成时间戳 (只消费一次, 防热循环)
+    - q_age/f_age: 行情/汇率磁盘缓存的最旧年龄 (秒), 周期保温据此判断
+    """
+    return st.session_state.setdefault(
+        _PLAN_KEY,
+        {
+            "quotes": None,
+            "fx": None,
+            "dirty": False,
+            "seen": 0.0,
+            "q_age": 0.0,
+            "f_age": 0.0,
+        },
+    )
 
 
 def _plan_reset() -> None:
     """每次渲染重建刷新计划 (行情/汇率两个槽位由各自 loader 填写).
 
-    原地更新而非替换 dict: seen (已消费的刷新完成时间戳) 必须跨渲染保留,
-    否则一次完成事件会被反复当成"新完成"触发 rerun, 数据仍脏时形成热循环。
+    只清脏标记, 其余字段原地保留: seen 丢失会让一次完成事件被反复当成
+    "新完成"触发 rerun (数据仍脏时形成热循环); quotes/fx 参数与年龄丢失
+    则周期保温无依据。
     """
-    plan = st.session_state.setdefault(
-        _PLAN_KEY, {"quotes": None, "fx": None, "dirty": False, "seen": 0.0}
-    )
-    plan.update(quotes=None, fx=None, dirty=False)
+    _plan()["dirty"] = False
 
 
-def _plan_set(kind: str, args) -> None:
-    """填写计划槽位: args=None 表示该数据面已同步取完 (无需后台刷新)."""
-    plan = st.session_state.setdefault(
-        _PLAN_KEY, {"quotes": None, "fx": None, "dirty": False, "seen": 0.0}
-    )
+def _plan_set(kind: str, args, dirty: bool = False) -> None:
+    """记录取数参数 (周期保温刷新要用); dirty=True 表示需后台刷新.
+
+    args=None 表示该数据面本渲染没有取数需求 (如无持仓 → 无汇率)。
+    """
+    plan = _plan()
     plan[kind] = args
-    plan["dirty"] = bool(plan.get("quotes") or plan.get("fx"))
+    if dirty:
+        plan["dirty"] = True
 
 
 def _plan_key(plan: dict) -> tuple:
@@ -212,23 +259,29 @@ def _load_quotes(
         list(fetch_symbols), ttl=QUOTE_STALE_TTL
     )
     errors = _local_quote_errors(fetch_symbols)
-    fetchable = [s for s in fetch_symbols if str(s) not in errors]
+    fetchable = tuple(s for s in fetch_symbols if str(s) not in errors)
+    args = (fetchable, prefer_akshare, use_ibkr, use_longport, crypto_source)
+    # 参数始终记录 (周期保温要用), 只有陈旧/缺失才置脏
+    plan = _plan()
+    plan["quotes"] = args
+    # 最旧条目年龄; 有代码缺缓存 → inf (视为必须刷)
+    plan["q_age"] = (
+        float("inf")
+        if len(hits) < len(fetchable)
+        else (max(ages.values()) if ages else 0.0)
+    )
     stale = [s for s in fetchable if ages.get(s, float("inf")) > QUOTE_FRESH_TTL]
     if not stale:
-        _plan_set("quotes", None)
         return hits, errors, []
     if not hits:
         with st.spinner("拉取行情 (首次加载需初始化数据引擎)..."):
             out = cached_quotes(
                 fetch_symbols, prefer_akshare, use_ibkr, use_longport, crypto_source
             )
-        _plan_set("quotes", None)
+        plan["q_age"] = 0.0  # 刚同步取完数, 不必立刻保温
         return out
     # 陈旧数据秒渲染 + 挂后台刷新
-    _plan_set(
-        "quotes",
-        (tuple(fetchable), prefer_akshare, use_ibkr, use_longport, crypto_source),
-    )
+    plan["dirty"] = True
     return hits, errors, []
 
 
@@ -242,22 +295,28 @@ def _load_fx(
     因此不参与陈旧/缺失判定 (否则持有本币资产时计划永久 dirty)。
     """
     need = tuple(c for c in currencies if c != base)
+    f_args = (base, need, use_ibkr) if need else None
+    # 参数始终记录 (周期保温要用), 只有陈旧/缺失才置脏
+    plan = _plan()
+    plan["fx"] = f_args
     if not need:
-        _plan_set("fx", None)
+        plan["f_age"] = 0.0
         return ({base: 1.0} if currencies else {}), []
     hits, ages = cache_mod.get_fx_cached(base, list(need), ttl=QUOTE_STALE_TTL)
     missing = [c for c in need if c not in hits]
+    plan["f_age"] = (
+        float("inf") if missing else (max(ages.values()) if ages else 0.0)
+    )
     stale = [c for c in need if ages.get(c, float("inf")) > QUOTE_FRESH_TTL]
     if not stale:
-        _plan_set("fx", None)
         return ({**hits, base: 1.0}), missing
     if not hits:
         with st.spinner("拉取汇率..."):
             out = cached_fx(base, currencies, use_ibkr)
-        _plan_set("fx", None)
+        plan["f_age"] = 0.0  # 刚同步取完数, 不必立刻保温
         return out
     # 陈旧汇率秒取 + 挂后台刷新
-    _plan_set("fx", (base, need, use_ibkr))
+    plan["dirty"] = True
     return ({**hits, base: 1.0}), missing
 
 
@@ -269,13 +328,22 @@ def _first_screen_watchdog() -> None:
       完成事件按 plan["seen"] 只消费一次, 避免数据仍脏时反复 rerun 成热循环;
     - 已消费过完成事件但数据仍陈旧 (全部源失败/负缓存/代码失效) → 按最短
       间隔补刷, 不热重试;
+    - 数据虽新鲜但磁盘年龄已到保温周期 → 主动重取, 让长期开着的页面数据
+      持续滚动更新 (服务长期运行的主要场景);
     - 无待处理刷新 → 直接返回 (仅一次 session_state 读取).
     """
     plan = st.session_state.get(_PLAN_KEY)
-    if not plan or not plan.get("dirty"):
+    if not plan:
         return
     key = _plan_key(plan)
     inflight, done = _refresh_state(key)
+    if not plan.get("dirty") and not inflight:
+        # 周期保温: 没有可取数的参数 (无持仓也无自选) 时直接退出
+        if not (plan.get("quotes") or plan.get("fx")):
+            return
+        if _plan_data_age(plan) < _refresh_period(_plan_symbol_count(plan)):
+            return
+        plan["dirty"] = True  # 复用脏路径: 发起 → 完成 → rerun 换新
     if inflight:
         st.caption(":material/sync: 数据后台刷新中, 先展示缓存数据…")
         return
@@ -288,6 +356,120 @@ def _first_screen_watchdog() -> None:
         if _start_refresh(key, plan):
             plan["base"] = time.time()
             st.caption(":material/sync: 数据后台刷新中, 先展示缓存数据…")
+
+
+def _plan_symbol_count(plan: dict) -> int:
+    q_args = plan.get("quotes") or ()
+    return len(q_args[0]) if q_args else 0
+
+
+def _plan_data_age(plan: dict) -> float:
+    """计划覆盖数据的磁盘年龄 (秒): 取行情/汇率两者最旧; 缺数据视为无限旧."""
+    return max(plan.get("q_age") or 0.0, plan.get("f_age") or 0.0)
+
+
+def _cache_age(symbols=(), fx=None) -> float:
+    """磁盘缓存覆盖数据的最旧年龄 (秒); 有代码缺缓存 → inf (视为必须刷).
+
+    后台保温线程用 (没有 session 计划可读), 与页面 _plan_data_age 同口径。
+    """
+    worst = 0.0
+    if symbols:
+        hits, ages = cache_mod.get_cached_with_age(list(symbols), ttl=10**9)
+        if len(hits) < len(symbols):
+            return float("inf")
+        if ages:
+            worst = max(worst, max(ages.values()))
+    if fx:
+        base, currencies, _use_ibkr = fx
+        need = [c for c in currencies if c != base]
+        if need:
+            rates, f_ages = cache_mod.get_fx_cached(base, need, ttl=10**9)
+            if len(rates) < len(need):
+                return float("inf")
+            if f_ages:
+                worst = max(worst, max(f_ages.values()))
+    return worst
+
+
+def ensure_background_refresher() -> None:
+    """启动进程级后台保温线程 (每个服务进程一条, 惰性启动, 重复调用无副作用).
+
+    看门狗片段只在组合页开着时轮询; 这条线程让服务在没有任何页面打开时也
+    持续刷新磁盘缓存 —— 之后任何人打开都是新鲜数据秒开, 保存了新持仓的
+    下一个周期也会自动补取 (无需等页面渲染)。与页面级刷新共用协调器
+    (_start_refresh 的 inflight/间隔去重), 不会重复发网络。
+    """
+    global _refresher_started
+    with _refresher_lock:
+        if _refresher_started:
+            return
+        _refresher_started = True
+    threading.Thread(
+        target=_background_refresher_loop, name="quote-refresher", daemon=True
+    ).start()
+
+
+def _disk_refresh_plan() -> dict | None:
+    """从磁盘数据 (持仓/自选/设置) 推导刷新参数; 无代码时返回 None.
+
+    不读 session_state: 后台线程跨会话共享, 且页面可能一个都没开。币种从
+    磁盘行情缓存推导 (与页面 _load_fx 同源, 保证 key 一致可被协调器去重)。
+    """
+    try:
+        settings = storage.load_settings()
+        portfolio = storage.load_portfolio(storage.PORTFOLIO_PATH)
+        watch = storage.load_watchlist(WATCHLIST_PATH)
+    except Exception:  # noqa: BLE001 - 读盘失败: 下个周期再试
+        return None
+    symbols = [
+        str(h.get("symbol", "")).strip() for h in portfolio.get("holdings", [])
+    ]
+    symbols += [str(e["symbol"]) for e in merge_entries(watch)]
+    symbols = tuple(dict.fromkeys(s for s in symbols if s))
+    if not symbols:
+        return None
+    q_args = (
+        symbols,
+        settings["prefer_akshare"],
+        settings["use_ibkr"],
+        bool(settings.get("use_longport")),
+        settings["crypto_source"],
+    )
+    base = portfolio.get("base_currency", "CNY")
+    hits, _ages = cache_mod.get_cached_with_age(list(symbols), ttl=10**9)
+    # 币种排除 base (与页面 _load_fx 的 need 同口径, 保证刷新 key 一致可去重)
+    currencies = tuple(
+        sorted({q.currency for q in hits.values() if q.currency != base})
+    )
+    f_args = (base, currencies, settings["use_ibkr"]) if currencies else None
+    return {"quotes": q_args, "fx": f_args}
+
+
+def _background_refresher_loop() -> None:
+    """保温线程主循环: 每周期检查磁盘数据年龄, 旧了才刷新.
+
+    首周期等满一个基准周期再动, 避开服务启动风暴 (页面打开时首屏 SWR 已
+    负责立即刷新); 之后周期按符号集规模缩放。年龄判定与页面看门狗同口径
+    (_cache_age): 页面刚刷新的数据这里会跳过, 不重复发网络。任何异常都
+    吞掉续命 —— 保温失败不该影响服务本身。
+    """
+    period = _REFRESH_PERIOD
+    while True:
+        time.sleep(period)
+        try:
+            plan = _disk_refresh_plan()
+            if not plan or not (plan.get("quotes") or plan.get("fx")):
+                continue
+            q_args = plan.get("quotes") or ()
+            symbols = q_args[0] if q_args else ()
+            period = _refresh_period(len(symbols))
+            # 年龄判定与页面看门狗同口径: 页面刚刷新的数据这里会跳过
+            if _cache_age(symbols, plan.get("fx")) < period:
+                continue
+            _start_refresh(_plan_key(plan), plan)
+        except Exception:  # noqa: BLE001 - 保温失败不影响服务
+            pass
 
 
 def _post_import() -> None:
@@ -707,6 +889,10 @@ def render_portfolio_page() -> None:
         m = summary
     else:
         view = pd.DataFrame()
+        # 无持仓 → 无汇率需求: 清空槽位与年龄, 别让上一渲染的币种参数继续参与保温
+        plan = _plan()
+        plan["fx"] = None
+        plan["f_age"] = 0.0
 
     # 看门狗片段: 后台刷新完成即 rerun 换新; 无刷新任务时零开销。放在行情/汇率
     # 都判定完之后 —— 一个后台任务同时刷两者, 避免分两轮刷新

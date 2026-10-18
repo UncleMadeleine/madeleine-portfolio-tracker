@@ -101,6 +101,15 @@ INDEX_GROUPS: dict[str, dict[str, dict[str, str]]] = {
         "SZSE": {"name": "深证成指", "ak": "sz399001", "currency": "点"},
         "CYB": {"name": "创业板指", "ak": "sz399006", "currency": "点"},
         "KECHUANG50": {"name": "科创 50", "ak": "sh000688", "currency": "点"},
+        # 恒生沪深港通AH股溢价指数 (恒生指数公司, 彭博 HSAHP / 路孚特 .HSCAHPI):
+        # 100 = A/H 同价, >100 = A股溢价, 市值加权, 约 149 只 AH 双重上市公司。
+        # hsi 字段 = 恒生内部指数代码 (seriesCode=ahpremium), 走官网公开 API
+        # (零鉴权, 见 providers/index.py); 该指数不发布开高低, 为平K线。
+        "HSAHP": {
+            "name": "AH股溢价指数",
+            "hsi": "01044.00",
+            "currency": "点",
+        },
     },
     # 商品期货 (新浪主力连续, akshare futures_main_sina; 见 providers/index.py)
     # LC = 广期所碳酸锂期货主力连续 (2023-07-21 上市), 单位 元/吨

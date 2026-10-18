@@ -9,6 +9,8 @@ IX.CSI300 沪深 300 ...)。源链:
 追加一个 _xxx_history 函数并插入 history_sources 源链。
 中国水泥网 (IX.CEMPI 等, 目录条目带 ccement 字段): 前端 AJAX 接口免登录,
 仅全国口径; 区域分解与水泥大数据中心需会员, 不接入。
+恒生指数公司 (IX.HSAHP, 目录条目带 hsi 字段): 官网公开 API 零鉴权,
+固定滚动约 5 年日收盘, 无开高低 (平K线)。
 商品期货 (IX.LC 等, 目录条目带 futures 字段): akshare futures_main_sina
 新浪主力连续 (LC0=广期所碳酸锂), 返回全量历史后本地切片; 主力连续含换月
 跳空 (新浪标准构造), 单合约历史可改用 futures_zh_daily_sina (未接入)。
@@ -36,6 +38,12 @@ def _ak():
     import akshare as ak
 
     return ak
+
+
+def _requests():
+    import requests
+
+    return requests
 
 
 def _catalog(p: ParsedSymbol) -> dict:
@@ -70,15 +78,9 @@ _CCEMENT_HEADERS = {
 _CCEMENT_TIMEOUT = 15.0
 
 
-def _ccement_session():
-    import requests
-
-    return requests
-
-
 def _ccement_post(path: str, data: dict) -> dict:
     """POST 水泥网 AJAX 端点, Code==200 校验后返回 Data 字段."""
-    requests = _ccement_session()
+    requests = _requests()
     r = requests.post(
         f"{_CCEMENT_BASE}/index/{path}",
         headers=_CCEMENT_HEADERS,
@@ -153,6 +155,66 @@ def _ccement_history(
     # 熟料/混凝土/碎石/机制砂/砂浆: 各自端点, areaV=country + indexSign=1
     d = _ccement_post(kind, {"areaV": "country", "indexSign": "1", "timeType": "5"})
     return _slice_range(_ccement_points(d), start_date, end_date)
+
+
+# ---------- 恒生指数公司官方 API (hsi.com.hk) ----------
+
+# valueHistoryPub: 公开零鉴权 (无需 cookie/token/验证码, 只要 Referer 头),
+# 固定返回滚动约 5 年日收盘; 不接受日期参数 (多传即 400 Bad Request),
+# 故全量取回后本地按窗口切片。接口偏慢 (实测 5~12s), 由
+# prices.get_index_history 的 SQLite 缓存兜住 (只付一次)。
+_HSI_HISTORY_URL = (
+    "https://www.hsi.com.hk/api/wsit-hsi-ddoc-ea-public-website-proxy"
+    "/v1/product-data/pub/indexes/metadata/v2"
+)
+_HSI_REFERER = (
+    "https://www.hsi.com.hk/en-hk/indexes/all-indexes/index-details/"
+    "?seriesCode=ahpremium"
+)
+_HSI_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+    ),
+    "Referer": _HSI_REFERER,
+}
+_HSI_TIMEOUT = 30.0
+
+
+def _hsi_history(
+    p: ParsedSymbol, start_date: str, end_date: str | None = None
+) -> pd.DataFrame:
+    """恒生 valueHistoryPub 日收盘序列 → 平K线 (open=high=low=close).
+
+    目录 hsi 字段 = 恒生内部指数代码 (HSAHP → 01044.00, seriesCode=ahpremium)。
+    恒生不发布该指数的开/高/低 (实时接口 todayOpn 恒为 null), 故与水泥网
+    点位数指数一样作平K线处理, 不虚构振幅。
+    """
+    r = _requests().get(
+        _HSI_HISTORY_URL,
+        params={
+            "data": "valueHistoryPub",
+            "language": "zh-cn",
+            "indexCodes": _catalog(p)["hsi"],
+        },
+        headers=_HSI_HEADERS,
+        timeout=_HSI_TIMEOUT,
+    )
+    r.raise_for_status()
+    payload = r.json()
+    if payload.get("code") != "0":
+        raise RuntimeError(f"恒生接口返回异常: {payload.get('message') or payload}")
+    records = (payload.get("data") or [{}])[0].get("valueHistory") or []
+    if not records:
+        raise RuntimeError("恒生接口返回空序列")
+    df = pd.DataFrame(records)
+    df["date"] = pd.to_datetime(df["date"])
+    df["close"] = df["close"].astype(float)
+    df["open"] = df["high"] = df["low"] = df["close"]
+    df["volume"] = 0.0
+    return _slice_range(
+        df[["date", "open", "high", "low", "close", "volume"]], start_date, end_date
+    )
 
 
 # ---------- yfinance (OpenBB) 源 ----------
@@ -245,7 +307,8 @@ _AK_US_SINA = {
 class IndexProvider(Provider):
     """宏观/风险指数域: 中国指数 akshare 优先, 其余 yfinance 主源 + 新浪兜底.
 
-    商品期货 (futures 字段) 与水泥网 (ccement 字段) 为各自专属源, 无兜底.
+    商品期货 (futures 字段) 与水泥网 (ccement 字段) 为各自专属源, 无兜底;
+    恒生官方 API (hsi 字段) 同理, 官网零鉴权但仅约 5 年滚动窗口。
     """
 
     name = "index"
@@ -269,12 +332,18 @@ class IndexProvider(Provider):
         def cc():
             return _ccement_history(p, start_date, end_date)
 
+        def hs():
+            return _hsi_history(p, start_date, end_date)
+
         def ft():
             return _ak_futures_history(p, start_date, end_date)
 
         # 水泥网指数: 目录带 ccement 字段, 专属源 (无第二数据源)
         if _catalog(p).get("ccement"):
             return [cc]
+        # 恒生指数公司官方 API: 目录带 hsi 字段, 专属源 (无第二数据源)
+        if _catalog(p).get("hsi"):
+            return [hs]
         # 商品期货: 目录带 futures 字段 (新浪主力连续), 专属源 (无第二数据源)
         if _catalog(p).get("futures"):
             return [ft]

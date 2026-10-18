@@ -207,6 +207,132 @@ def test_index_provider_rejects_quote():
         IndexProvider().fetch_quote(parse("IX.DXY"), prefer_first=False)
 
 
+# ---------- 恒生官方 API 源 (AH股溢价指数) ----------
+
+
+def test_hsi_catalog_entries_parse_to_index_domain():
+    """恒生 AH 溢价: 目录合法 + 带 hsi 路由字段 (无 ak/yf/ccement/futures 源)."""
+    hsi_keys = [k for k, e in INDEX_CATALOG.items() if "hsi" in e]
+    assert hsi_keys == ["HSAHP"]
+    p = parse("IX.HSAHP")
+    assert p.type == "index"
+    assert p.market is Market.INDEX
+    e = INDEX_CATALOG["HSAHP"]
+    assert e["hsi"] == "01044.00"
+    assert not ({"ak", "yf", "ccement", "futures"} & set(e))
+
+
+def test_hsi_source_chain_is_exclusive():
+    """恒生源链只有专属 hs 源 (官网零鉴权, 无第二数据源可兜底)."""
+    provider = IndexProvider()
+    chains = provider.history_sources(parse("IX.HSAHP"), "2025-01-01", None)
+    assert [f.__name__ for f in chains] == ["hs"]
+
+
+class _FakeResp:
+    def __init__(self, payload, status=200):
+        self._payload = payload
+        self.status_code = status
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+    def json(self):
+        return self._payload
+
+
+def _fake_hsi_requests(payload, calls, status=200):
+    class FakeRequests:
+        @staticmethod
+        def get(url, params=None, headers=None, timeout=None):
+            calls.append({"url": url, "params": params, "headers": headers})
+            return _FakeResp(payload, status)
+
+    return FakeRequests
+
+
+_HSI_PAYLOAD = {
+    "code": "0",
+    "message": "success",
+    "data": [
+        {
+            "indexCode": "01044.00",
+            "indexName": "恒生沪深港通AH股溢价指数",
+            "valueHistory": [
+                {"date": "2026-10-14", "close": "127.12"},
+                {"date": "2026-10-15", "close": "128.12"},
+                {"date": "2026-10-16", "close": "128.56"},
+            ],
+        }
+    ],
+}
+
+
+def test_hsi_history_parses_value_history_pub(monkeypatch):
+    """valueHistoryPub 日收盘 → 平K线 (open=high=low=close), 本地按窗口切片."""
+    from tracker.providers import index as idx_mod
+
+    calls = []
+    monkeypatch.setattr(idx_mod, "_requests", _fake_hsi_requests(_HSI_PAYLOAD, calls))
+    df = idx_mod._hsi_history(parse("IX.HSAHP"), "2026-10-15", None)
+    assert list(df.columns) == ["date", "open", "high", "low", "close", "volume"]
+    assert len(df) == 2  # 本地切片: 只保留 >= start_date
+    assert df.iloc[-1]["close"] == pytest.approx(128.56)
+    # 恒生不发布开高低: 平K线, 不虚构振幅
+    row = df.iloc[-1]
+    assert row["open"] == row["high"] == row["low"] == row["close"]
+    assert (df["volume"] == 0.0).all()
+    # 请求参数: 恒生内部指数代码 + 中文语言
+    assert calls[0]["params"] == {
+        "data": "valueHistoryPub",
+        "language": "zh-cn",
+        "indexCodes": "01044.00",
+    }
+    assert calls[0]["url"].endswith("/indexes/metadata/v2")
+
+
+def test_hsi_history_rejects_empty_series(monkeypatch):
+    """接口返回空序列必须报错, 不能产出空 DataFrame 静默通过."""
+    from tracker.providers import index as idx_mod
+
+    empty = {"code": "0", "message": "success", "data": [{"valueHistory": []}]}
+    monkeypatch.setattr(idx_mod, "_requests", _fake_hsi_requests(empty, []))
+    with pytest.raises(RuntimeError, match="空序列"):
+        idx_mod._hsi_history(parse("IX.HSAHP"), "2025-01-01", None)
+
+
+def test_hsi_history_rejects_error_code(monkeypatch):
+    """恒生错误响应 (HTTP 400 / code != "0") 必须转成异常, 不静默返回空."""
+    from tracker.providers import index as idx_mod
+
+    # HTTP 层错误 (如 400 参数错误) 由 raise_for_status 先行抛出
+    bad_status = {"type": "hiip:index360:aim:error:common_0406", "title": "Bad Request"}
+    monkeypatch.setattr(
+        idx_mod, "_requests", _fake_hsi_requests(bad_status, [], status=400)
+    )
+    with pytest.raises(RuntimeError, match="HTTP 400"):
+        idx_mod._hsi_history(parse("IX.HSAHP"), "2025-01-01", None)
+
+    # HTTP 200 但业务码非 "0"
+    bad_code = {"code": "COMMON_0406", "message": "invalid query parameters"}
+    monkeypatch.setattr(idx_mod, "_requests", _fake_hsi_requests(bad_code, []))
+    with pytest.raises(RuntimeError, match="恒生接口返回异常"):
+        idx_mod._hsi_history(parse("IX.HSAHP"), "2025-01-01", None)
+
+
+def test_hsi_history_slices_end_date_inclusive(monkeypatch):
+    """end_date 为闭区间: 结束日当天那根 K 线要保留."""
+    from tracker.providers import index as idx_mod
+
+    monkeypatch.setattr(idx_mod, "_requests", _fake_hsi_requests(_HSI_PAYLOAD, []))
+    df = idx_mod._hsi_history(parse("IX.HSAHP"), "2026-10-14", "2026-10-15")
+    assert [d.strftime("%Y-%m-%d") for d in df["date"]] == [
+        "2026-10-14",
+        "2026-10-15",
+    ]
+
+
 def test_get_quotes_routes_index_to_explicit_error(monkeypatch):
     """IX.* 混入实时行情查询: 记入明确 errors, 不落入 global 域误查 yfinance."""
     import tracker.providers.orchestration as orch

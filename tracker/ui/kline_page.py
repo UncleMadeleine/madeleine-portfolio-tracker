@@ -14,7 +14,7 @@ import streamlit as st
 
 from . import settings
 
-from tracker import charting, prices, search
+from tracker import charting, fx, prices, search
 from tracker.providers import PROVIDERS
 from tracker.symbols import parse, type_for_symbol
 
@@ -265,6 +265,38 @@ def render_compare_controls(
             "选择持仓/自选代码, 或直接输入任意代码 (如 NVDA · 600519.SS) 开始对比。"
         )
         return
+    # 可选比例线 (默认关闭): 两标的收盘价相除, 同图独立纵轴; 跨币种可选汇率调整。
+    ratio_cfg = None
+    if len(sel) >= 2:
+        r1, r2, r3, r4 = st.columns([1.1, 1.5, 1.5, 1.3], vertical_alignment="bottom")
+        ratio_on = r1.toggle(
+            "比例线",
+            value=False,
+            key="compare_ratio",
+            help="额外画一条两标的收盘价比值线 (同图独立纵轴, 虚线为区间均值)",
+        )
+        if ratio_on:
+            # 选项随对比代码变化: 会话状态里的旧代码不在本次选择中时先回退默认
+            for key, default in (
+                ("compare_ratio_num", sel[0]),
+                ("compare_ratio_den", sel[1]),
+            ):
+                if st.session_state.get(key) not in sel:
+                    st.session_state[key] = default
+            ratio_num = r2.selectbox("比例线分子", sel, key="compare_ratio_num")
+            ratio_den = r3.selectbox("比例线分母", sel, key="compare_ratio_den")
+            try:
+                diff_ccy = parse(ratio_num).currency != parse(ratio_den).currency
+            except ValueError:
+                diff_ccy = False
+            fx_adjust = r4.toggle(
+                "汇率调整",
+                value=False,
+                key="compare_ratio_fx",
+                disabled=not diff_ccy,
+                help="跨币种时把分母价格换算成分子币种后再相除 (默认关闭: 直接看两个报价的比值)",
+            )
+            ratio_cfg = (ratio_num, ratio_den, bool(fx_adjust and diff_ccy))
     frames = {}
     with st.spinner(f"拉取 {len(sel)} 只代码近 {cmp_months} 个月 K线..."):
         for s in sel:
@@ -279,15 +311,72 @@ def render_compare_controls(
             except Exception as e:
                 st.warning(f"{s}: {e}")
     if frames:
+        ratio_payload = None
+        if ratio_cfg:
+            ratio_num, ratio_den, fx_adjust = ratio_cfg
+            if ratio_num == ratio_den:
+                st.warning("比例线分子与分母相同, 已忽略。")
+            elif ratio_num in frames and ratio_den in frames:
+                fx_df = None
+                fx_pair = None
+                fx_missing = False
+                if fx_adjust:
+                    cur_num = parse(ratio_num).currency
+                    cur_den = parse(ratio_den).currency
+                    fx_pair = f"{cur_den}{cur_num}"
+                    start_ts = min(
+                        frames[ratio_num]["date"].min(),
+                        frames[ratio_den]["date"].min(),
+                    ) - pd.Timedelta(days=10)
+                    fx_df = fx.get_fx_history(
+                        cur_den,
+                        cur_num,
+                        start_ts.strftime("%Y-%m-%d"),
+                        pd.Timestamp.today().strftime("%Y-%m-%d"),
+                    )
+                    fx_missing = fx_df is None
+                try:
+                    ratio_payload = charting.build_ratio_series(
+                        frames,
+                        ratio_num,
+                        ratio_den,
+                        period=cmp_period,
+                        fx_df=fx_df,
+                        fx_pair=fx_pair,
+                        fx_missing=fx_missing,
+                    )
+                except ValueError as e:
+                    st.warning(f"比例线: {e}")
+            else:
+                st.warning("比例线代码无有效K线数据, 已忽略。")
         render_compare_chart(
             charting.compare_payload(
                 frames,
                 normalize=norm,
                 period=cmp_period,
                 green_up=settings.green_up(),
+                ratio=ratio_payload,
             ),
             height=560,
         )
+        if ratio_payload:
+            den_expr = ratio_payload["denominator"]
+            if ratio_payload.get("fxAdjusted"):
+                den_expr = f"({den_expr} × {ratio_payload['fxPair']})"
+            prec = ratio_payload["precision"]
+            cur_v = ratio_payload["data"][-1]["value"]
+            mean_v = ratio_payload["mean"]
+            dev = (cur_v / mean_v - 1) * 100 if mean_v else 0
+            st.caption(
+                f"比例线 = {ratio_payload['numerator']} ÷ {den_expr}"
+                f" (具体比值, 未归一化); 当前 {cur_v:.{prec}f}"
+                f" · 均值 {mean_v:.{prec}f} · 较均值 {dev:+.2f}%"
+                " · 使用左侧独立纵轴, 虚线为区间均值。"
+            )
+            if ratio_payload.get("fxMissing"):
+                st.warning(
+                    "汇率历史取数失败, 比例线未做汇率调整 (比值含汇率波动)。"
+                )
         chg = []
         for sym, d in frames.items():
             dd = charting.resample_ohlc(d, cmp_period) if cmp_period != "daily" else d

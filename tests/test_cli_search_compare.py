@@ -167,7 +167,7 @@ def compare_env(monkeypatch):
     monkeypatch.setattr(
         cli.prices,
         "get_ohlc",
-        _fake_ohlc_factory({"AAPL": 100.0, "0700.HK": 300.0, "600519.SS": 1500.0}),
+        _fake_ohlc_factory({"AAPL": 100.0, "0700.HK": 300.0, "600519.SS": 1500.0, "NVDA": 200.0}),
     )
     _fake_grouped(
         monkeypatch,
@@ -248,3 +248,119 @@ def test_resolve_inputs_dedupes_and_warns(monkeypatch):
     codes, warnings = resolve_inputs(["AAPL", "AAPL", "不存在的股"])
     assert codes == ["AAPL"]
     assert any("无法识别" in w for w in warnings)
+
+
+def test_compare_cli_ratio_json(compare_env, capsys, tmp_path):
+    """--ratio: JSON 额外输出比例线 (同币种默认不做汇率调整)."""
+    out = _run(
+        capsys,
+        "compare",
+        "AAPL",
+        "NVDA",
+        "--months",
+        "3",
+        "--ratio",
+        "AAPL",
+        "NVDA",
+        "--json",
+        "--output",
+        str(tmp_path / "x.html"),
+    )
+    data = json.loads(out)
+    ratio = data["ratio"]
+    assert ratio["numerator"] == "AAPL"
+    assert ratio["denominator"] == "NVDA"
+    assert ratio["fx_adjusted"] is False
+    assert ratio["fx_pair"] is None
+    assert ratio["points"] == len(ratio["series"]) == 30
+    assert ratio["series"][0]["value"] == pytest.approx(0.5)
+    assert ratio["mean"] == pytest.approx(0.5, abs=0.01)
+    # 未开启 --ratio 时该字段为 null (不改变既有 JSON 结构)
+    plain = json.loads(
+        _run(capsys, "compare", "AAPL", "NVDA", "--months", "3", "--json")
+    )
+    assert plain["ratio"] is None
+
+
+def test_compare_cli_ratio_cross_currency_fx(
+    compare_env, capsys, monkeypatch, tmp_path
+):
+    """--ratio-fx: 跨币种比例线按历史汇率统一口径 (HKD→USD)."""
+    import tracker.fx as fx_mod
+
+    called = {}
+
+    def fake_hist(src, dst, start, end=None):
+        called["pair"] = f"{src}{dst}"
+        return pd.DataFrame(
+            {
+                "date": pd.date_range("2023-12-01", periods=60, freq="D"),
+                "close": [0.9] * 60,
+            }
+        )
+
+    monkeypatch.setattr(fx_mod, "get_fx_history", fake_hist)
+    out = _run(
+        capsys,
+        "compare",
+        "AAPL",
+        "0700.HK",
+        "--months",
+        "3",
+        "--ratio",
+        "AAPL",
+        "0700.HK",
+        "--ratio-fx",
+        "--json",
+        "--output",
+        str(tmp_path / "x.html"),
+    )
+    ratio = json.loads(out)["ratio"]
+    assert called["pair"] == "HKDUSD"
+    assert ratio["fx_adjusted"] is True
+    assert ratio["fx_pair"] == "HKDUSD"
+
+
+def test_compare_cli_ratio_cross_currency_default_raw(
+    compare_env, capsys, monkeypatch, tmp_path
+):
+    """默认比例线是原币种报价的直接比值 (不取汇率, 不偷偷调整口径)."""
+    import tracker.fx as fx_mod
+
+    def boom(*a, **kw):
+        raise AssertionError("默认不应取汇率")
+
+    monkeypatch.setattr(fx_mod, "get_fx_history", boom)
+    out = _run(
+        capsys,
+        "compare",
+        "AAPL",
+        "0700.HK",
+        "--months",
+        "3",
+        "--ratio",
+        "AAPL",
+        "0700.HK",
+        "--json",
+        "--output",
+        str(tmp_path / "x.html"),
+    )
+    ratio = json.loads(out)["ratio"]
+    assert ratio["fx_adjusted"] is False
+    assert ratio["fx_pair"] is None
+
+
+def test_compare_cli_ratio_requires_compared_codes(compare_env, capsys):
+    """比例线代码不在对比代码中: 报错退出 (退出码 2)."""
+    with pytest.raises(SystemExit) as e:
+        _run(
+            capsys,
+            "compare",
+            "AAPL",
+            "NVDA",
+            "--ratio",
+            "AAPL",
+            "600519.SS",
+            "--json",
+        )
+    assert e.value.code == 2

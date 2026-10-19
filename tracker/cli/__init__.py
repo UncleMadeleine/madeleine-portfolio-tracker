@@ -453,6 +453,8 @@ def build_parser() -> argparse.ArgumentParser:
             "  tracker compare AAPL NVDA --months 6 --period weekly\n"
             "  tracker compare AAPL 0700.HK --raw               # 不归一化 (各代码原币种)\n"
             "  tracker compare AAPL NVDA --json                 # JSON: 每代码归一化序列+涨跌\n"
+            "  tracker compare 601155.SS 1030.HK --ratio 601155.SS 1030.HK\n"
+            "                                                 # 额外画比例线 (默认原币比值; --ratio-fx 汇率调整)\n"
         ),
     )
     p_cmp.add_argument(
@@ -467,6 +469,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_cmp.add_argument(
         "--raw", action="store_true", help="不归一化, 直接画各代码原币种收盘价"
+    )
+    p_cmp.add_argument(
+        "--ratio",
+        nargs=2,
+        metavar=("分子", "分母"),
+        default=None,
+        help="额外画比例线: 两代码收盘价相除 (需在对比代码中), 如 --ratio 601155.SS 1030.HK",
+    )
+    p_cmp.add_argument(
+        "--ratio-fx",
+        action="store_true",
+        help="比例线按历史汇率调整 (跨币种时把分母换算成分子币种; 默认关闭)",
     )
     p_cmp.add_argument("--akshare", action="store_true")
     p_cmp.add_argument(

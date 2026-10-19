@@ -699,3 +699,81 @@ class TestKlinePayloadIndicators:
         assert p["macd"] is None
         assert p["rsi"] is not None
         assert p["kdj"] is None
+
+
+def _ratio_frame(dates, base: float) -> pd.DataFrame:
+    """合法 OHLC (high ≥ close, low ≤ close), 收盘价 base, base+1, ..."""
+    rows = []
+    for i, d in enumerate(dates):
+        c = base + i
+        rows.append(
+            {
+                "date": d,
+                "open": c - 0.5,
+                "high": c + 0.5,
+                "low": c - 1.0,
+                "close": c,
+                "volume": 10.0,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+class TestRatioSeries:
+    """比例线 (可选功能): 两标的收盘价比值 + 跨币种汇率调整."""
+
+    def _frames(self):
+        dates = pd.date_range("2025-01-06", periods=5, freq="B")
+        # 分母缺一个交易日: 比例线应按「≤ 当日」的最近收盘价对齐
+        den_dates = [d for d in dates if d != dates[2]]
+        return (
+            {
+                "AAA": _ratio_frame(dates, 100.0),
+                "BBB": _ratio_frame(den_dates, 10.0),
+            },
+            dates,
+        )
+
+    def test_ratio_aligns_missing_trading_day(self):
+        frames, dates = self._frames()
+        r = charting.build_ratio_series(frames, "AAA", "BBB")
+        assert r["name"] == "AAA / BBB"
+        assert r["fxAdjusted"] is False
+        assert len(r["data"]) == len(dates)
+        # 第 3 天分母无数据 → 沿用前一日收盘 11; 分子收盘 102
+        assert r["data"][2]["time"] == dates[2].strftime("%Y-%m-%d")
+        assert r["data"][2]["value"] == pytest.approx(round(102 / 11, r["precision"]))
+        assert r["mean"] == pytest.approx(
+            sum(p["value"] for p in r["data"]) / len(r["data"]), abs=1e-3
+        )
+
+    def test_ratio_fx_adjustment(self):
+        frames, dates = self._frames()
+        fx = pd.DataFrame(
+            {"date": [dates[0] - pd.Timedelta(days=1)], "close": [0.5]}
+        )
+        r = charting.build_ratio_series(
+            frames, "AAA", "BBB", fx_df=fx, fx_pair="HKDCNY"
+        )
+        assert r["fxAdjusted"] is True
+        assert r["fxPair"] == "HKDCNY"
+        # 比例 = 分子价 / (分母价 × 汇率); 首日 100 / (10 × 0.5)
+        assert r["data"][0]["value"] == pytest.approx(20.0)
+        assert r["precision"] >= 4
+
+    def test_ratio_rejects_same_or_missing_code(self):
+        frames, _ = self._frames()
+        with pytest.raises(ValueError):
+            charting.build_ratio_series(frames, "AAA", "AAA")
+        with pytest.raises(ValueError):
+            charting.build_ratio_series(frames, "AAA", "CCC")
+
+    def test_compare_payload_embeds_ratio(self):
+        frames, _ = self._frames()
+        ratio = charting.build_ratio_series(frames, "AAA", "BBB")
+        p = charting.compare_payload(frames, ratio=ratio)
+        assert p["ratio"]["name"] == "AAA / BBB"
+        assert p["mode"] == "compare"
+        # 时间轴并集包含比例线日期
+        assert set(p["ratio"]["data"][0]) == {"time", "value"}
+        assert p["axis"] == sorted(set(p["axis"]))

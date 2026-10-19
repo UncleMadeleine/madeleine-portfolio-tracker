@@ -44,7 +44,7 @@ tracker-ui          # pip 安装后起 Streamlit 页面 (等价 streamlit run tr
 | `history` | 历史价格 | `history AAPL --months 12` |
 | `kline` | K线蜡烛图 (HTML+摘要) | `kline AAPL --months 6 --ma 5,20,60`, `kline 0700.HK --period weekly --open`, `--json` 出数据, `--refresh` 强刷 |
 | `search` | 代码/名称搜索→规范代码 | `search 腾讯 --json`, `search 700 --limit 5`, `search AAPL --exact` |
-| `compare` | 多股走势对比 (归一化) | `compare AAPL 0700.HK 600519.SS`, `compare AAPL NVDA --json`, `--raw` 不归一化 (原币种) |
+| `compare` | 多股走势对比 (归一化) | `compare AAPL 0700.HK 600519.SS`, `compare AAPL NVDA --json`, `--raw` 不归一化 (原币种), `--ratio 分子 分母` 额外画比例线 (跨币种默认按历史汇率调整) |
 | `index-kline` | 宏观/风险指数K线 (IX.<KEY>) | `index-kline IX.DXY --months 12`, `index-kline IX.CSI300 --list` (指数默认无成交量副图, `--volume` 才显示) |
 | `import` | 统一持仓导入 (ibkr/longport/wallet/file) | `import ibkr --dry-run`, `import longport --dry-run`, `import wallet eth 0x... --dry-run`, `import file 持仓.csv --dry-run` |
 | `longport-login` | 长桥 OAuth 登录 (浏览器授权) | `longport-login` (token 缓存于 ~/.longport/openapi/tokens/<client_id>, 自动刷新), `longport-login --json` 只出授权 URL (供脚本), `-o <文件>` 写 URL 到文件 |
@@ -244,6 +244,9 @@ Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致);
 8c. **多股对比 / 指数K线**:
    ```
    .venv/bin/python -m tracker.cli compare AAPL 0700.HK 600519.SS --json   # 归一化序列+区间涨跌
+   .venv/bin/python -m tracker.cli compare 601155.SS 1030.HK --ratio 601155.SS 1030.HK  # 额外比例线
+   # 比例线: --ratio 分子 分母 (须在对比代码中), 默认是原币报价的直接比值;
+   #         --ratio-fx 打开历史汇率调整; --json 的 ratio 字段含均值/区间涨跌/序列
    # compare 与 kline 参数对齐, 均支持 --ibkr / --longport 前置源开关
    .venv/bin/python -m tracker.cli index-kline IX.DXY --months 12 --json   # 指数K线数据
    .venv/bin/python -m tracker.cli index-kline --list          # 全部已收录指数 (按分组)
@@ -254,6 +257,9 @@ Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致);
    页面侧「K线」页有三个子功能 tab: 单只查询 / 走势对比 (归一化折线, 任意代码) /
    加密货币对比 (仅 BASE-QUOTE 代码, 原始价格不归一化, 每币一个独立窗格蜡烛图,
    共享时间轴与十字光标)。加密货币对比仅 UI 提供, 无对应 CLI 子命令。
+   走势对比页的「比例线」为可选开关 (默认关闭): 打开后选分子/分母两代码,
+   同图叠加比值线 (具体比值不归一化, 独立纵轴, 虚线=区间均值),
+   跨币种默认原币比值, 可切换「汇率调整」。
 
 9. **IBKR / 长桥同步 / 导入持仓** (IBKR 需本机 Gateway 在线; 长桥需先 `longport-login`, 无凭据则报错回退):
    ```

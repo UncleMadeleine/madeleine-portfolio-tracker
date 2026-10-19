@@ -145,3 +145,63 @@ def test_get_fx_rates(monkeypatch):
     rates, missing = fx.get_fx_rates("CNY", ["USD", "CNY", "ZZZ"])
     assert rates == {"USD": 7.2, "CNY": 1.0}
     assert missing == ["ZZZ"]
+
+
+def _fx_frame(values, start="2025-01-01"):
+    return pd.DataFrame(
+        {
+            "date": pd.date_range(start, periods=len(values), freq="D"),
+            "close": values,
+        }
+    )
+
+
+def test_fx_history_direct_pair(monkeypatch):
+    monkeypatch.setattr(fx, "_fx_hist_cache", {})
+    calls = []
+
+    def fake(pair, start, end=None):
+        calls.append(pair)
+        return _fx_frame([0.9, 0.91]) if pair == "HKDCNY=X" else None
+
+    monkeypatch.setattr(fx, "_yahoo_pair_history", fake)
+    df = fx.get_fx_history("hkd", "cny", "2025-01-01", "2025-01-05")
+    assert calls == ["HKDCNY=X"]
+    assert list(df["close"]) == [0.9, 0.91]
+
+
+def test_fx_history_inverse_pair(monkeypatch):
+    monkeypatch.setattr(fx, "_fx_hist_cache", {})
+    monkeypatch.setattr(
+        fx,
+        "_yahoo_pair_history",
+        lambda pair, start, end=None: (
+            _fx_frame([2.0]) if pair == "CNYHKD=X" else None
+        ),
+    )
+    df = fx.get_fx_history("HKD", "CNY", "2025-01-01")
+    assert df["close"].iloc[0] == 0.5
+
+
+def test_fx_history_identity_and_cache(monkeypatch):
+    monkeypatch.setattr(fx, "_fx_hist_cache", {})
+    df = fx.get_fx_history("CNY", "CNY", "2025-01-01")
+    assert list(df["close"]) == [1.0]
+
+    calls = []
+
+    def fake(pair, start, end=None):
+        calls.append(pair)
+        return _fx_frame([0.9])
+
+    monkeypatch.setattr(fx, "_yahoo_pair_history", fake)
+    first = fx.get_fx_history("HKD", "CNY", "2025-01-01", "2025-01-05")
+    second = fx.get_fx_history("HKD", "CNY", "2025-01-01", "2025-01-05")
+    assert calls == ["HKDCNY=X"]  # 第二次命中进程内缓存
+    assert list(first["close"]) == list(second["close"]) == [0.9]
+
+
+def test_fx_history_failure_returns_none(monkeypatch):
+    monkeypatch.setattr(fx, "_fx_hist_cache", {})
+    monkeypatch.setattr(fx, "_yahoo_pair_history", lambda *a, **kw: None)
+    assert fx.get_fx_history("HKD", "CNY", "2025-01-01") is None

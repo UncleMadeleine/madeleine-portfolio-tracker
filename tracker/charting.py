@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from functools import lru_cache
 import math
 from typing import TYPE_CHECKING
@@ -588,7 +589,8 @@ export default function (component) {
   var chart = LC.createChart(el, CFG.options);
   var isCompare = CFG.mode === 'compare';
   var isCrypto = CFG.mode === 'crypto';
-  var candle = null, volSeries = null, tracks = [], indSeries = [];
+  var candle = null, volSeries = null, tracks = [], indSeries = [], ratioSeries = null;
+  var ratio = CFG.ratio || null;
 
   function addLine(color, data) {
     var s = chart.addSeries(LC.LineSeries, {
@@ -604,6 +606,31 @@ export default function (component) {
     tracks = CFG.lines.map(function (ln) {
       return { name: ln.name, color: ln.color, series: addLine(ln.color, ln.data), data: ln.data };
     });
+    // 可选比例线: 与对比折线同图, 但使用独立的左侧价轴 (左侧价轴默认隐藏,
+    // 这里显式启用); 画的是两标的的「具体比值」(不归一化), 虚线为区间均值。
+    if (ratio) {
+      ratioSeries = chart.addSeries(LC.LineSeries, {
+        color: ratio.color || '#ff5da2', lineWidth: 2,
+        priceScaleId: 'left',
+        priceLineVisible: false, lastValueVisible: false,
+        crosshairMarkerVisible: true, crosshairMarkerRadius: 3,
+        priceFormat: { type: 'price', precision: ratio.precision, minMove: Math.pow(10, -ratio.precision) }
+      });
+      ratioSeries.setData(ratio.data);
+      if (ratio.mean != null) {
+        ratioSeries.createPriceLine({
+          price: ratio.mean, color: '#8b949e', lineWidth: 1, lineStyle: 2,
+          axisLabelVisible: true, title: '均值'
+        });
+      }
+      try {
+        chart.applyOptions({ leftPriceScale: { visible: true } });
+        chart.priceScale('left').applyOptions({
+          scaleMargins: { top: 0.1, bottom: 0.1 },
+          borderColor: 'rgba(120,140,180,0.25)'
+        });
+      } catch (e) {}
+    }
   } else if (isCrypto) {
     // 加密货币对比: 每币一个独立窗格的蜡烛图 (原始价格不归一化, 各自价轴,
     // 共享时间轴与十字光标); 窗格分隔线可拖拽调高。
@@ -756,6 +783,18 @@ export default function (component) {
         }
         h += '&nbsp;&nbsp;';
       });
+      if (ratio && ratioSeries) {
+        // 比例线信息单独一行, 避免多代码时被标题/涨跌信息挤出可视区
+        h += '<br>';
+        var rv = valAt({ data: ratio.data }, t);
+        h += ' ' + span('比例 ' + ratio.name, ratio.color) + ' ' + span(fpn(rv, ratio.precision));
+        if (rv != null && ratio.mean) {
+          var dev = (rv / ratio.mean - 1) * 100;
+          h += ' ' + span('(均值 ' + fpn(ratio.mean, ratio.precision) + ', 较均值 '
+            + (dev >= 0 ? '+' : '') + dev.toFixed(2) + '%)', '#8b949e');
+        }
+        h += '&nbsp;&nbsp;';
+      }
       legend.innerHTML = h;
       return;
     }
@@ -829,7 +868,8 @@ export default function (component) {
   show(null);
 
   var n = isCompare
-    ? Math.max.apply(null, CFG.lines.map(function (l) { return l.data.length; }).concat([1]))
+    ? Math.max.apply(null, CFG.lines.map(function (l) { return l.data.length; })
+        .concat([ratio ? ratio.data.length : 1, 1]))
     : isCrypto
       ? Math.max.apply(null, CFG.coins.map(function (cn) { return cn.candles.length; }).concat([1]))
       : CFG.candles.length;
@@ -1124,6 +1164,10 @@ def kline_payload(
     return payload
 
 
+# 比例线颜色 (可选叠加线: 两标的收盘价的具体比值, 独立右侧价轴)
+RATIO_COLOR = "#ff5da2"
+
+
 # 多股对比折线配色 (与 MA 调色板区分, 首色取蓝便于与红绿涨跌色区分)
 COMPARE_PALETTE = (
     "#4ea1f3",
@@ -1136,6 +1180,99 @@ COMPARE_PALETTE = (
 )
 
 
+def build_ratio_series(
+    frames: dict[str, pd.DataFrame],
+    numerator: str,
+    denominator: str,
+    *,
+    period: str = "daily",
+    fx_df: pd.DataFrame | None = None,
+    fx_pair: str | None = None,
+    fx_missing: bool = False,
+) -> dict:
+    """两标的收盘价比值线 (可选功能): numerator / denominator, 按日期对齐.
+
+    - 不同市场交易日历不同: 分母取「≤ 该日期」的最近一个收盘价
+    - fx_df 为 1 分母币种 → 分子币种 的历史汇率日线 (date/close):
+      比例 = 分子价 / (分母价 × 汇率), 跨币种比较才不会被汇率波动主导
+    - 返回可直接渲染的 payload (data / mean / precision / 汇率元信息)
+    """
+    if numerator == denominator:
+        raise ValueError("比例线的分子与分母不能是同一代码")
+    missing = [c for c in (numerator, denominator) if c not in frames]
+    if missing:
+        raise ValueError(f"比例线代码不在对比数据中: {', '.join(missing)}")
+
+    def _prepared(sym: str) -> pd.DataFrame:
+        df = frames[sym]
+        return resample_ohlc(df, period) if period != "daily" else clean_ohlc(df)
+
+    num, den = _prepared(numerator), _prepared(denominator)
+    if num.empty or den.empty:
+        raise ValueError("比例线代码无有效K线数据")
+
+    def _rows(df: pd.DataFrame) -> tuple[list[str], list[float]]:
+        pairs = [
+            (t, float(v))
+            for t, v in zip(df["date"].dt.strftime("%Y-%m-%d"), df["close"])
+            if pd.notna(v) and math.isfinite(float(v)) and float(v) > 0
+        ]
+        pairs.sort()
+        return [p[0] for p in pairs], [p[1] for p in pairs]
+
+    den_times, den_vals = _rows(den)
+    fx_times: list[str] = []
+    fx_vals: list[float] = []
+    if fx_df is not None and not fx_df.empty:
+        fx_clean = fx_df.copy()
+        fx_clean["date"] = pd.to_datetime(fx_clean["date"], errors="coerce")
+        fx_clean["close"] = pd.to_numeric(fx_clean["close"], errors="coerce")
+        fx_clean = fx_clean.dropna(subset=["date", "close"])
+        fx_clean = fx_clean[fx_clean["close"] > 0]
+        if not fx_clean.empty:
+            fx_times, fx_vals = _rows(fx_clean)
+
+    raw: list[tuple[str, float]] = []
+    for t, v in zip(num["date"].dt.strftime("%Y-%m-%d"), num["close"]):
+        if pd.isna(v) or not math.isfinite(float(v)) or float(v) <= 0:
+            continue
+        j = bisect_right(den_times, t) - 1
+        if j < 0:
+            continue
+        rate = 1.0
+        if fx_times:
+            k = bisect_right(fx_times, t) - 1
+            if k < 0:
+                continue
+            rate = fx_vals[k]
+        if rate <= 0:
+            continue
+        ratio = float(v) / (den_vals[j] * rate)
+        if math.isfinite(ratio):
+            raw.append((t, ratio))
+    if not raw:
+        raise ValueError("比例线无可对齐的数据 (两标的日期区间无交集)")
+
+    med = float(pd.Series([v for _, v in raw]).median())
+    precision = max(4, _price_precision(med))
+    values = [v for _, v in raw]
+    mean = sum(values) / len(values)
+    return {
+        "name": f"{numerator} / {denominator}",
+        "numerator": numerator,
+        "denominator": denominator,
+        "color": RATIO_COLOR,
+        "precision": precision,
+        "mean": round(mean, precision),
+        "fxAdjusted": bool(fx_times),
+        "fxPair": fx_pair if fx_times else None,
+        "fxMissing": bool(not fx_times and (fx_missing or fx_df is not None)),
+        "data": [
+            {"time": t, "value": round(v, precision)} for t, v in raw
+        ],
+    }
+
+
 def compare_payload(
     frames: dict[str, pd.DataFrame],
     *,
@@ -1144,11 +1281,13 @@ def compare_payload(
     green_up: bool = False,
     height: int = 560,
     init_bars: int = 140,
+    ratio: dict | None = None,
 ) -> dict:
     """多股对比 payload (复用 K线组件): 每只代码一条收盘价折线.
 
     normalize=True 时各代码按自身区间首个收盘归一化为 100 起点,
     便于不同币种/量级的代码同图比较; 交易日历不同的市场按各自数据点绘制.
+    ratio: 可选的比例线 payload (build_ratio_series 生成), 同图使用独立纵轴.
     """
     lines = []
     precisions = []
@@ -1189,6 +1328,10 @@ def compare_payload(
     )
     # 原始价格模式按最细精度展示 (低价币), 归一化模式 ~100 量级用 2 位
     payload_precision = (max(precisions) if precisions else 2) if not normalize else 2
+    ratio = ratio or None
+    axis = {p["time"] for ln in lines for p in ln["data"]}
+    if ratio:
+        axis |= {p["time"] for p in ratio.get("data", [])}
     return {
         "mode": "compare",
         "title": f"{names} · {PERIOD_LABELS.get(period, '日K')}"
@@ -1200,9 +1343,10 @@ def compare_payload(
         "initBars": init_bars,
         "height": height,
         "lines": lines,
+        "ratio": ratio,
         # 全系列时间轴 (并集, 升序去重): 视口锚点的索引空间 (对比模式
         # candles 为空, 不提供 axis 的话拖动位置无法跨重绘还原)
-        "axis": sorted({p["time"] for ln in lines for p in ln["data"]}),
+        "axis": sorted(axis),
         "candles": [],
         "volume": [],
         "mas": [],

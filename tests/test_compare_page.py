@@ -44,6 +44,17 @@ def _fake_ohlc(symbol, months=12, prefer_akshare=False, **kw):
 def compare_app(monkeypatch):
     monkeypatch.setattr(prices, "get_ohlc", _fake_ohlc)
     monkeypatch.setattr(kline_page, "_KLINE_CHART", lambda **kw: None)
+    # 比例线默认关闭; 测试打开时汇率历史不得打真实网络
+    monkeypatch.setattr(
+        kline_page.fx,
+        "get_fx_history",
+        lambda *a, **kw: pd.DataFrame(
+            {
+                "date": pd.date_range("2024-01-01", periods=10, freq="D"),
+                "close": [0.9] * 10,
+            }
+        ),
+    )
     kline_page.cached_kline.clear()
     return AppTest.from_string(_SCRIPT, default_timeout=30).run()
 
@@ -70,3 +81,16 @@ def test_compare_gone_from_portfolio_page():
     ast.parse(src)  # 语法有效 (解析失败先于下面的断言报错)
     assert "走势对比" not in src
     assert "render_compare_chart" not in src
+
+
+def test_compare_ratio_toggle(compare_app):
+    """比例线是可选开关: 默认关闭, 打开后出现分子/分母/汇率调整控件并渲染."""
+    _subview(compare_app, "走势对比")
+    ratio_toggles = [t for t in compare_app.toggle if t.key == "compare_ratio"]
+    assert ratio_toggles and ratio_toggles[0].value is False
+    assert not any(t.key == "compare_ratio_fx" for t in compare_app.toggle)
+
+    compare_app.toggle(key="compare_ratio").set_value(True).run()
+    captions = [c.value for c in compare_app.caption]
+    assert any("比例线 =" in c for c in captions)
+    assert any(t.key == "compare_ratio_fx" for t in compare_app.toggle)

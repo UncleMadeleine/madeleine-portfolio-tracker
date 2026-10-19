@@ -15,6 +15,10 @@ _CFETS_TTL = 120
 _CFETS_TIMEOUT = 8.0
 _cfets_cache: tuple[float, dict[str, float]] = (0.0, {})
 
+# 历史汇率 (比例线汇率调整用): 6 小时进程内缓存, 键含起止日期
+_FX_HIST_TTL = 6 * 3600
+_fx_hist_cache: dict[tuple[str, str, str, str], tuple[float, object]] = {}
+
 
 def _obb():
     from openbb import obb
@@ -130,6 +134,64 @@ def get_rate(src: str, dst: str, use_ibkr: bool = False) -> float | None:
         if r1 is not None and r2 is not None:
             return r1 * r2
     return None
+
+
+def _yahoo_pair_history(pair: str, start_date: str, end_date: str | None = None):
+    """yfinance (OpenBB) 货币对日线 → DataFrame(date, close), 失败 None."""
+    import pandas as pd
+
+    kwargs: dict[str, object] = {
+        "symbol": pair,
+        "provider": "yfinance",
+        "start_date": start_date,
+    }
+    if end_date:
+        kwargs["end_date"] = end_date
+    try:
+        df = _obb().currency.price.historical(**kwargs).to_dataframe()
+    except Exception:
+        return None
+    if df is None or df.empty or "close" not in df.columns:
+        return None
+    out = df.reset_index()
+    date_col = "date" if "date" in out.columns else out.columns[0]
+    out = out[[date_col, "close"]].rename(columns={date_col: "date"})
+    out["date"] = pd.to_datetime(out["date"], errors="coerce")
+    out["close"] = pd.to_numeric(out["close"], errors="coerce")
+    out = out.dropna(subset=["date", "close"])
+    out = out[out["close"] > 0].sort_values("date").reset_index(drop=True)
+    return out if not out.empty else None
+
+
+def get_fx_history(src: str, dst: str, start_date, end_date=None):
+    """历史汇率日线 (1 src → dst): DataFrame(date, close); 失败 None.
+
+    供 K线对比的「比例线」做汇率调整: 跨币种两标的的价格按同一币种相除,
+    得到的比值才反映相对估值而非汇率波动。先取 src+dst 直盘, 失败取反向
+    再取倒数; 结果按 (src, dst, 起, 止) 进程内缓存 6 小时。
+    """
+    import pandas as pd
+
+    src, dst = str(src).upper(), str(dst).upper()
+    start_s = str(start_date)
+    end_s = str(end_date) if end_date else ""
+    key = (src, dst, start_s, end_s)
+    now = time.time()
+    hit = _fx_hist_cache.get(key)
+    if hit and now - hit[0] < _FX_HIST_TTL:
+        return hit[1].copy()
+
+    if src == dst:
+        df = pd.DataFrame({"date": pd.to_datetime([start_s]), "close": [1.0]})
+    else:
+        df = _yahoo_pair_history(f"{src}{dst}=X", start_s, end_s or None)
+        if df is None:
+            inv = _yahoo_pair_history(f"{dst}{src}=X", start_s, end_s or None)
+            df = None if inv is None else inv.assign(close=1.0 / inv["close"])
+        if df is None:
+            return None
+    _fx_hist_cache[key] = (now, df)
+    return df.copy()
 
 
 def get_fx_rates(

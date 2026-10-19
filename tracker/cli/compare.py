@@ -48,6 +48,62 @@ def resolve_inputs(symbols: list[str]) -> tuple[list[str], list[str]]:
     return codes, warnings
 
 
+def _build_ratio(frames: dict[str, object], ratio_args, period: str, fx_adjust: bool):
+    """--ratio: 两个代码 → 比例线 payload (默认原币比值, 可选历史汇率调整)."""
+    from .. import charting, fx as fx_mod
+    from ..symbols import parse as _parse
+
+    ratio_codes, warnings = resolve_inputs(list(ratio_args))
+    for w in warnings:
+        print(f"⚠ {w}", file=sys.stderr)
+    if len(ratio_codes) != 2:
+        _finish_with_error("--ratio 需要两个可识别的代码")
+    numerator, denominator = ratio_codes
+    missing = [c for c in ratio_codes if c not in frames]
+    if missing:
+        _finish_with_error(
+            "比例线代码需同时出现在对比代码中: " + ", ".join(missing)
+        )
+
+    fx_df = None
+    fx_pair = None
+    fx_missing = False
+    if fx_adjust:
+        cur_num = _parse(numerator).currency
+        cur_den = _parse(denominator).currency
+        if cur_num != cur_den:
+            import pandas as pd
+
+            fx_pair = f"{cur_den}{cur_num}"
+            start_ts = min(
+                frames[numerator]["date"].min(), frames[denominator]["date"].min()
+            ) - pd.Timedelta(days=10)
+            fx_df = fx_mod.get_fx_history(
+                cur_den,
+                cur_num,
+                start_ts.strftime("%Y-%m-%d"),
+                pd.Timestamp.today().strftime("%Y-%m-%d"),
+            )
+            fx_missing = fx_df is None
+            if fx_missing:
+                print(
+                    f"⚠ {fx_pair}: 汇率历史取数失败, 比例线未做汇率调整",
+                    file=sys.stderr,
+                )
+    try:
+        return charting.build_ratio_series(
+            frames,
+            numerator,
+            denominator,
+            period=period,
+            fx_df=fx_df,
+            fx_pair=fx_pair,
+            fx_missing=fx_missing,
+        )
+    except ValueError as e:
+        _finish_with_error(f"比例线: {e}")
+
+
 def cmd_compare(args) -> None:
     """多代码 K线收盘价对比: --json 出归一化序列, 默认出交互式 HTML."""
     import webbrowser
@@ -85,8 +141,20 @@ def cmd_compare(args) -> None:
 
     period = args.period
     raw = getattr(args, "raw", False)
+    ratio_payload = (
+        _build_ratio(
+            frames,
+            args.ratio,
+            period,
+            fx_adjust=getattr(args, "ratio_fx", False),
+        )
+        if getattr(args, "ratio", None)
+        else None
+    )
     if args.json:
-        payload = charting.compare_payload(frames, normalize=not raw, period=period)
+        payload = charting.compare_payload(
+            frames, normalize=not raw, period=period, ratio=ratio_payload
+        )
         lines = []
         for ln in payload["lines"]:
             vals = [p["value"] for p in ln["data"]]
@@ -101,6 +169,23 @@ def cmd_compare(args) -> None:
                     "series": ln["data"],
                 }
             )
+        ratio_out = None
+        if ratio_payload:
+            rvals = [p["value"] for p in ratio_payload["data"]]
+            first, last = rvals[0], rvals[-1]
+            ratio_out = {
+                "numerator": ratio_payload["numerator"],
+                "denominator": ratio_payload["denominator"],
+                "fx_adjusted": ratio_payload["fxAdjusted"],
+                "fx_pair": ratio_payload["fxPair"],
+                "mean": ratio_payload["mean"],
+                "precision": ratio_payload["precision"],
+                "points": len(rvals),
+                "first": first,
+                "last": last,
+                "change_pct": round((last / first - 1) * 100, 4) if first else None,
+                "series": ratio_payload["data"],
+            }
         _print_json(
             {
                 "period": period,
@@ -108,14 +193,17 @@ def cmd_compare(args) -> None:
                 "normalized": not raw,
                 "codes": list(frames.keys()),
                 "lines": lines,
+                "ratio": ratio_out,
             }
         )
         return
 
     # HTML: plotly 折线图; 默认归一化 (起点=100) 便于跨币种/量级, --raw 原币种收盘价
     import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
 
-    fig = go.Figure()
+    # 双纵轴: 右侧对比折线, 左侧比例线 (比例线是具体比值, 不归一化)
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
     palette = charting.COMPARE_PALETTE
     for i, (code, df) in enumerate(frames.items()):
         d = charting.resample_ohlc(df, period) if period != "daily" else df
@@ -132,7 +220,30 @@ def cmd_compare(args) -> None:
                 hovertemplate="%{y:.2f}<extra>" + code + " %{x|%Y-%m-%d}</extra>",
             )
         )
-    fig.update_layout(
+    if ratio_payload:
+        rd = ratio_payload["data"]
+        fig.add_trace(
+            go.Scatter(
+                x=[p["time"] for p in rd],
+                y=[p["value"] for p in rd],
+                mode="lines",
+                name=ratio_payload["name"],
+                line=dict(color=ratio_payload["color"], width=1.8),
+                hovertemplate="%{y:.4f}<extra>比例 "
+                + ratio_payload["name"]
+                + "</extra>",
+            ),
+            secondary_y=True,
+        )
+        fig.add_hline(
+            y=ratio_payload["mean"],
+            line_dash="dot",
+            line_color="#8b949e",
+            yref="y2",
+            annotation_text="均值",
+            annotation_position="top left",
+        )
+    layout = dict(
         title=f"走势对比 · 近 {args.months} 个月 · {' vs '.join(codes)}"
         + ("" if args.raw else " (起点=100)"),
         template="plotly_white",
@@ -140,6 +251,18 @@ def cmd_compare(args) -> None:
         hovermode="x unified",
         height=560,
     )
+    if ratio_payload:
+        # 比例线: 与折线同图叠加, 但使用独立的左侧纵轴 (具体比值, 不归一化);
+        # 对比折线的归一化轴放在右侧 (与页面组件的布局一致)
+        layout["yaxis"] = dict(side="right")
+        layout["yaxis2"] = dict(
+            overlaying="y",
+            side="left",
+            showgrid=False,
+            automargin=True,
+            title=f"比例 {ratio_payload['numerator']}/{ratio_payload['denominator']} (未归一化)",
+        )
+    fig.update_layout(**layout)
     out = (
         Path(args.output)
         if args.output
@@ -156,6 +279,21 @@ def cmd_compare(args) -> None:
         chg_parts.append(f"{code} {pct:+.2f}%")
     print(f"\n=== 走势对比 (近 {args.months} 个月, {period}) ===")
     print("区间涨跌: " + " · ".join(chg_parts))
+    if ratio_payload:
+        last = ratio_payload["data"][-1]["value"]
+        mean = ratio_payload["mean"]
+        dev = (last / mean - 1) * 100 if mean else 0
+        fx_txt = (
+            f" (按 {ratio_payload['fxPair']} 汇率调整)"
+            if ratio_payload.get("fxAdjusted")
+            else ""
+        )
+        print(
+            f"比例线 {ratio_payload['name']} (具体比值, 未归一化):"
+            f" 最新 {last:.{ratio_payload['precision']}f}"
+            f" · 均值 {mean:.{ratio_payload['precision']}f}"
+            f" · 较均值 {dev:+.2f}%{fx_txt}"
+        )
     print(f"\n✅ 对比图已生成: {out}")
     if args.open_browser:
         webbrowser.open(out.resolve().as_uri())

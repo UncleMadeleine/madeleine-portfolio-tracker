@@ -126,6 +126,7 @@ python -m tracker.cli search 腾讯 --json
 
 # 多股走势对比（归一化起点=100）
 python -m tracker.cli compare AAPL 0700.HK 600519.SS
+python -m tracker.cli compare 601155.SS 1030.HK --ratio 601155.SS 1030.HK  # 比例线
 
 # 持仓管理
 python -m tracker.cli portfolio list
@@ -269,12 +270,18 @@ python -m tracker.cli kline 0700.HK --period weekly --open  # 周K + 自动打�
   （如对比腾讯与南非报业、A股与美股的相对走势）
 - 图下方给出各代码**区间涨跌**；复用 K线组件的拖动/缩放/十字光标交互
 - 日K / 周K / 月K 周期可切
+- **可选比例线**（默认关闭）：打开后选两个对比代码（分子/分母），在同一张图上叠加
+  两标的收盘价的**具体比值**（不归一化），使用独立纵轴，虚线为区间均值，
+  悬停显示当日比值与较均值的偏离幅度。
+  跨币种默认直接看两个**原币报价**的比值；也可打开「汇率调整」按历史汇率统一口径
+  （如 HKD→CNY），避免比值被汇率波动带偏。命令行对应 `--ratio 分子 分母`
+  （`--ratio-fx` 打开汇率调整）。
 
 「K线」页还有第三个子功能「**加密货币对比**」（仅 UI 提供，无对应 CLI 子命令）：只接受
 `BASE-QUOTE` 加密货币代码，各币画**独立窗格蜡烛图**（BTC ~10 万 vs SHIB ~0.00002 量级悬殊，
 同轴归一化不可读，故不做归一化、保留原始价格），共享时间轴与十字光标，下方同样给出区间涨跌。
 
-> K 线**比值**模式（两标的收盘价相除画成一根 K 线，如 `0700.HK / NPN.L`）在 Roadmap 中，尚未实现。
+> 比值线（两标的收盘价相除画成折线）已支持，见上；把比值画成 K 线（OHLC）仍在 Roadmap 中。
 
 ---
 
@@ -335,7 +342,7 @@ tracker/
 │   ├── fx.py             汇率
 │   ├── history.py        历史价格
 │   ├── kline.py          K线 HTML + 摘要（--json 输出数据）
-│   ├── compare.py        多股走势对比（归一化折线, --raw 原价, --json 出序列）
+│   ├── compare.py        多股走势对比（归一化折线, --raw 原价, --ratio 比例线, --json 出序列）
 │   ├── search.py         代码/名称搜索 → 规范代码
 │   ├── index_kline.py    指数K线 HTML + 摘要（IX.<KEY>, --json / --list）
 │   ├── importer.py       统一导入（import ibkr / longport / wallet / file, 追加/覆盖）

@@ -112,7 +112,26 @@ INDEX_GROUPS: dict[str, dict[str, dict[str, str]]] = {
         },
     },
     # 商品期货 (新浪主力连续, akshare futures_main_sina; 见 providers/index.py)
-    # LC = 广期所碳酸锂期货主力连续 (2023-07-21 上市), 单位 元/吨
+    # futures 字段 = 新浪主连代码 (<品种><0>), 已收录上期所/大商所/广期所主力连续。
+    # 主力连续按新浪规则拼接近月合约, 换月处有跳空 (属正常构造); currency 为报价单位。
+    "商品/贵金属": {
+        # 上期所黄金主连 AU0: 元/克
+        "AU": {"name": "黄金主力连续", "futures": "AU0", "currency": "元/克"},
+        # 上期所白银主连 AG0: 元/千克
+        "AG": {"name": "白银主力连续", "futures": "AG0", "currency": "元/千克"},
+    },
+    "商品/农产品": {
+        # 大商所鸡蛋主连 JD0: 元/500千克
+        "JD": {"name": "鸡蛋主力连续", "futures": "JD0", "currency": "元/500千克"},
+        # 大商所豆粕主连 M0: 元/吨
+        "M": {"name": "豆粕主力连续", "futures": "M0", "currency": "元/吨"},
+        # 大商所黄大豆1号/2号主连 (A0 非转基因食用豆 / B0 进口转基因压榨豆): 元/吨
+        "A": {"name": "豆一主力连续", "futures": "A0", "currency": "元/吨"},
+        "B": {"name": "豆二主力连续", "futures": "B0", "currency": "元/吨"},
+        # 大商所生猪主连 LH0: 元/吨
+        "LH": {"name": "生猪主力连续", "futures": "LH0", "currency": "元/吨"},
+    },
+    # 广期所碳酸锂期货主力连续 (2023-07-21 上市), 单位 元/吨
     "商品/新能源": {
         "LC": {"name": "碳酸锂主力连续", "futures": "LC0", "currency": "元/吨"},
     },

@@ -101,13 +101,22 @@ def test_ccement_source_chain_is_exclusive():
 def test_futures_catalog_entries_parse_to_index_domain():
     """商品期货指数: 目录合法 + 统一带 futures 路由字段 (无 ak/yf/ccement 源)."""
     futures_keys = [k for k, e in INDEX_CATALOG.items() if "futures" in e]
-    assert futures_keys == ["LC"]
+    assert futures_keys == ["AU", "AG", "JD", "M", "A", "B", "LH", "LC"]
     for key in futures_keys:
         p = parse(f"IX.{key}")
         assert p.type == "index"
         assert p.market is Market.INDEX
         e = INDEX_CATALOG[key]
         assert "ak" not in e and "yf" not in e and "ccement" not in e
+
+
+def test_futures_entries_use_matching_sina_main_continuous():
+    """futures 代码必须是同名品种的新浪主连 (<KEY>0), 代码错位会静默画出别的品种."""
+    for key, e in INDEX_CATALOG.items():
+        if "futures" not in e:
+            continue
+        assert e["futures"] == f"{key}0", f"IX.{key} 的主连代码应为 {key}0"
+        assert e.get("currency"), f"IX.{key} 缺少报价单位"
 
 
 def test_futures_source_chain_is_exclusive():

@@ -11,9 +11,10 @@ IX.CSI300 沪深 300 ...)。源链:
 仅全国口径; 区域分解与水泥大数据中心需会员, 不接入。
 恒生指数公司 (IX.HSAHP, 目录条目带 hsi 字段): 官网公开 API 零鉴权,
 固定滚动约 5 年日收盘, 无开高低 (平K线)。
-商品期货 (IX.LC 等, 目录条目带 futures 字段): akshare futures_main_sina
-新浪主力连续 (LC0=广期所碳酸锂), 返回全量历史后本地切片; 主力连续含换月
-跳空 (新浪标准构造), 单合约历史可改用 futures_zh_daily_sina (未接入)。
+商品期货 (IX.AU/AG/JD/M/A/B/LH/LC 等, 目录条目带 futures 字段): akshare
+futures_main_sina 新浪主力连续 (如 AU0=黄金, LC0=碳酸锂), 返回全量历史后本地
+切片; 主力连续含换月跳空 (新浪标准构造), 单合约历史可改用 futures_zh_daily_sina
+(未接入)。
 """
 
 from __future__ import annotations

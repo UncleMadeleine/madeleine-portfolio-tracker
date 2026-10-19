@@ -214,6 +214,18 @@ def test_yf_crypto_quote_missing_price_raises(monkeypatch):
         crypto_mod._yf_quote(parse("BTC-USD"))
 
 
+@pytest.mark.parametrize("bad", [0.0, -1.0, float("nan"), float("inf")])
+def test_yf_crypto_quote_non_positive_price_raises(monkeypatch, bad):
+    """0/负/NaN/inf 都是无效价 (与 Binance/Gate/Hyperliquid 同一守卫).
+
+    价格 0 会让市值归零并触发全部下限阈值, 还会挡住后续源链降级。
+    """
+    monkeypatch.setattr(crypto_mod, "_yf", lambda: _fake_yf(bad))
+
+    with pytest.raises(RuntimeError, match="无最新价"):
+        crypto_mod._yf_quote(parse("BTC-USD"))
+
+
 def test_binance_history_shape(monkeypatch):
     """Binance klines → 标准列名升序 DataFrame."""
     klines = [

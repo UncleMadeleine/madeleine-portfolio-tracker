@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 
@@ -83,8 +84,22 @@ def _pick(d: dict, *keys):
 
 def _quote_from_dump(p: ParsedSymbol, d: dict) -> Quote | None:
     # yfinance 部分证券 (多为 ETF) 的 quoteSummary 缺 last/close, 只有 open
-    # (盘前/盘后/无成交场景): 逐级回退, open 视为最新参考价
-    price = _pick(d, "last_price", "price", "close", "open")
+    # (盘前/盘后/无成交场景): 逐级回退, open 视为最新参考价。
+    # 只接受「有限正数」: 停牌/坏响应里的 0、NaN、负价不能当成有效行情
+    # (会产出市值 0 / 触发全部下限阈值); 该字段无效时继续尝试下一级,
+    # 全部无效才返回 None 交给逐代码源链/负缓存。
+    price = None
+    for key in ("last_price", "price", "close", "open"):
+        v = d.get(key)
+        if v is None:
+            continue
+        try:
+            candidate = float(v)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(candidate) and candidate > 0:
+            price = candidate
+            break
     if price is None:
         return None
     prev = _pick(d, "prev_close", "previous_close")

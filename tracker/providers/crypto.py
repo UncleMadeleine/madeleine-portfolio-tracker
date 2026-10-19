@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import math
 import threading
 import time
 
@@ -317,16 +318,22 @@ def _yf_quote(p: ParsedSymbol) -> Quote:
     """yfinance 直连降级: fast_info 含 lastPrice."""
     info = _yf().Ticker(p.yahoo).fast_info
     price = info.get("lastPrice")
-    if price is None or not pd.notna(price):
+    try:
+        price = float(price) if price is not None and pd.notna(price) else None
+    except (TypeError, ValueError):
+        price = None
+    # 0/负/NaN/inf 都是无效行情 (与 Binance/Gate/Hyperliquid 源同一守卫):
+    # 价格 0 会让市值归零并触发全部下限阈值, 且会挡住后面的源链降级。
+    if price is None or not math.isfinite(price) or price <= 0:
         raise RuntimeError(f"{p.yahoo}: yfinance 无最新价")
     prev = info.get("previousClose")
     chg = None
     if prev and prev > 0:
-        chg = (float(price) / float(prev) - 1) * 100
+        chg = (price / float(prev) - 1) * 100
     return Quote(
         symbol=p.yahoo,
         name=None,
-        price=float(price),
+        price=price,
         prev_close=float(prev) if prev and pd.notna(prev) else None,
         change_pct=float(chg) if chg is not None and pd.notna(chg) else None,
         currency=str(info.get("currency") or p.currency).upper(),

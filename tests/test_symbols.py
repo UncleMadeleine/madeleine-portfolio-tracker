@@ -178,6 +178,25 @@ def test_parse_unknown_suffix():
         parse("FOO.ZZ")
 
 
+def test_parse_rejects_empty_and_non_string():
+    """空代码 / 非字符串代码显式报可读错误, 不静默产出空 yahoo 美股.
+
+    手改 JSON 把 symbol 写成数字 (700) 时, 旧实现抛 AttributeError 并穿透
+    整个快照; 空串则被当成合法的美股空代码去请求数据源。
+    """
+    with pytest.raises(ValueError, match="代码必须是字符串"):
+        parse(700)
+    with pytest.raises(ValueError, match="代码必须是字符串"):
+        parse(None)
+    with pytest.raises(ValueError, match="代码不能为空"):
+        parse("")
+    with pytest.raises(ValueError, match="代码不能为空"):
+        parse("   ")
+    # normalize 保持 total (供 type_for_symbol 等内部路径兜底)
+    assert normalize(None) == ""
+    assert normalize(700) == "700"
+
+
 # ---------- 加密货币 ----------
 
 

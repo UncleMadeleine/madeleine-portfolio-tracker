@@ -117,6 +117,44 @@ def test_futures_source_chain_is_exclusive():
     assert [f.__name__ for f in chains] == ["ft"]
 
 
+def test_us_index_sina_fallback_uses_matching_index(monkeypatch):
+    """美股指数的新浪兜底代码必须与目录同名指数一致.
+
+    NDX = 纳斯达克 100, 新浪代码是 .NDX; .IXIC 是纳斯达克综合指数 (成分与
+    点位都不同)。映射错会在 yfinance 失败时静默展示另一条指数。
+    """
+    from tracker.providers import index as idx_mod
+
+    assert idx_mod._AK_US_SINA == {
+        "SPX": ".INX",
+        "NDX": ".NDX",
+        "DJI": ".DJI",
+    }
+
+    calls: list[str] = []
+
+    class FakeAk:
+        @staticmethod
+        def index_us_stock_sina(symbol):
+            calls.append(symbol)
+            return pd.DataFrame(
+                {
+                    "date": pd.to_datetime(["2026-10-14", "2026-10-15"]),
+                    "open": [1.0, 1.1],
+                    "high": [1.2, 1.3],
+                    "low": [0.9, 1.0],
+                    "close": [1.1, 1.2],
+                    "volume": [0.0, 0.0],
+                }
+            )
+
+    monkeypatch.setattr(idx_mod, "_ak", lambda: FakeAk)
+    df = idx_mod._ak_index_history(parse("IX.NDX"), "2026-10-01", None)
+    assert calls == [".NDX"]
+    assert list(df.columns) == ["date", "open", "high", "low", "close", "volume"]
+    assert len(df) == 2
+
+
 def test_futures_history_renames_sina_columns(monkeypatch):
     """新浪中文列名 → date/open/high/low/close/volume, 持仓量/动态结算价丢弃."""
     from tracker.providers import index as idx_mod

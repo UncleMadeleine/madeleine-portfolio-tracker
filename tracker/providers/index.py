@@ -299,7 +299,9 @@ def _ak_index_history(
 # (Yahoo 无对应新浪码, 收了也只会在兜底时失败)
 _AK_US_SINA = {
     "SPX": ".INX",
-    "NDX": ".IXIC",
+    # 纳斯达克 100 必须用 .NDX; .IXIC 是纳斯达克综合指数 (口径不同, 成分股
+    # 数量与点位都不同), 用错会在 yfinance 失败时静默展示另一条指数。
+    "NDX": ".NDX",
     "DJI": ".DJI",
 }
 

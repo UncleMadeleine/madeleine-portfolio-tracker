@@ -81,6 +81,26 @@ def test_all_price_fields_missing_returns_none(us_symbol):
     assert _quote_from_dump(us_symbol, d) is None
 
 
+def test_zero_last_price_falls_back_to_valid_close(us_symbol):
+    """last_price=0 (停牌/坏响应) 不是有效价: 继续回退到有效的 close."""
+    d = {
+        "symbol": "GLD",
+        "last_price": 0.0,
+        "close": 393.41,
+        "currency": "USD",
+    }
+    q = _quote_from_dump(us_symbol, d)
+    assert q is not None
+    assert q.price == pytest.approx(393.41)
+
+
+def test_non_positive_or_non_finite_prices_return_none(us_symbol):
+    """0/负/NaN/inf 都不能当有效行情 (会产出市值 0 并误触下限阈值)."""
+    for bad in (0.0, -1.0, float("nan"), float("inf")):
+        d = {"symbol": "GLD", "last_price": bad, "currency": "USD"}
+        assert _quote_from_dump(us_symbol, d) is None, bad
+
+
 def test_open_fallback_respects_pence(us_symbol):
     """英股 (GBp) 走 open 回退时同样要 ÷100, 不能放大 100 倍."""
     d = {

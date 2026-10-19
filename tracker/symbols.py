@@ -335,7 +335,9 @@ class ParsedSymbol:
 
 
 def normalize(symbol: str) -> str:
-    s = symbol.strip().upper()
+    # 容忍 None / 数字等非字符串输入 (手改 JSON 时 symbol 可能写成 700):
+    # 归一函数本身保持 total, 由 parse() 统一做合法性校验。
+    s = ("" if symbol is None else str(symbol)).strip().upper()
     # 加密货币无分隔符格式: BTCUSD → BTC-USD, BTCFDUSD → BTC-FDUSD (Yahoo Finance 格式)
     if "-" not in s and "." not in s and len(s) > 3:
         # 计价货币按长度从长到短匹配 (FDUSD 5位, USDT/USDC/BUSD 4位, 其余 3位)
@@ -397,6 +399,13 @@ def type_for_symbol(yahoo: str) -> str:
 
 
 def parse(symbol: str) -> ParsedSymbol:
+    # 非字符串 / 空代码显式报错: 手改 JSON 写成 "symbol": 700 时不再抛
+    # AttributeError('int' object has no attribute 'strip') 穿透成裸 traceback,
+    # 也避免空串被静默当成合法美股 (yahoo="") 去请求数据源。
+    if not isinstance(symbol, str):
+        raise ValueError(f"代码必须是字符串 (得到 {type(symbol).__name__}: {symbol!r})")
+    if not symbol.strip():
+        raise ValueError("代码不能为空")
     # 宏观/风险指数: IX.<KEY> (独立域, 目录校验; 与股票代码永不冲突)
     yahoo = normalize(symbol)
     ikey = index_key(yahoo)

@@ -79,6 +79,25 @@ class TestMetricForEntry:
         """两条手写键并存时 PB 优先 (历史上 PB 键先落地)."""
         assert metric_for_entry({"pb": 4.0, "mcap": 1e12}) == METRIC_PB
 
+    def test_non_finite_or_garbage_override_does_not_switch_metric(self):
+        """NaN/inf/非数字覆盖值不算有效数据, 不得把基准切到 pb/mcap.
+
+        否则 data_editor 空单元格 (NaN) 或手改 JSON 的垃圾值会让价格阈值被
+        当成市净率/市值比较, 每次评估都误报。
+        """
+        assert metric_for_entry({"symbol": "AAPL", "mcap": float("nan")}) == (
+            METRIC_PRICE
+        )
+        assert metric_for_entry({"symbol": "AAPL", "pb": float("inf")}) == (
+            METRIC_PRICE
+        )
+        assert metric_for_entry({"symbol": "AAPL", "market_cap": "abc"}) == (
+            METRIC_PRICE
+        )
+        # 有效数值仍按键推断
+        assert metric_for_entry({"symbol": "AAPL", "pb": 5.0}) == METRIC_PB
+        assert metric_for_entry({"symbol": "AAPL", "mcap": 1e12}) == METRIC_MCAP
+
 
 class TestMetricNormalization:
     def test_metric_pb_kept(self):

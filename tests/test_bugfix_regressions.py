@@ -221,6 +221,49 @@ class TestStorageFixes:
         assert set(merged[0]["lists"]) == {"A", "B"}
 
 
+class TestRobustnessFixes:
+    def test_save_watchlist_drops_non_finite_numbers(self, tmp_path):
+        """NaN/inf 阈值不能炸写盘 (json allow_nan=False), 应直接剔除."""
+        from tracker import storage
+
+        p = tmp_path / "w.json"
+        storage.save_watchlist(
+            {
+                "watchlist": [
+                    {
+                        "symbol": "AAPL",
+                        "upper_1": float("nan"),
+                        "lower_1": float("inf"),
+                        "note": "关注",
+                    }
+                ]
+            },
+            p,
+        )
+        e = json.loads(p.read_text(encoding="utf-8"))["watchlist"][0]
+        assert "upper_1" not in e and "lower_1" not in e
+        assert e["note"] == "关注"
+        assert e["symbol"] == "AAPL"
+
+    def test_cli_watchlist_add_nan_threshold_does_not_crash(self, tmp_path, capsys):
+        """CLI float("nan") 合法入参: 写盘前清洗, 不抛 ValueError traceback."""
+        from tracker import cli
+
+        p = tmp_path / "w.json"
+        p.write_text(json.dumps({"watchlist": []}), encoding="utf-8")
+        cli.main(["watchlist", "add", "AAPL", "--file", str(p), "--upper1", "nan"])
+        e = json.loads(p.read_text(encoding="utf-8"))["watchlist"][0]
+        assert e["symbol"] == "AAPL"
+        assert "upper_1" not in e
+
+    def test_get_quotes_non_string_symbol_reports_readable_error(self):
+        """手改 JSON 把 symbol 写成数字: 记可读错误, 不抛 AttributeError."""
+        quotes, errors, notes = orch.get_quotes([700])
+        assert quotes == {} and notes == []
+        assert "700" in errors
+        assert "字符串" in errors["700"]
+
+
 # ---------------------------------------------------------------------------
 # 行情缓存 / 负缓存 / 批量超时
 # ---------------------------------------------------------------------------

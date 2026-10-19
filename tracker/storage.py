@@ -336,7 +336,13 @@ def save_watchlist(data: dict, path: str | Path = WATCHLIST_PATH) -> None:
     else:
         merged = {}
     merged["watchlist"] = dedupe_watch_entries(
-        [normalize_watch_entry(dict(raw)) for raw in data.get("watchlist", [])]
+        # _clean_rows: 与 save_portfolio 同一道清洗 —— data_editor 空单元格 /
+        # CLI 传入 nan/inf 会在 json.dumps(allow_nan=False) 处直接抛
+        # ValueError ("Out of range float values are not JSON compliant"),
+        # 让保存整条失败。非有限阈值/覆盖值应直接剔除, 而不是炸写盘。
+        _clean_rows(
+            [normalize_watch_entry(dict(raw)) for raw in data.get("watchlist", [])]
+        )
     )
     _write_json(merged, p)
 

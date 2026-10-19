@@ -40,14 +40,19 @@ _MCAP_KEYS = ("mcap", "market_cap")  # 手写市值别名兼容
 
 
 def metric_for_entry(entry: dict) -> str:
-    """条目 → 指标基准 (price/pb/mcap); 非法值回退 price."""
+    """条目 → 指标基准 (price/pb/mcap); 非法值回退 price.
+
+    手写覆盖键的推断只看「有效数值」: NaN/inf/非数字字符串 (如 data_editor
+    空单元格产生的 NaN) 不能把基准悄悄切到 pb/mcap —— 否则价格阈值会被
+    当成市净率/市值比较, 每次评估都误报。
+    """
     raw = entry.get("metric")
     if raw is None:
         for k in _PB_KEYS:  # 手写 pb (每股净资产) 视为 PB 基准条目
-            if entry.get(k) not in (None, ""):
+            if _num(entry.get(k)) is not None:
                 return METRIC_PB
         for k in _MCAP_KEYS:  # 手写 mcap/market_cap (市值) 视为市值基准条目
-            if entry.get(k) not in (None, ""):
+            if _num(entry.get(k)) is not None:
                 return METRIC_MCAP
         return METRIC_PRICE
     s = str(raw).strip().lower()

@@ -300,6 +300,17 @@ def contract_spec(p: ParsedSymbol, exchanges: dict | None = None) -> ContractSpe
         # B3 (圣保罗): Yahoo 后缀 .SA (PETR4.SA); IBKR 合约库交易代码无后缀数字。
         # 交易所代号现行为 "B3" (旧代号 BVMF 已下线, 直传会报「交易所无效」)
         return ContractSpec(code, ex.get("BR", "B3"), "BRL")
+    if p.market is Market.JP:
+        # 东京证券交易所 (JPX): Yahoo 后缀 .T (9984.T 软银); IBKR 合约库 symbol
+        # 同为不带前导零的 4 位数字, 交易所代号 TSEJ (IBKR 官方产品清单口径)
+        return ContractSpec(code, ex.get("JP", "TSEJ"), "JPY")
+    if p.market is Market.KR:
+        # 韩国交易所: Yahoo 后缀 .KS=KOSPI 主板 (005930.KS 三星电子), IBKR 交易所
+        # 代号 KRX; .KQ=KOSDAQ (035720.KQ), IBKR 代号 KOSDAQ。两板合约 symbol 同为
+        # 6 位带前导零数字, 币种 KRW, 只能按后缀区分路由
+        if suffix == "KQ":
+            return ContractSpec(code, ex.get("KR_KQ", "KOSDAQ"), "KRW")
+        return ContractSpec(code, ex.get("KR", "KRX"), "KRW")
     raise ValueError(f"不支持的市场: {p.market}")
 
 
@@ -380,7 +391,7 @@ def quote_from_ticker(yahoo_symbol: str, ticker) -> Quote | None:
 
 
 def _claims_global(p: ParsedSymbol) -> bool:
-    """IBKR 认领范围: 全球域 (美股/港股/德英加澳新).
+    """IBKR 认领范围: 全球域 (美股/港股/德英加澳新/日韩).
 
     A股/B股/北交所始终走 akshare→yfinance (CNY 实时价, 分域记账规范);
     crypto/index 无 IBKR 合约。不认领的交回调用方默认链。
@@ -595,6 +606,16 @@ def ibkr_to_yahoo(
         return f"{sym}.SI"
     if ccy == "BRL" or exkey in ("BVMF", "BOVESPA", "B3"):
         return f"{sym}.SA"
+    # 日本 (东京, TSEJ): JPY 为东京独有币种, 裸 ccy 兜底安全; 交易所别名含
+    # JPX 内部代号。注意不能收裸 "TSE" —— 那是多伦多 (TSX) 的 IBKR 代号
+    if ccy == "JPY" or exkey in ("TSEJ", "XJPX", "JPX"):
+        return f"{sym}.T"
+    # 韩国: KRW 为韩国独有币种; KOSDAQ 分支必须前置 (KRX/KSE 是 KOSPI 口径,
+    # 落进 KRW 兜底会得到 .KS, 而 KOSDAQ 板应为 .KQ)
+    if exkey in ("KOSDAQ", "XKOS"):
+        return f"{sym}.KQ"
+    if ccy == "KRW" or exkey in ("KRX", "KSE", "XKRX"):
+        return f"{sym}.KS"
     if ccy == "CAD" or exkey in ("TSE", "TSXV", "TSX", "CDGX"):
         return f"{sym}.V" if exkey == "TSXV" else f"{sym}.TO"
     if ccy == "USD" or exkey in (

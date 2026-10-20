@@ -164,6 +164,12 @@ def test_contract_spec_all_markets():
         ("NIO.SI", ContractSpec("NIO", "SGX", "")),
         # B3 现行交易所代号 (旧 BVMF 已下线)
         ("MBRF3.SA", ContractSpec("MBRF3", "B3", "BRL")),
+        # 日股: 东京 TSEJ, JPY 计价, 合约 symbol 与 Yahoo 同为 4 位数字
+        ("9984.T", ContractSpec("9984", "TSEJ", "JPY")),
+        # 韩股: KOSPI=KRX (.KS) / KOSDAQ=KOSDAQ (.KQ), KRW 计价, 6 位带前导零
+        ("005930.KS", ContractSpec("005930", "KRX", "KRW")),
+        ("005935.KS", ContractSpec("005935", "KRX", "KRW")),
+        ("035720.KQ", ContractSpec("035720", "KOSDAQ", "KRW")),
     ]
     for sym, expected in cases:
         assert contract_spec(parse(sym)) == expected, sym
@@ -329,6 +335,17 @@ def test_ibkr_to_yahoo_mappings():
         (("D01", "SGX", "", "USD"), "D01.SI"),
         # B3 现行交易所代号
         (("MBRF3", "B3", "", "BRL"), "MBRF3.SA"),
+        # 日股: TSEJ (东京) → .T; JPY 兜底覆盖 SMART 路由 (真实交易所只在
+        # primaryExchange 上); 裸 "TSE" 是多伦多, 不在东京别名里
+        (("9984", "TSEJ", "", "JPY"), "9984.T"),
+        (("8830", "TSEJ", "TSEJ", "JPY"), "8830.T"),
+        (("9984", "SMART", "TSEJ", "JPY"), "9984.T"),
+        (("9984", "XJPX", "", "JPY"), "9984.T"),
+        # 韩股: KOSDAQ 分支前置 (KRX/KSE 是 KOSPI 口径), KRW 兜底归 .KS
+        (("005930", "KRX", "", "KRW"), "005930.KS"),
+        (("005935", "SMART", "KRX", "KRW"), "005935.KS"),
+        (("035720", "KOSDAQ", "", "KRW"), "035720.KQ"),
+        (("035720", "XKOS", "", "KRW"), "035720.KQ"),
         # LSE 国际挂盘 (IOB): Kazatomprom GDR (KAP.IL, IOB/USD)。落进 USD 兜底
         # 会拼出裸 KAP 被当成美股, 而该代码在美股已退市 (KapStone) → 无行情
         (("KAP", "IOB", "", "USD"), "KAP.IL"),

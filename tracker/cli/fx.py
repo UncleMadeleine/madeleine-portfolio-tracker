@@ -12,7 +12,7 @@ def cmd_fx(args) -> None:
     currencies = [
         c.upper()
         for c in (
-            args.currencies or ["CNY", "USD", "EUR", "GBP", "HKD", "JPY", "CAD", "AUD"]
+            args.currencies or ["CNY", "USD", "EUR", "GBP", "HKD", "JPY", "KRW", "CAD", "AUD"]
         )
     ]
     rates, missing = get_fx_rates(base, currencies, use_ibkr=args.ibkr)

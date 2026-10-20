@@ -202,7 +202,7 @@ def yahoo_to_longport(yahoo: str) -> str | None:
 
     AAPL → AAPL.US; 0700.HK → 700.HK (长桥不补零); 600519.SS → 600519.SH;
     000001.SZ 原样; D05.SI → D05.SG; 美股类别/优先股 TAP-A → TAP.A.US,
-    WFC-PL → WFC.PR.L.US; 其它后缀 (.DE/.L/.TO/.AX/.BJ...) 不支持。
+    WFC-PL → WFC.PR.L.US; 其它后缀 (.DE/.L/.TO/.AX/.T/.KS/.KQ/.BJ...) 不支持。
     """
     s = str(yahoo).strip().upper()
     head, dot, suffix = s.rpartition(".")

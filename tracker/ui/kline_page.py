@@ -656,7 +656,8 @@ def render_kline_controls(
 
     st.caption(
         "代码规范: 美股 AAPL · A股 600519.SS · 港股 0700.HK · 德股 SAP.DE · "
-        "英股 BP.L · 加股 RY.TO · 澳股 BHP.AX · 新加坡 D05.SI · 加密货币 BTC-USD"
+        "英股 BP.L · 加股 RY.TO · 澳股 BHP.AX · 日股 9984.T · 韩股 005930.KS · "
+        "新加坡 D05.SI · 加密货币 BTC-USD"
     )
 
     def _pick_symbol(code, pill_key):

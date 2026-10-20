@@ -8,7 +8,7 @@
 
 ## 项目目标
 
-1. **投资组合追踪** — 多数据源接入 A股 / B股 / 北交所 / 港股 / 美股 / 德股 / 英股 / 加股 / 澳股 / 新加坡股 / 巴西股 / 加密货币
+1. **投资组合追踪** — 多数据源接入 A股 / B股 / 北交所 / 港股 / 美股 / 德股 / 英股 / 加股 / 澳股 / 日股 / 韩股 / 新加坡股 / 巴西股 / 加密货币
 2. **Watchlist 管理** — 多列表归属 + 两级阈值提醒 (价格 / 市净率 PB / 总市值 mcap 三指标)
 3. **按代码或名称查询** — 模糊搜索代码/名称，一键查看 K 线与基本数据
 4. **双前端** — 人类用 Streamlit UI；Agent（hermes / openclaw 等）用统一 CLI，全部子命令支持 `--json`，解决手机上查看的问题
@@ -218,6 +218,8 @@ python -m tracker.cli longport-login --json    # 长桥 OAuth 授权 URL（脚�
 | 英股 | `.L` | `BP.L` | GBP | global | Yahoo 报价单位为便士（GBp），系统自动 ÷100 换算为英镑；`.AL` 同属伦交所；`.IL` = LSE 国际挂盘 IOB（如 `KAP.IL` Kazatomprom GDR，**USD 计价**，不做便士折算） |
 | 加股 | `.TO` 等 | `RY.TO` | CAD | global | `.V`（TSXV）`.CN` `.NE` 均可 |
 | 澳股 | `.AX` | `BHP.AX` | AUD | global | |
+| 日股 | `.T` | `9984.T` `6758.T` | JPY | global | 东京证券交易所（JPX）；`.JP` 别名自动归一为 `.T`；代码为 4 位数字，不补零 |
+| 韩股 | `.KS` / `.KQ` | `005930.KS` `005935.KS` `035720.KQ` | KRW | global | KRX 韩国交易所：`.KS`=KOSPI 主板、`.KQ`=KOSDAQ；6 位代码保留前导零；普通股与优先股为并列代码（三星电子 `005930.KS` / 优先股 `005935.KS`）；`.KR` 不作为别名（两板同族无法判归哪板） |
 | 新加坡股 | `.SI` | `D05.SI` `NIO.SI` | SGD / USD | global | SGX；`.SG` 别名自动归一为 `.SI`（yfinance 无 `.SG` 数据）；SGX 同时有 SGD 计价（`D05.SI`）与 USD 计价（`NIO.SI`）证券，IBKR 侧按代码自辨币种 |
 | 巴西股 | `.SA` | `PETR4.SA` | BRL | global | B3；IBKR 交易所代号 `B3`（旧 `BVMF` 已下线） |
 | 加密货币 | `-QUOTE` | `BTC-USD` `ETH-USDT` | 计价货币 | crypto | 连字符 `BASE-QUOTE`（Yahoo crypto 规范）；无分隔符 `BTCUSD` 自动补全 |
@@ -416,7 +418,7 @@ tests/                  单元测试（离线, mock）
 
 | type | 覆盖代码 | 实时行情优先级 | 历史K线优先级 |
 |----------|----------|----------------|----------------|
-| **global** | 裸代码（美股）、`.HK/.DE/.L/.TO/.AX/.SI/.SA…` | 长桥(可选) → IBKR(可选) → yfinance 批量 → 港股 akshare | IBKR(可选) → 长桥(可选) → yfinance（港股可 `--akshare` 翻转） |
+| **global** | 裸代码（美股）、`.HK/.DE/.L/.TO/.AX/.T/.KS/.KQ/.SI/.SA…` | 长桥(可选) → IBKR(可选) → yfinance 批量 → 港股 akshare | IBKR(可选) → 长桥(可选) → yfinance（港股可 `--akshare` 翻转） |
 | **cn** | `.SS/.SZ/.BJ`（A/B股、北交所） | 长桥(可选前置) → **akshare 优先** → yfinance | 长桥(可选前置) → **akshare 优先** → yfinance |
 | **crypto** | `BASE-QUOTE`（`BTC-USD`） | **Binance API** → Gate.io 现货 → Hyperliquid 永续（仅USD系） → yfinance | **Binance klines** → Gate.io → Hyperliquid → yfinance |
 | **index** | `IX.<KEY>`（`IX.DXY` 美元指数 / `IX.VIX` 恐慌指数 / `IX.CSI300` 沪深 300 / `IX.AU` 黄金 · `IX.AG` 白银 · `IX.JD` 鸡蛋 · `IX.M` 豆粕 · `IX.A` 豆一 · `IX.B` 豆二 · `IX.LH` 生猪 · `IX.LC` 碳酸锂主力连续 / `IX.CEMPI` 水泥价格指数 / `IX.HSAHP` AH股溢价指数 …） | —（指数无实时行情, 不参与持仓聚合） | 中国指数 **akshare 优先** → yfinance；美股 SPX/NDX/DJI 有新浪兜底；水泥网/商品期货/恒生官网为专属源（无兜底） |
@@ -480,7 +482,7 @@ python -m tracker.cli import ibkr --overwrite        # 覆盖全部持仓
 - 自动将 IBKR 账户股票持仓转换为规范代码并写入 `portfolio.json`
 - 保留原有 `base_currency`；`avg_cost` 取自 IBKR（合约货币每股均价，含佣金）；英股（LSE 主板/AIM）IBKR 与行情同以便士报价，已自动 ÷100 折成英镑（`.IL` 国际挂盘币种由 IBKR 自报，不折算）
 - 无法映射为规范代码的标的（权证/期权/基金等）会跳过并在控制台提示
-- 反向映射规则：`SEHK + CNY/CNH → .SS/.SZ`（沪深港通，6 位代码；`8` 开头 5 位为港股人民币柜台，归 `.HK`）；`SHSE + USD → .SS (B股)`；`SZSE + HKD → .SZ (B股)`；`SEHK + HKD/USD → .HK`（USD 为港股美元柜台）；`IBIS/FWB/GETX/SWB + EUR → .DE`（仅认德国交易所，泛欧所落 skipped）；`IOB → .IL`（LSE 国际挂盘，如 `KAP.IL` Kazatomprom GDR；币种 USD/GBP/EUR 混杂，不能落进 GBP/USD 兜底拼出 `KAP.L` 或裸 `KAP`）；`LSE + GBP/GBX → .L`；`TSE + CAD → .TO`；`TSXV + CAD → .V`；`CSE + CAD → .CN`；`NEO/NEOE + CAD → .NE`；`ASX + AUD → .AX`；`SGX/SES → .SI`（SGD 与 USD 计价证券均归 `.SI`）；`B3/BVMF/BOVESPA + BRL → .SA`；`SMART + USD → 原码`
+- 反向映射规则：`SEHK + CNY/CNH → .SS/.SZ`（沪深港通，6 位代码；`8` 开头 5 位为港股人民币柜台，归 `.HK`）；`SHSE + USD → .SS (B股)`；`SZSE + HKD → .SZ (B股)`；`SEHK + HKD/USD → .HK`（USD 为港股美元柜台）；`IBIS/FWB/GETX/SWB + EUR → .DE`（仅认德国交易所，泛欧所落 skipped）；`IOB → .IL`（LSE 国际挂盘，如 `KAP.IL` Kazatomprom GDR；币种 USD/GBP/EUR 混杂，不能落进 GBP/USD 兜底拼出 `KAP.L` 或裸 `KAP`）；`LSE + GBP/GBX → .L`；`TSE + CAD → .TO`；`TSXV + CAD → .V`；`CSE + CAD → .CN`；`NEO/NEOE + CAD → .NE`；`ASX + AUD → .AX`；`TSEJ/XJPX + JPY → .T`（东京；裸 `TSE` 是多伦多，不进东京分支）；`KRX/KSE + KRW → .KS`（KOSPI）；`KOSDAQ/XKOS → .KQ`（必须前置判定，否则 KOSDAQ 落进 KRW 兜底被误归 `.KS`）；`SGX/SES → .SI`（SGD 与 USD 计价证券均归 `.SI`）；`B3/BVMF/BOVESPA + BRL → .SA`；`SMART + USD → 原码`
 - 兼容入口：`python -m tracker.cli sync` / `python -m tracker.ibkr_sync`（默认覆盖，加 `--append` 追加）
 
 ### 长桥 (LongPort) 账户
@@ -509,7 +511,7 @@ python -m tracker.cli watchlist import-longport --overwrite  # 覆盖现有自�
   两源都启用时 IBKR 优先级更高，长桥失败自动回退默认数据源
 - 代码映射：内部 `0700.HK` ↔ 长桥 `700.HK`，`600519.SS` ↔ `600519.SH`，`AAPL` ↔
   `AAPL.US`，`D05.SI` ↔ `D05.SG`，类别股/优先股 `TAP-A` ↔ `TAP.A.US` / `WFC-PL` ↔
-  `WFC.PR.L.US`；德英加澳/北交所不支持（前置自动跳过，回落默认源）
+  `WFC.PR.L.US`；德英加澳日韩/北交所不支持（前置自动跳过，回落默认源）
 - UI 登录引导在「导入」页长桥标签（授权在独立子进程运行，状态经 `var/longport_oauth_state.json`）；
   授权子进程独占 `callback_port`（默认 60355），同一端口只能跑一个登录流程
 

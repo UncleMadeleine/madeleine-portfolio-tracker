@@ -1,5 +1,5 @@
 {
-  "_comment": "IB Gateway 配置模板。复制本文件为 ibkr.json 并按需修改 (ibkr.json 已被 .gitignore 忽略, 不会误提交敏感信息)。env IBKR_CONFIG 可指定其他配置文件路径; env IBKR_MODE 可覆盖 mode。mode=paper 模拟盘(4002) / live 实盘(4001); 写 \"port\" 可显式指定任意端口(如 TWS 7496/7497)。exchanges 键名与 contract_spec 读取的一致: 沪A=CN_SH (科创板=CN_STAR), 深A=CN_SZ, 北交所=BJ; B股走 SHSE/SZSE 代码默认值 (模板不提供, 避免与沪深港通通道混淆)。删除某个键即用内置默认路由。",
+  "_comment": "IB Gateway 配置模板。复制本文件为 ibkr.json 并按需修改 (ibkr.json 已被 .gitignore 忽略, 不会误提交敏感信息)。env IBKR_CONFIG 可指定其他配置文件路径; env IBKR_MODE 可覆盖 mode。mode=paper 模拟盘(4002) / live 实盘(4001); 写 \"port\" 可显式指定任意端口(如 TWS 7496/7497)。exchanges 键名与 contract_spec 读取的一致: 沪A=CN_SH (科创板=CN_STAR), 深A=CN_SZ, 北交所=BJ; 日股=JP (东京 TSEJ); 韩股=KR (KOSPI 板, KOSDAQ 板=KR_KQ)。删除某个键即用内置默认路由。",
   "host": "127.0.0.1",
   "mode": "paper",
   "client_id": 17,
@@ -20,6 +20,9 @@
     "CA_CN": "CSE",
     "CA_NE": "NEOE",
     "AU": "ASX",
+    "JP": "TSEJ",
+    "KR": "KRX",
+    "KR_KQ": "KOSDAQ",
     "SG": "SGX",
     "BR": "B3"
   }

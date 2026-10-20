@@ -121,6 +121,38 @@ def test_parse_all_markets():
     assert parse("X.V").market is Market.CA
     assert parse("BHP.AX").market is Market.AU
     assert parse("D05.SI").market is Market.SG
+    assert parse("9984.T").market is Market.JP
+    assert parse("005930.KS").market is Market.KR
+    assert parse("035720.KQ").market is Market.KR
+
+
+def test_parse_jp_kr():
+    """日股 (.T) / 韩股 (.KS/.KQ): 软银 9984.T、三星电子优先股 005935.KS.
+
+    东京 Yahoo 规范后缀 .T, 代码为 4 位数字不补零 (.JP 别名归一到 .T);
+    韩国 6 位代码保留前导零 (005930.KS 普通股 / 005935.KS 优先股),
+    .KS=KOSPI 主板, .KQ=KOSDAQ; .KR 别名不收 (两板同族无法判归哪板)。
+    币种 JPY/KRW 由 MARKET_META 市场默认给出, 汇率层走 CFETS/yfinance 直盘。
+    """
+    sb = parse("9984.T")
+    assert sb.yahoo == "9984.T"
+    assert sb.market is Market.JP
+    assert sb.currency == "JPY"
+    assert sb.market_label == "日股"
+    assert sb.type == "global"
+    assert sb.ak_code is None
+    assert normalize("9984.jp") == "9984.T"  # .JP 别名
+
+    samsung_pf = parse("005935.KS")
+    assert samsung_pf.yahoo == "005935.KS"  # 前导零保留
+    assert samsung_pf.market is Market.KR
+    assert samsung_pf.currency == "KRW"
+    assert samsung_pf.market_label == "韩股"
+    assert samsung_pf.type == "global"
+
+    assert parse("035720.KQ").market is Market.KR
+    with pytest.raises(ValueError, match="无法识别的交易所后缀"):
+        parse("005930.KR")
 
 
 def test_parse_lse_main_market():

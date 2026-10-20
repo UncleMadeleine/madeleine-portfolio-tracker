@@ -16,6 +16,8 @@ class Market(str, Enum):
     AU = "AU"
     SG = "SG"
     BR = "BR"
+    JP = "JP"
+    KR = "KR"
     BJ = "BJ"
     CRYPTO = "CRYPTO"
     INDEX = "INDEX"
@@ -31,6 +33,8 @@ MARKET_META: dict[Market, dict[str, str]] = {
     Market.AU: {"label": "澳股", "currency": "AUD"},
     Market.SG: {"label": "新加坡股", "currency": "SGD"},
     Market.BR: {"label": "巴西股", "currency": "BRL"},
+    Market.JP: {"label": "日股", "currency": "JPY"},
+    Market.KR: {"label": "韩股", "currency": "KRW"},
     Market.BJ: {"label": "北交所", "currency": "CNY"},
     Market.CRYPTO: {"label": "加密货币", "currency": "USD"},
     Market.INDEX: {"label": "指数", "currency": "USD"},
@@ -61,6 +65,15 @@ _SUFFIX_MARKET: dict[str, Market] = {
     # 新加坡 (SGX): Yahoo 规范后缀 .SI (D05.SI); .SG 为常见别名, normalize 归一
     "SI": Market.SG,
     "SG": Market.SG,
+    # 日本 (东京证券交易所 JPX): Yahoo 规范后缀 .T (9984.T 软银 / 6758.T 索尼);
+    # .JP 为常见别名, normalize 归一。Yahoo 上日本代码为 4 位数字, 不补零
+    "T": Market.JP,
+    "JP": Market.JP,
+    # 韩国 (KRX 韩国交易所): Yahoo 规范后缀 .KS=KOSPI 主板 (005930.KS 三星电子
+    # 普通股 / 005935.KS 优先股), .KQ=KOSDAQ (035720.KQ Celltrion)。
+    # 6 位代码保留前导零; .KR 别名不收 (KOSPI/KOSDAQ 两板同后缀族, 无法判归哪板)
+    "KS": Market.KR,
+    "KQ": Market.KR,
 }
 
 # 宏观/风险指数目录: 与股票域完全隔离的独立代码规范 (IX.<KEY>).
@@ -376,6 +389,8 @@ def normalize(symbol: str) -> str:
         head = head.lstrip("0").zfill(4)
     elif suffix == "SG":
         suffix = "SI"  # SGX: Yahoo 规范后缀 .SI; .SG 别名归一 (yfinance 无 .SG 数据)
+    elif suffix == "JP":
+        suffix = "T"  # 东京: Yahoo 规范后缀 .T; .JP 别名归一
     return f"{head}.{suffix}"
 
 

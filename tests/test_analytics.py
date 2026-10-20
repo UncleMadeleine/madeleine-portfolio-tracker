@@ -1,4 +1,5 @@
 import pandas as pd
+import pytest
 
 from tracker.analytics import build_view, by_symbol, summarize
 from tracker.prices import Quote
@@ -49,7 +50,29 @@ def test_build_view_multi_market_weights():
     assert view.iloc[0]["symbol"] == "AAPL"
 
 
-def test_build_view_zero_cost_keeps_pnl():
+def test_build_view_weights_shorts_outweigh_longs():
+    """总市值 ≤ 0 (空头压过多头) 时多头权重仍按多头市值归一, 空头行权重 0.
+
+    修复前条件是 total_mv > 0, 空头压过多头时所有行 (含真实多头) 权重
+    一律清零, UI 权重列全部显示 0.0%。
+    """
+    holdings = [
+        {"symbol": "LONG", "quantity": 5, "avg_cost": 10.0},  # 市值 +100
+        {"symbol": "SHORT", "quantity": -10, "avg_cost": 10.0},  # 市值 -400
+    ]
+    quotes = {
+        "LONG": make_quote("LONG", 20.0),
+        "SHORT": make_quote("SHORT", 40.0),
+    }
+    view, issues = build_view(holdings, quotes, {"USD": 1.0})
+    assert issues == []
+    assert float(view["market_value"].sum()) == -300.0
+    by = view.set_index("symbol")
+    assert by.loc["LONG", "weight_pct"] == pytest.approx(100.0)
+    assert by.loc["SHORT", "weight_pct"] == pytest.approx(0.0)
+
+
+
     # avg_cost=0 (如 IBKR avgCost=0) 时 pnl 应为全额市值而非缺失
     holdings = [{"symbol": "AAPL", "quantity": 10, "avg_cost": 0.0}]
     quotes = {"AAPL": make_quote("AAPL", 150.0)}

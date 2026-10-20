@@ -85,8 +85,16 @@ def build_view(
     if not df.empty:
         df = df.sort_values("market_value", ascending=False).reset_index(drop=True)
         total_mv = df["market_value"].sum()
+        long_mv = float(df.loc[df["market_value"] > 0, "market_value"].sum())
         if total_mv > 0:
             df["weight"] = df["market_value"] / total_mv
+            df["weight_pct"] = df["weight"] * 100
+        elif long_mv > 0:
+            # 总市值 ≤ 0 但仍有多头 (空头压过多头): 净值作分母会让多头权重
+            # 失去意义 (注释原口径把 total<0 一并当「全 0」处理, 多头权重被
+            # 整行清零)。改按多头市值归一, 空头行 clip 到 0 (负占比对
+            # UI 进度条/饼图无意义), 仅表示多头内部的相对占比。
+            df["weight"] = df["market_value"].clip(lower=0.0) / long_mv
             df["weight_pct"] = df["weight"] * 100
         else:
             # 全部持仓市值为 0 (数量全 0 等): 权重无定义, 置 0 避免 NaN 扩散到 UI/JSON

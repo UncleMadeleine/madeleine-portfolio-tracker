@@ -55,7 +55,14 @@ def _read_json(path: str | Path) -> dict:
     # utf-8-sig: 容忍带 BOM 的文件 (部分编辑器保存 JSON 时加 BOM, utf-8 直接解码报错)
     with open(path, encoding="utf-8-sig") as f:
         data = json.load(f)
-    return data if isinstance(data, dict) else {}
+    # 合法 JSON 但顶层不是对象 (如手滑把数组/字符串写进 portfolio.json):
+    # 不能静默当 {} —— 调用方 (_read_json_or_recover) 会据此想恢复/报错,
+    # 回 {} 会让下一次保存直接把可恢复的内容覆盖成空组合
+    if not isinstance(data, dict):
+        raise CorruptDataError(
+            f"{path} 顶层不是 JSON 对象 (实际类型: {type(data).__name__})"
+        )
+    return data
 
 
 def _read_json_or_recover(path: str | Path) -> dict:
@@ -63,19 +70,27 @@ def _read_json_or_recover(path: str | Path) -> dict:
 
     不静默返回空数据 —— 否则下一次保存会把损坏文件直接覆盖成空组合, 造成数据丢失。
     """
-    try:
-        return _read_json(path)
-    except json.JSONDecodeError as e:
+
+    def _recover(e: Exception, reason: str) -> dict:
         bak = Path(f"{path}.bak")
         if bak.exists():
             try:
                 return _read_json(bak)
-            except (json.JSONDecodeError, OSError):
+            except (json.JSONDecodeError, CorruptDataError, OSError):
                 pass
         raise CorruptDataError(
-            f"{path} 不是合法 JSON ({e.msg}, 第 {e.lineno} 行); "
+            f"{path} {reason}; "
             f"已尝试从 {bak.name} 恢复但失败, 请修复或删除该文件后重试。"
         ) from e
+
+    try:
+        return _read_json(path)
+    except json.JSONDecodeError as e:
+        return _recover(e, f"不是合法 JSON ({e.msg}, 第 {e.lineno} 行)")
+    except CorruptDataError as e:
+        # _read_json 对「顶层非对象」直接抛 CorruptDataError: 这里走同一条
+        # .bak 恢复路径, 不能静默当空数据 (原因信息含具体文件与类型)
+        return _recover(e, str(e))
 
 
 def _write_json(data: dict, path: str | Path) -> None:

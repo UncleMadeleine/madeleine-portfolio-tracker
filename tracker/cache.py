@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import sqlite3
 import time
@@ -225,10 +226,14 @@ def get_fundamental_cached(symbol: str, ttl: int = 21600) -> dict | None:
         return None
     return {
         "book_value": (
-            float(bv) if isinstance(bv, (int, float)) and bv == bv and bv > 0 else None
+            float(bv)
+            if isinstance(bv, (int, float)) and math.isfinite(bv) and bv > 0
+            else None
         ),
         "market_cap": (
-            float(mc) if isinstance(mc, (int, float)) and mc == mc and mc > 0 else None
+            float(mc)
+            if isinstance(mc, (int, float)) and math.isfinite(mc) and mc > 0
+            else None
         ),
     }
 
@@ -248,7 +253,9 @@ def set_fundamental_cached(
     now = time.time()
 
     def _valid(v) -> float | None:
-        if v is None or v != v or v <= 0:
+        # 与 storage._clean_rows 同口径: ±Infinity 同样不落库 (json 不认, 且
+        # 6h 负缓存期内会在视图/snapshot --json 里炸出非法 JSON)
+        if v is None or not math.isfinite(v) or v <= 0:
             return None
         return float(v)
 

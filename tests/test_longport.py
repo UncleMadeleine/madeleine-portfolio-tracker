@@ -500,7 +500,9 @@ def test_positions_to_rows_mapping_and_skips():
         _pos("XXX.DD", 10, 1.0, "USD", "US"),  # 非法形态跳过
     ]
     rows, skipped = lp.positions_to_rows(positions)
-    assert len(rows) == 3 and len(skipped) == 1
+    assert len(rows) == 3 and len(skipped) == 2
+    # 零仓位也要显式出现在 skipped 里 (不能静默消失)
+    assert any("9999.HK" in s and "数量为 0" in s for s in skipped)
     by = {r["symbol"]: r for r in rows}
     assert by["0700.HK"]["quantity"] == 100
     assert by["0700.HK"]["avg_cost"] == pytest.approx(457.53)

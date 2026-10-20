@@ -724,6 +724,8 @@ def render_kline_controls(
         )
         return
     # ---- 范围模式 (旧流程兜底) ----
+    # 已查询标志取数成功后置位 (两种模式共用): 范围模式曾只在滑动模式赋值,
+    # 纯范围流程改均线/周期/成交量后整张图退回「点查询」提示页, 只能重按
     submitted = submitted or st.session_state.get("kline_queried") is True
     if not submitted:
         st.info("输入代码后回车或点「查询」获取数据 —— 页面启动不会预加载任何 K线。")
@@ -762,6 +764,9 @@ def render_kline_controls(
         st.session_state["kline_current_symbol"] = yahoo
         st.session_state["kline_last_months"] = kdepth
         st.session_state["kline_last_src"] = src
+        # 本次范围取数已完成: 置已查询标志, 之后改图表参数只走重绘分支
+        # (旧版该标志只在滑动模式赋值, 纯范围流程改参数会整图消失)
+        st.session_state["kline_queried"] = True
         # 记录进最近查看; 列表有变时 rerun 一次让 pills 立即显示
         # (df 已存 session_state, rerun 走重绘分支, 不会重新取数)
         if record_recent(yahoo):

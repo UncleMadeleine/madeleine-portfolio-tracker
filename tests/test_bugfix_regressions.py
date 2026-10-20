@@ -8,6 +8,7 @@ JSON NaN 安全/UI 闭包绑定与列格式。均为不联网的单元/组件级
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -684,3 +685,72 @@ class TestUiFixes:
         src = open("tracker/ui/portfolio_page.py", encoding="utf-8").read()
         assert '"盈亏%", format="percent"' in src
         assert '"盈亏%", format="%+.2f%%"' not in src
+
+
+# ---------------------------------------------------------------------------
+# 本轮审查修复: storage 非对象顶层 / 基本面 ±inf 穿透 / tokenlist BOM
+# ---------------------------------------------------------------------------
+
+
+class TestReviewFixes202610:
+    def test_load_rejects_non_object_top_level(self, tmp_path):
+        """合法 JSON 但顶层非对象 (如把数组写进 portfolio.json) 不能静默返回 {}.
+
+        修复前 _read_json 对顶层非 dict 返回 {}, 下一次保存会把该文件
+        覆盖成空组合 —— 与 _read_json_or_recover 注释承诺的数据保护矛盾。
+        """
+        import json as _json
+        import os
+
+        from tracker import storage
+
+        p = tmp_path / "portfolio.json"
+        p.write_text('[{"symbol": "AAPL", "quantity": 1}]', encoding="utf-8")
+        # 无 .bak: 直接抛可读错误, 不静默回空
+        with pytest.raises(storage.CorruptDataError):
+            storage.load_portfolio(p)
+        # 有 .bak: 能从备份恢复
+        backup = Path(str(p) + ".bak")
+        backup.write_text(
+            _json.dumps({"base_currency": "CNY", "holdings": []}),
+            encoding="utf-8",
+        )
+        data = storage.load_portfolio(p)
+        assert data["base_currency"] == "CNY"
+        # 恢复后备份文件仍在 (不删档)
+        assert os.path.exists(backup)
+        # watchlist 同路径 (独立文件, 无 .bak)
+        p2 = tmp_path / "watchlist.json"
+        p2.write_text('"just a string"', encoding="utf-8")
+        with pytest.raises(storage.CorruptDataError):
+            storage.load_watchlist(p2)
+
+    def test_fundamental_cache_filters_non_finite(self):
+        """±Infinity 不能当作有效基本面落库 (否则 6h 内在 snapshot JSON 里变非法)."""
+        from tracker import cache as cache_mod
+
+        cache_mod.set_fundamental_cached(
+            "INF.US", float("inf"), market_cap=float("-inf")
+        )
+        hit = cache_mod.get_fundamental_cached("INF.US", ttl=3600)
+        assert hit == {"book_value": None, "market_cap": None}
+        # 正常值仍然有效
+        cache_mod.set_fundamental_cached("OK.US", 12.5, market_cap=3e9)
+        assert cache_mod.get_fundamental_cached("OK.US", ttl=3600) == {
+            "book_value": 12.5,
+            "market_cap": 3e9,
+        }
+
+    def test_load_tokenlist_tolerates_bom(self, tmp_path):
+        """外部 tokenlist 带 BOM (Windows 记事本保存) 应容忍, 与 storage 同口径."""
+        import json as _json
+
+        from tracker import wallet as wallet_mod
+
+        p = tmp_path / "tokens.json"
+        p.write_text(
+            _json.dumps({"eth": {"0xABC": {"symbol": "TKN", "decimals": 18}}}),
+            encoding="utf-8-sig",
+        )
+        loaded = wallet_mod._load_tokenlist(str(p))
+        assert loaded == {"eth": {"0xabc": {"symbol": "TKN", "decimals": 18}}}

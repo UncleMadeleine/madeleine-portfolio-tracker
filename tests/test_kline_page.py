@@ -193,6 +193,65 @@ def test_range_mode_param_change_redraws_not_refetches(kline_app):
     assert kline_app._calls["n"] == base + 1
 
 
+def test_range_mode_pure_session_param_change_redraws(monkeypatch):
+    """纯范围会话 (从未在滑动模式取数) 改图表参数只重绘, 不退回提示页.
+
+    修复前 kline_queried 只在滑动模式赋值: 范围模式查询成功后改均线/周期,
+    整张图退回「输入代码后回车...」提示, 只能重新点「查询」。
+    """
+    import streamlit.testing.v1 as _st_testing
+
+    calls = {"n": 0}
+
+    def _fake(
+        symbol,
+        months=12,
+        prefer_akshare=False,
+        start_date=None,
+        end_date=None,
+        refresh=False,
+        **kw,
+    ):
+        calls["n"] += 1
+        idx = pd.date_range("2024-01-01", periods=360, freq="D")
+        df = pd.DataFrame(
+            {
+                "date": idx,
+                "open": 1.0,
+                "high": 1.2,
+                "low": 0.9,
+                "close": [1.0 + (i % 50) * 0.01 for i in range(len(idx))],
+                "volume": 100.0,
+            }
+        )
+        if start_date is not None:
+            df = df[df["date"] >= pd.Timestamp(start_date)]
+        if end_date is not None:
+            df = df[df["date"] < pd.Timestamp(end_date)]
+        return df.reset_index(drop=True)
+
+    monkeypatch.setattr(prices, "get_ohlc", _fake)
+    monkeypatch.setattr(prices, "get_history", _fake)
+    monkeypatch.setattr(kline_page, "_KLINE_CHART", lambda **kw: {"stub": True})
+    kline_page.cached_kline.clear()
+    kline_page.cached_kline_all.clear()
+    script = """
+import streamlit as st
+st.session_state["kline_mode"] = "范围"
+import tracker.ui.kline_page as kp
+kp.set_quick_symbols(["AAPL"])
+kp.render_kline_controls(False)
+"""
+    app = _st_testing.AppTest.from_string(script, default_timeout=30).run()
+    assert len(app.metric) == 0  # 未提交: 只提示不取数
+    app.text_input[1].set_value("600519.SS").run()  # 代码变化即查询
+    assert len(app.metric) == 4
+    assert calls["n"] == 1
+    app.multiselect[0].set_value([5, 10]).run()  # 改均线: 只重绘
+    assert len(app.metric) == 4
+    assert calls["n"] == 1
+
+
 def test_invalid_symbol_rejected(kline_app):
     """无法识别后缀的代码报错不渲染."""
     kline_app.text_input[1].set_value("600519.XX").run()  # 无法识别的交易所后缀

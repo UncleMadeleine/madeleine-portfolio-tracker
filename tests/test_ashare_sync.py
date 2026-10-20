@@ -14,6 +14,13 @@ from tracker.ashare_sync import code_to_yahoo, parse_positions_file
         ("600519", "600519.SS"),
         ("688981", "688981.SS"),
         ("900902", "900902.SS"),
+        # 沪市可转债: 券商持仓导出常见, 修复前被默认落 .SZ (错市)
+        ("110092", "110092.SS"),
+        ("111051", "111051.SS"),
+        ("113050", "113050.SS"),
+        ("118048", "118048.SS"),
+        # 深市形态仍然缺省 .SZ
+        ("123456", "123456.SZ"),
         ("000001", "000001.SZ"),
         ("002594", "002594.SZ"),
         ("300750", "300750.SZ"),
@@ -116,3 +123,42 @@ def test_missing_columns_reports_reason(tmp_path):
 def test_missing_file_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
         parse_positions_file(tmp_path / "nope.csv")
+
+
+# ---------- 写盘回执 ----------
+
+
+def test_backup_notice_only_when_backup_exists(tmp_path, capsys):
+    """首次导入 (目标 portfolio.json 不存在) 不谎报「已备份原文件».
+
+    修复前只要 result["written"] 就打印 .bak 提示, 但 backup_file 对
+    不存在的文件返回 None —— 提示了一个不存在的回滚路径。
+    """
+    import argparse
+
+    from tracker import ashare_sync
+
+    f = _write(
+        tmp_path,
+        "证券代码,证券名称,持仓数量,成本价\n600519,贵州茅台,10,1500\n",
+    )
+    target = tmp_path / "portfolio.json"
+    args = argparse.Namespace(
+        file=str(f),
+        portfolio=str(target),
+        dry_run=False,
+        overwrite=False,
+        append=True,
+        json=False,
+    )
+    ashare_sync.run_sync(args)
+    out = capsys.readouterr().out
+    assert "已写入" in out
+    assert "已备份原文件" not in out
+    assert target.exists()
+
+    # 目标已存在的第二次导入: 确有 .bak, 提示保留
+    ashare_sync.run_sync(args)
+    out = capsys.readouterr().out
+    assert "已备份原文件" in out
+    assert (tmp_path / "portfolio.json.bak").exists()

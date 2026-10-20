@@ -26,13 +26,15 @@ from .cli._common import _finish_with_error
 from .storage import PORTFOLIO_PATH as DEFAULT_PORTFOLIO
 from .symbols import type_for_symbol
 
-# A股代码前缀 -> Yahoo 交易所后缀 (与 ibkr.py _A_SHARE_*_PREFIX 规则一致)
+# A股代码前缀 -> Yahoo 交易所后缀。基础规则与 ibkr.py _A_SHARE_*_PREFIX 一致,
+# 另补沪市可转债段 (110/111/113/118): 券商持仓导出常含转债, 落到默认 .SZ
+# 会映射到错误的深市代码 (如 110092 浦发转债 → 110092.SZ)。
 _BJ_PREFIX = ("4", "8", "920")
-_SH_PREFIX = ("5", "6", "9")
+_SH_PREFIX = ("5", "6", "9", "110", "111", "113", "118")
 
 
 def code_to_yahoo(code: str) -> str | None:
-    """6位A股代码 -> Yahoo 后缀代码 (.SS/.SZ/.BJ); 非A股代码原样返回."""
+    """6位A股代码 -> Yahoo 后缀代码 (.SS/.SZ/.BJ); 非6位数字/非法前缀返回 None."""
     raw = str(code).strip()
     if not raw:
         return None
@@ -50,6 +52,8 @@ def code_to_yahoo(code: str) -> str | None:
         return f"{raw}.BJ"
     if raw.startswith(_SH_PREFIX):
         return f"{raw}.SS"
+    # 其余前缀 (0/2/3/12x 等) 仍归深市: 深市前缀形态多 (主板 0、B股 2、
+    # 创业板 3、转债 12x), 难以穷举白名单, 缺省映射维持不变
     return f"{raw}.SZ"
 
 
@@ -238,7 +242,10 @@ def run_sync(args) -> None:
         return
 
     if result["written"]:
-        print(f"\n已备份原文件: {Path(args.portfolio).name}.bak")
+        # 仅当确有备份 (目标文件原本存在) 才提示: 全新 portfolio.json 首次
+        # 导入时 backup_file 返回 None, 与 ibkr_sync 的口径一致
+        if result.get("backup"):
+            print(f"\n已备份原文件: {Path(args.portfolio).name}.bak")
         print(
             f"✅ 已写入 {args.portfolio} "
             f"({'追加合并' if mode == importer.MODE_APPEND else '覆盖'}; "

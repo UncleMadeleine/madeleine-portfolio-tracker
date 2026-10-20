@@ -621,8 +621,13 @@ def positions_to_rows(positions: list) -> tuple[list[dict], list[str]]:
             continue
         qty = _f(getattr(pos, "quantity", None))
         if qty is None or qty == 0:
-            if qty is None:
-                skipped.append(f"{raw}: 数量缺失或非法, 已跳过")
+            # 0 数量与非法数量都要记 skipped: 否则零仓位条目从导入报告里
+            # 无声消失, 用户无法区分「成功跳过」与「静默丢弃」
+            skipped.append(
+                f"{raw}: 数量缺失或非法, 已跳过"
+                if qty is None
+                else f"{raw}: 数量为 0, 已跳过"
+            )
             continue
         cost = _f(getattr(pos, "cost_price", None))
         ccy = str(getattr(pos, "currency", "") or "").strip().upper()

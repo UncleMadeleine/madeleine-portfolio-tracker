@@ -12,6 +12,7 @@ services.watchlist 在组装视图时即时计算 (rules.metric_value_for_quote)
 
 from __future__ import annotations
 
+import math
 from threading import Lock
 
 from . import cache as cache_mod
@@ -44,7 +45,7 @@ def _fund_metrics(symbols: list[str]) -> dict[str, dict[str, float | None]]:
                 f = float(v) if v is not None else None
             except (TypeError, ValueError):
                 f = None
-            out[sym][key] = f if f is not None and f == f else None
+            out[sym][key] = f if f is not None and math.isfinite(f) else None
     return out
 
 

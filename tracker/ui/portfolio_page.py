@@ -16,6 +16,7 @@ app.py 入口启动) 在没有任何页面打开时照常刷磁盘缓存, 后来
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from datetime import datetime
@@ -213,7 +214,11 @@ def _start_refresh(key: tuple, plan: dict) -> bool:
                 base, currencies, use_ibkr = f_args
                 get_fx_rates(base, list(currencies), use_ibkr=use_ibkr)
         except Exception:  # noqa: BLE001 - 刷新失败: 陈旧数据继续展示, 下轮重试
-            pass
+            # 静默 pass 会让持续失败退化成无诊断的热循环 (每轮重试都视为
+            # "完成"), 至少留下日志痕迹定位是哪个数据面刷不动
+            logging.getLogger(__name__).warning(
+                "首屏后台刷新失败 (key=%s), 下轮重试", key, exc_info=True
+            )
         finally:
             with _refresh_lock:
                 _refresh_inflight.discard(key)
@@ -255,11 +260,18 @@ def _load_quotes(
     无法识别的代码永远取不到数, 不进刷新计划 (否则计划永久 dirty, 看门狗
     每间隔空转); 它们的报错由 errors 给出。
     """
-    hits, ages = cache_mod.get_cached_with_age(
-        list(fetch_symbols), ttl=QUOTE_STALE_TTL
-    )
     errors = _local_quote_errors(fetch_symbols)
-    fetchable = tuple(s for s in fetch_symbols if str(s) not in errors)
+    # 缓存读写两侧键都是 parse().yahoo 规范形态: 未保存的编辑器输入
+    # (如 "aapl"/"600519.SH") 原样查缓存必 miss, 计划被永久标 dirty
+    # 反复后台刷新。取数/查缓存一律先归一再去重, 报错仍保留用户原输入。
+    fetchable = tuple(
+        dict.fromkeys(
+            _norm_sym(s) for s in fetch_symbols if str(s) not in errors
+        )
+    )
+    hits, ages = cache_mod.get_cached_with_age(
+        list(fetchable), ttl=QUOTE_STALE_TTL
+    )
     args = (fetchable, prefer_akshare, use_ibkr, use_longport, crypto_source)
     # 参数始终记录 (周期保温要用), 只有陈旧/缺失才置脏
     plan = _plan()
@@ -276,7 +288,7 @@ def _load_quotes(
     if not hits:
         with st.spinner("拉取行情 (首次加载需初始化数据引擎)..."):
             out = cached_quotes(
-                fetch_symbols, prefer_akshare, use_ibkr, use_longport, crypto_source
+                fetchable, prefer_akshare, use_ibkr, use_longport, crypto_source
             )
         plan["q_age"] = 0.0  # 刚同步取完数, 不必立刻保温
         return out
@@ -469,7 +481,10 @@ def _background_refresher_loop() -> None:
                 continue
             _start_refresh(_plan_key(plan), plan)
         except Exception:  # noqa: BLE001 - 保温失败不影响服务
-            pass
+            # 吞掉续命但留日志: 持续失败 (如缓存库损坏) 不能完全无痕迹
+            logging.getLogger(__name__).warning(
+                "保温线程刷新失败 (period=%ss)", period, exc_info=True
+            )
 
 
 def _post_import() -> None:

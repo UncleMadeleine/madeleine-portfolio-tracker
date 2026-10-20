@@ -495,7 +495,8 @@ def _load_tokenlist(tokenlist_path: str | None) -> dict[str, dict[str, dict[str,
         if not p.exists():
             raise FileNotFoundError(f"tokenlist 文件不存在: {tokenlist_path}")
         try:
-            raw = json.loads(p.read_text(encoding="utf-8"))
+            # utf-8-sig: 与 storage 同口径, 容忍编辑器保存 JSON 时带 BOM
+            raw = json.loads(p.read_text(encoding="utf-8-sig"))
         except json.JSONDecodeError as e:
             raise ValueError(f"tokenlist 不是合法 JSON: {e}") from e
         if not isinstance(raw, dict):

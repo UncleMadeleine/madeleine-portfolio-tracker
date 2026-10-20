@@ -9,8 +9,9 @@ IX.CSI300 沪深 300 ...)。源链:
 追加一个 _xxx_history 函数并插入 history_sources 源链。
 中国水泥网 (IX.CEMPI 等, 目录条目带 ccement 字段): 前端 AJAX 接口免登录,
 仅全国口径; 区域分解与水泥大数据中心需会员, 不接入。
-恒生指数公司 (IX.HSAHP, 目录条目带 hsi 字段): 官网公开 API 零鉴权,
-固定滚动约 5 年日收盘, 无开高低 (平K线)。
+恒生指数公司 (港股组 12 指数 + IX.HSAHP, 目录条目带 hsi 字段): 官网公开 API
+零鉴权, 固定滚动约 5 年日收盘, 无开高低 (平K线, 官网图表亦只画收盘线);
+Yahoo 对港股指数仅 ^HSI/^HSCE 有数据, 为保持全组收盘口径一致不接兜底。
 商品期货 (IX.AU/AG/JD/M/A/B/LH/LC 等, 目录条目带 futures 字段): akshare
 futures_main_sina 新浪主力连续 (如 AU0=黄金, LC0=碳酸锂), 返回全量历史后本地
 切片; 主力连续含换月跳空 (新浪标准构造), 单合约历史可改用 futures_zh_daily_sina
@@ -164,6 +165,7 @@ def _ccement_history(
 # 固定返回滚动约 5 年日收盘; 不接受日期参数 (多传即 400 Bad Request),
 # 故全量取回后本地按窗口切片。接口偏慢 (实测 5~12s), 由
 # prices.get_index_history 的 SQLite 缓存兜住 (只付一次)。
+# Referer 用任一指数详情页 URL 均可 (不校验 seriesCode 与 indexCodes 一致)。
 _HSI_HISTORY_URL = (
     "https://www.hsi.com.hk/api/wsit-hsi-ddoc-ea-public-website-proxy"
     "/v1/product-data/pub/indexes/metadata/v2"
@@ -187,8 +189,8 @@ def _hsi_history(
 ) -> pd.DataFrame:
     """恒生 valueHistoryPub 日收盘序列 → 平K线 (open=high=low=close).
 
-    目录 hsi 字段 = 恒生内部指数代码 (HSAHP → 01044.00, seriesCode=ahpremium)。
-    恒生不发布该指数的开/高/低 (实时接口 todayOpn 恒为 null), 故与水泥网
+    目录 hsi 字段 = 恒生内部指数代码 (恒生指数 → 00001.00, 恒生科技 → 02083.00)。
+    恒生不发布指数的开/高/低 (实时接口 todayOpn 恒为 null), 故与水泥网
     点位数指数一样作平K线处理, 不虚构振幅。
     """
     r = _requests().get(

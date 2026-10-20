@@ -254,26 +254,53 @@ def test_index_provider_rejects_quote():
         IndexProvider().fetch_quote(parse("IX.DXY"), prefer_first=False)
 
 
-# ---------- 恒生官方 API 源 (AH股溢价指数) ----------
+# ---------- 恒生官方 API 源 (港股组 + AH股溢价指数) ----------
+
+
+# 恒生官网内部指数代码 → 目录 key (代码错位会静默画出别的指数, 与 futures
+# 测试同思路锁死映射; 全部为实测可用代码, 见目录港股组注释)
+_HSI_CODE_MAP = {
+    "HSI": "00001.00",
+    "HSCEI": "00014.00",
+    "HSTECH": "02083.00",
+    "HSCCI": "00015.00",
+    "HSCI": "00011.00",
+    "HSHK35": "00020.00",
+    "HSHKI": "02019.00",
+    "VHSI": "01050.00",
+    "HSIII": "02016.00",
+    "HSHCI": "02017.00",
+    "HSCGSI": "02018.00",
+    "HSBIO": "02077.00",
+    "HSAHP": "01044.00",
+}
 
 
 def test_hsi_catalog_entries_parse_to_index_domain():
-    """恒生 AH 溢价: 目录合法 + 带 hsi 路由字段 (无 ak/yf/ccement/futures 源)."""
+    """恒生官网指数: 目录合法 + 统一带 hsi 路由字段 (无 ak/yf/ccement/futures 源)."""
     hsi_keys = [k for k, e in INDEX_CATALOG.items() if "hsi" in e]
-    assert hsi_keys == ["HSAHP"]
-    p = parse("IX.HSAHP")
-    assert p.type == "index"
-    assert p.market is Market.INDEX
-    e = INDEX_CATALOG["HSAHP"]
-    assert e["hsi"] == "01044.00"
-    assert not ({"ak", "yf", "ccement", "futures"} & set(e))
+    assert hsi_keys == list(_HSI_CODE_MAP)
+    for key in hsi_keys:
+        p = parse(f"IX.{key}")
+        assert p.type == "index"
+        assert p.market is Market.INDEX
+        e = INDEX_CATALOG[key]
+        assert not ({"ak", "yf", "ccement", "futures"} & set(e))
+        assert e.get("currency"), f"IX.{key} 缺少币种展示"
+
+
+def test_hsi_internal_codes_match_catalog():
+    """hsi 内部代码与官网目录一一对应 (官网目录接口 data=allIndexes 实测核对)."""
+    for key, code in _HSI_CODE_MAP.items():
+        assert INDEX_CATALOG[key]["hsi"] == code
 
 
 def test_hsi_source_chain_is_exclusive():
-    """恒生源链只有专属 hs 源 (官网零鉴权, 无第二数据源可兜底)."""
+    """恒生官网指数源链只有专属 hs 源 (官网零鉴权, 全组无第二数据源)."""
     provider = IndexProvider()
-    chains = provider.history_sources(parse("IX.HSAHP"), "2025-01-01", None)
-    assert [f.__name__ for f in chains] == ["hs"]
+    for key in ("HSAHP", "HSI", "HSTECH"):
+        chains = provider.history_sources(parse(f"IX.{key}"), "2025-01-01", None)
+        assert [f.__name__ for f in chains] == ["hs"]
 
 
 class _FakeResp:

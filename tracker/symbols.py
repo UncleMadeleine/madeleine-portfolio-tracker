@@ -80,7 +80,8 @@ _SUFFIX_MARKET: dict[str, Market] = {
 # 分组是唯一数据源: 新增指数必须归入 INDEX_GROUPS 某组, 平铺目录 INDEX_CATALOG 由此派生
 # (单一定义点, CLI --list 与 UI 下拉均从 index_groups() 读取, 不会再出现"目录有、分组无").
 # yf: Yahoo Finance 全球指数代码; ak: akshare 新浪指数代码 (stock_zh_index_daily /
-# index_us_stock_sina, 缺省 = key 本身). currency 仅作展示 (指数无交割货币).
+# index_us_stock_sina, 缺省 = key 本身); hsi: 恒生官网内部指数代码 (00001.00 等).
+# currency 仅作展示 (指数无交割货币).
 INDEX_GROUPS: dict[str, dict[str, dict[str, str]]] = {
     "风险/波动": {
         "VIX": {"name": "恐慌指数 VIX", "yf": "^VIX", "currency": "USD"},
@@ -104,7 +105,36 @@ INDEX_GROUPS: dict[str, dict[str, dict[str, str]]] = {
         "DAX": {"name": "德国 DAX", "yf": "^GDAXI", "currency": "点"},
         "FTSE": {"name": "英国富时 100", "yf": "^FTSE", "currency": "点"},
         "N225": {"name": "日经 225", "yf": "^N225", "currency": "点"},
-        "HSI": {"name": "恒生指数", "yf": "^HSI", "currency": "点"},
+    },
+    # 恒生指数公司官网 (hsi.com.hk, 见 providers/index.py): 官网公开 API 零鉴权,
+    # 只发布日收盘 (滚动约 5 年窗口), 无开高低 → 平K线。hsi 字段 = 恒生内部
+    # 指数代码。Yahoo 对港股指数仅 ^HSI/^HSCE 有数据, 其余官网独有, 且官网
+    # 收盘口径与 Yahoo 开高低口径混用会画出两种K线, 故全组专属源无兜底。
+    "港股": {
+        "HSI": {"name": "恒生指数", "hsi": "00001.00", "currency": "点"},
+        "HSCEI": {
+            "name": "恒生中国企业指数 (国企)",
+            "hsi": "00014.00",
+            "currency": "点",
+        },
+        "HSTECH": {"name": "恒生科技指数", "hsi": "02083.00", "currency": "点"},
+        "HSCCI": {
+            "name": "恒生香港中资企业指数 (红筹)",
+            "hsi": "00015.00",
+            "currency": "点",
+        },
+        "HSCI": {"name": "恒生综合指数", "hsi": "00011.00", "currency": "点"},
+        "HSHK35": {"name": "恒生香港35", "hsi": "00020.00", "currency": "点"},
+        "HSHKI": {"name": "恒生港股通指数", "hsi": "02019.00", "currency": "点"},
+        "VHSI": {"name": "恒指波幅指数", "hsi": "01050.00", "currency": "点"},
+        "HSIII": {
+            "name": "恒生互联网科技业指数",
+            "hsi": "02016.00",
+            "currency": "点",
+        },
+        "HSHCI": {"name": "恒生医疗保健指数", "hsi": "02017.00", "currency": "点"},
+        "HSCGSI": {"name": "恒生消费指数", "hsi": "02018.00", "currency": "点"},
+        "HSBIO": {"name": "恒生生物科技指数", "hsi": "02077.00", "currency": "点"},
     },
     "中国": {
         "CSI300": {"name": "沪深 300", "ak": "sh000300", "currency": "点"},

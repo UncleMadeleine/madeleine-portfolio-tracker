@@ -14,7 +14,7 @@ import streamlit as st
 
 from . import settings
 
-from tracker import charting, fx, prices, search
+from tracker import charting, fx, mcap, prices, search
 from tracker.providers import PROVIDERS
 from tracker.symbols import parse, type_for_symbol
 
@@ -200,6 +200,33 @@ def render_kline_view(
     return result
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_mcap_compare(
+    symbols: tuple[str, ...],
+    months: int,
+    prefer_akshare: bool,
+    use_ibkr: bool = False,
+    use_longport: bool = False,
+    crypto_source: str = "auto",
+    target_currency: str | None = None,
+):
+    """历史市值对比序列 (磁盘缓存 + 内存缓存双层): 市值口径不可变属性低频.
+
+    内部经 cached_kline 取同源价格K线, 市值序列按「东财历史总市值 / 历史股本
+    ×收盘 / 当前市值近似」三级兜底, 最后统一折算 target_currency 币种。
+    返回 (市值 frames dict, warnings 列表, 元信息 dict)。
+    """
+    frames: dict[str, pd.DataFrame] = {}
+    for s in symbols:
+        d = cached_kline(
+            s, months, prefer_akshare, use_ibkr, use_longport, crypto_source
+        )
+        if isinstance(d, pd.DataFrame) and not d.empty:
+            frames[s] = d
+    cap_frames, warnings, meta = mcap.compare_market_caps(frames, target_currency)
+    return cap_frames, warnings, meta
+
+
 def render_compare_chart(data: dict, *, height: int = 560) -> None:
     """多股对比图: 复用 K线组件 (拖动平移/滚轮缩放/十字光标), data 由 compare_payload 生成."""
     _KLINE_CHART(key="compare_chart", data=data, height=height)
@@ -208,6 +235,102 @@ def render_compare_chart(data: dict, *, height: int = 560) -> None:
 def render_crypto_compare_chart(data: dict, *, height: int = 560) -> None:
     """加密货币K线对比图: 复用 K线组件 (每币一个窗格蜡烛图), data 由 crypto_compare_payload 生成."""
     _KLINE_CHART(key="crypto_compare_chart", data=data, height=height)
+
+
+def _build_ratio_payload(
+    frames: dict[str, pd.DataFrame],
+    ratio_cfg: tuple[str, str, bool],
+    cmp_period: str,
+) -> dict | None:
+    """比例线 payload (股价模式): 两代码收盘价相除, 跨币种可选汇率调整."""
+    ratio_num, ratio_den, fx_adjust = ratio_cfg
+    if ratio_num == ratio_den:
+        st.warning("比例线分子与分母相同, 已忽略。")
+        return None
+    if ratio_num not in frames or ratio_den not in frames:
+        st.warning("比例线代码无有效K线数据, 已忽略。")
+        return None
+    fx_df = None
+    fx_pair = None
+    fx_missing = False
+    if fx_adjust:
+        cur_num = parse(ratio_num).currency
+        cur_den = parse(ratio_den).currency
+        fx_pair = f"{cur_den}{cur_num}"
+        start_ts = min(
+            frames[ratio_num]["date"].min(),
+            frames[ratio_den]["date"].min(),
+        ) - pd.Timedelta(days=10)
+        fx_df = fx.get_fx_history(
+            cur_den,
+            cur_num,
+            start_ts.strftime("%Y-%m-%d"),
+            pd.Timestamp.today().strftime("%Y-%m-%d"),
+        )
+        fx_missing = fx_df is None
+    try:
+        return charting.build_ratio_series(
+            frames,
+            ratio_num,
+            ratio_den,
+            period=cmp_period,
+            fx_df=fx_df,
+            fx_pair=fx_pair,
+            fx_missing=fx_missing,
+        )
+    except ValueError as e:
+        st.warning(f"比例线: {e}")
+        return None
+
+
+def _price_compare_payload(
+    frames: dict[str, pd.DataFrame],
+    ratio_cfg: tuple[str, str, bool] | None,
+    cmp_period: str,
+    norm: bool,
+) -> dict:
+    """股价对比 payload (走势对比页原有路径复用)."""
+    ratio_payload = (
+        _build_ratio_payload(frames, ratio_cfg, cmp_period) if ratio_cfg else None
+    )
+    return charting.compare_payload(
+        frames,
+        normalize=norm,
+        period=cmp_period,
+        green_up=settings.green_up(),
+        ratio=ratio_payload,
+    )
+
+
+def _render_mcap_summary(
+    frames: dict[str, pd.DataFrame],
+    meta: dict[str, dict],
+    cmp_period: str,
+    target_ccy: str,
+) -> None:
+    """市值对比摘要: 区间市值涨跌 + 最新市值排序 (含各代码口径标注)."""
+    chg, rows = [], []
+    for sym, d in frames.items():
+        dd = charting.resample_ohlc(d, cmp_period) if cmp_period != "daily" else d
+        if len(dd) >= 2:
+            pct = float(dd["close"].iloc[-1]) / float(dd["close"].iloc[0]) - 1
+            up_tag, down_tag = settings.up_down_tags()
+            chg.append(
+                f"{sym} :{up_tag}[{pct:+.2%}]"
+                if pct >= 0
+                else f"{sym} :{down_tag}[{pct:+.2%}]"
+            )
+        src = (meta.get(sym) or {}).get("source_label")
+        rows.append((sym, float(d["close"].iloc[-1]), src))
+    if chg:
+        st.markdown("区间市值涨跌: " + " · ".join(chg))
+    rows.sort(key=lambda r: -r[1])
+    mc_line = " · ".join(
+        f"{sym} {mcap.describe_amount(v)} {target_ccy}" + (f" ({src})" if src else "")
+        for sym, v, src in rows
+    )
+    st.markdown(f"最新市值 ({target_ccy}): {mc_line}")
+    st.caption("统一币种按历史汇率逐日折算; crypto/加密货币与指数无总市值语义。")
 
 
 def render_compare_controls(
@@ -228,7 +351,9 @@ def render_compare_controls(
     chart_symbols = list(
         dict.fromkeys(chart_symbols + list(st.session_state.get("compare_extra", [])))
     )
-    c1, c2, c3, c4 = st.columns([4, 1, 1, 1], vertical_alignment="bottom")
+    c1, c2, c3, c5, c4 = st.columns(
+        [3.2, 1, 0.9, 0.9, 1.1], vertical_alignment="bottom"
+    )
     sel_raw = c1.multiselect(
         "对比代码",
         chart_symbols,
@@ -251,6 +376,14 @@ def render_compare_controls(
         format_func=lambda v: charting.PERIOD_LABELS[v],
         key="compare_period",
     )
+    metric = c5.selectbox(
+        "指标",
+        ["股价", "市值"],
+        index=0,
+        key="compare_metric",
+        help="市值: 历史总市值对比 (A股为东财历史总市值; 美股/港股等为历史股本×收盘价, "
+        "缺失时按当前市值近似; 统一折算币种, crypto/指数无市值语义)",
+    )
     norm = c4.toggle("归一化 (起点=100)", value=True, key="compare_norm")
 
     sel, bad = [], []
@@ -265,7 +398,9 @@ def render_compare_controls(
             "选择持仓/自选代码, 或直接输入任意代码 (如 NVDA · 600519.SS) 开始对比。"
         )
         return
-    # 可选比例线 (默认关闭): 两标的收盘价相除, 同图独立纵轴; 跨币种可选汇率调整。
+    # 可选比例线 (默认关闭): 两标的收盘价/市值相除, 同图独立纵轴。
+    # 市值模式下各序列已统一折算币种, 汇率调整无意义 → 禁用。
+    is_mcap = metric == "市值"
     ratio_cfg = None
     if len(sel) >= 2:
         r1, r2, r3, r4 = st.columns([1.1, 1.5, 1.5, 1.3], vertical_alignment="bottom")
@@ -273,7 +408,9 @@ def render_compare_controls(
             "比例线",
             value=False,
             key="compare_ratio",
-            help="额外画一条两标的收盘价比值线 (同图独立纵轴, 虚线为区间均值)",
+            help="额外画一条两标的"
+            + ("市值" if is_mcap else "收盘价")
+            + "比值线 (同图独立纵轴, 虚线为区间均值)",
         )
         if ratio_on:
             # 选项随对比代码变化: 会话状态里的旧代码不在本次选择中时先回退默认
@@ -293,108 +430,134 @@ def render_compare_controls(
                 "汇率调整",
                 value=False,
                 key="compare_ratio_fx",
-                disabled=not diff_ccy,
-                help="跨币种时把分母价格换算成分子币种后再相除 (默认关闭: 直接看两个报价的比值)",
+                disabled=not diff_ccy or is_mcap,
+                help="跨币种时把分母价格换算成分子币种后再相除 (默认关闭: 直接看两个报价的比值)"
+                if not is_mcap
+                else "市值模式下各序列已统一折算币种, 无需汇率调整",
             )
-            ratio_cfg = (ratio_num, ratio_den, bool(fx_adjust and diff_ccy))
+            ratio_cfg = (ratio_num, ratio_den, bool(fx_adjust and diff_ccy and not is_mcap))
     frames = {}
-    with st.spinner(f"拉取 {len(sel)} 只代码近 {cmp_months} 个月 K线..."):
-        for s in sel:
-            try:
-                d = cached_kline(
-                    s, cmp_months, prefer_akshare, use_ibkr, use_longport, crypto_source
-                )
-                if d.empty:
-                    st.warning(f"{s}: 无有效K线数据")
-                else:
-                    frames[s] = d
-            except Exception as e:
-                st.warning(f"{s}: {e}")
-    if frames:
+    mcap_meta: dict[str, dict] = {}
+    if is_mcap:
+        from tracker import storage
+
+        target_ccy = storage.load_portfolio()["base_currency"].upper()
+        with st.spinner(f"拉取 {len(sel)} 只代码近 {cmp_months} 个月 历史市值..."):
+            frames, mcap_warnings, mcap_meta = cached_mcap_compare(
+                tuple(sel),
+                cmp_months,
+                prefer_akshare,
+                use_ibkr,
+                use_longport,
+                crypto_source,
+                target_ccy,
+            )
+        for w in mcap_warnings:
+            st.warning(w)
+    else:
+        with st.spinner(f"拉取 {len(sel)} 只代码近 {cmp_months} 个月 K线..."):
+            for s in sel:
+                try:
+                    d = cached_kline(
+                        s, cmp_months, prefer_akshare, use_ibkr, use_longport, crypto_source
+                    )
+                    if d.empty:
+                        st.warning(f"{s}: 无有效K线数据")
+                    else:
+                        frames[s] = d
+                except Exception as e:
+                    st.warning(f"{s}: {e}")
+    if not frames:
+        st.info(
+            "所选代码均无历史市值数据 (crypto/指数无市值语义, 或数据源不可得)"
+            if is_mcap
+            else "所选代码均无有效K线数据"
+        )
+        return
+    if is_mcap:
+        # 市值模式: 各序列已统一折算 target 币种, 比例线 = 两市值之比 (无汇率调整)
         ratio_payload = None
         if ratio_cfg:
-            ratio_num, ratio_den, fx_adjust = ratio_cfg
+            ratio_num, ratio_den, _ = ratio_cfg
             if ratio_num == ratio_den:
                 st.warning("比例线分子与分母相同, 已忽略。")
             elif ratio_num in frames and ratio_den in frames:
-                fx_df = None
-                fx_pair = None
-                fx_missing = False
-                if fx_adjust:
-                    cur_num = parse(ratio_num).currency
-                    cur_den = parse(ratio_den).currency
-                    fx_pair = f"{cur_den}{cur_num}"
-                    start_ts = min(
-                        frames[ratio_num]["date"].min(),
-                        frames[ratio_den]["date"].min(),
-                    ) - pd.Timedelta(days=10)
-                    fx_df = fx.get_fx_history(
-                        cur_den,
-                        cur_num,
-                        start_ts.strftime("%Y-%m-%d"),
-                        pd.Timestamp.today().strftime("%Y-%m-%d"),
-                    )
-                    fx_missing = fx_df is None
                 try:
                     ratio_payload = charting.build_ratio_series(
-                        frames,
-                        ratio_num,
-                        ratio_den,
-                        period=cmp_period,
-                        fx_df=fx_df,
-                        fx_pair=fx_pair,
-                        fx_missing=fx_missing,
+                        frames, ratio_num, ratio_den, period=cmp_period
                     )
                 except ValueError as e:
                     st.warning(f"比例线: {e}")
             else:
-                st.warning("比例线代码无有效K线数据, 已忽略。")
-        render_compare_chart(
-            charting.compare_payload(
-                frames,
-                normalize=norm,
-                period=cmp_period,
-                green_up=settings.green_up(),
-                ratio=ratio_payload,
-            ),
-            height=560,
+                st.warning("比例线代码无有效市值数据, 已忽略。")
+        payload = charting.compare_payload(
+            frames,
+            normalize=norm,
+            period=cmp_period,
+            green_up=settings.green_up(),
+            ratio=ratio_payload,
+            title=f"市值对比 · 近 {cmp_months} 个月 · "
+            + f"{charting.PERIOD_LABELS.get(cmp_period, '日K')} · 统一 {target_ccy}"
+            + (" · 归一化" if norm else ""),
         )
+        render_compare_chart(payload, height=560)
         if ratio_payload:
-            den_expr = ratio_payload["denominator"]
-            if ratio_payload.get("fxAdjusted"):
-                den_expr = f"({den_expr} × {ratio_payload['fxPair']})"
             prec = ratio_payload["precision"]
             cur_v = ratio_payload["data"][-1]["value"]
             mean_v = ratio_payload["mean"]
             dev = (cur_v / mean_v - 1) * 100 if mean_v else 0
             st.caption(
-                f"比例线 = {ratio_payload['numerator']} ÷ {den_expr}"
-                f" (具体比值, 未归一化); 当前 {cur_v:.{prec}f}"
+                f"市值比例线 = {ratio_payload['numerator']} ÷ {ratio_payload['denominator']}"
+                f" (统一 {target_ccy} 口径, 未归一化); 当前 {cur_v:.{prec}f}"
                 f" · 均值 {mean_v:.{prec}f} · 较均值 {dev:+.2f}%"
                 " · 使用左侧独立纵轴, 虚线为区间均值。"
             )
-            if ratio_payload.get("fxMissing"):
-                st.warning(
-                    "汇率历史取数失败, 比例线未做汇率调整 (比值含汇率波动)。"
-                )
-        chg = []
-        for sym, d in frames.items():
-            dd = charting.resample_ohlc(d, cmp_period) if cmp_period != "daily" else d
-            if len(dd) >= 2:
-                pct = float(dd["close"].iloc[-1]) / float(dd["close"].iloc[0]) - 1
-                up_tag, down_tag = settings.up_down_tags()
-                chg.append(
-                    f"{sym} :{up_tag}[{pct:+.2%}]"
-                    if pct >= 0
-                    else f"{sym} :{down_tag}[{pct:+.2%}]"
-                )
-        if chg:
-            st.markdown("区间涨跌: " + " · ".join(chg))
+        _render_mcap_summary(frames, mcap_meta, cmp_period, target_ccy)
         if norm:
             st.caption(
-                "各代码按自身区间首个收盘归一化 (=100); 不同市场按各自交易日绘制, "
+                "市值按统一币种折算 (各代码较自身首日归一化); A股取东财历史总市值, "
+                "美股/港股等按历史股本×收盘价 (缺失时按当前市值近似, 见警告提示), "
                 "拖动平移 / 滚轮缩放, 悬停查看当日各代码取值。"
             )
+        return
+    payload = _price_compare_payload(frames, ratio_cfg, cmp_period, norm)
+    render_compare_chart(payload, height=560)
+    if ratio_payload := payload.get("ratio"):
+        den_expr = ratio_payload["denominator"]
+        if ratio_payload.get("fxAdjusted"):
+            den_expr = f"({den_expr} × {ratio_payload['fxPair']})"
+        prec = ratio_payload["precision"]
+        cur_v = ratio_payload["data"][-1]["value"]
+        mean_v = ratio_payload["mean"]
+        dev = (cur_v / mean_v - 1) * 100 if mean_v else 0
+        st.caption(
+            f"比例线 = {ratio_payload['numerator']} ÷ {den_expr}"
+            f" (具体比值, 未归一化); 当前 {cur_v:.{prec}f}"
+            f" · 均值 {mean_v:.{prec}f} · 较均值 {dev:+.2f}%"
+            " · 使用左侧独立纵轴, 虚线为区间均值。"
+        )
+        if ratio_payload.get("fxMissing"):
+            st.warning(
+                "汇率历史取数失败, 比例线未做汇率调整 (比值含汇率波动)。"
+            )
+    chg = []
+    for sym, d in frames.items():
+        dd = charting.resample_ohlc(d, cmp_period) if cmp_period != "daily" else d
+        if len(dd) >= 2:
+            pct = float(dd["close"].iloc[-1]) / float(dd["close"].iloc[0]) - 1
+            up_tag, down_tag = settings.up_down_tags()
+            chg.append(
+                f"{sym} :{up_tag}[{pct:+.2%}]"
+                if pct >= 0
+                else f"{sym} :{down_tag}[{pct:+.2%}]"
+            )
+    if chg:
+        st.markdown("区间涨跌: " + " · ".join(chg))
+    if norm:
+        st.caption(
+            "各代码按自身区间首个收盘归一化 (=100); 不同市场按各自交易日绘制, "
+            "拖动平移 / 滚轮缩放, 悬停查看当日各代码取值。"
+        )
 
 
 def _append_compare_symbol(code: str) -> None:

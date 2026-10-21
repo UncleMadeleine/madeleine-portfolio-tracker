@@ -11,7 +11,7 @@
   history   历史价格 (近 N 个月)
   kline     K线蜡烛图 (交互式 HTML + 摘要, 含成交量/均线/周月K)
   search    代码/名称搜索 → 规范代码 (结果可直接喂 kline/compare/quote)
-  compare   多股走势对比 (归一化折线; --json 出序列, 默认出交互式 HTML)
+  compare   多股走势/市值对比 (归一化折线 --metric mcap 可切市值; --json 出序列)
   import    统一持仓导入 (ibkr / longport / wallet / file, 追加合并或 --overwrite 覆盖)
   longport-login 长桥 OAuth 登录 (浏览器授权, token 自动缓存刷新)
   sync      从 IB Gateway 账户同步持仓 (已并入 import ibkr, 保留兼容)
@@ -445,7 +445,7 @@ def build_parser() -> argparse.ArgumentParser:
     # ---- compare ----
     p_cmp = sub.add_parser(
         "compare",
-        help="多股走势对比 (归一化折线; --json 出序列, 默认出交互式 HTML)",
+        help="多股走势/市值对比 (--metric mcap 切市值; --json 出序列, 默认出交互式 HTML)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
@@ -455,6 +455,8 @@ def build_parser() -> argparse.ArgumentParser:
             "  tracker compare AAPL NVDA --json                 # JSON: 每代码归一化序列+涨跌\n"
             "  tracker compare 601155.SS 1030.HK --ratio 601155.SS 1030.HK\n"
             "                                                 # 额外画比例线 (默认原币比值; --ratio-fx 汇率调整)\n"
+            "  tracker compare 0700.HK 600519.SS --metric mcap  # 市值对比 (统一折算基础货币)\n"
+            "  tracker compare AAPL NVDA --metric mcap --currency USD  # 市值对比指定折算币种\n"
         ),
     )
     p_cmp.add_argument(
@@ -466,6 +468,13 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["daily", "weekly", "monthly"],
         default="daily",
         help="周期 (默认日K)",
+    )
+    p_cmp.add_argument(
+        "--metric",
+        choices=["price", "mcap"],
+        default="price",
+        help="对比指标: price=收盘价 (默认); mcap=历史市值 (A股用东财历史总市值, "
+        "其余市场用历史股本×收盘价, 缺失时按当前市值近似; crypto/指数无市值语义)",
     )
     p_cmp.add_argument(
         "--raw", action="store_true", help="不归一化, 直接画各代码原币种收盘价"
@@ -480,7 +489,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_cmp.add_argument(
         "--ratio-fx",
         action="store_true",
-        help="比例线按历史汇率调整 (跨币种时把分母换算成分子币种; 默认关闭)",
+        help="比例线按历史汇率调整 (跨币种时把分母换算成分子币种; 默认关闭; 市值模式已统一币种, 无需此开关)",
+    )
+    p_cmp.add_argument(
+        "--currency",
+        metavar="币种",
+        default=None,
+        help="市值对比 (--metric mcap) 统一折算币种 (默认组合基础货币, 如 CNY/USD)",
     )
     p_cmp.add_argument("--akshare", action="store_true")
     p_cmp.add_argument(

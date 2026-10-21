@@ -1282,12 +1282,14 @@ def compare_payload(
     height: int = 560,
     init_bars: int = 140,
     ratio: dict | None = None,
+    title: str | None = None,
 ) -> dict:
     """多股对比 payload (复用 K线组件): 每只代码一条收盘价折线.
 
     normalize=True 时各代码按自身区间首个收盘归一化为 100 起点,
     便于不同币种/量级的代码同图比较; 交易日历不同的市场按各自数据点绘制.
     ratio: 可选的比例线 payload (build_ratio_series 生成), 同图使用独立纵轴.
+    title: 图表标题覆盖 (默认走势对比 · 代码 · 周期; 市值模式标注币种口径).
     """
     lines = []
     precisions = []
@@ -1334,8 +1336,11 @@ def compare_payload(
         axis |= {p["time"] for p in ratio.get("data", [])}
     return {
         "mode": "compare",
-        "title": f"{names} · {PERIOD_LABELS.get(period, '日K')}"
-        + (" · 归一化" if normalize else ""),
+        "title": title
+        or (
+            f"{names} · {PERIOD_LABELS.get(period, '日K')}"
+            + (" · 归一化" if normalize else "")
+        ),
         "up": up,
         "down": down,
         "precision": payload_precision,

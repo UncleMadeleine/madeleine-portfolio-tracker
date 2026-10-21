@@ -94,3 +94,73 @@ def test_compare_ratio_toggle(compare_app):
     captions = [c.value for c in compare_app.caption]
     assert any("比例线 =" in c for c in captions)
     assert any(t.key == "compare_ratio_fx" for t in compare_app.toggle)
+
+
+def _fake_mcap_frames():
+    """假的「历史市值 frames」(K线同构, close=已折算的亿级市值)."""
+    from tracker.mcap import ohlcv_shim
+
+    def _df(scale):
+        idx = pd.date_range("2024-01-01", periods=30, freq="D")
+        return ohlcv_shim(
+            pd.DataFrame(
+                {"date": idx, "close": [scale * (1 + i / 100) for i in range(30)]}
+            )
+        )
+
+    return {"AAPL": _df(1e12), "0700.HK": _df(5e11)}
+
+
+def test_compare_mcap_mode(compare_app, monkeypatch):
+    """市值模式: 指标切「市值」后走市值序列路径 (市值标题说明 + 最新市值摘要)."""
+    from tracker import storage
+
+    app = _subview(compare_app, "走势对比")
+    metric_sel = next(s for s in app.selectbox if s.key == "compare_metric")
+    assert metric_sel.value == "股价"
+
+    captured = {}
+
+    def fake_cached_mcap_compare(
+        symbols,
+        months,
+        prefer_akshare,
+        use_ibkr=False,
+        use_longport=False,
+        crypto_source="auto",
+        target_currency=None,
+    ):
+        captured["symbols"] = symbols
+        captured["target"] = target_currency
+        capsule = _fake_mcap_frames()
+        warnings_list = ["AAPL: 无历史股本数据, 按当前市值近似折算"]
+        meta = {
+            "AAPL": {
+                "source": "approx",
+                "currency": "CNY",
+                "source_label": "当前市值近似折算",
+            },
+            "0700.HK": {
+                "source": "shares",
+                "currency": "CNY",
+                "source_label": "历史股本×收盘价",
+            },
+        }
+        return capsule, warnings_list, meta
+
+    monkeypatch.setattr(
+        kline_page, "cached_mcap_compare", fake_cached_mcap_compare
+    )
+    metric_sel.set_value("市值").run()
+    assert captured["symbols"] == ("AAPL", "0700.HK")
+    # 默认折算币种 = 组合基础货币 (读本地 portfolio.json, 不硬编码)
+    assert captured["target"] == storage.load_portfolio()["base_currency"].upper()
+    texts = [w.value for w in compare_app.warning]
+    assert any("按当前市值近似折算" in t for t in texts)
+    assert any("最新市值" in m.value for m in compare_app.markdown)
+    assert any("市值按统一币种折算" in c.value for c in compare_app.caption)
+    # 比例线在市值模式下仍可开: 比例 = 两市值之比 (汇率调整禁用)
+    compare_app.toggle(key="compare_ratio").set_value(True).run()
+    fx_toggle = next(t for t in compare_app.toggle if t.key == "compare_ratio_fx")
+    assert fx_toggle.disabled
+    assert any("市值比例线 =" in c.value for c in compare_app.caption)

@@ -105,6 +105,15 @@ def _create_schema(con) -> None:
         )
         """
     )
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS series_cache (
+            key TEXT PRIMARY KEY,
+            payload TEXT NOT NULL,
+            fetched_at REAL NOT NULL
+        )
+        """
+    )
     try:
         con.execute("ALTER TABLE fundamentals ADD COLUMN market_cap REAL")
     except sqlite3.OperationalError:
@@ -458,6 +467,54 @@ def clear_ohlc() -> int:
         return n
 
 
+# ---------- 通用序列缓存 (历史市值 em / 历史股本 shares 用) ----------
+
+
+def get_series_cached(key: str, ttl: int) -> pd.DataFrame | None:
+    """读取缓存的 (date, close) 序列; 未命中/过期/载荷损坏返回 None.
+
+    与 OHLC 缓存同构: 整段 JSON 载荷按 key 覆盖, TTL 过期重取。
+    """
+    _ensure_db()
+    with sqlite3.connect(CACHE_DB) as con:
+        row = con.execute(
+            "SELECT payload FROM series_cache WHERE key=? AND fetched_at > ?",
+            (key, time.time() - ttl),
+        ).fetchone()
+    if row is None:
+        return None
+    try:
+        df = pd.DataFrame(json.loads(row[0]))
+        if df.empty:
+            return None
+        df["date"] = pd.to_datetime(df["date"])
+        df["close"] = pd.to_numeric(df["close"], errors="coerce")
+        return df.dropna(subset=["close"]).sort_values("date").reset_index(drop=True)
+    except Exception:
+        return None
+
+
+def set_series_cached(key: str, df: pd.DataFrame) -> None:
+    """写入 (date, close) 序列缓存; 空表跳过 (不落库空载荷)."""
+    if df is None or df.empty:
+        return
+    _ensure_db()
+    recs = df[["date", "close"]].copy()
+    recs["date"] = pd.to_datetime(recs["date"]).dt.strftime("%Y-%m-%d")
+    payload = json.dumps(recs.to_dict(orient="records"))
+    with _lock, sqlite3.connect(CACHE_DB) as con:
+        con.execute(
+            """
+            INSERT INTO series_cache (key, payload, fetched_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                payload=excluded.payload, fetched_at=excluded.fetched_at
+            """,
+            (key, payload, time.time()),
+        )
+        con.commit()
+
+
 def info() -> dict:
     """缓存统计: 记录总数 / 有效条数 / 数据库大小."""
     _ensure_db()
@@ -482,6 +539,11 @@ def info() -> dict:
         oldest, newest = con.execute(
             "SELECT MIN(fetched_at), MAX(fetched_at) FROM quotes"
         ).fetchone()
+        series_total = con.execute("SELECT COUNT(*) FROM series_cache").fetchone()[0]
+        series_fresh = con.execute(
+            "SELECT COUNT(*) FROM series_cache WHERE fetched_at > ?",
+            (now - OHLC_TTL,),
+        ).fetchone()[0]
     size = CACHE_DB.stat().st_size if CACHE_DB.exists() else 0
     return {
         "db": str(CACHE_DB),
@@ -500,6 +562,8 @@ def info() -> dict:
         "ohlc_fresh": ohlc_fresh,
         "oldest_at": oldest or 0.0,
         "newest_at": newest or 0.0,
+        "series_total": series_total,
+        "series_fresh": series_fresh,
         "size_bytes": size,
     }
 
@@ -511,6 +575,7 @@ def clear() -> int:
         n_quotes = con.execute("DELETE FROM quotes").rowcount
         n_ohlc = con.execute("DELETE FROM ohlc_cache").rowcount
         n_fx = con.execute("DELETE FROM fx_rates").rowcount
+        n_series = con.execute("DELETE FROM series_cache").rowcount
         con.commit()
         n_fund = con.execute("DELETE FROM fundamentals").rowcount
-        return n_quotes + n_ohlc + n_fund + n_fx
+        return n_quotes + n_ohlc + n_fund + n_fx + n_series

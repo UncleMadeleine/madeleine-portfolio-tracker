@@ -141,12 +141,32 @@ def cmd_compare(args) -> None:
 
     period = args.period
     raw = getattr(args, "raw", False)
+    # 市值对比 (可选指标): frames (股价) → 历史市值 frames (统一折算币种),
+    # 下游归一化/JSON/HTML/比例线逻辑全部复用 (close=市值, K线同构)。
+    metric = getattr(args, "metric", "price") or "price"
+    mcap_meta: dict[str, dict] = {}
+    target_ccy: str | None = None
+    if metric == "mcap":
+        from .. import mcap as mcap_mod
+        from .. import storage
+
+        target_ccy = (
+            getattr(args, "currency", None) or storage.load_portfolio()["base_currency"]
+        ).upper()
+        mcap_frames, mcap_warnings, mcap_meta = mcap_mod.compare_market_caps(
+            frames, target_ccy
+        )
+        for w in mcap_warnings:
+            print(f"⚠ {w}", file=sys.stderr)
+        if len(mcap_frames) < 2:
+            _finish_with_error("取到历史市值数据的代码不足 2 个, 无法市值对比")
+        frames = mcap_frames
     ratio_payload = (
         _build_ratio(
             frames,
             args.ratio,
             period,
-            fx_adjust=getattr(args, "ratio_fx", False),
+            fx_adjust=getattr(args, "ratio_fx", False) and metric != "mcap",
         )
         if getattr(args, "ratio", None)
         else None
@@ -190,6 +210,9 @@ def cmd_compare(args) -> None:
             {
                 "period": period,
                 "months": args.months,
+                "metric": metric,
+                "currency": target_ccy,
+                "sources": mcap_meta,
                 "normalized": not raw,
                 "codes": list(frames.keys()),
                 "lines": lines,
@@ -210,6 +233,9 @@ def cmd_compare(args) -> None:
         y = d["close"].astype(float)
         if not args.raw:
             y = y / y.iloc[0] * 100
+        elif metric == "mcap":
+            # 绝对市值 plot 时折算到亿 (raw 大数轴可读性差; JSON 输出仍为原值)
+            y = y / 1e8
         fig.add_trace(
             go.Scatter(
                 x=d["date"],
@@ -243,11 +269,23 @@ def cmd_compare(args) -> None:
             annotation_text="均值",
             annotation_position="top left",
         )
+    label_head = "市值对比" if metric == "mcap" else "走势对比"
+    label_y = (
+        "归一化 (起点=100)"
+        if not args.raw
+        else (
+            f"市值 (亿 {target_ccy})"
+            if metric == "mcap"
+            else "收盘价 (各代码原币种)"
+        )
+    )
     layout = dict(
-        title=f"走势对比 · 近 {args.months} 个月 · {' vs '.join(codes)}"
+        title=f"{label_head} · 近 {args.months} 个月 · {period}"
+        + (f" · 统一 {target_ccy}" if metric == "mcap" else "")
+        + " · " + " vs ".join(codes)
         + ("" if args.raw else " (起点=100)"),
         template="plotly_white",
-        yaxis_title="收盘价 (各代码原币种)" if args.raw else "归一化 (起点=100)",
+        yaxis_title=label_y,
         hovermode="x unified",
         height=560,
     )
@@ -266,19 +304,35 @@ def cmd_compare(args) -> None:
     out = (
         Path(args.output)
         if args.output
-        else VAR_DIR / f"compare_{'-'.join(c[:6] for c in codes)}.html"
+        else VAR_DIR
+        / (
+            f"compare_{'mcap_' if metric == 'mcap' else ''}{'-'.join(c[:6] for c in codes)}.html"
+        )
     )
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(charting.fig_to_html(fig), encoding="utf-8")
-    # 终端摘要: 区间涨跌
+    # 终端摘要: 区间涨跌 (+ 市值模式的最新市值与口径)
+    mcap_mod = None
+    if metric == "mcap":
+        from .. import mcap as mcap_mod  # noqa: F811  本地别名供摘要格式化
     chg_parts = []
+    mc_parts = []
     for code, df in frames.items():
         d = charting.resample_ohlc(df, period) if period != "daily" else df
         close = d["close"].astype(float)
         pct = (close.iloc[-1] / close.iloc[0] - 1) * 100
         chg_parts.append(f"{code} {pct:+.2f}%")
-    print(f"\n=== 走势对比 (近 {args.months} 个月, {period}) ===")
+        if metric == "mcap":
+            src = (mcap_meta.get(code) or {}).get("source_label")
+            mc_parts.append(
+                f"{code} {mcap_mod.describe_amount(float(close.iloc[-1]))} {target_ccy}"
+                + (f" ({src})" if src else "")
+            )
+    print(f"\n=== {label_head} (近 {args.months} 个月, {period}) ===")
     print("区间涨跌: " + " · ".join(chg_parts))
+    if metric == "mcap":
+        print("最新市值: " + " · ".join(mc_parts))
+        print(f"市值已统一折算为 {target_ccy} (历史汇率按日折算; crypto/指数无市值语义)")
     if ratio_payload:
         last = ratio_payload["data"][-1]["value"]
         mean = ratio_payload["mean"]

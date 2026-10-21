@@ -128,6 +128,9 @@ python -m tracker.cli search 腾讯 --json
 python -m tracker.cli compare AAPL 0700.HK 600519.SS
 python -m tracker.cli compare 601155.SS 1030.HK --ratio 601155.SS 1030.HK  # 比例线
 
+# 多股市值对比（统一折算币种; A股东财历史总市值, 美股/港股等历史股本×收盘价）
+python -m tracker.cli compare 0700.HK 600519.SS --metric mcap
+
 # 持仓管理
 python -m tracker.cli portfolio list
 python -m tracker.cli portfolio add AAPL --quantity 10 --avg-cost 180
@@ -344,7 +347,7 @@ tracker/
 │   ├── fx.py             汇率
 │   ├── history.py        历史价格
 │   ├── kline.py          K线 HTML + 摘要（--json 输出数据）
-│   ├── compare.py        多股走势对比（归一化折线, --raw 原价, --ratio 比例线, --json 出序列）
+│   ├── compare.py        多股走势/市值对比（归一化折线, --raw 原价, --ratio 比例线, --metric mcap 市值, --json 出序列）
 │   ├── search.py         代码/名称搜索 → 规范代码
 │   ├── index_kline.py    指数K线 HTML + 摘要（IX.<KEY>, --json / --list）
 │   ├── importer.py       统一导入（import ibkr / longport / wallet / file, 追加/覆盖）
@@ -376,6 +379,7 @@ tracker/
 │   ├── watchlist.py      自选视图组装 + 取数用例（watchlist list / report 复用）
 │   └── snapshot.py       快照用例（take_snapshot / snapshot_json, 存储剥离）
 ├── fundamentals.py     基本面取数门面（每股净资产/总市值, 6h 磁盘缓存）— PB/市值提醒数据源
+├── mcap.py             历史市值序列（A股东财历史总市值 / 全球历史股本×收盘价 / 当前市值近似; 市值对比用）
 ├── ibkr.py             IBKR 行情接入 + 持仓读取（可选依赖 ib_async，失败静默回退）
 ├── longport.py         长桥行情/历史/持仓接入（可选依赖 longport，失败静默回退）
 ├── longport_oauth.py   长桥 OAuth 授权子进程（独立进程运行, 状态写 var/longport_oauth_state.json）

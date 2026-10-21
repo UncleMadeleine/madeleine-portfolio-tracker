@@ -105,6 +105,19 @@ def _quote_from_dump(p: ParsedSymbol, d: dict) -> Quote | None:
         return None
     prev = _pick(d, "prev_close", "previous_close")
     chg = _pick(d, "change_percent", "percent_change")
+    # 与价格字段同一守卫: 停牌/坏响应里的 NaN 会 float() 成 nan 而非 None,
+    # 直接漏进 Quote 变成 "+NaN%" 行情 (其余数据源均有 pd.notna/有限性过滤)。
+    def _finite_or_none(v: object) -> float | None:
+        if v is None:
+            return None
+        try:
+            f = float(v)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return None
+        return f if math.isfinite(f) else None
+
+    prev = _finite_or_none(prev)
+    chg = _finite_or_none(chg)
     # yfinance 对 LSE 返回的价为便士且 currency=GBp; 若字段缺失, GB 市场按便士处理
     # 避免回退到 p.currency(GBP) 导致价格放大 100 倍
     raw_ccy = _pick(d, "currency")

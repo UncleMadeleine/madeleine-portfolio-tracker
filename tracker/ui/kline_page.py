@@ -903,8 +903,10 @@ def render_kline_controls(
     )
     # 仅数据源变化才需 bypass 磁盘 OHLC 缓存: 其键只有 symbol+months, 换源后
     # 同键会命中上一个源的旧K线 (settings 页 clear_quotes 只清实时行情、保留K线)。
-    # 换代码/范围本就换磁盘键, 无需 refresh。
-    src_changed = st.session_state.get("kline_last_src") != src
+    # 换代码/范围本就换磁盘键, 无需 refresh。首次会话 (无上次记录) 不算"换源",
+    # 否则全新会话第一条K线必然绕过磁盘缓存强制回源 (与滑动模式 prev_qid 守卫一致)。
+    prev_src = st.session_state.get("kline_last_src")
+    src_changed = prev_src is not None and prev_src != src
     if data_changed or st.session_state.get("kline_current_df") is None:
         try:
             with st.spinner(f"拉取 {yahoo} K线..."):

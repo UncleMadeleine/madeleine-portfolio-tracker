@@ -548,6 +548,32 @@ class TestChartingFixes:
         df2 = df.assign(open=100.0, high=101.0, low=99.0, close=100.0)
         assert charting.kline_payload(df2, "AAPL")["precision"] == 2
 
+    def test_crypto_compare_low_price_precision(self):
+        """加密货币对比: 蜡烛取整位数不得低于声明的 precision.
+
+        回归背景: 蜡烛硬编码 round(,8) 而 precision 可达 9~10 (中位价 ~1e-6),
+        声明的 minMove=1e-10 却没有数据位可显示, 与 kline_payload 的
+        nd=max(6, precision) 约定不一致。
+        """
+        idx = pd.date_range("2024-01-01", periods=5, freq="D")
+        # 中位价 5.432189e-6 → _price_precision = 9 (> 旧实现的硬编码 8)
+        df = pd.DataFrame(
+            {
+                "date": idx,
+                "open": 5.432189e-6,
+                "high": 5.442189e-6,
+                "low": 5.422189e-6,
+                "close": 5.432189e-6,
+                "volume": 1.0,
+            }
+        )
+        payload = charting.crypto_compare_payload({"PEPE": df})
+        coin = payload["coins"][0]
+        assert coin["precision"] == 9
+        # 9 位小数: 第 9 位 (…432) 保留; 旧代码 round(,8) 会截成 0.00000543
+        assert coin["candles"][0]["close"] == round(5.432189e-6, 9)
+        assert coin["candles"][0]["close"] != round(5.432189e-6, 8)
+
     def test_compare_payloads_carry_axis(self):
         """对比/加密货币对比 payload 带 axis 时间轴 (视口锚点索引空间)."""
         f1 = pd.DataFrame(

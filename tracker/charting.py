@@ -1382,13 +1382,18 @@ def crypto_compare_payload(
         if d.empty:
             continue
         dates = d["date"].dt.strftime("%Y-%m-%d")
+        # 低价币 (SHIB/PEPE ~1e-5) 需要比单只K线更细的价格精度才不至于显示为 0.0000:
+        # 与 kline_payload 一致用 nd=max(6, precision) 取整, 保证蜡烛数据不低于
+        # 对外声明的 priceFormat.precision (否则溢出统计, UI 显示的位数是空的)。
+        precision = _price_precision(float(d["close"].median()))
+        nd = max(6, precision)
         candles = [
             {
                 "time": t,
-                "open": round(float(o), 8),
-                "high": round(float(h), 8),
-                "low": round(float(lo), 8),
-                "close": round(float(c), 8),
+                "open": round(float(o), nd),
+                "high": round(float(h), nd),
+                "low": round(float(lo), nd),
+                "close": round(float(c), nd),
             }
             for t, o, h, lo, c in zip(
                 dates, d["open"], d["high"], d["low"], d["close"]
@@ -1396,8 +1401,6 @@ def crypto_compare_payload(
         ]
         if not candles:
             continue
-        # 低价币 (SHIB/PEPE ~1e-5) 需要比单只K线更细的价格精度才不至于显示为 0.0000
-        precision = _price_precision(float(d["close"].median()))
         coins.append(
             {
                 "name": sym,

@@ -47,6 +47,27 @@ def test_full_dump_unchanged(us_symbol):
     assert q.currency == "USD"
 
 
+def test_nan_prev_and_change_become_none(us_symbol):
+    """NaN prev_close/change_percent 不得漏进 Quote 变成 +NaN% 行情.
+
+    回归背景: 价格字段有「有限正数」守卫而 prev/chg 只做 None 检查, 停牌/
+    坏响应里的 NaN 会 float() 成 nan 直接漏进 Quote (其余数据源均有过滤)。
+    """
+    d = {
+        "symbol": "GLD",
+        "last_price": 377.91,
+        "prev_close": float("nan"),
+        "change_percent": float("nan"),
+        "currency": "USD",
+        "name": "SPDR Gold Shares",
+    }
+    q = _quote_from_dump(us_symbol, d)
+    assert q is not None
+    assert q.price == 377.91
+    assert q.prev_close is None
+    assert q.change_pct is None
+
+
 def test_missing_last_falls_back_to_open(us_symbol):
     """核心回归: 无 last_price/price/close 时用 open, 不再丢弃整条行情."""
     d = {

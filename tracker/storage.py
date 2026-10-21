@@ -181,10 +181,10 @@ def save_portfolio(data: dict, path: str | Path = PORTFOLIO_PATH) -> None:
     """
     p = Path(path)
     if p.exists():
-        try:
-            merged = _read_json(p)
-        except (json.JSONDecodeError, OSError):
-            merged = {}
+        # 损坏/不可读的旧文件不能静默当 {} —— 同 _read_json_or_recover 注释:
+        # 直接覆盖会把 _说明 等自定义字段连同原持仓一起清掉 (数据丢失),
+        # 走 .bak 恢复, 仍失败则抛可读错误。
+        merged = _read_json_or_recover(p)
     else:
         merged = {}
     merged.update(data)
@@ -344,10 +344,8 @@ def save_watchlist(data: dict, path: str | Path = WATCHLIST_PATH) -> None:
     """
     p = Path(path)
     if p.exists():
-        try:
-            merged = _read_json(p)
-        except (json.JSONDecodeError, OSError):
-            merged = {}
+        # 与 save_portfolio 一致: 损坏文件不静默当 {} 覆盖掉已有数据。
+        merged = _read_json_or_recover(p)
     else:
         merged = {}
     merged["watchlist"] = dedupe_watch_entries(

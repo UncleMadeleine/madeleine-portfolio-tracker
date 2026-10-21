@@ -130,3 +130,32 @@ def test_save_portfolio_failure_leaves_original_intact(tmp_path):
         )
     assert path.read_text(encoding="utf-8") == before
     assert [p.name for p in tmp_path.iterdir()] == ["portfolio.json"]
+
+
+def test_save_portfolio_corrupt_raises_not_wipe(tmp_path):
+    """旧文件损坏时保存必须报错, 不得静默当成 {} 覆盖掉原有内容.
+
+    与 _read_json_or_recover 注释一致: 损坏文件 + .bak 可恢复时走恢复内容,
+    无 .bak 则抛可读错误, 而不是把 _说明 等自定义字段连同原持仓清空。
+    """
+    path = tmp_path / "portfolio.json"
+    path.write_text("{ truncated", encoding="utf-8")
+    with pytest.raises(ValueError, match="不是合法 JSON"):
+        storage.save_portfolio(
+            {"holdings": [{"symbol": "AAPL", "quantity": 1}]}, path
+        )
+    # 再校验健康文件路径: 原有自定义键仍保留
+    path.write_text(
+        json.dumps({"_说明": "手动备注", "holdings": []}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    storage.save_portfolio({"holdings": [{"symbol": "AAPL", "quantity": 1}]}, path)
+    assert "手动备注" in path.read_text(encoding="utf-8")
+
+
+def test_save_watchlist_corrupt_raises_not_wipe(tmp_path):
+    """save_watchlist 同一道防线: 损坏旧文件报错而不是静默当 {} 覆盖."""
+    path = tmp_path / "watchlist.json"
+    path.write_text("{ truncated", encoding="utf-8")
+    with pytest.raises(ValueError, match="不是合法 JSON"):
+        storage.save_watchlist({"watchlist": [{"symbol": "AAPL"}]}, path)

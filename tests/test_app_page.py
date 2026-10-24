@@ -27,6 +27,7 @@ _URL_PATHS = {
     "": "组合",
     "kline": "K线",
     "index": "指数K线",
+    "calendar": "日历",
     "import": "导入",
     "settings": "设置",
 }

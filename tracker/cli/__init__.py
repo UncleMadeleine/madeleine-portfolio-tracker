@@ -16,6 +16,7 @@
   longport-login 长桥 OAuth 登录 (浏览器授权, token 自动缓存刷新)
   sync      从 IB Gateway 账户同步持仓 (已并入 import ibkr, 保留兼容)
   index-kline 宏观/风险指数K线 (IX.<KEY>, 独立于股票 kline)
+  calendar  财报/重大事件日历 (组合+自选, 默认本月+下月)
   init      首次使用: 把包内配置模板复制到数据目录 (pip 安装后必走一步)
 
 所有子命令均支持 --json 输出机器可读结果, 便于脚本与 AI 消费。
@@ -31,6 +32,7 @@ from ..storage import PORTFOLIO_PATH as DEFAULT_PORTFOLIO, CorruptDataError
 from ..watchlist import DEFAULT_WATCHLIST  # storage 门面 (watchlist.json 常量)
 from ._common import VERSION, _finish_with_error
 from .cache import cmd_cache
+from .calendar import cmd_calendar
 from .export import cmd_export
 from .compare import cmd_compare
 from .init import cmd_init
@@ -414,6 +416,45 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_k.add_argument("--json", action="store_true", help="输出 JSON 数据 (不生成图表)")
     p_k.set_defaults(func=cmd_kline)
+
+    # ---- calendar ----
+    p_cal = sub.add_parser(
+        "calendar",
+        help="组合/自选的财报与重大事件日历 (默认本月+下月)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "示例:\n"
+            "  tracker calendar                       # 持仓+自选, 本月+下月\n"
+            "  tracker calendar --months 3 --json     # 未来三个月, JSON 输出\n"
+            "  tracker calendar --watchlist 科技       # 只看某个自选列表\n"
+            "  tracker calendar AAPL 0700.HK 600519.SS # 指定代码\n"
+            "  tracker calendar --refresh             # 忽略 6h/24h 缓存强制刷新\n"
+            "  tracker calendar --longport            # 开长桥兜底 (需已 longport-login)\n"
+        ),
+    )
+    p_cal.add_argument(
+        "symbols", nargs="*", help="代码列表 (缺省 = 持仓+自选全部), 如 AAPL 600519.SS"
+    )
+    p_cal.add_argument("--portfolio", default=str(DEFAULT_PORTFOLIO))
+    p_cal.add_argument(
+        "--watchlist-file", default=str(DEFAULT_WATCHLIST), help="watchlist.json 路径"
+    )
+    p_cal.add_argument(
+        "--watchlist", default=None, help="只看某个自选列表 (缺省: 组合+全部自选)"
+    )
+    p_cal.add_argument(
+        "--months", type=int, default=2, help="从本月起的自然月数 (默认 2 = 本月+下月)"
+    )
+    p_cal.add_argument(
+        "--refresh", action="store_true", help="忽略缓存强制刷新"
+    )
+    p_cal.add_argument(
+        "--longport",
+        action="store_true",
+        help="开启长桥日历兜底 (yfinance/akshare 拿不到时补; 需已 longport-login)"
+    )
+    p_cal.add_argument("--json", action="store_true", help="输出 JSON")
+    p_cal.set_defaults(func=cmd_calendar)
 
     # ---- search ----
     p_s = sub.add_parser(

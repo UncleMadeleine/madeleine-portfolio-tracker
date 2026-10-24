@@ -114,6 +114,17 @@ def _create_schema(con) -> None:
         )
         """
     )
+    # 财经日历 (财报/分红事件): key 前缀区分来源 (g:<symbol> 单票 / cn:<period> /
+    # lp:<market>:<category>:<month> 整批), 载荷均为 {"events": [...]}
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS calendar_cache (
+            key TEXT PRIMARY KEY,
+            payload TEXT NOT NULL,
+            fetched_at REAL NOT NULL
+        )
+        """
+    )
     try:
         con.execute("ALTER TABLE fundamentals ADD COLUMN market_cap REAL")
     except sqlite3.OperationalError:
@@ -467,6 +478,50 @@ def clear_ohlc() -> int:
         return n
 
 
+# ---------- 财经日历 (财报/分红事件) 缓存 ----------
+
+
+def get_calendar_row(key: str) -> dict | None:
+    """读取日历缓存行; 未命中/载荷损坏返回 None.
+
+    返回 {"events": [...], "fetched_at": float}。TTL 判定留给调用方:
+    单票缓存按「载荷是否为空」区分正/负缓存两个 TTL (events.py), 整批缓
+    存统一 6h —— 这里不套 WHERE fetched_at, 只给原始时间戳。
+    """
+    _ensure_db()
+    with sqlite3.connect(CACHE_DB) as con:
+        row = con.execute(
+            "SELECT payload, fetched_at FROM calendar_cache WHERE key = ?", (key,)
+        ).fetchone()
+    if row is None:
+        return None
+    try:
+        payload = json.loads(row[0])
+        events = payload.get("events") if isinstance(payload, dict) else None
+        if not isinstance(events, list):
+            return None
+    except Exception:
+        return None
+    return {"events": events, "fetched_at": row[1]}
+
+
+def set_calendar_row(key: str, events: list) -> None:
+    """写入日历缓存行; 空事件列表同样落库 (单票负缓存依赖空载荷)."""
+    _ensure_db()
+    payload = json.dumps({"events": events}, ensure_ascii=False, default=str)
+    with _lock, sqlite3.connect(CACHE_DB) as con:
+        con.execute(
+            """
+            INSERT INTO calendar_cache (key, payload, fetched_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                payload=excluded.payload, fetched_at=excluded.fetched_at
+            """,
+            (key, payload, time.time()),
+        )
+        con.commit()
+
+
 # ---------- 通用序列缓存 (历史市值 em / 历史股本 shares 用) ----------
 
 
@@ -544,6 +599,7 @@ def info() -> dict:
             "SELECT COUNT(*) FROM series_cache WHERE fetched_at > ?",
             (now - OHLC_TTL,),
         ).fetchone()[0]
+        cal_total = con.execute("SELECT COUNT(*) FROM calendar_cache").fetchone()[0]
     size = CACHE_DB.stat().st_size if CACHE_DB.exists() else 0
     return {
         "db": str(CACHE_DB),
@@ -564,6 +620,8 @@ def info() -> dict:
         "newest_at": newest or 0.0,
         "series_total": series_total,
         "series_fresh": series_fresh,
+        "calendar_total": cal_total,
+        "calendar_ttl_seconds": 21600,
         "size_bytes": size,
     }
 
@@ -576,6 +634,7 @@ def clear() -> int:
         n_ohlc = con.execute("DELETE FROM ohlc_cache").rowcount
         n_fx = con.execute("DELETE FROM fx_rates").rowcount
         n_series = con.execute("DELETE FROM series_cache").rowcount
+        n_cal = con.execute("DELETE FROM calendar_cache").rowcount
         con.commit()
         n_fund = con.execute("DELETE FROM fundamentals").rowcount
-        return n_quotes + n_ohlc + n_fund + n_fx + n_series
+        return n_quotes + n_ohlc + n_fund + n_fx + n_series + n_cal

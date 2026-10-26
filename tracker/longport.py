@@ -528,7 +528,9 @@ def static_names_longport(
                     if ccy:
                         currencies[lp] = ccy
         except Exception:  # noqa: BLE001 - 名称/币种缺失不阻塞行情
-            break
+            # 单块失败 (限流/死连接) 只丢该块的名称/币种, 后续块继续:
+            # break 会让后面所有块都退回按代码形态猜币种 (港股多柜台会猜错)
+            continue
     return names, currencies
 
 

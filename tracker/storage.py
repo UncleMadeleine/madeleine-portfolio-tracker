@@ -52,9 +52,21 @@ def backup_file(path: str | Path) -> str | None:
 
 
 def _read_json(path: str | Path) -> dict:
-    # utf-8-sig: 容忍带 BOM 的文件 (部分编辑器保存 JSON 时加 BOM, utf-8 直接解码报错)
-    with open(path, encoding="utf-8-sig") as f:
-        data = json.load(f)
+    # utf-8-sig: 容忍带 BOM 的文件 (部分编辑器保存 JSON 时加 BOM, utf-8 直接解码报错)。
+    # 中文 Windows 编辑器 (记事本 ANSI / Excel 另存) 常写成 GBK, 直接按 UTF-8
+    # 读会抛 UnicodeDecodeError (非 JSONDecodeError, 原先会绕过 .bak 恢复路径
+    # 变成裸 traceback), 故先 UTF-8 再 GBK 兜底。
+    p = Path(path)
+    text = None
+    for enc in ("utf-8-sig", "gbk"):
+        try:
+            text = p.read_text(encoding=enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    if text is None:
+        raise CorruptDataError(f"{path} 编码无法识别 (非 UTF-8/GBK 文本)")
+    data = json.loads(text)
     # 合法 JSON 但顶层不是对象 (如手滑把数组/字符串写进 portfolio.json):
     # 不能静默当 {} —— 调用方 (_read_json_or_recover) 会据此想恢复/报错,
     # 回 {} 会让下一次保存直接把可恢复的内容覆盖成空组合
@@ -91,6 +103,9 @@ def _read_json_or_recover(path: str | Path) -> dict:
         # _read_json 对「顶层非对象」直接抛 CorruptDataError: 这里走同一条
         # .bak 恢复路径, 不能静默当空数据 (原因信息含具体文件与类型)
         return _recover(e, str(e))
+    except OSError as e:
+        # 权限/IO 错误: .bak 通常不可读同一路径, 直接给可读错误而不是裸 traceback
+        raise CorruptDataError(f"{path} 读取失败 ({e.strerror or e})") from e
 
 
 def _write_json(data: dict, path: str | Path) -> None:
@@ -137,10 +152,18 @@ def _stamp_type(row: dict) -> dict:
 
 
 def load_portfolio(path: str | Path = PORTFOLIO_PATH) -> dict:
-    """读取持仓文件; 文件缺失时返回空组合。"""
+    """读取持仓文件; 文件缺失时返回空组合。
+
+    存在文件时也补齐 base_currency/holdings 两个必需键: 手写/旧版/第三方
+    导入的文件可能缺键, 直接 `data["base_currency"]` 的调用方 (如 compare
+    --metric mcap) 会抛 KeyError。
+    """
     if not Path(path).exists():
         return {"base_currency": DEFAULT_BASE_CURRENCY, "holdings": []}
-    return _read_json_or_recover(path)
+    data = _read_json_or_recover(path)
+    data.setdefault("base_currency", DEFAULT_BASE_CURRENCY)
+    data.setdefault("holdings", [])
+    return data
 
 
 def _clean_rows(rows: list) -> list[dict]:
@@ -221,9 +244,15 @@ def normalize_watch_entry(e: dict) -> dict:
     parse 失败 (无法识别的代码) 时保留原串, 由取数/视图层报错。
     """
     out = dict(e)
+    # 旧阈值键名迁移: 两个键并存时也删除旧键 (否则旧键永久留在文件里成为
+    # 所有消费者都忽略的死数据), 新键已存在则保留新键。
     for old, new in (("upper", "upper_1"), ("lower", "lower_1")):
-        if old in out and new not in out:
-            out[new] = out.pop(old)
+        if old in out:
+            out.setdefault(new, out.pop(old))
+    # lists 可能是手写/第三方写入的逗号分隔字符串: 统一解析为列表,
+    # 否则 dedupe/save 路径按字符迭代 ("科技" → ["科", "技"]) 或 append 崩溃。
+    if "lists" in out:
+        out["lists"] = parse_lists(out.get("lists"))
     # 手写市值别名收敛: 保留数值, 去掉别名键 (mcap 为唯一形态)
     if "market_cap" in out and out.get("market_cap") not in (None, ""):
         out.setdefault("mcap", out.pop("market_cap"))
@@ -268,9 +297,19 @@ def dedupe_watch_entries(entries: list[dict]) -> list[dict]:
         if found is None:
             by_symbol[key] = e
             continue
-        for name in e.get("lists") or []:
-            if name not in (found.setdefault("lists", [])):
-                found["lists"].append(name)
+        names = e.get("lists")
+        if isinstance(names, str):  # 防御: 直接调用本函数时 lists 可能未归一
+            names = parse_lists(names)
+        found_lists = found.get("lists")
+        if isinstance(found_lists, str):
+            found_lists = parse_lists(found_lists)
+            found["lists"] = found_lists
+        elif found_lists is None:
+            found_lists = []
+            found["lists"] = found_lists
+        for name in names or []:
+            if name not in found_lists:
+                found_lists.append(name)
         for k, v in e.items():
             if k in ("symbol", "lists", "type"):
                 continue
@@ -388,7 +427,7 @@ def load_settings(path: str | Path = SETTINGS_PATH) -> dict:
             # utf-8-sig: 兼容编辑器存成的带 BOM settings.json, 否则 json.loads
             # 报错被吞 → 全部设置静默回退默认 (与 portfolio/watchlist 读取一致)
             raw = json.loads(p.read_text(encoding="utf-8-sig"))
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
             raw = None
         if isinstance(raw, dict):
             data.update({k: v for k, v in raw.items() if k in DEFAULT_SETTINGS})
@@ -405,5 +444,14 @@ def load_settings(path: str | Path = SETTINGS_PATH) -> dict:
 
 
 def save_settings(data: dict, path: str | Path = SETTINGS_PATH) -> None:
-    """保存设置 (写盘唯一入口): 与默认键合并, 防止丢键。"""
-    _write_json({**DEFAULT_SETTINGS, **data}, path)
+    """保存设置 (写盘唯一入口): 与磁盘已有键/默认键合并, 不丢未知键。"""
+    p = Path(path)
+    # 与 save_portfolio/save_watchlist 一致: 保留文件中已有自定义键 (_说明 等),
+    # 只覆盖本次写入的已知键。settings 属可重建的轻量配置, 损坏且无 .bak 时
+    # 不阻断保存 (load_settings 同样回退默认值), 避免设置页彻底不可写。
+    try:
+        merged = _read_json_or_recover(p) if p.exists() else {}
+    except CorruptDataError:
+        merged = {}
+    merged.update({**DEFAULT_SETTINGS, **data})
+    _write_json(merged, p)

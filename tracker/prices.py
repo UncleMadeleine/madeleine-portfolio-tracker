@@ -82,8 +82,18 @@ def get_ohlc(
     # 只要指定了任一端日期就是「区间查询」: 结果可能被截断, 不能当作完整
     # months 窗口读写 (key 只有 symbol+months), 否则会把截断数据污染进缓存
     is_range = start_date is not None or end_date is not None
+    # 数据源偏好也必须进缓存键: 缓存里的 K 线来自某条源链, 同一代码换
+    # --akshare/--longport/--ibkr/--crypto-source 再查时若仍命中旧缓存,
+    # 用户显式指定的源根本不会执行 (首次结果被 TTL 内复用)。
+    src_sig = ""
+    if prefer_akshare or use_ibkr or use_longport or crypto_source != "auto":
+        src_sig = (
+            f"|a{int(prefer_akshare)}i{int(use_ibkr)}"
+            f"l{int(use_longport)}c{crypto_source}"
+        )
+    cache_key = f"{p.yahoo}{src_sig}"
     if not refresh and not is_range:
-        cached = cache_mod.get_ohlc_cached(p.yahoo, months)
+        cached = cache_mod.get_ohlc_cached(cache_key, months)
         if cached is not None:
             return cached
     df = clean_ohlc(
@@ -99,7 +109,7 @@ def get_ohlc(
         )
     )
     if not df.empty and not is_range:
-        cache_mod.set_ohlc_cached(p.yahoo, months, df)
+        cache_mod.set_ohlc_cached(cache_key, months, df)
     return df
 
 

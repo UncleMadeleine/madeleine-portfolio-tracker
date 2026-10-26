@@ -137,13 +137,49 @@ INDEX_GROUPS: dict[str, dict[str, dict[str, str]]] = {
         "HSBIO": {"name": "恒生生物科技指数", "hsi": "02077.00", "currency": "点"},
     },
     "中国": {
-        "CSI300": {"name": "沪深 300", "ak": "sh000300", "currency": "点"},
-        "CSI500": {"name": "中证 500", "ak": "sh000905", "currency": "点"},
-        "CSI1000": {"name": "中证 1000", "ak": "sh000852", "currency": "点"},
-        "SSE": {"name": "上证指数", "ak": "sh000001", "currency": "点"},
-        "SZSE": {"name": "深证成指", "ak": "sz399001", "currency": "点"},
-        "CYB": {"name": "创业板指", "ak": "sz399006", "currency": "点"},
-        "KECHUANG50": {"name": "科创 50", "ak": "sh000688", "currency": "点"},
+        # ak = 新浪代码 (akshare 优先); yf = Yahoo 兜底 (akshare 失败时不再 KeyError)
+        "CSI300": {
+            "name": "沪深 300",
+            "ak": "sh000300",
+            "yf": "000300.SS",
+            "currency": "点",
+        },
+        "CSI500": {
+            "name": "中证 500",
+            "ak": "sh000905",
+            "yf": "000905.SS",
+            "currency": "点",
+        },
+        "CSI1000": {
+            "name": "中证 1000",
+            "ak": "sh000852",
+            "yf": "000852.SS",
+            "currency": "点",
+        },
+        "SSE": {
+            "name": "上证指数",
+            "ak": "sh000001",
+            "yf": "000001.SS",
+            "currency": "点",
+        },
+        "SZSE": {
+            "name": "深证成指",
+            "ak": "sz399001",
+            "yf": "399001.SZ",
+            "currency": "点",
+        },
+        "CYB": {
+            "name": "创业板指",
+            "ak": "sz399006",
+            "yf": "399006.SZ",
+            "currency": "点",
+        },
+        "KECHUANG50": {
+            "name": "科创 50",
+            "ak": "sh000688",
+            "yf": "000688.SS",
+            "currency": "点",
+        },
         # 恒生沪深港通AH股溢价指数 (恒生指数公司, 彭博 HSAHP / 路孚特 .HSCAHPI):
         # 100 = A/H 同价, >100 = A股溢价, 市值加权, 约 149 只 AH 双重上市公司。
         # hsi 字段 = 恒生内部指数代码 (seriesCode=ahpremium), 走官网公开 API
@@ -177,6 +213,20 @@ INDEX_GROUPS: dict[str, dict[str, dict[str, str]]] = {
     # 广期所碳酸锂期货主力连续 (2023-07-21 上市), 单位 元/吨
     "商品/新能源": {
         "LC": {"name": "碳酸锂主力连续", "futures": "LC0", "currency": "元/吨"},
+    },
+    # Cameco 官网铀价 (见 providers/index.py): 月末 UxC + TradeTech 行业均价,
+    # 月频且不发布开高低 → 平K线。cameco 字段选择序列: spot=现货 / lt=长协。
+    "商品/能源": {
+        "URANIUM": {
+            "name": "铀现货价 U3O8",
+            "cameco": "spot",
+            "currency": "美元/磅",
+        },
+        "URANIUM_LT": {
+            "name": "铀长协价 U3O8",
+            "cameco": "lt",
+            "currency": "美元/磅",
+        },
     },
     # 中国水泥网 (index.ccement.com, 免登录前端接口; 见 providers/index.py)
     "水泥网": {

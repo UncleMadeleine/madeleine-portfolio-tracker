@@ -46,6 +46,11 @@ def code_to_yahoo(code: str) -> str | None:
     # 数值读入残留的小数形式 (1.0 → 1) 先归一为整数串
     if raw.endswith(".0"):
         raw = raw[:-2]
+    # Excel 数值单元格会丢掉前导零 (000001 → 1 / 002594 → 2594): A股 6 位代码
+    # 去掉前导零后只可能是 1~4 位 (000/001/002/003 开头), 补齐后校验;
+    # 5 位数字不是任何 A股代码丢零的形态, 保持拒绝以防把杂数当代码。
+    if raw.isdigit() and 1 <= len(raw) <= 4:
+        raw = raw.zfill(6)
     if not raw.isdigit() or len(raw) != 6:
         return None
     if raw.startswith(_BJ_PREFIX):
@@ -63,14 +68,17 @@ _NAME_KEYS = ("证券名称", "股票名称", "名称", "product_name", "name")
 _QTY_KEYS = (
     "持仓数量",
     "当前持仓",
+    "股票余额",
     "股份余额",
-    "股份可用",
-    "可用余额",
-    "持仓股数",
     "总持仓",
-    "volume",
+    "持仓股数",
     "当前数量",
     "持仓量",
+    # 可用余额类列 (T+1 当日买入/质押/冻结时为 0) 只能最后兜底: 优先取总持仓,
+    # 否则会把有持仓但当日不可卖的头寸整只丢掉
+    "股份可用",
+    "可用余额",
+    "volume",
 )
 _COST_KEYS = (
     "成本价",

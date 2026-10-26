@@ -16,7 +16,7 @@ from threading import Lock
 import pandas as pd
 
 from .. import cache as cache_mod
-from ..symbols import ParsedSymbol, parse as _parse_symbol
+from ..symbols import Market, ParsedSymbol, parse as _parse_symbol
 from .base import Quote, resolve
 from .crypto import CryptoProvider
 from .cn_stocks import CNStocksProvider
@@ -221,7 +221,13 @@ def get_quotes(
         if not plist:
             continue
         if domain == "global":
-            quotes.update(_yahoo_batch(plist))
+            # 港股 akshare 优先 (prefer_akshare) 时不能让 yfinance 批量抢先:
+            # 批量的结果会直接进 quotes, 逐代码源链就不再执行, 港股永远走
+            # yfinance (与设置页/CLI 声明的"港股源顺序翻转"矛盾)。
+            batch_plist = plist
+            if prefer_akshare:
+                batch_plist = [p for p in plist if p.market is not Market.HK]
+            quotes.update(_yahoo_batch(batch_plist))
             plist = [p for p in plist if p.yahoo not in quotes]
             if not plist:
                 continue

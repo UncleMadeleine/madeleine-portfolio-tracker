@@ -9,9 +9,9 @@ description: Use when the user asks to check or manage their investment portfoli
 数据层抽象为 **provider 层** (`tracker/providers/`): 四个市场域各一个 provider —
 全球股票 (美股/港股, 长桥→IBKR→yfinance→港股 akshare 兜底)、A股/B股 (.SS/.SZ/.BJ, akshare 固定优先→yfinance)、
 加密货币 (`BASE-QUOTE` 连字符代码, Binance 优先→Gate.io→Hyperliquid(仅USD系)→yfinance; 数据源偏好 settings.json `crypto_source` 或 CLI `--crypto-source`, 默认 auto=默认链, 指定源前置失败自动回落),
-指数 (`IX.<KEY>`, 中国指数 akshare 优先, 其余 yfinance→akshare 新浪兜底; 水泥网/商品期货/恒生官网指数为专属源无兜底)。
+指数 (`IX.<KEY>`, 中国指数 akshare 优先, 其余 yfinance→akshare 新浪兜底; 水泥网/商品期货/恒生官网/Cameco 铀价指数为专属源无兜底)。
 各域只在投资组合/watchlist 聚合, 数据层面严格分域。有 Streamlit 页面
-(`python -m streamlit run tracker/ui/app.py`, 5 页: 组合 `/` · K线 `/kline` · 指数K线 `/index` · 导入 `/import` · 设置 `/settings`)
+(`python -m streamlit run tracker/ui/app.py`, 6 页: 组合 `/` · K线 `/kline` · 指数K线 `/index` · 日历 `/calendar` · 导入 `/import` · 设置 `/settings`)
 和命令行两套入口。**AI 操作请优先用 CLI。**
 
 所有子命令都支持机器可读输出: 多数是 `--json`; `report`/`export` 用 `-f json`
@@ -43,6 +43,7 @@ tracker-ui          # pip 安装后起 Streamlit 页面 (等价 streamlit run tr
 | `fx` | 汇率 | `fx USD CNY` |
 | `history` | 历史价格 | `history AAPL --months 12` |
 | `kline` | K线蜡烛图 (HTML+摘要) | `kline AAPL --months 6 --ma 5,20,60`, `kline 0700.HK --period weekly --open`, `--json` 出数据, `--refresh` 强刷 |
+| `calendar` | 财报/重大事件日历 (持仓+自选) | `calendar`, `calendar --months 3 --json`, `calendar --watchlist 科技`, `--longport` 开长桥兜底, `--refresh` 强刷 |
 | `search` | 代码/名称搜索→规范代码 | `search 腾讯 --json`, `search 700 --limit 5`, `search AAPL --exact` |
 | `compare` | 多股走势对比 (归一化) | `compare AAPL 0700.HK 600519.SS`, `compare AAPL NVDA --json`, `--raw` 不归一化 (原币种), `--ratio 分子 分母` 额外画比例线 (跨币种默认按历史汇率调整), `--metric mcap` 市值对比 (统一折算 `--currency`, 缺省组合基础货币) |
 | `index-kline` | 宏观/风险指数K线 (IX.<KEY>) | `index-kline IX.DXY --months 12`, `index-kline IX.CSI300 --list` (指数默认无成交量副图, `--volume` 才显示) |
@@ -82,7 +83,7 @@ tracker-ui          # pip 安装后起 Streamlit 页面 (等价 streamlit run tr
 | 新加坡股 | `.SI` | `D05.SI` | SGD / USD | global | `.SG` 别名自动归一为 `.SI` (yfinance 无 `.SG` 数据); SGX 有 SGD 与 USD 计价证券 |
 | 巴西股 | `.SA` | `PETR4.SA` | BRL | global | B3; IBKR 交易所代号 `B3` (旧 `BVMF` 已下线) |
 | 加密货币 | `-QUOTE` | `BTC-USD` `ETH-USDT` | 计价货币 | crypto | 无分隔符 `BTCUSD` 自动补全 |
-| 指数 | `IX.<KEY>` | `IX.DXY` `IX.VIX` `IX.CEMPI` `IX.LC` `IX.HSAHP` | 各异 | index | 已收录 38 个, `index-kline --list` 可查 |
+| 指数 | `IX.<KEY>` | `IX.DXY` `IX.VIX` `IX.CEMPI` `IX.LC` `IX.URANIUM` `IX.HSAHP` | 各异 | index | 已收录 51 个, `index-kline --list` 可查 |
 
 - 推导唯一入口: `symbols.type_for_symbol()`; 单字母连字符是美股类别股 (`BRK-B` → global),
   `P+系列字母` 连字符 (`WFC-PL`) 是美股优先股, 都不是 crypto。
@@ -98,7 +99,7 @@ tracker-ui          # pip 安装后起 Streamlit 页面 (等价 streamlit run tr
 | global | 长桥(可选)→ IBKR(可选)→ yfinance 批量 → 港股 akshare 兜底 (两源同开时 IBKR 结果覆盖长桥) | IBKR(可选)→ 长桥(可选)→ yfinance (港股可 `--akshare` 翻转) |
 | cn | **akshare 优先** → yfinance (长桥可选前置, 沪深代码 .SH/.SZ) | **akshare 优先** → yfinance (长桥可选前置) |
 | crypto | **Binance API** → Gate.io 现货 → Hyperliquid 永续(仅USD系) → yfinance (偏好 `crypto_source`/`--crypto-source`) | **Binance klines** → Gate.io → Hyperliquid → yfinance |
-| index | — (指数无实时行情, 不参与持仓聚合) | 中国指数 **akshare 优先** → yfinance; 美股 SPX/NDX/DJI 有新浪兜底; 水泥网 (CEMPI 等) / 商品期货主力连续 (`IX.AU` 黄金 `IX.AG` 白银 `IX.JD` 鸡蛋 `IX.M` 豆粕 `IX.A` 豆一 `IX.B` 豆二 `IX.LH` 生猪 `IX.LC` 碳酸锂) / 恒生官网 (IX.HSAHP) 为专属源无兜底 |
+| index | — (指数无实时行情, 不参与持仓聚合) | 中国指数 **akshare 优先** → yfinance; 美股 SPX/NDX/DJI 有新浪兜底; 水泥网 (CEMPI 等) / 商品期货主力连续 (`IX.AU` 黄金 `IX.AG` 白银 `IX.JD` 鸡蛋 `IX.M` 豆粕 `IX.A` 豆一 `IX.B` 豆二 `IX.LH` 生猪 `IX.LC` 碳酸锂) / Cameco 铀价 (`IX.URANIUM` 现货 `IX.URANIUM_LT` 长协, 月K) / 恒生官网 (IX.HSAHP) 为专属源无兜底 |
 
 代码搜索 (`tracker/search.py`) 为**纯在线分域接口**:
 - A股/北交所: 东财 suggest (支持中文名/拼音)

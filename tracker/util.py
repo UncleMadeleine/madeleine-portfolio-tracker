@@ -6,6 +6,19 @@ import threading
 from concurrent.futures import Future
 
 
+def records(df) -> list[dict]:
+    """DataFrame → records (NaN/NaT 转 None 便于 JSON 序列化).
+
+    放在 util 而不是 cli/_common: services 层也要用它, 从 cli 导入会触发
+    `tracker.cli.__init__` → cli/export → services.snapshot 的循环导入。
+    """
+    import pandas as pd
+
+    if df is None or df.empty:
+        return []
+    return df.astype(object).where(pd.notnull(df), None).to_dict(orient="records")
+
+
 def with_timeout(fn, timeout: float, *args, **kwargs):
     """在守护线程中执行 fn 并强制超时, 避免阻塞型调用卡死.
 

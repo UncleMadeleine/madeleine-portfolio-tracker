@@ -48,7 +48,7 @@ __all__ = [
 ]
 
 # 单票缓存 TTL (秒): 有事件 6h (与 fundamentals 一致的低频报表口径)
-CAL_TTL = 21600
+CAL_TTL = cache_mod.CALENDAR_TTL
 # 单票空结果负缓存 TTL: Yahoo 无数据的标的 24h 内不重试
 CAL_NEG_TTL = 86400
 # 预约披露覆盖窗口: 报表期结束到实际/预约披露最长间隔约 4 个月 (年报),
@@ -505,15 +505,19 @@ def _quiet_stderr():
 
 
 def _fetch_cn_period(period: str, refresh: bool, progress=None) -> tuple[dict, list[str]]:
-    """一个报表期的整市场日历 (缓存优先) → {"events": [...]}, issues."""
+    """一个报表期的整市场日历 (缓存优先, 整批 TTL 6h) → {"events": [...]}, issues."""
     key = f"cn:{period}"
-    row = None if refresh else cache_mod.get_calendar_row(key)
-    if row is not None:
-        return {"events": row["events"]}, []
+    if not refresh:
+        row = cache_mod.get_calendar_row(key)
+        # 整批缓存与单票同 TTL: 少了这层判断则首次写入后永远不刷新
+        # (--refresh 之外再也拿不到新预约/变更日期)
+        if row is not None and not _age_exceeded(row["fetched_at"], CAL_TTL):
+            return {"events": row["events"]}, []
     import akshare as ak
 
     evs: list[dict] = []
     issues: list[str] = []
+    ok = 0  # 成功完成的请求数: 全部失败时不写负缓存
     with _quiet_stderr():
         for board in ("沪深A股", "京市A股"):
             try:
@@ -521,13 +525,19 @@ def _fetch_cn_period(period: str, refresh: bool, progress=None) -> tuple[dict, l
             except Exception as e:  # noqa: BLE001 - 整批失败注记并继续另一板
                 issues.append(f"akshare 预约披露 {period} {board} 失败 ({e})"[:200])
                 continue
+            ok += 1
             evs.extend(_cn_normalize_disclosure(df, period))
         try:
             df2 = ak.stock_fhps_em(date=period)
             evs.extend(_cn_normalize_fhps(df2))
         except Exception as e:  # noqa: BLE001 - 分红失败只在 events 缺口上可见
             issues.append(f"akshare 分红 {period} 失败 ({e})"[:200])
-    cache_mod.set_calendar_row(key, evs)
+        else:
+            ok += 1
+    # 全部源都失败 (断网/接口变更) 时不能把空结果当「该期无事件」缓存 6h,
+    # 否则一次临时故障会让日历长时间静默为空, 且复用时 issues 已丢失。
+    if ok:
+        cache_mod.set_calendar_row(key, evs)
     return {"events": evs}, issues
 
 
@@ -627,15 +637,21 @@ def _lp_market_axis(yahoo: str) -> str | None:
 
 
 def _fetch_lp_month_events(
-    market: str, category: str, seg_start: date, seg_end: date, cfg: dict | None = None
+    market: str,
+    category: str,
+    seg_start: date,
+    seg_end: date,
+    cfg: dict | None = None,
+    refresh: bool = False,
 ) -> tuple[list[dict], str | None]:
-    """一个 (market, category, 月) 的整批日历 (缓存优先) → events, error."""
+    """一个 (market, category, 月) 的整批日历 (缓存优先, TTL 6h) → events, error."""
     key = f"lp:{market}:{category}:{seg_start.strftime('%Y-%m')}"
-    row = cache_mod.get_calendar_row(key)
-    if row is not None:
-        return row["events"], None
+    if not refresh:
+        row = cache_mod.get_calendar_row(key)
+        if row is not None and not _age_exceeded(row["fetched_at"], CAL_TTL):
+            return row["events"], None
     try:
-        from longport.openapi import CalendarCategory, CalendarContext
+        from longport.openapi import CalendarCategory
 
         api = _lp_config_builder(cfg)
     except Exception as e:  # noqa: BLE001 - 统一转错误信息
@@ -656,8 +672,10 @@ def _fetch_lp_month_events(
                         <= seg_end
                     ):
                         evs.append(ev)
+            prev = cursor
             cursor = str(getattr(resp, "next_date", "") or "").strip()
-            if not cursor or cursor > end_iso:
+            # next_date 不前进时立即收尾: 服务端异常返回同一游标会死循环
+            if not cursor or cursor > end_iso or cursor <= prev:
                 break
     except Exception as e:  # noqa: BLE001 - 带日期的错误兜底
         return evs, f"长桥日历({market}/{category})失败: {type(e).__name__}: {e}"[:200]
@@ -675,7 +693,11 @@ def _lp_config_builder(cfg: dict | None):
 
 
 def _fetch_longport_events(
-    symbols: set[str], start: date, end: date, cfg: dict | None = None
+    symbols: set[str],
+    start: date,
+    end: date,
+    cfg: dict | None = None,
+    refresh: bool = False,
 ) -> tuple[dict[str, list[dict]], str | None]:
     """长桥整批兜底: 只拉长桥支持且自选中存在的市场 → {symbol: 窗口事件}."""
     markets = sorted({_lp_market_axis(s) for s in symbols} - {None})
@@ -687,7 +709,7 @@ def _fetch_longport_events(
         for category in _LP_CATEGORIES:
             for seg_start, seg_end in _month_starts(start, end):
                 evs, e = _fetch_lp_month_events(
-                    market, category, seg_start, seg_end, cfg=cfg
+                    market, category, seg_start, seg_end, cfg=cfg, refresh=refresh
                 )
                 if e and err is None:
                     err = e
@@ -770,7 +792,9 @@ def fetch_calendar(
         missing_cn = cn_syms - got
         if (cn_issues or not cn_events) and missing_cn and use_longport:
             try:
-                lp_out, lp_err = _fetch_longport_events(missing_cn, start, end)
+                lp_out, lp_err = _fetch_longport_events(
+                    missing_cn, start, end, refresh=refresh
+                )
             except Exception as e:  # noqa: BLE001 - 兜底失败不拖主流程
                 lp_out, lp_err = {}, f"长桥日历不可用: {e}"[:200]
             for _sym, evs2 in lp_out.items():
@@ -800,7 +824,9 @@ def fetch_calendar(
             }
             if lpable:
                 try:
-                    lp_out, lp_err = _fetch_longport_events(lpable, start, end)
+                    lp_out, lp_err = _fetch_longport_events(
+                        lpable, start, end, refresh=refresh
+                    )
                 except Exception as e:  # noqa: BLE001
                     lp_out, lp_err = {}, f"长桥日历不可用: {e}"[:200]
                 for _sym, evs3 in lp_out.items():

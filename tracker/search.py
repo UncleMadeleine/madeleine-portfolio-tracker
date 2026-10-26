@@ -90,16 +90,20 @@ def resolve_symbol(query: str, *, limit: int = 1) -> list[dict]:
         if not hits:
             return _parse_pass(q, parse)
         if q.isdigit():
-            # 数字查询: 补零/原码精确命中排最前 (700/00700 → 0700.HK);
-            # 同为精确命中取代码更短者 (0700.HK 优于 000700.SZ 的 000700),
-            # 子串匹配 (600700.SS 等) 最后 —— 用户输 700 想要的是"那只股"
+            # 数字查询: 原码精确命中 > 补零/去零命中 > 子串匹配。
+            # 例: 输入 000700 时 000700.SZ (原样) 必须排在 0700.HK (去零后
+            # 同为 700) 之前; 输入 700 时 0700.HK 仍是去零命中里最短者。
             digits = q.lstrip("0") or "0"
-            hits.sort(
-                key=lambda h: (
-                    0 if h["code"].split(".")[0].lstrip("0") == digits else 1,
-                    len(h["code"].split(".")[0]),
+
+            def _rank(h: dict) -> tuple:
+                code = str(h["code"]).split(".")[0]
+                return (
+                    0 if code == q else 1,
+                    0 if code.lstrip("0") == digits else 1,
+                    len(code),
                 )
-            )
+
+            hits.sort(key=_rank)
         return hits[:limit]
     try:
         p = parse(q)

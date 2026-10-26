@@ -16,10 +16,14 @@ Yahoo 对港股指数仅 ^HSI/^HSCE 有数据, 为保持全组收盘口径一致
 futures_main_sina 新浪主力连续 (如 AU0=黄金, LC0=碳酸锂), 返回全量历史后本地
 切片; 主力连续含换月跳空 (新浪标准构造), 单合约历史可改用 futures_zh_daily_sina
 (未接入)。
+Cameco 官网铀价 (IX.URANIUM/URANIUM_LT, 目录条目带 cameco 字段): 服务端渲染的
+月度表格 (UxC + TradeTech 月末行业均价), 免登录但只有月频且无开高低 → 平K线;
+页面改版由解析异常显式报错兜住, 无第二数据源。
 """
 
 from __future__ import annotations
 
+import io
 import json
 
 import pandas as pd
@@ -220,6 +224,70 @@ def _hsi_history(
     )
 
 
+# ---------- Cameco 官网铀价表 (monthly) ----------
+
+# 页面服务端渲染完整月度历史表 (1988-01 起现货, 1996-03 起长协), 另外两张
+# 透视表只覆盖近 5 年, 故固定取第一张。Cameco 说明其价格是 UxC + TradeTech
+# 月末价的行业平均; 无开高低, 与恒生/水泥网点位指数一样作平K线。
+_CAMECO_URL = "https://www.cameco.com/invest/markets/uranium-price"
+_CAMECO_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+    ),
+    # 固定英文页, 避免按地域返回翻译后的表头导致列名匹配失败
+    "Accept-Language": "en-US,en;q=0.9",
+}
+_CAMECO_TIMEOUT = 30.0
+
+
+def _cameco_history(
+    p: ParsedSymbol, start_date: str, end_date: str | None = None
+) -> pd.DataFrame:
+    """Cameco 铀价表 → 月度平K线 (cameco 字段: spot=现货 / lt=长协).
+
+    日期统一到月末: 源站早期记为月初、近年记为月末, 若保留原值会给人
+    「同一个月两个点」的错觉, 也会让按截止日的切片出现未来数据。
+    """
+    field = _catalog(p)["cameco"]
+    r = _requests().get(_CAMECO_URL, headers=_CAMECO_HEADERS, timeout=_CAMECO_TIMEOUT)
+    r.raise_for_status()
+    try:
+        tables = pd.read_html(io.StringIO(r.text))
+    except ValueError as exc:
+        raise RuntimeError(f"Cameco 页面未找到铀价表格: {exc}") from exc
+    if not tables:
+        raise RuntimeError("Cameco 页面未找到铀价表格")
+    raw = tables[0].rename(
+        columns={
+            tables[0].columns[0]: "date",
+            "Uranium Spot Price": "spot",
+            "Long-term Uranium Price": "lt",
+        }
+    )
+    if field not in raw.columns:
+        raise RuntimeError(f"Cameco 铀价表缺少 {field} 列")
+    df = raw[["date", field]].rename(columns={field: "close"}).copy()
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df["close"] = pd.to_numeric(df["close"], errors="coerce")
+    df = df.dropna(subset=["date", "close"])
+    if df.empty:
+        raise RuntimeError("Cameco 铀价表返回空序列")
+    # 月末锚点: 同一月份只保留一个点, 且截止日早于月末时不会提前泄露当月价格
+    df["date"] = df["date"].dt.to_period("M").dt.to_timestamp("M")
+    # 源站存在整月重复行 (实测 2019-06 出现两条完全相同的记录): 显式去重,
+    # 否则 provider 返回值里会有两根同日期 K 线 (下游 clean_ohlc 虽会兜住,
+    # 但 provider 自身的契约就是「每月一个点」)
+    df = df.drop_duplicates(subset="date", keep="last")
+    df["open"] = df["high"] = df["low"] = df["close"]
+    df["volume"] = 0.0
+    return _slice_range(
+        df[["date", "open", "high", "low", "close", "volume"]],
+        start_date,
+        end_date,
+    )
+
+
 # ---------- yfinance (OpenBB) 源 ----------
 
 
@@ -313,7 +381,8 @@ class IndexProvider(Provider):
     """宏观/风险指数域: 中国指数 akshare 优先, 其余 yfinance 主源 + 新浪兜底.
 
     商品期货 (futures 字段) 与水泥网 (ccement 字段) 为各自专属源, 无兜底;
-    恒生官方 API (hsi 字段) 同理, 官网零鉴权但仅约 5 年滚动窗口。
+    恒生官方 API (hsi 字段) 同理, 官网零鉴权但仅约 5 年滚动窗口;
+    Cameco 铀价 (cameco 字段) 为月频专属源, 无第二数据源。
     """
 
     name = "index"
@@ -343,6 +412,12 @@ class IndexProvider(Provider):
         def ft():
             return _ak_futures_history(p, start_date, end_date)
 
+        def cm():
+            return _cameco_history(p, start_date, end_date)
+
+        # Cameco 铀价: 目录带 cameco 字段, 月频专属源 (无第二数据源)
+        if _catalog(p).get("cameco"):
+            return [cm]
         # 水泥网指数: 目录带 ccement 字段, 专属源 (无第二数据源)
         if _catalog(p).get("ccement"):
             return [cc]

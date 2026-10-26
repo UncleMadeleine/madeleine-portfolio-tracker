@@ -1,10 +1,10 @@
 """财经日历域测试: 纯函数 + 缓存 + 源链 (全部离线, 网络函数 monkeypatch)."""
 
-from datetime import date, datetime
+from datetime import date
 
 import pytest
 
-from tracker import events, storage
+from tracker import events
 from tracker.events import (
     _cn_code_to_yahoo,
     _cn_normalize_disclosure,
@@ -373,7 +373,7 @@ class TestLongportFallback:
     def test_global_fallback_when_no_events(self, no_network_calendar, monkeypatch):
         lp_calls = {}
 
-        def fake_lp(symbols, start, end, cfg=None):
+        def fake_lp(symbols, start, end, cfg=None, refresh=False):
             lp_calls["syms"] = sorted(symbols)
             return {"ZZZ-US": []}, None
 
@@ -410,3 +410,158 @@ def test_storage_paths_untouched():
     from tracker.storage import PORTFOLIO_PATH
 
     assert "tracker-home" in str(PORTFOLIO_PATH) or "tmp" in str(PORTFOLIO_PATH)
+
+
+# ---------------------------------------------------------------------------
+# 整批缓存 TTL / 失败不落负缓存 (回归: 整批缓存曾无 TTL, 一次失败被固化 6h)
+# ---------------------------------------------------------------------------
+
+
+def _age_calendar_row(key: str, age_seconds: float) -> None:
+    """把日历缓存行的 fetched_at 改成 age_seconds 之前 (模拟过期)."""
+    import sqlite3
+    import time
+
+    from tracker import cache as cache_mod
+
+    with sqlite3.connect(cache_mod.CACHE_DB) as con:
+        cur = con.execute(
+            "UPDATE calendar_cache SET fetched_at=? WHERE key=?",
+            (time.time() - age_seconds, key),
+        )
+        assert cur.rowcount == 1, f"缓存行不存在: {key}"
+        con.commit()
+
+
+class TestBatchCacheTTL:
+    def test_cn_period_cache_expires_after_ttl(
+        self, monkeypatch, no_network_calendar
+    ):
+        """cn 整批缓存超过 6h 必须回源, 不能永久命中旧表."""
+        from tracker import cache as cache_mod
+
+        cache_mod.set_calendar_row(
+            "cn:20260930",
+            [{"symbol": "600519.SS", "type": "earnings", "date": "2026-10-31"}],
+        )
+        _age_calendar_row("cn:20260930", events.CAL_TTL + 1)
+        before = len(no_network_calendar["cn"])
+        data, issues = events._fetch_cn_period("20260930", refresh=False)
+        assert len(no_network_calendar["cn"]) > before, "缓存过期后仍命中旧表"
+        assert issues == []
+        assert any(e["symbol"] == "600519.SS" for e in data["events"])
+
+    def test_cn_period_fresh_cache_hits(self, no_network_calendar):
+        """TTL 内的整批缓存仍应零请求命中 (回归不把 TTL 做成永远回源)."""
+        from tracker import cache as cache_mod
+
+        cache_mod.set_calendar_row(
+            "cn:20260930",
+            [{"symbol": "600519.SS", "type": "earnings", "date": "2026-10-31"}],
+        )
+        before = len(no_network_calendar["cn"])
+        data, issues = events._fetch_cn_period("20260930", refresh=False)
+        assert len(no_network_calendar["cn"]) == before
+        assert issues == []
+        assert data["events"][0]["symbol"] == "600519.SS"
+
+    def test_cn_period_all_sources_failed_not_cached(self, monkeypatch):
+        """akshare 全部失败时不得把空结果写进缓存 (否则故障被固化 6h)."""
+
+        def boom(*a, **kw):
+            raise OSError("offline")
+
+        monkeypatch.setattr("akshare.stock_yysj_em", boom)
+        monkeypatch.setattr("akshare.stock_fhps_em", boom)
+        from tracker import cache as cache_mod
+
+        data, issues = events._fetch_cn_period("20261231", refresh=False)
+        assert data["events"] == []
+        assert len(issues) == 3  # 沪深/京市/分红三条失败注记
+        assert cache_mod.get_calendar_row("cn:20261231") is None
+        # 第二次调用必须重试而不是命中空负缓存
+        _, issues2 = events._fetch_cn_period("20261231", refresh=False)
+        assert len(issues2) == 3
+
+
+class _LpInfo:
+    def __init__(self, symbol: str, d: str):
+        self.symbol = symbol
+        self.date = d
+        self.content = ""
+        self.counter_name = ""
+        self.data_kv = []
+        self.star = 0
+
+
+class _LpGroup:
+    def __init__(self, infos):
+        self.infos = infos
+
+
+class _LpResp:
+    def __init__(self, infos, next_date=""):
+        self.list = [_LpGroup(infos)]
+        self.next_date = next_date
+
+
+class _LpApi:
+    def __init__(self, infos, next_date=""):
+        self._infos = infos
+        self._next = next_date
+        self.calls = 0
+
+    def finance_calendar(self, category, cursor, end, market):
+        self.calls += 1
+        return _LpResp(self._infos, self._next)
+
+
+class TestLongportBatchCache:
+    _START = date(2026, 10, 1)
+    _END = date(2026, 10, 31)
+    _KEY = "lp:US:Report:2026-10"
+
+    def test_lp_month_cache_expires_after_ttl(self, monkeypatch):
+        """长桥整批缓存同样受 6h TTL 约束."""
+        from tracker import cache as cache_mod
+
+        cache_mod.set_calendar_row(
+            self._KEY,
+            [{"symbol": "AAPL", "type": "earnings", "date": "2026-10-09"}],
+        )
+        _age_calendar_row(self._KEY, events.CAL_TTL + 1)
+        api = _LpApi([_LpInfo("MSFT.US", "2026.10.20")])
+        monkeypatch.setattr(events, "_lp_config_builder", lambda cfg=None: api)
+        evs, err = events._fetch_lp_month_events(
+            "US", "Report", self._START, self._END
+        )
+        assert err is None
+        assert api.calls == 1
+        assert [e["symbol"] for e in evs] == ["MSFT"]
+
+    def test_lp_refresh_bypasses_cache(self, monkeypatch):
+        """--refresh 必须穿透长桥整批缓存 (此前参数根本没有传进来)."""
+        from tracker import cache as cache_mod
+
+        cache_mod.set_calendar_row(
+            self._KEY,
+            [{"symbol": "AAPL", "type": "earnings", "date": "2026-10-09"}],
+        )
+        api = _LpApi([_LpInfo("MSFT.US", "2026.10.20")])
+        monkeypatch.setattr(events, "_lp_config_builder", lambda cfg=None: api)
+        evs, err = events._fetch_lp_month_events(
+            "US", "Report", self._START, self._END, refresh=True
+        )
+        assert err is None
+        assert api.calls == 1
+        assert [e["symbol"] for e in evs] == ["MSFT"]
+
+    def test_lp_pagination_stops_when_cursor_stuck(self, monkeypatch):
+        """next_date 不前进时必须收尾, 不能死循环."""
+        api = _LpApi([], next_date="2026-10-01")
+        monkeypatch.setattr(events, "_lp_config_builder", lambda cfg=None: api)
+        evs, err = events._fetch_lp_month_events(
+            "US", "Report", self._START, self._END, refresh=True
+        )
+        assert (evs, err) == ([], None)
+        assert api.calls == 1

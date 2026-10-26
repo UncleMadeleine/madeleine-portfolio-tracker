@@ -304,9 +304,10 @@ def test_hsi_source_chain_is_exclusive():
 
 
 class _FakeResp:
-    def __init__(self, payload, status=200):
+    def __init__(self, payload, status=200, text=""):
         self._payload = payload
         self.status_code = status
+        self.text = text
 
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -405,6 +406,123 @@ def test_hsi_history_slices_end_date_inclusive(monkeypatch):
         "2026-10-14",
         "2026-10-15",
     ]
+
+
+# ---------- Cameco 官网铀价源 ----------
+
+
+_CAMECO_HTML = """
+<html><body>
+<table>
+  <thead>
+    <tr><th>Date</th><th>Uranium Spot Price</th><th>Long-term Uranium Price</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>1988/01/01</td><td>16.40</td><td></td></tr>
+    <tr><td>2026/07/31</td><td>86.38</td><td>95.50</td></tr>
+    <tr><td>2026/08/31</td><td>89.68</td><td>96.50</td></tr>
+    <tr><td>2026/09/30</td><td>89.63</td><td></td></tr>
+  </tbody>
+</table>
+</body></html>
+"""
+
+
+def _fake_text_requests(text, calls, status=200):
+    class FakeRequests:
+        @staticmethod
+        def get(url, headers=None, timeout=None):
+            calls.append({"url": url, "headers": headers, "timeout": timeout})
+            return _FakeResp(None, status, text=text)
+
+    return FakeRequests
+
+
+def test_cameco_catalog_entries_parse_to_index_domain():
+    """Cameco 铀价: 目录合法 + 统一带 cameco 路由字段 (无其它数据源)."""
+    cameco_keys = [k for k, e in INDEX_CATALOG.items() if "cameco" in e]
+    assert cameco_keys == ["URANIUM", "URANIUM_LT"]
+    for key in cameco_keys:
+        p = parse(f"IX.{key}")
+        assert p.type == "index"
+        assert p.market is Market.INDEX
+        e = INDEX_CATALOG[key]
+        assert not ({"ak", "yf", "ccement", "futures", "hsi"} & set(e))
+        assert e["cameco"] in {"spot", "lt"}
+        assert e.get("currency"), f"IX.{key} 缺少报价单位"
+
+
+def test_cameco_source_chain_is_exclusive():
+    """Cameco 铀价源链只有专属 cm 源 (月频无第二数据源)."""
+    provider = IndexProvider()
+    for key in ("URANIUM", "URANIUM_LT"):
+        chains = provider.history_sources(parse(f"IX.{key}"), "2025-01-01", None)
+        assert [f.__name__ for f in chains] == ["cm"]
+
+
+def test_cameco_history_parses_spot_as_monthly_flat_kline(monkeypatch):
+    """现货表 → 平K线; 日期统一到月末, 本地切片, 无成交量."""
+    from tracker.providers import index as idx_mod
+
+    calls = []
+    monkeypatch.setattr(idx_mod, "_requests", _fake_text_requests(_CAMECO_HTML, calls))
+    df = idx_mod._cameco_history(parse("IX.URANIUM"), "1988-01-01", "2026-08-31")
+    assert list(df.columns) == ["date", "open", "high", "low", "close", "volume"]
+    # 月初/月末混用的源日期统一成月末; end_date 闭区间不多取 9 月
+    assert [d.strftime("%Y-%m-%d") for d in df["date"]] == [
+        "1988-01-31",
+        "2026-07-31",
+        "2026-08-31",
+    ]
+    assert df.iloc[-1]["close"] == pytest.approx(89.68)
+    row = df.iloc[-1]
+    assert row["open"] == row["high"] == row["low"] == row["close"]
+    assert (df["volume"] == 0.0).all()
+    assert calls[0]["url"] == idx_mod._CAMECO_URL
+    assert calls[0]["headers"] == idx_mod._CAMECO_HEADERS
+
+
+def test_cameco_history_parses_long_term_series(monkeypatch):
+    """长协序列独立选择, 缺失月份丢弃 (不能用现货补齐)."""
+    from tracker.providers import index as idx_mod
+
+    monkeypatch.setattr(idx_mod, "_requests", _fake_text_requests(_CAMECO_HTML, []))
+    df = idx_mod._cameco_history(parse("IX.URANIUM_LT"), "2026-01-01", None)
+    assert [d.strftime("%Y-%m-%d") for d in df["date"]] == [
+        "2026-07-31",
+        "2026-08-31",
+    ]
+    assert df.iloc[-1]["close"] == pytest.approx(96.50)
+
+
+def test_cameco_history_rejects_missing_table(monkeypatch):
+    """页面改版/无表格必须显式报错, 不能产出空 DataFrame 静默通过."""
+    from tracker.providers import index as idx_mod
+
+    monkeypatch.setattr(
+        idx_mod,
+        "_requests",
+        _fake_text_requests("<html><body>no table</body></html>", []),
+    )
+    with pytest.raises(RuntimeError, match="未找到铀价表格"):
+        idx_mod._cameco_history(parse("IX.URANIUM"), "2025-01-01", None)
+
+
+def test_cameco_history_dedupes_duplicate_month(monkeypatch):
+    """源站同一月份重复行只保留一条 (实测 2019-06 有两条相同记录)."""
+    from tracker.providers import index as idx_mod
+
+    html = """
+    <html><body><table>
+      <tr><th>Date</th><th>Uranium Spot Price</th><th>Long-term Uranium Price</th></tr>
+      <tr><td>2025/01/01</td><td>10.00</td><td></td></tr>
+      <tr><td>2025/01/31</td><td>11.00</td><td></td></tr>
+    </table></body></html>
+    """
+    monkeypatch.setattr(idx_mod, "_requests", _fake_text_requests(html, []))
+    df = idx_mod._cameco_history(parse("IX.URANIUM"), "2025-01-01", None)
+    assert [d.strftime("%Y-%m-%d") for d in df["date"]] == ["2025-01-31"]
+    assert df.iloc[0]["close"] == pytest.approx(11.00)
 
 
 def test_get_quotes_routes_index_to_explicit_error(monkeypatch):

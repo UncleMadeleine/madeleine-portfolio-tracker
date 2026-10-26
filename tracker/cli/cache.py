@@ -40,6 +40,10 @@ def cmd_cache(args) -> None:
         f"  K线缓存: {info['ohlc_total']} 组 (有效 {info['ohlc_fresh']}"
         f" / TTL {info['ohlc_ttl_seconds']}s)"
     )
+    print(
+        f"  日历缓存: {info['calendar_total']} 组"
+        f" (TTL {info['calendar_ttl_seconds']}s)"
+    )
     print(f"  文件大小: {info['size_bytes']:,} bytes")
     if info["newest_at"]:
         print(

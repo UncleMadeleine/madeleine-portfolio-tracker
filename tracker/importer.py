@@ -63,6 +63,31 @@ def _merge_key(row: dict) -> tuple[str, str]:
     return (_norm_sym(row.get("symbol", "")), str(row.get("import_source") or ""))
 
 
+def _aggregate_rows(rows: list[dict]) -> list[dict]:
+    """同一批导入里同 (代码, 来源) 的多行先合并为一行 (数量相加).
+
+    券商导出/长桥渠道常把同一代码拆成多行 (普通+信用账户、多股东账户、
+    多交易渠道)。逐行进入下面的覆盖逻辑时, 后一行会替换前一行的数量,
+    静默丢掉先出现的持仓; 先聚合才能得到真实总量。
+    """
+    out: dict[tuple[str, str], dict] = {}
+    for r in rows:
+        key = _merge_key(r)
+        cur = out.get(key)
+        if cur is None:
+            out[key] = dict(r)
+            continue
+        cur["quantity"] = float(cur.get("quantity") or 0) + float(
+            r.get("quantity") or 0
+        )
+        # 多账户成本可能不同, 不编造加权成本: 保留先出现的有效成本价
+        if cur.get("avg_cost") is None and r.get("avg_cost") is not None:
+            cur["avg_cost"] = r["avg_cost"]
+        for k, v in r.items():
+            cur.setdefault(k, v)
+    return list(out.values())
+
+
 # ---------------------------------------------------------------------------
 # 采集 (各来源 → 统一 rows)
 # ---------------------------------------------------------------------------
@@ -168,7 +193,7 @@ def merge_holdings(
     """
     if mode not in IMPORT_MODES:
         raise ValueError(f"未知导入模式: {mode} (支持: {', '.join(IMPORT_MODES)})")
-    normalized = [normalize_row(r) for r in rows]
+    normalized = _aggregate_rows([normalize_row(r) for r in rows])
     stats: dict[str, list[str]] = {"added": [], "updated": []}
     if mode == MODE_OVERWRITE:
         stats["added"] = [r["symbol"] for r in normalized]

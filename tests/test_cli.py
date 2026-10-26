@@ -626,6 +626,7 @@ class TestCacheCli:
         )
         out = _run(capsys, "cache", "info")
         assert "总条数: 1" in out
+        assert "日历缓存: 0 组" in out
         assert "AAPL" not in out
 
         out = _run(capsys, "cache", "clear")

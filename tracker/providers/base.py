@@ -123,7 +123,19 @@ def resolve(type_or_market) -> Provider:
         return PROVIDERS["index"]
     if t in ("CN", "BJ"):
         return PROVIDERS["cn"]
-    if t in ("GLOBAL", "US", "HK", "DE", "GB", "CA", "AU", "SG", "BR"):
+    if t in (
+        "GLOBAL",
+        "US",
+        "HK",
+        "DE",
+        "GB",
+        "CA",
+        "AU",
+        "SG",
+        "BR",
+        "JP",
+        "KR",
+    ):
         return PROVIDERS["global"]
     raise ValueError(f"未知域标记: {type_or_market}")
 

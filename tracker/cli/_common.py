@@ -11,13 +11,16 @@ import pandas as pd
 
 from .. import __version__ as VERSION  # noqa: F401  (单一版本来源, 经 cli 再导出)
 from ..symbols import parse
+from ..util import records as _util_records
 
 
 def _records(df: pd.DataFrame) -> list[dict]:
-    """DataFrame -> records, NaN/NaT 转 None 便于 JSON 序列化."""
-    if df is None or df.empty:
-        return []
-    return df.astype(object).where(pd.notnull(df), None).to_dict(orient="records")
+    """DataFrame -> records, NaN/NaT 转 None 便于 JSON 序列化 (实现见 util).
+
+    兼容既有 `from ._common import _records` 导入路径; 实现放 util 是为了
+    避免 services.snapshot → cli._common → cli.__init__ 的循环导入。
+    """
+    return _util_records(df)
 
 
 def _sym(e: dict) -> str:

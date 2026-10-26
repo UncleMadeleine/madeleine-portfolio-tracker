@@ -349,7 +349,12 @@ def _binance_history(
 ) -> pd.DataFrame:
     """Binance 1d klines → date/open/high/low/close/volume (升序)."""
     pair = binance_pair(p)
-    start_ms = int(pd.Timestamp(start_date, tz="UTC").timestamp() * 1000)
+    # 加密历史不可能早于 2009 (BTC 创世); 更早的 start 既无数据, 也会让
+    # Binance 因负时间戳直接 HTTP 400 (months 很大时出现过)
+    start_ms = max(
+        int(pd.Timestamp(start_date, tz="UTC").timestamp() * 1000),
+        int(pd.Timestamp("2009-01-01", tz="UTC").timestamp() * 1000),
+    )
     end_ms = (
         int(pd.Timestamp(end_date, tz="UTC").timestamp() * 1000 + 86_399_000)
         if end_date
@@ -402,7 +407,10 @@ def _gate_history(
     截断单次窗口、用游标翻页拼全区间。
     """
     pair = gate_pair(p)
-    start_ts = int(pd.Timestamp(start_date, tz="UTC").timestamp())
+    start_ts = max(
+        int(pd.Timestamp(start_date, tz="UTC").timestamp()),
+        int(pd.Timestamp("2009-01-01", tz="UTC").timestamp()),
+    )
     end_ts = (
         int(pd.Timestamp(end_date, tz="UTC").timestamp()) + 86_399
         if end_date
@@ -425,7 +433,12 @@ def _gate_history(
             },
         )
         if not batch:
-            break
+            # 空窗口不等于"没有更多数据": 请求区间可能整段早于上市日
+            # (months 很大 / 币上线较晚), 推进窗口继续找, 直到覆盖 end。
+            if page_to >= end_ts:
+                break
+            cursor = page_to + 1
+            continue
         for k in batch:
             rows.append(
                 {
@@ -437,8 +450,11 @@ def _gate_history(
                     "volume": float(k[6]),
                 }
             )
-        cursor = int(batch[-1][0]) + 86_400
-        if len(batch) < _KLINES_LIMIT:
+        # 按窗口推进而不是按「本页是否满 1000 根」判断结束: 窗口首段早于
+        # 上市日时本页天然不满, 提前 break 会把上市日之后的数据整段截掉
+        # (SUI 从 2021 起查只拿到 413 根、停在 2024-06)。
+        cursor = max(int(batch[-1][0]) + 86_400, page_to + 1)
+        if page_to >= end_ts:
             break
     df = pd.DataFrame(rows)
     if df.empty:

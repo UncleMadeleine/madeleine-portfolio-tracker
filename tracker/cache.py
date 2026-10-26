@@ -33,6 +33,8 @@ CACHE_TTL = 300  # 秒, 实时行情缓存有效期 (新鲜期)
 # 陈旧数据对「先看到数」是可接受的代价, 且刷新完成即换新。
 STALE_TTL = 1800  # 秒, 实时行情陈旧可渲染期 (30 分钟)
 OHLC_TTL = 1800  # 秒, 日线K线缓存有效期 (30 分钟; 收盘后数据不变, TTL 过期重取也准)
+# 财经日历整批缓存 (cn 报表期 / 长桥按月): 与单票正缓存同口径 (events.CAL_TTL)
+CALENDAR_TTL = 21600  # 秒 (6 小时)
 
 # 汇率即期缓存 (base→currency): 与行情同样的新鲜/陈旧两档。CFETS 一次拉齐
 # CNY 货币对表, 但 akshare 首次 import alone 就要 ~10s, 冷进程每屏都付这笔钱;
@@ -132,12 +134,30 @@ def _create_schema(con) -> None:
     con.commit()
 
 
+def _is_corruption(exc: sqlite3.DatabaseError) -> bool:
+    """该异常是否真的表示库文件损坏 (而不是锁竞争/磁盘 I/O 等瞬时错误).
+
+    OperationalError("database is locked") 也是 DatabaseError: 早期实现把
+    并发窗口里的锁超时当成损坏, 直接把另一个进程正在写的库 os.replace 隔离,
+    缓存被劈成两份。只有 CORRUPT/NOTADB 才走隔离重建。
+    """
+    name = getattr(exc, "sqlite_errorname", "") or ""
+    if name in ("SQLITE_CORRUPT", "SQLITE_NOTADB"):
+        return True
+    msg = str(exc).lower()
+    return any(m in msg for m in ("not a database", "malformed", "corrupt"))
+
+
 def _ensure_db() -> None:
     CACHE_DB.parent.mkdir(parents=True, exist_ok=True)
     try:
         with sqlite3.connect(CACHE_DB) as con:
             _create_schema(con)
-    except sqlite3.DatabaseError:
+    except sqlite3.DatabaseError as exc:
+        if not _is_corruption(exc):
+            # 锁/IO 等瞬时错误: 不隔离正在使用的库, 交给本次读写自行解释
+            # (读路径通常仍可继续, 写路径会抛出真实错误)
+            return
         # 缓存库损坏 (写入中途断电/磁盘满/误写文本): 行情/K线/基本面缓存全是可再生
         # 的派生数据。若不处理, snapshot/quote/kline 与 cache info/clear 全链路都会
         # 因一个坏文件裸 traceback —— 连用户想「cache clear 自愈」的那条路也崩。
@@ -621,7 +641,7 @@ def info() -> dict:
         "series_total": series_total,
         "series_fresh": series_fresh,
         "calendar_total": cal_total,
-        "calendar_ttl_seconds": 21600,
+        "calendar_ttl_seconds": CALENDAR_TTL,
         "size_bytes": size,
     }
 

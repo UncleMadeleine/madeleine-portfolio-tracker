@@ -1079,7 +1079,7 @@ def kline_payload(
                 ("middle", "BOLL中轨", BOLL_MIDDLE_COLOR),
                 ("lower", "BOLL下轨", BOLL_LOWER_COLOR),
             ]:
-                data = _to_line_data(dates, boll[col])
+                data = _to_line_data(dates, boll[col], precision=nd)
                 if data:
                     boll_series.append({"name": name, "color": color, "data": data})
         if "macd" in indicators:
@@ -1091,12 +1091,12 @@ def kline_payload(
                 signal=mp.get("signal", 9),
             )
             macd_data = {
-                "dif": _to_line_data(dates, macd["dif"]),
-                "dea": _to_line_data(dates, macd["dea"]),
+                "dif": _to_line_data(dates, macd["dif"], precision=nd),
+                "dea": _to_line_data(dates, macd["dea"], precision=nd),
                 "hist": [
                     {
                         "time": t,
-                        "value": round(float(v), 6),
+                        "value": round(float(v), nd),
                         "color": _rgba(up, 0.6) if v >= 0 else _rgba(down, 0.6),
                     }
                     for t, v in zip(dates, macd["macd"])
@@ -1108,14 +1108,17 @@ def kline_payload(
         if "rsi" in indicators:
             rp = indicators["rsi"]
             rsi = calc_rsi(df, period=rp.get("period", 14))
-            rsi_data = {"data": _to_line_data(dates, rsi), "color": RSI_COLOR}
+            rsi_data = {
+                "data": _to_line_data(dates, rsi, precision=nd),
+                "color": RSI_COLOR,
+            }
         if "kdj" in indicators:
             kp = indicators["kdj"]
             kdj = calc_kdj(df, n=kp.get("n", 9), m1=kp.get("m1", 3), m2=kp.get("m2", 3))
             kdj_data = {
-                "k": _to_line_data(dates, kdj["k"]),
-                "d": _to_line_data(dates, kdj["d"]),
-                "j": _to_line_data(dates, kdj["j"]),
+                "k": _to_line_data(dates, kdj["k"], precision=nd),
+                "d": _to_line_data(dates, kdj["d"], precision=nd),
+                "j": _to_line_data(dates, kdj["j"], precision=nd),
                 "kColor": KDJ_K_COLOR,
                 "dColor": KDJ_D_COLOR,
                 "jColor": KDJ_J_COLOR,
@@ -1452,24 +1455,27 @@ def summarize_ohlc(df: pd.DataFrame, mas=DEFAULT_MA) -> dict:
     )
     hi = df.loc[df["high"].idxmax()]
     lo = df.loc[df["low"].idxmin()]
+    # 精度按价格中位数定: 硬编码 4 位会把 SHIB/PEPE 一类低价币的摘要
+    # (终端/--json/页面指标) 全部归零; 正常价位仍保持 4 位 (max(4, ...)).
+    nd = max(4, _price_precision(float(df["close"].median())))
     ma_vals: dict[str, float | None] = {}
     for n, srs in compute_ma(df, mas).items():
         v = srs.iloc[-1]
-        ma_vals[f"ma{n}"] = None if pd.isna(v) else round(float(v), 4)
+        ma_vals[f"ma{n}"] = None if pd.isna(v) else round(float(v), nd)
     return {
         "bars": int(len(df)),
         "first_date": first["date"].strftime("%Y-%m-%d"),
         "last_date": last["date"].strftime("%Y-%m-%d"),
-        "first_close": round(float(first["close"]), 4),
-        "last_open": round(float(last["open"]), 4),
-        "last_high": round(float(last["high"]), 4),
-        "last_low": round(float(last["low"]), 4),
-        "last_close": round(float(last["close"]), 4),
+        "first_close": round(float(first["close"]), nd),
+        "last_open": round(float(last["open"]), nd),
+        "last_high": round(float(last["high"]), nd),
+        "last_low": round(float(last["low"]), nd),
+        "last_close": round(float(last["close"]), nd),
         "last_volume": float(last["volume"]) if pd.notna(last["volume"]) else None,
         "change_pct": round(change_pct, 4) if change_pct is not None else None,
-        "period_high": round(float(hi["high"]), 4),
+        "period_high": round(float(hi["high"]), nd),
         "period_high_date": hi["date"].strftime("%Y-%m-%d"),
-        "period_low": round(float(lo["low"]), 4),
+        "period_low": round(float(lo["low"]), nd),
         "period_low_date": lo["date"].strftime("%Y-%m-%d"),
         "ma": ma_vals,
     }

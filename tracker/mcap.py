@@ -22,7 +22,7 @@ from dataclasses import dataclass
 import pandas as pd
 
 from . import cache as cache_mod
-from .symbols import parse
+from .symbols import Market, is_pence, parse
 
 # 东财估值分析: 报表级低频数据, 6h 与 fundamentals 同口径
 MCAP_EM_TTL = 21600
@@ -249,6 +249,27 @@ def _shares_history(yahoo: str) -> pd.DataFrame | None:
 # ---------- 编排入口 (CLI / 页面共用) ----------
 
 
+def _price_currency_for(p) -> str:
+    """市值序列的报价币种 (跟随价格实际币种, 而不是市场静态币种).
+
+    parse() 对 .L/.IL 一律给 GBP, 但 LSE 主板/IOB 存在 USD/EUR 计价线
+    (CSPX.L / VWRA.L / KAP.IL): 历史 K 线按实际报价币种保留 (见
+    providers/global_stocks._yahoo_history 的便士折算判据)。市值 = 股本 ×
+    该价格, 币种必须与价格一致, 否则 compare --metric mcap 会拿 USD 数字按
+    GBP 汇率折算 (约 1.3 倍偏差) 且不告警。
+    """
+    if p.market is not Market.GB:
+        return p.currency
+    from .providers.global_stocks import _yahoo_quote_currency
+
+    ccy = _yahoo_quote_currency(p.yahoo).strip()
+    # 便士 (GBp/GBX) 的 K 线已按 LSE 惯例 ÷100 折成英镑; 未知币种同样按
+    # 英镑兜底 (与 parse 的市场静态币种一致, 维持既有行为)
+    if ccy and not is_pence(ccy) and ccy.upper() not in ("GBP", "GBX"):
+        return ccy.upper()
+    return "GBP"
+
+
 def history_for(symbol: str, price_df: pd.DataFrame) -> McapResult:
     """单代码历史市值序列 → McapResult (df 为 K线同构, close=当地币市值)."""
     try:
@@ -262,6 +283,7 @@ def history_for(symbol: str, price_df: pd.DataFrame) -> McapResult:
         return McapResult(symbol, None, None, None, reason="指数无总市值语义")
     if price_df is None or price_df.empty:
         return McapResult(symbol, None, None, p.currency, reason="无K线数据")
+    price_ccy = _price_currency_for(p)
 
     mcap_pairs: pd.Series | None = None
     source = None
@@ -309,16 +331,16 @@ def history_for(symbol: str, price_df: pd.DataFrame) -> McapResult:
         except Exception:
             snapshot = None
         if snapshot is None or snapshot <= 0:
-            return McapResult(symbol, None, None, p.currency, reason="无市值数据")
+            return McapResult(symbol, None, None, price_ccy, reason="无市值数据")
         approx = approx_frame(float(snapshot), price_df)
         if approx.empty:
-            return McapResult(symbol, None, None, p.currency, reason="无有效价格")
-        return McapResult(symbol, ohlcv_shim(approx), "approx", p.currency)
+            return McapResult(symbol, None, None, price_ccy, reason="无有效价格")
+        return McapResult(symbol, ohlcv_shim(approx), "approx", price_ccy)
 
     attached = _map_by_closest_date(price_df, mcap_pairs)
     if attached.empty:
-        return McapResult(symbol, None, None, p.currency, reason="市值与K线无重叠日期")
-    return McapResult(symbol, ohlcv_shim(attached), source, p.currency)
+        return McapResult(symbol, None, None, price_ccy, reason="市值与K线无重叠日期")
+    return McapResult(symbol, ohlcv_shim(attached), source, price_ccy)
 
 
 def compare_market_caps(

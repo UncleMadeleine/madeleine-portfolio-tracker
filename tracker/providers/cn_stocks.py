@@ -48,14 +48,24 @@ class CNStocksProvider(Provider):
 
     def search(self, query: str, limit: int = 10) -> list[SymbolEntry]:
         """A股域搜索: 东财 suggest (沪/深/京 A股 B股) + 合法代码直查兜底。"""
-        from ..search import _fallback_match
-
         q = query.strip()
         if not q:
             return []
+
+        def _local_fallback() -> list[SymbolEntry]:
+            from ..search import _fallback_match
+
+            return [
+                SymbolEntry(r["code"], r["name"], r["market"], r["type"])
+                for r in _fallback_match(q, limit)
+                if r["type"] == "cn"
+            ]
+
         merged = suggest_merged(q)
         if merged is None:
-            return []  # 东财不可达且无其他在线源
+            # 东财不可达: 仍走本地代码直查 (规范 A股代码无需网络),
+            # 不能因为在线源失败就把 600519.SS 这类合法输入也判为搜不到
+            return _local_fallback()
         rows, _failed = merged
         out: list[SymbolEntry] = []
         seen: set[str] = set()
@@ -70,12 +80,7 @@ class CNStocksProvider(Provider):
             seen.add(p.yahoo)
             out.append(SymbolEntry(p.yahoo, row["Name"], p.market_label, p.type))
         if not out:
-            fb = _fallback_match(q, limit)
-            return [
-                SymbolEntry(r["code"], r["name"], r["market"], r["type"])
-                for r in fb
-                if r["type"] == "cn"
-            ]
+            return _local_fallback()
         return out[:limit]
 
 

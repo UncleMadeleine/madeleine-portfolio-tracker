@@ -257,18 +257,16 @@ def _yahoo_history(
     ]
     df = df[keep]
     if p.market is Market.GB:
-        # LSE 惯例: 报价币种为 GBP (价在便士) / GBX / 便士变体 / 未知时 ÷100 折成
-        # 英镑; 仅当确证为其它币种 (美元/欧元计价的 LSE ETF/ADR, 如 CSPX.L/VWRA.L)
-        # 才不折算 —— 与报价路径 _quote_from_dump 的 is_pence 判据对齐, 避免同一
-        # 代码行情与K线单位不一致 (历史曾无条件 ÷100, 把美元计价 LSE 缩错 100 倍)
-        # .IL (国际挂盘 IOB) 不适用该惯例, 见下方分支
-        ccy = _yahoo_quote_currency(p.yahoo).upper()
-        # .IL (LSE 国际挂盘, 如 KAP.IL) 以 USD/EUR 计价: 币种未知时不能按 LSE
-        # 主板惯例兜底 ÷100, 仅当确证为便士才折算 (与 _quote_from_dump 判据对齐)
+        # LSE 惯例: 便士报价 (GBp/GBX, is_pence 命中) 或币种未知时 ÷100 折成
+        # 英镑; 真正的英镑报价 (Yahoo 报 "GBP", 如 VUSA.L/VWRL.L 的 ETF) 与
+        # 美元/欧元计价线 (CSPX.L/VWRA.L, Yahoo 报 USD) 按面值。
+        # 注意: 这里不能先 .upper() —— "GBp" 大写后会与英镑 "GBP" 混同,
+        # 把英镑计价 ETF 的历史价错误缩小 100 倍 (与实时行情不一致)。
+        ccy = _yahoo_quote_currency(p.yahoo).strip()
         if p.yahoo.endswith(".IL"):
             pence = is_pence(ccy)
         else:
-            pence = ccy in ("", "GBP", "GBX") or is_pence(ccy)
+            pence = is_pence(ccy) or not ccy
         if pence:
             for c in ("open", "high", "low", "close"):
                 if c in df.columns:

@@ -12,7 +12,7 @@ from .. import prices
 from ..analytics import build_view, summarize
 from ..fx import get_fx_rates
 from ..symbols import parse
-from ..cli._common import _records
+from ..util import records
 from .watchlist import build_watchlist_view, entries_for, triggered_entries
 
 
@@ -28,7 +28,7 @@ def snapshot_json(
 ) -> dict:
     return {
         "base_currency": base,
-        "holdings": _records(view),
+        "holdings": records(view),
         "summary": {
             "total_value": summary.get("total_value"),
             "total_cost": summary.get("total_cost"),
@@ -39,8 +39,8 @@ def snapshot_json(
             "by_market": _series_to_dict(summary.get("by_market")),
             "by_currency": _series_to_dict(summary.get("by_currency")),
         },
-        "watchlist": _records(wview),
-        "triggered": _records(triggered_entries(wview)),
+        "watchlist": records(wview),
+        "triggered": records(triggered_entries(wview)),
         "issues": issues,
     }
 

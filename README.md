@@ -25,10 +25,11 @@ Madeleine Portfolio Tracker 是一款**本地优先**的投资组合追踪工具
 - **自选股阈值提醒** — 价格 / 市净率 (PB) / 总市值 (mcap) 三指标基准，两级上限/下限，触发分级，距离预测
 - **长桥 (LongPort) 行情接入** — 可选行情/历史/持仓源（OAuth 登录），自带 PB (calc_indexes 实时口径) 反推每股净资产，失败自动回退默认数据源
 - **K 线蜡烛图** — 日K / 周K / 月K，MA 均线，成交量，MACD / RSI / KDJ / 布林带，滑动模式默认加载上市以来全量历史
-- **宏观/风险指数K线** — 独立 IX.<KEY> 代码规范（美元指数 / VIX / 沪深 300 / 商品期货主力连续（黄金·白银·鸡蛋·豆粕·豆一·豆二·生猪·碳酸锂）/ 水泥网建材指数 / 恒生官网港股指数（恒生指数·国企·恒生科技·红筹·恒生综合·恒指波幅 等共 12 个）/ 恒生AH股溢价指数 等，共 49 个，`index-kline --list` 可查全部），独立页面与 `index-kline` 子命令，独立 provider 源链
+- **宏观/风险指数K线** — 独立 IX.<KEY> 代码规范（美元指数 / VIX / 沪深 300 / 商品期货主力连续（黄金·白银·鸡蛋·豆粕·豆一·豆二·生猪·碳酸锂）/ 铀现货与长协价（Cameco 月度 U3O8）/ 水泥网建材指数 / 恒生官网港股指数（恒生指数·国企·恒生科技·红筹·恒生综合·恒指波幅 等共 12 个）/ 恒生AH股溢价指数 等，共 51 个，`index-kline --list` 可查全部），独立页面与 `index-kline` 子命令，独立 provider 源链
 - **多股对比** — 任意代码同坐标系折线对比，归一化（起点=100）跨币种跨量级比较
-- **Streamlit 可视化页面** — 组合明细 / 资产配置 / 自选提醒 / K线查询（含多股走势对比）/ 指数K线 / 设置
-- **统一 CLI** — 18 个子命令（快照、报价、持仓、自选、监控报告、导出、汇率、历史、K线、搜索、对比、指数K线、导入、长桥登录、同步、钱包导入、缓存、初始化），全部支持机器可读输出（`--json`，`report`/`export` 为 `-f json`）
+- **财经日历** — 持仓/自选的本月与下月财报、预约披露、除权除息/派息事件（yfinance 单票 + akshare 整批，长桥可选兜底），独立页面与 `calendar` 子命令
+- **Streamlit 可视化页面** — 组合明细 / 资产配置 / 自选提醒 / K线查询（含多股走势对比）/ 指数K线 / 日历 / 设置
+- **统一 CLI** — 19 个子命令（快照、报价、持仓、自选、监控报告、导出、汇率、历史、K线、日历、搜索、对比、指数K线、导入、长桥登录、同步、钱包导入、缓存、初始化），全部支持机器可读输出（`--json`，`report`/`export` 为 `-f json`）
 - **链上钱包导入** — EVM 五链 + TRON + Solana 共七条链地址余额只读查询，一键写入持仓
 - **A股券商持仓导入** — 解析券商客户端导出的 CSV/Excel 持仓文件
 
@@ -77,11 +78,12 @@ streamlit run tracker/ui/app.py   # 源码树
 tracker-ui                        # pip 安装后 (等价, 参数透传给 streamlit)
 ```
 
-页面默认运行在 `http://localhost:8501`，五个页面各有独立 URL（刷新 / 书签 / 前进后退不丢页）：
+页面默认运行在 `http://localhost:8501`，六个页面各有独立 URL（刷新 / 书签 / 前进后退不丢页）：
 
 - **组合** (`/`) — 持仓编辑、明细表、资产配置（按市场 / 按币种 / 按代码三张饼图，按代码为市值 Top 20 + 其他 + 持仓市值 Top 15 柱图）、自选提醒
 - **K线** (`/kline`) — 任意代码 K 线查询（支持按代码或名称模糊搜索）+ 多股走势对比 + 加密货币对比（K线页子功能）
 - **指数K线** (`/index`) — 宏观/风险指数查询（IX.<KEY> 分组下拉，分组随目录维护；CLI `index-kline --list` 可查全部已收录指数）
+- **日历** (`/calendar`) — 持仓/自选的财报、预约披露、除权除息/派息事件月历（窗口与范围可切）
 - **导入** (`/import`) — IBKR 账户 / 长桥账户 / 链上钱包 / A股券商文件导入
 - **设置** (`/settings`) — 涨跌配色（红涨绿跌/绿涨红跌）、数据源偏好（akshare / IBKR / 长桥）、基础货币
 
@@ -118,6 +120,7 @@ python -m tracker.cli kline 0700.HK --period weekly --open
 python -m tracker.cli index-kline IX.DXY --months 12      # 美元指数
 python -m tracker.cli index-kline IX.VIX --period weekly  # 恐慌指数 周K
 python -m tracker.cli index-kline IX.AU --months 24       # 黄金主力连续（商品期货同理: IX.AG/JD/M/A/B/LH/LC）
+python -m tracker.cli index-kline IX.URANIUM --months 60  # 铀现货价（Cameco 月K; 长协 IX.URANIUM_LT）
 python -m tracker.cli index-kline --list                 # 全部已收录指数（按分组）
 python -m tracker.cli index-kline --list --json          # 机器可读目录（code/name/group）
 
@@ -333,7 +336,7 @@ tracker/ui/           Streamlit 页面包（streamlit run tracker/ui/app.py / �
 tracker/
 ├── __main__.py         python -m tracker 入口（转发到 cli）
 ├── paths.py            数据目录解析（TRACKER_HOME > 仓库根 > 平台用户目录）+ 包内资源定位
-├── cli/                CLI 包（python -m tracker.cli，18 个子命令各一个模块）
+├── cli/                CLI 包（python -m tracker.cli，19 个子命令各一个模块）
 │   ├── __init__.py       argparse 注册与分发
 │   ├── _common.py        JSON 序列化 / 代码归一化 / 原子写 / 错误退出
 │   ├── __main__.py       python -m tracker.cli 入口
@@ -364,7 +367,7 @@ tracker/
 │   ├── cn_stocks.py        A股/B股域（.SS/.SZ/.BJ）：akshare 固定优先, yfinance 兜底
 │   ├── global_stocks.py    全球股票域（美股/港股/欧股…）：yfinance 主源, 港股 akshare 兜底; 搜索走 IBKR → 东财 suggest → yfinance Search → 代码直查
 │   ├── crypto.py           加密货币域（BASE-QUOTE）：Binance → Gate.io → Hyperliquid(USD系) → yfinance
-│   ├── index.py            指数域（IX.<KEY>）：中国指数 akshare 优先, 其余 yfinance 主源 + 新浪兜底; 水泥网/商品期货/恒生官网为专属源
+│   ├── index.py            指数域（IX.<KEY>）：中国指数 akshare 优先, 其余 yfinance 主源 + 新浪兜底; 水泥网/商品期货/恒生官网/Cameco 铀价为专属源
 │   ├── orchestration.py    批量编排：按域分组取数 → 聚合 quotes/errors/notes; 进程内负缓存
 │   └── em_suggest.py       东财 suggest 搜索客户端（cn 域搜索底层 HTTP 封装 + 代码归一）
 ├── prices.py           行情门面（历史 API 保持不变, 全部路由到 providers）
@@ -425,7 +428,7 @@ tests/                  单元测试（离线, mock）
 | **global** | 裸代码（美股）、`.HK/.DE/.L/.TO/.AX/.T/.KS/.KQ/.SI/.SA…` | 长桥(可选) → IBKR(可选) → yfinance 批量 → 港股 akshare | IBKR(可选) → 长桥(可选) → yfinance（港股可 `--akshare` 翻转） |
 | **cn** | `.SS/.SZ/.BJ`（A/B股、北交所） | 长桥(可选前置) → **akshare 优先** → yfinance | 长桥(可选前置) → **akshare 优先** → yfinance |
 | **crypto** | `BASE-QUOTE`（`BTC-USD`） | **Binance API** → Gate.io 现货 → Hyperliquid 永续（仅USD系） → yfinance | **Binance klines** → Gate.io → Hyperliquid → yfinance |
-| **index** | `IX.<KEY>`（`IX.DXY` 美元指数 / `IX.VIX` 恐慌指数 / `IX.CSI300` 沪深 300 / `IX.AU` 黄金 · `IX.AG` 白银 · `IX.JD` 鸡蛋 · `IX.M` 豆粕 · `IX.A` 豆一 · `IX.B` 豆二 · `IX.LH` 生猪 · `IX.LC` 碳酸锂主力连续 / `IX.CEMPI` 水泥价格指数 / `IX.HSI` 恒生指数 · `IX.HSTECH` 恒生科技指数 等恒生官网港股指数 / `IX.HSAHP` AH股溢价指数 …） | —（指数无实时行情, 不参与持仓聚合） | 中国指数 **akshare 优先** → yfinance；美股 SPX/NDX/DJI 有新浪兜底；水泥网/商品期货/恒生官网为专属源（无兜底） |
+| **index** | `IX.<KEY>`（`IX.DXY` 美元指数 / `IX.VIX` 恐慌指数 / `IX.CSI300` 沪深 300 / `IX.AU` 黄金 · `IX.AG` 白银 · `IX.JD` 鸡蛋 · `IX.M` 豆粕 · `IX.A` 豆一 · `IX.B` 豆二 · `IX.LH` 生猪 · `IX.LC` 碳酸锂主力连续 / `IX.URANIUM` 铀现货价 · `IX.URANIUM_LT` 铀长协价 / `IX.CEMPI` 水泥价格指数 / `IX.HSI` 恒生指数 · `IX.HSTECH` 恒生科技指数 等恒生官网港股指数 / `IX.HSAHP` AH股溢价指数 …） | —（指数无实时行情, 不参与持仓聚合） | 中国指数 **akshare 优先** → yfinance；美股 SPX/NDX/DJI 有新浪兜底；水泥网/商品期货/恒生官网/Cameco 铀价为专属源（无兜底） |
 
 - **type 即域**：`type` 字段由系统在保存/导入时按 `symbols.type_for_symbol()` 自动推导覆写，
   手改 JSON 无效。点后缀/裸代码永远是股票，连字符+计价货币永远是加密货币，同一代码不会映射两个域。
@@ -655,10 +658,11 @@ A **local-first** portfolio tracker supporting **A-shares / B-shares / Beijing S
 - **IBKR integration** — TWS / IB Gateway snapshots + position sync, automatic fallback
 - **LongPort integration** — optional quotes/history/positions source (OAuth login), silent fallback to default sources
 - **K-line charts** — daily/weekly/monthly, MA overlays, volume, MACD/RSI/KDJ/Bollinger; slide mode loads full listing history by default
-- **Macro/risk index K-lines** — dedicated `IX.<KEY>` symbol space (USD index, VIX, CSI 300, commodity main-continuous futures — gold, silver, eggs, soybean meal, soybeans, hogs, lithium carbonate — cement indices, ...), separate page & `index-kline` subcommand, dedicated provider source chain
+- **Macro/risk index K-lines** — dedicated `IX.<KEY>` symbol space (USD index, VIX, CSI 300, commodity main-continuous futures — gold, silver, eggs, soybean meal, soybeans, hogs, lithium carbonate — uranium spot/long-term (Cameco monthly), cement indices, ...), separate page & `index-kline` subcommand, dedicated provider source chain
 - **Multi-symbol comparison** — same-coordinate overlay normalized to 100; plus a crypto-only sub-tab on the K-line page (independent per-coin candle panes, raw prices, shared time axis)
+- **Financial calendar** — earnings, scheduled disclosures, ex-dividend/record dates for holdings & watchlist over the current and next months (yfinance per-symbol + akshare bulk, optional LongPort fallback), dedicated page & `calendar` subcommand
 - **Unified import pipeline** — IBKR account / LongPort account / on-chain wallet (5 EVM chains + TRON + Solana) / A-share broker CSV-Excel file, each with append-merge or overwrite mode (auto .bak backup); same logic drives the Streamlit「导入」page
-- **Unified CLI** — 18 subcommands (snapshot, quote, watchlist, portfolio, report, export, fx, history, kline, search, compare, index-kline, import, longport-login, cache, init; `sync` / `import-wallet` kept as compat aliases); all support machine-readable output (`--json`, or `-f json` for report/export)
+- **Unified CLI** — 19 subcommands (snapshot, quote, watchlist, portfolio, report, export, fx, history, kline, calendar, search, compare, index-kline, import, longport-login, cache, init; `sync` / `import-wallet` kept as compat aliases); all support machine-readable output (`--json`, or `-f json` for report/export)
 
 ### Quick Start
 
@@ -697,7 +701,7 @@ Quotes are fetched with a priority chain:
 3. **yfinance** (via OpenBB) — batch quote (1 request) + individual retry
 4. **akshare** (East Money) — A-shares / HK spot + history (CN domain: akshare first)
 5. **FX** — CFETS for full XXX/CNY table, direct/inverse/USD bridge fallback
-6. **Indices** — `IX.<KEY>` historical only: CN indices via akshare (Sina), US SPX/NDX/DJI via yfinance with Sina fallback, cement & commodity-futures indices on dedicated sources (no fallback)
+6. **Indices** — `IX.<KEY>` historical only: CN indices via akshare (Sina), US SPX/NDX/DJI via yfinance with Sina fallback, cement / commodity-futures / Cameco uranium indices on dedicated sources (no fallback)
 7. **Crypto** — Binance → Gate.io → Hyperliquid perpetuals (USD-quoted only) → yfinance; reorder with `settings.json` `crypto_source` or `--crypto-source`
 
 IBKR/LongPort disconnects silently fall back to the next source; the page continues running without interruption.
@@ -705,7 +709,7 @@ IBKR/LongPort disconnects silently fall back to the next source; the page contin
 ### Project Structure
 
 ```
-tracker/ui/        Streamlit dashboard (app.py + cli_main() console entry + kline/index/import/settings pages + longport login + settings)
+tracker/ui/        Streamlit dashboard (app.py + cli_main() console entry + kline/index/calendar/import/settings pages + longport login + settings)
 tracker/           Core package: paths.py (data-dir resolution), cli/ subcommands (incl. init),
                    providers/, symbols, symbol_migrations, storage, prices, fx, search,
                    cache, charting, analytics, watchlist, services/, importer, ibkr,

@@ -426,7 +426,7 @@ def build_parser() -> argparse.ArgumentParser:
             "示例:\n"
             "  tracker calendar                       # 持仓+自选, 本月+下月\n"
             "  tracker calendar --months 3 --json     # 未来三个月, JSON 输出\n"
-            "  tracker calendar --watchlist 科技       # 只看某个自选列表\n"
+            "  tracker calendar --watchlist 科技       # 组合持仓 + 「科技」列表\n"
             "  tracker calendar AAPL 0700.HK 600519.SS # 指定代码\n"
             "  tracker calendar --refresh             # 忽略 6h/24h 缓存强制刷新\n"
             "  tracker calendar --longport            # 开长桥兜底 (需已 longport-login)\n"
@@ -440,7 +440,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--watchlist-file", default=str(DEFAULT_WATCHLIST), help="watchlist.json 路径"
     )
     p_cal.add_argument(
-        "--watchlist", default=None, help="只看某个自选列表 (缺省: 组合+全部自选)"
+        "--watchlist",
+        default=None,
+        help="自选部分只看某个列表 (组合持仓始终包含; 缺省: 全部自选)",
     )
     p_cal.add_argument(
         "--months", type=int, default=2, help="从本月起的自然月数 (默认 2 = 本月+下月)"
@@ -572,6 +574,7 @@ def build_parser() -> argparse.ArgumentParser:
             "示例:\n"
             "  tracker index-kline IX.DXY --months 12\n"
             "  tracker index-kline IX.VIX --period weekly --json\n"
+            "  tracker index-kline IX.URANIUM --months 60\n"
             "  tracker index-kline IX.CSI300 --list\n"
         ),
     )
@@ -579,7 +582,7 @@ def build_parser() -> argparse.ArgumentParser:
         "symbol",
         nargs="?",
         default=None,
-        help="指数代码 IX.<KEY>, 如 IX.DXY / IX.VIX / IX.CSI300",
+        help="指数代码 IX.<KEY>, 如 IX.DXY / IX.VIX / IX.URANIUM / IX.CSI300",
     )
     p_ik.add_argument("--list", action="store_true", help="列出已收录指数目录")
     p_ik.add_argument("--months", type=int, default=12, help="拉取近 N 个月日线")

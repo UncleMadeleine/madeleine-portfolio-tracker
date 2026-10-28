@@ -67,11 +67,17 @@ _obb_lock = threading.Lock()
 def _obb():
     """OpenBB 单例 (线程安全缓存).
 
-    首次 `from openbb import obb` 有冷启动开销 (实测 8-16s: 导入 openbb 包 +
-    首次触达 provider 注册表), 之后是进程内单例。必须放到计时区外:
-    with_timeout 把整个调用 (含 `_obb()` 的属性求值) 塞进 daemon 线程,
-    冷启动整段吃掉 _QUOTE_TIMEOUT 的 5s 预算, 首次 quote 必然超时。
-    缓存同时让批量/历史/汇率/crypto 路径共用一次初始化。
+    首次 `from openbb import obb` 有冷启动开销 (本机实测 5.5s), 之后是进程内
+    单例。价值在于让批量/历史/汇率/crypto 路径共用一次初始化, 而不是省下单次
+    调用的时间。
+
+    注意: 冷启动并不吃掉 _QUOTE_TIMEOUT 的预算。`with_timeout(fn, t, *args)`
+    的实参在调用它之前就已在主线程求值完毕, daemon 线程只执行已解析的可调用
+    对象, 所以 `_obb()` 无论写在哪里都在计时区外。曾以为「把 _obb() 移出
+    with_timeout 就能修好首次超时」——那是错的, 那样改动语义上无效。
+
+    真正的超时风险是首次 quote 本身慢 (实测 4.5s, 阈值 5.0s, 余量仅 0.5s),
+    属临界竞态; 单例化缩小了它, 没有消除它。
 
     失败行为与原来一致: openbb 未安装/导入异常时 import 语句本身抛错,
     单例保持 None, 下次调用重试 (不缓存失败)。

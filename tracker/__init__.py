@@ -1,7 +1,7 @@
 """Madeleine Portfolio Tracker — 本地多市场投资组合追踪 (多数据源 + Streamlit/CLI 双前端)."""
 
 #: 单一版本来源 (pyproject.toml 动态读取; CLI --version 与此一致)
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 from .analytics import build_view, summarize
 from .fx import get_fx_rates, get_rate

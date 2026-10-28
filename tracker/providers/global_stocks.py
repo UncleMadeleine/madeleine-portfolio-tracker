@@ -60,10 +60,30 @@ def _yf_search(query: str) -> list[dict]:
     return out
 
 
-def _obb():
-    from openbb import obb
+_obb_singleton = None
+_obb_lock = threading.Lock()
 
-    return obb
+
+def _obb():
+    """OpenBB 单例 (线程安全缓存).
+
+    首次 `from openbb import obb` 有冷启动开销 (实测 8-16s: 导入 openbb 包 +
+    首次触达 provider 注册表), 之后是进程内单例。必须放到计时区外:
+    with_timeout 把整个调用 (含 `_obb()` 的属性求值) 塞进 daemon 线程,
+    冷启动整段吃掉 _QUOTE_TIMEOUT 的 5s 预算, 首次 quote 必然超时。
+    缓存同时让批量/历史/汇率/crypto 路径共用一次初始化。
+
+    失败行为与原来一致: openbb 未安装/导入异常时 import 语句本身抛错,
+    单例保持 None, 下次调用重试 (不缓存失败)。
+    """
+    global _obb_singleton
+    if _obb_singleton is None:
+        with _obb_lock:
+            if _obb_singleton is None:
+                from openbb import obb
+
+                _obb_singleton = obb
+    return _obb_singleton
 
 
 def _ak():
@@ -171,8 +191,14 @@ _EMPTY_STREAK_GIVEUP = 2  # 连续空批: 判定已被限流, 放弃剩余批次
 
 
 def _yahoo_quote(p: ParsedSymbol) -> Quote:
+    # _obb() 必须先在计时区外求值: 冷启动 (首次 import openbb + 触达 provider
+    # 注册表) 实测 8-16s, 整段塞进 with_timeout 会吃掉 5s 预算, 首次必然超时。
+    # 取到引用后 5s 预算只覆盖真正的网络请求。
     res = with_timeout(
-        _obb().equity.price.quote, _QUOTE_TIMEOUT, symbol=p.yahoo, provider="yfinance"
+        _obb().equity.price.quote,
+        _QUOTE_TIMEOUT,
+        symbol=p.yahoo,
+        provider="yfinance",
     )
     if not res.results:
         raise RuntimeError(f"{p.yahoo}: yfinance 无行情结果")
@@ -197,6 +223,10 @@ def _yahoo_batch(parsed: list[ParsedSymbol]) -> dict[str, Quote]:
         return out
     by_yahoo = {p.yahoo: p for p in parsed}
     empty_streak = 0
+    # 与 _yahoo_quote 同理: _obb() 冷启动 (首次 import openbb + 触达 provider
+    # 注册表) 必须在计时区外完成, 否则第一块请求还没发出预算已耗尽。取一次
+    # 引用, 所有块共用 (openbb 是进程内单例)。
+    quote_fn = _obb().equity.price.quote
     for start in range(0, len(parsed), _YAHOO_CHUNK):
         if start:
             time.sleep(_CHUNK_PAUSE * (2 if empty_streak else 1))
@@ -206,7 +236,7 @@ def _yahoo_batch(parsed: list[ParsedSymbol]) -> dict[str, Quote]:
             # 而它跑在 get_quotes 主线程里 (域间串行), 一挂全批卡死。超时按
             # 空结果处理, 后续逐代码源链还能兜底 (单代码 5s 硬超时)
             res = with_timeout(
-                _obb().equity.price.quote,
+                quote_fn,
                 _BATCH_TIMEOUT,
                 symbol=[p.yahoo for p in chunk],
                 provider="yfinance",

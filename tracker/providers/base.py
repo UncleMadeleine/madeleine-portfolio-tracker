@@ -18,6 +18,20 @@ __all__ = [
 ]
 
 
+def _err_repr(err: BaseException | None) -> str:
+    """异常 → 诊断字符串.
+
+    `str(TimeoutError())` 是空串, 直接内插会输出 "cn 行情获取失败 ()";
+    无消息 (或纯空白) 时回退到类型名 + repr, 保证括号里永远有可读内容。
+    """
+    if err is None:
+        return "未知错误"
+    text = str(err).strip()
+    if text:
+        return text
+    return f"{type(err).__name__}: {err!r}"
+
+
 @dataclass(frozen=True)
 class SymbolEntry:
     """一条搜索结果 (规范代码 + 名称 + 市场标签 + 权威域标记)."""
@@ -86,7 +100,9 @@ class Provider:
                 return fn(p)
             except Exception as e:  # noqa: BLE001 - 降级到下一数据源
                 last_err = e
-        raise RuntimeError(f"{self.name} 行情获取失败 ({last_err})")
+        # TimeoutError() 等无消息异常会让 str() 渲染成空串, 用户只看到
+        # "cn 行情获取失败 ()" 无从诊断; 回退到类型名/repr。
+        raise RuntimeError(f"{self.name} 行情获取失败 ({_err_repr(last_err)})")
 
     def fetch_history(
         self,
@@ -104,7 +120,7 @@ class Provider:
                     return df
             except Exception as e:  # noqa: BLE001 - 降级到下一数据源
                 last_err = e
-        raise RuntimeError(f"{p.yahoo}: 历史数据获取失败 ({last_err})")
+        raise RuntimeError(f"{p.yahoo}: 历史数据获取失败 ({_err_repr(last_err)})")
 
 
 def resolve(type_or_market) -> Provider:

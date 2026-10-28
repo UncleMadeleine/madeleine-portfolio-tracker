@@ -105,6 +105,76 @@ def test_calendar_page_empty_scope(monkeypatch):
     assert any("范围内没有代码" in i.value for i in at.info)
 
 
+def test_apply_names_overlays_watchlist(monkeypatch):
+    """watchlist 改名后立即生效 (名称叠加在取数缓存之外)."""
+    import tracker.ui.calendar_page as cp
+
+    monkeypatch.setattr(cp, "_watch_names", lambda: {"AAPL": "苹果新名"})
+    data = {
+        "window": {"start": "2026-10-01", "end": "2026-11-30", "months": 2},
+        "events": [
+            {
+                "symbol": "AAPL",
+                "name": None,
+                "type": "earnings",
+                "date": "2026-11-03",
+            },
+            {
+                "symbol": "600519.SS",
+                "name": "贵州茅台",
+                "type": "earnings",
+                "date": "2026-10-31",
+            },
+        ],
+        "issues": [],
+        "sources": {},
+        "names": {},
+    }
+    out = cp._apply_names(data)
+    assert out["events"][0]["name"] == "苹果新名"
+    assert out["events"][1]["name"] == "贵州茅台"  # 源名称优先
+    assert data["events"][0]["name"] is None  # 不改动缓存对象
+
+
+def test_refresh_button_bypasses_cache(monkeypatch, fake_calendar_result):
+    """刷新按钮: 清页面缓存并直接穿透磁盘缓存取数."""
+    from streamlit.testing.v1 import AppTest
+
+    import tracker.ui.calendar_page as cp
+
+    class FakeCache:
+        def __init__(self):
+            self.cleared = False
+
+        def __call__(self, *a, **kw):
+            raise AssertionError("刷新时不应走缓存")
+
+        def clear(self):
+            self.cleared = True
+
+    fake = FakeCache()
+    calls = {}
+
+    def fake_fetch(symbols, months, use_longport, refresh):
+        calls["refresh"] = refresh
+        return fake_calendar_result
+
+    monkeypatch.setattr(cp, "cached_calendar", fake)
+    monkeypatch.setattr(cp, "_fetch_calendar", fake_fetch)
+    monkeypatch.setattr(cp, "_resolve_scope", lambda: ["AAPL", "600519.SS"])
+    monkeypatch.setattr(cp, "_watch_lists", lambda: [])
+    monkeypatch.setattr(cp, "load_watchlist", lambda *a, **kw: {"watchlist": []})
+    at = AppTest.from_string(
+        "import tracker.ui.calendar_page as cp\ncp.render_calendar_page()"
+    )
+    at.run(timeout=60)
+    assert not at.exception, at.exception
+    at.button[0].click().run(timeout=60)
+    assert not at.exception, at.exception
+    assert fake.cleared is True
+    assert calls["refresh"] is True
+
+
 def test_calendar_page_fetch_failure_shows_warning(monkeypatch):
     """取数抛错 → warning 而不是裸 traceback."""
     from streamlit.testing.v1 import AppTest

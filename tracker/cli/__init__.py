@@ -32,7 +32,7 @@ from ..storage import PORTFOLIO_PATH as DEFAULT_PORTFOLIO, CorruptDataError
 from ..watchlist import DEFAULT_WATCHLIST  # storage 门面 (watchlist.json 常量)
 from ._common import VERSION, _finish_with_error
 from .cache import cmd_cache
-from .calendar import cmd_calendar
+from .calendar import cmd_calendar, months_arg
 from .export import cmd_export
 from .compare import cmd_compare
 from .init import cmd_init
@@ -445,7 +445,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="自选部分只看某个列表 (组合持仓始终包含; 缺省: 全部自选)",
     )
     p_cal.add_argument(
-        "--months", type=int, default=2, help="从本月起的自然月数 (默认 2 = 本月+下月)"
+        "--months",
+        type=months_arg,
+        default=2,
+        help="从本月起的自然月数 1..12 (默认 2 = 本月+下月)",
     )
     p_cal.add_argument(
         "--refresh", action="store_true", help="忽略缓存强制刷新"

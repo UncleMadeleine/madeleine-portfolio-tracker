@@ -27,29 +27,50 @@ MAX_PER_CELL = 4
 # 事件类型 → 月历单元格单字标记 (与 events.EVENT_TYPE_LABELS 中文一一对应)
 TYPE_MARK = {
     "earnings": "报",
-    "forecast": "预",
     "ex_dividend": "息",
     "record_date": "登",
     "dividend": "派",
 }
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
-def cached_calendar(
-    symbols: tuple[str, ...], months: int, use_longport: bool, refresh: bool = False
+def _fetch_calendar(
+    symbols: tuple[str, ...], months: int, use_longport: bool, refresh: bool
 ):
-    """日历取数 (页面内存 st.cache_data + 磁盘 calendar_cache 双层).
-
-    refresh=True 同时绕过两层缓存 (刷新按钮); 名称映射在函数体内读本地
-    json —— watchlist 改名不清取数缓存, 也避免大映射进哈希键。
-    """
+    """真正取数 (不带名称): 名称由 _apply_names 在缓存外叠加."""
     return events_mod.fetch_calendar(
         list(symbols),
         months=months,
         refresh=refresh,
         use_longport=use_longport,
-        names=_watch_names(),
     )
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def cached_calendar(symbols: tuple[str, ...], months: int, use_longport: bool):
+    """日历取数 (页面内存 st.cache_data + 磁盘 calendar_cache 双层).
+
+    名称映射不参与缓存: 改名/新增自选后立即生效, 也避免大映射进哈希键。
+    刷新按钮走 _fetch_calendar(refresh=True) 直接穿透两层缓存。
+    """
+    return _fetch_calendar(symbols, months, use_longport, refresh=False)
+
+
+def _apply_names(data: dict) -> dict:
+    """把 watchlist 名称叠加到缓存结果 (返回浅拷贝, 不改动缓存对象).
+
+    事件自带名称 (akshare/长桥) 时保留源名称; 缺失时才用 watchlist 名称补,
+    这样改自选名不用等 30 分钟取数缓存过期。
+    """
+    evs = [dict(e) for e in (data.get("events") or [])]
+    names = dict(data.get("names") or {})
+    for sym, nm in _watch_names().items():
+        names.setdefault(sym, nm)
+    for ev in evs:
+        if not ev.get("name"):
+            nm = names.get(ev.get("symbol"))
+            if nm:
+                ev["name"] = nm
+    return {**data, "events": evs, "names": names}
 
 
 def _watch_names() -> dict[str, str]:
@@ -159,9 +180,16 @@ def render_calendar_page() -> None:
 
     try:
         with st.spinner(f"拉取 {len(syms)} 只代码的财报/事件日历..."):
-            data = cached_calendar(tuple(syms), int(months), bool(use_longport), bool(refresh))
-        if refresh:
-            cached_calendar.clear()
+            if refresh:
+                # 刷新: 先清页面缓存, 再直接穿透磁盘缓存取数; 本次结果不写入
+                # st.cache_data (不会把刚算出的条目又立刻清掉)。
+                cached_calendar.clear()
+                data = _fetch_calendar(
+                    tuple(syms), int(months), bool(use_longport), refresh=True
+                )
+            else:
+                data = cached_calendar(tuple(syms), int(months), bool(use_longport))
+        data = _apply_names(data)
     except Exception as e:
         st.warning(f"日历获取失败: {e}")
         return
@@ -177,7 +205,7 @@ def render_calendar_page() -> None:
     )
     st.caption(
         f"窗口 {w0} → {w1} · {len(evs)} 个事件 · {src_bits or '无来源'} · "
-        "标记: 报=财报 预=业绩预告 息=除权除息 登=股权登记 派=派息日"
+        "标记: 报=财报 息=除权除息 登=股权登记 派=派息日"
     )
     if not evs:
         st.info("窗口内无财报/分红事件。")
@@ -199,18 +227,21 @@ def _render_month_grids(evs: list[dict], w0: date, w1: date) -> None:
         st.markdown(f"#### {start.year} 年 {start.month} 月")
         header = st.columns(7)
         for i, wd in enumerate(("一", "二", "三", "四", "五", "六", "日")):
-            header[i].caption(wd + ("周" * 0))
+            header[i].caption(wd)
         for week in _cal.monthcalendar(start.year, start.month):
             row = st.columns(7)
             for i, d in enumerate(week):
                 if not d:
                     continue
                 dt = date(start.year, start.month, d)
-                label = f"{d}"
+                day_evs = by_day.get(dt) or []
                 if dt == today:
                     label = f":red[**{d}**]"
+                elif day_evs:
+                    label = f"**{d}**"
+                else:
+                    label = f":gray[{d}]"
                 lines = [label]
-                day_evs = by_day.get(dt) or []
                 for ev in day_evs[:MAX_PER_CELL]:
                     mark = TYPE_MARK.get(ev["type"], "?")
                     lines.append(
@@ -218,7 +249,8 @@ def _render_month_grids(evs: list[dict], w0: date, w1: date) -> None:
                     )
                 if len(day_evs) > MAX_PER_CELL:
                     lines.append(f"(+{len(day_evs) - MAX_PER_CELL})")
-                row[i].markdown("\n".join(lines) if len(lines) > 1 else f"~~{d}~~")
+                # Markdown 单换行是软换行 (渲染成空格), 用行尾两空格强制换行
+                row[i].markdown("  \n".join(lines))
     return
 
 

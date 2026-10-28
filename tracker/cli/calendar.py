@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 from datetime import date
 
 from .. import events as events_mod
@@ -12,6 +13,17 @@ from ._common import _finish_with_error, _print_json
 from ..symbols import parse
 
 _WEEKDAY_CN = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+
+
+def months_arg(value: str) -> int:
+    """--months 校验: 1..12 个自然月, 防止误传超大值拉几十个报表期."""
+    try:
+        n = int(value)
+    except (TypeError, ValueError) as e:
+        raise argparse.ArgumentTypeError(f"--months 需为整数: {value!r}") from e
+    if not 1 <= n <= 12:
+        raise argparse.ArgumentTypeError("--months 需在 1..12 之间")
+    return n
 
 
 def _scope_symbols(args) -> tuple[list[str], dict[str, str]]:

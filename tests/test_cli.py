@@ -1217,6 +1217,13 @@ class TestVersion:
 
 
 class TestParser:
+    def test_calendar_months_bounds(self):
+        p = cli.build_parser()
+        assert p.parse_args(["calendar", "--months", "3"]).months == 3
+        for bad in ("0", "13", "abc"):
+            with pytest.raises(SystemExit):
+                p.parse_args(["calendar", "--months", bad])
+
     def test_subcommands_parse(self):
         for argv in (
             ["snapshot", "--base", "USD"],

@@ -436,6 +436,7 @@ tests/                  单元测试（离线, mock）
 - **长桥与 IBKR 同开时**：实时行情两者都拉、IBKR 结果覆盖长桥（IBKR 优先）；历史K线先试 IBKR、失败再试长桥
 - **IBKR 历史K线按 ≤365 天窗口分块拼接**（IBKR 单次日K请求上限 365 D，超限拒单）：60 个月（5 年）区间在 IBKR 源同样可用；标的上市晚于区间起点时连续空窗即停，任一分块失败该代码整体回退默认源（不返回半截区间）
 - 汇率：CFETS 一次拿全 XXX/CNY；直对/逆对/USD 桥接兜底
+- A股/港股实时行情（akshare 源）走东财 push2 **单代码**接口（`.SS`=市场段 1、`.SZ`/`.BJ`=0、`.HK`=116+5位码），一个请求拿齐 最新价/昨收/涨跌幅/名称/总市值/市净率，实测 0.4-0.8s；不用 akshare 全市场 spot（内部分 60 页拉全 A 股、页间 sleep，单次 42-102s，秒级超时必然失败——改之前「A股 akshare 优先 / 港股 akshare 兜底」实际从未生效）。单代码接口还比全市场表多给港股的总市值/市净率（全市场 spot 最终列丢了这两列），港股 PB/市值阈值提醒因此有了东财实时口径；带 5s 进程内缓存 + per-key 单飞 + 失败 15s 占位
 - `--akshare` 开关仅影响港股数据源顺序（A股域固定 akshare 优先）；设置页同名开关全局生效
 - 加密货币域数据源可自选：`settings.json` `"crypto_source": "auto|binance|gate|hyperliquid|yfinance"`
   或子命令 `--crypto-source <值>`；默认 `auto` = Binance → Gate.io → Hyperliquid(USD系) → yfinance，

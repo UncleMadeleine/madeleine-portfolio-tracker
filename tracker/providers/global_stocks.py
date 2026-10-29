@@ -18,18 +18,12 @@ from ..util import with_timeout
 from .base import Provider, Quote, SymbolEntry
 from .em_suggest import parse_symbol_safe
 
-_AK_TIMEOUT = 6.0
 # akshare 单代码日K (stock_zh_a_hist / stock_hk_hist): 接口不传 timeout,
 # 给硬超时防挂死 (单代码请求通常 1-3s, 30s 覆盖慢网/重试)
 _AK_HIST_TIMEOUT = 30.0
-# akshare 全市场 spot 失败占位 TTL: 真实耗时 40-100s (东财分页 + 页间 sleep),
-# 6s 超时必然失败; 不占位的话每次调用都重新起一条全市场拉取线程
+# 单代码实时行情失败占位 TTL: 东财不可达/限流时不反复打 (与全市场 spot 的
+# 失败占位同思路, 现在是 per-symbol 粒度)
 _AK_FAIL_TTL = 15.0
-# 按市场独立缓存: 某市场接口失败不影响其它市场, 且失败不占用 TTL (可重试)
-_ak_spot_cache: dict[Market, tuple[float, pd.DataFrame, bool]] = {}
-_ak_spot_lock = threading.Lock()
-_ak_spot_inflight: dict[Market, threading.Lock] = {}  # per-market 并发首拉去重
-_AK_SPOT_TTL = 60
 
 
 def _market_label(yahoo: str) -> str:
@@ -329,107 +323,162 @@ def _yahoo_history(
     return df
 
 
-# ---------- akshare 源 (港股兜底; A股由 CN provider 专属使用) ----------
+# ---------- 实时行情源: 东财 push2 单代码 (akshare 同源, per-symbol) ----------
+#
+# 为什么不用 akshare 的全市场 spot (stock_zh_a_spot_em / stock_hk_spot_em):
+#   那两个接口内部 fetch_paginated_data 分页拉全市场 (A股 ~5926 只 = 60 页,
+#   每页之间 sleep 0.5-1.5s), 单次实测 42-102s —— 全市场 spot 任何秒级
+#   超时都必然失败, 「A股默认走 akshare / 港股 akshare 兜底」实际从未生效。
+#   单代码 stock/get 一个请求拿齐 最新价/昨收/涨跌幅/名称/总市值/市净率,
+#   实测 0.4-0.8s, 且比全市场表**多**给港股的总市值/市净率 (全市场 spot 的
+#   最终列把这两个丢了)。数据口径仍是东财实时 (akshare 只是它的封装), 故
+#   source 标签沿用 "akshare"。
+
+_AK_QUOTE_URL = "https://push2.eastmoney.com/api/qt/stock/get"
+# 东财对无 UA 的请求直接 RST: akshare 的 stock_bid_ask_em 就是这样失败的
+_AK_QUOTE_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+    ),
+    "Referer": "https://quote.eastmoney.com/",
+}
+_AK_QUOTE_TIMEOUT = 8.0
+# 东财字段码: f43=最新价 f57=代码 f58=名称 f60=昨收
+#              f116=总市值 f167=市净率 f170=涨跌幅(%)
+_AK_QUOTE_FIELDS = "f43,f57,f58,f60,f116,f167,f170"
+
+# 单代码行情进程内缓存 (短 TTL): 同一代码紧接着的重复请求 (UI 渲染 + 后台
+# 刷新) 只发一次; per-key 单飞去重并发首拉; 失败写短 TTL 占位防反复打东财
+_AK_QUOTE_TTL = 5.0
+_ak_quote_cache: dict[str, tuple[float, dict | None]] = {}
+_ak_quote_lock = threading.Lock()
+_ak_quote_inflight: dict[str, threading.Lock] = {}
 
 
-def _ak_spot(market: Market) -> pd.DataFrame:
-    """全域 spot 快照 (按市场缓存 60s); 并发首拉以 per-key 锁去重, 只发一次请求.
+def _requests():
+    import requests
 
-    失败 (超时/异常/空表) 也写一个短 TTL 失败占位: 全市场 spot 单次要
-    40-100s (东财分页 + 页间 sleep), 超时后若不占位, 下一次调用会重新起
-    一条拉取线程 —— _fetch_domain 8 并发时每轮 8 条废弃线程持续打东财,
-    50 只 A 股就是 50 轮。占位让 TTL 内后续调用直接失败降级。
+    return requests
+
+
+def _ak_secid(p: ParsedSymbol) -> str:
+    """ParsedSymbol → 东财 secid (市场段.代码).
+
+    段号按**交易所后缀**判 (不能按代码首位: 沪市 B 股 900xxx 与深市创业板
+    300xxx 首位都非 6, 而东财把 900xxx 归在上海段 1):
+      .SS/.SH → 1 (沪市: 60x/601/603/605/688 科创 + 900xxx B股)
+      .SZ     → 0 (深市: 000/001/002/003/300/301 + 200xxx B股)
+      .BJ     → 0 (北交所 43x/83x/87x/92x, 东财挂在 0 段)
+      .HK     → 116 + 5 位代码 (00700/82318)
     """
-    global _ak_spot_cache
-    now = pd.Timestamp.now().timestamp()
-    with _ak_spot_lock:
-        hit = _ak_spot_cache.get(market)
+    if p.market is Market.HK:
+        return f"116.{p.ak_code}"
+    code = p.ak_code or p.yahoo.split(".")[0]
+    prefix = "1" if p.yahoo.rsplit(".", 1)[-1] in ("SS", "SH") else "0"
+    return f"{prefix}.{code}"
+
+
+def _ak_quote_fetch(secid: str) -> dict | None:
+    """东财 push2 单代码行情 data 字典; 任何失败/无数据返回 None."""
+    try:
+        r = _requests().get(
+            _AK_QUOTE_URL,
+            params={
+                "fltt": "2",
+                "invt": "2",
+                "secid": secid,
+                "fields": _AK_QUOTE_FIELDS,
+            },
+            headers=_AK_QUOTE_HEADERS,
+            timeout=_AK_QUOTE_TIMEOUT,
+        )
+        j = r.json()
+    except Exception:
+        return None
+    data = j.get("data") if isinstance(j, dict) else None
+    return data if isinstance(data, dict) else None
+
+
+def _ak_quote_raw(p: ParsedSymbol) -> dict | None:
+    """带缓存/单飞/失败占位的单代码行情; 失败 None (调用方抛错降级下一源)."""
+    secid = _ak_secid(p)
+    now = time.time()
+    with _ak_quote_lock:
+        hit = _ak_quote_cache.get(secid)
         if hit:
-            ts, df, failed = hit
-            ttl = _AK_FAIL_TTL if failed else _AK_SPOT_TTL
-            if now - ts < ttl:
-                return df
-        gate = _ak_spot_inflight.setdefault(market, threading.Lock())
+            ts, data = hit
+            if now - ts < (_AK_QUOTE_TTL if data else _AK_FAIL_TTL):
+                return data
+        gate = _ak_quote_inflight.setdefault(secid, threading.Lock())
     acquired = gate.acquire(blocking=False)
     try:
         if acquired:  # 本线程负责拉取; 其它线程等拉取方写回缓存后读结果
-            df = pd.DataFrame()
-            ak = _ak()
-            fetcher = {
-                # 北交所与 A股共用一个东财端点: 缓存键复用 CN, 否则同一份
-                # 全市场数据会被抓两份
-                Market.CN: ak.stock_zh_a_spot_em,
-                Market.BJ: ak.stock_zh_a_spot_em,
-                Market.HK: ak.stock_hk_spot_em,
-            }.get(market)
-            if fetcher is not None:
-                try:
-                    df = with_timeout(fetcher, _AK_TIMEOUT)
-                except Exception:
-                    df = pd.DataFrame()
-            with _ak_spot_lock:
-                _ak_spot_cache[market] = (now, df, bool(df.empty))
-            return df
+            data = _ak_quote_fetch(secid)
+            with _ak_quote_lock:
+                _ak_quote_cache[secid] = (now, data)
+            return data
         gate.acquire()
         gate.release()  # 拉取方已 pop 此 gate: 立即释放, 不留持有者
     finally:
         if acquired:
-            with _ak_spot_lock:
-                if _ak_spot_inflight.get(market) is gate:
-                    _ak_spot_inflight.pop(market, None)
+            with _ak_quote_lock:
+                if _ak_quote_inflight.get(secid) is gate:
+                    _ak_quote_inflight.pop(secid, None)
             gate.release()
-    # 未获 gate: 拉取方已完成, 重读缓存; 缓存仍空 (拉取失败) 则返回空表
-    with _ak_spot_lock:
-        hit = _ak_spot_cache.get(market)
+    # 未获 gate: 拉取方已完成, 重读缓存; 仍未命中 (失败) 则返回 None
+    with _ak_quote_lock:
+        hit = _ak_quote_cache.get(secid)
     if hit:
-        ts, df, failed = hit
-        ttl = _AK_FAIL_TTL if failed else _AK_SPOT_TTL
-        if now - ts < ttl:
-            return df
-    return pd.DataFrame()
+        ts, data = hit
+        if now - ts < (_AK_QUOTE_TTL if data else _AK_FAIL_TTL):
+            return data
+    return None
+
+
+def _ak_num(v) -> float | None:
+    """东财字段值 → float; 缺失值 "-"/None/非数字 → None."""
+    if v is None:
+        return None
+    if isinstance(v, str):
+        s = v.strip()
+        if s in ("", "-", "None", "nan"):
+            return None
+        try:
+            v = float(s)
+        except ValueError:
+            return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
 
 
 def _akshare_quote(p: ParsedSymbol) -> Quote:
-    df = _ak_spot(p.market)
-    if df.empty:
-        raise RuntimeError(f"akshare spot 不可用 ({p.market.value})")
-    code = p.ak_code or ""
-    col = "代码" if "代码" in df.columns else df.columns[0]
-    row = df[df[col].astype(str) == code]
-    if row.empty:
-        raise RuntimeError(f"akshare 未找到 {code}")
-    r = row.iloc[0]
+    """A股/北交所/港股实时行情 (东财单代码): 价格 + 昨收 + 涨跌幅 + 名称.
 
-    def _num(v):
-        try:
-            f = float(v)
-            return f if pd.notna(f) else None
-        except (TypeError, ValueError):
-            return None
-
-    # 停牌/无成交股东财快照最新价可能为 0 或 NaN: 与其余行情源一致地守卫,
-    # 无效即抛错回退 yfinance, 不让 0/NaN 报价污染盈亏/PB/涨跌幅
-    price = _num(r["最新价"])
+    顺带反推每股净资产 (市净率) 与总市值 (东财实时口径, 比 yfinance 的滞后
+    财报新), 供 PB/市值阈值提醒; 缺失即 None, 由 fundamentals 链路兜底。
+    """
+    d = _ak_quote_raw(p)
+    if not d:
+        raise RuntimeError(f"{p.yahoo}: akshare 行情不可用 ({p.market.value})")
+    # 停牌/无成交时东财最新价就是 "-": 与其余行情源一致地守卫, 无效即抛错
+    # 回退 yfinance, 不让 0/NaN 报价污染盈亏/PB/涨跌幅
+    price = _ak_num(d.get("f43"))
     if price is None or price <= 0:
-        raise RuntimeError(f"{p.yahoo}: akshare 无有效最新价 ({r['最新价']!r})")
-    prev = r.get("昨收")
-    chg = r.get("涨跌幅")
-
-    # A股/北交 spot 自带市净率 (东财实时口径, HK spot 最终列已丢弃): 反推每股净资产,
-    # 供 PB 阈值提醒使用 (yfinance BVPS 为滞后财报, 东财口径更准)
-    pb = _num(r.get("市净率")) if "市净率" in df.columns else None
-    book_value = price / pb if pb is not None and pb > 0 else None
-    # spot 同样自带总市值 (本地币种口径), 供市值阈值提醒;
-    # 港股 spot 最终列已丢弃该字段, 由长桥/fundamentals 兜底
-    market_cap = _num(r.get("总市值")) if "总市值" in df.columns else None
+        raise RuntimeError(f"{p.yahoo}: akshare 无有效最新价 ({d.get('f43')!r})")
+    pb = _ak_num(d.get("f167"))
+    market_cap = _ak_num(d.get("f116"))
     return Quote(
         symbol=p.yahoo,
-        name=str(r.get("名称") or "") or None,
+        name=str(d.get("f58") or "").strip() or None,
         price=price,
-        prev_close=_num(prev),
-        change_pct=_num(chg),
+        prev_close=_ak_num(d.get("f60")),
+        change_pct=_ak_num(d.get("f170")),
         currency=p.currency,
-        book_value=book_value,
+        book_value=price / pb if pb is not None and pb > 0 else None,
         market_cap=market_cap if market_cap is not None and market_cap > 0 else None,
         source="akshare",
     )

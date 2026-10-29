@@ -107,6 +107,17 @@ tracker-ui          # pip 安装后起 Streamlit 页面 (等价 streamlit run tr
 | crypto | **Binance API** → Gate.io 现货 → Hyperliquid 永续(仅USD系) → yfinance (偏好 `crypto_source`/`--crypto-source`) | **Binance klines** → Gate.io → Hyperliquid → yfinance |
 | index | — (指数无实时行情, 不参与持仓聚合) | 中国指数 **akshare 优先** → yfinance; 美股 SPX/NDX/DJI 有新浪兜底; 水泥网 (CEMPI 等) / 商品期货主力连续 (`IX.AU` 黄金 `IX.AG` 白银 `IX.JD` 鸡蛋 `IX.M` 豆粕 `IX.A` 豆一 `IX.B` 豆二 `IX.LH` 生猪 `IX.LC` 碳酸锂) / Cameco 铀价 (`IX.URANIUM` 现货 `IX.URANIUM_LT` 长协, 月K) / 恒生官网 (IX.HSAHP) 为专属源无兜底 |
 
+**A股/港股实时行情 (akshare 源) 的实现细节**: 走东财 push2 `stock/get` **单代码**接口
+(secid 市场段: `.SS`=1 / `.SZ`/`.BJ`=0 / `.HK`=116+5位码), 一个请求拿齐
+最新价/昨收/涨跌幅/名称/总市值/市净率, 实测 0.4-0.8s。不用 akshare 的全市场
+spot (`stock_zh_a_spot_em`/`stock_hk_spot_em`): 那兩個内部分页拉全市场 (A股 ~5926 只
+= 60 页, 页间 sleep), 单次 42-102s, 任何秒级超时都必然失败 —— 改之前 "A股 akshare
+优先 / 港股 akshare 兜底" 实际从未生效, 只是每次白等再落 yfinance。单代码接口还比
+全市场表多给**港股的总市值/市净率** (全市场 spot 的最终列把这两个丢了), 港股的
+PB/市值阈值提醒因此有了东财实时口径。单代码行情带 5s 进程内缓存 + per-key 单飞 +
+失败 15s 占位 (东财不可达时不反复打)。历史K线仍走 akshare 的 `stock_zh_a_hist` /
+`stock_hk_hist` (本身是 per-symbol)。
+
 代码搜索 (`tracker/search.py`) 为**纯在线分域接口**:
 - A股/北交所: 东财 suggest (支持中文名/拼音)
 - 美股/港股: IBKR 合约匹配 (Gateway 在线时) → 东财 suggest (纯数字补零/中文查询, 只收港股行,

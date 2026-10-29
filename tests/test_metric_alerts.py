@@ -432,118 +432,108 @@ class TestMcapView:
 
 
 class TestAkshareQuoteBookValue:
+    """东财单代码行情 (push2 stock/get) 的 PB→BVPS / 总市值反填.
+
+    数据形态是东财字段码字典 (f43=最新价 f58=名称 f60=昨收 f116=总市值
+    f167=市净率 f170=涨跌幅), 缺失值为 "-"。
+    """
+
+    def _em(self, **fields):
+        return fields
+
     def test_akshare_quote_backfills_bvps_from_pb(self, monkeypatch):
-        """akshare spot 市净率列 → 反推每股净资产填入 Quote (东财实时口径)."""
+        """市净率 → 反推每股净资产填入 Quote (东财实时口径)."""
         from tracker.providers import global_stocks as gs
         from tracker.symbols import parse
 
-        df = pd.DataFrame(
-            {
-                "代码": ["600519", "000001"],
-                "名称": ["贵州茅台", "平安银行"],
-                "最新价": [1500.0, 12.0],
-                "昨收": [1490.0, 12.1],
-                "涨跌幅": [0.67, -0.83],
-                "市净率": [7.5, 0.5],
-            }
+        monkeypatch.setattr(
+            gs,
+            "_ak_quote_raw",
+            lambda p: self._em(
+                f43=1500.0, f58="贵州茅台", f60=1490.0, f170=0.67, f167=7.5
+            ),
         )
-        monkeypatch.setattr(gs, "_ak_spot", lambda market: df)
         quote = gs._akshare_quote(parse("600519.SS"))
         assert quote.book_value == pytest.approx(1500.0 / 7.5)
 
     def test_akshare_quote_pb_zero_or_missing(self, monkeypatch):
-        """市净率缺失/非正 → book_value=None (不除零, 回落 fundamentals 链路)."""
+        """市净率缺失("-")/非正 → book_value=None (不除零, 回落 fundamentals)."""
         from tracker.providers import global_stocks as gs
         from tracker.symbols import parse
 
+        for pb in ("-", 0.0):
+            monkeypatch.setattr(
+                gs, "_ak_quote_raw", lambda p, pb=pb: self._em(f43=1500.0, f167=pb)
+            )
+            assert gs._akshare_quote(parse("600519.SS")).book_value is None
 
-        df = pd.DataFrame(
-            {
-                "代码": ["600519", "000001"],
-                "名称": ["贵州茅台", "平安银行"],
-                "最新价": [1500.0, 12.0],
-                "昨收": [1490.0, 12.1],
-                "涨跌幅": [0.67, -0.83],
-                "市净率": [None, 0.0],
-            }
-        )
-        monkeypatch.setattr(gs, "_ak_spot", lambda market: df)
-        quote = gs._akshare_quote(parse("600519.SS"))
-        assert quote.book_value is None
-        quote2 = gs._akshare_quote(parse("000001.SZ"))
-        assert quote2.book_value is None
-
-    def test_akshare_quote_no_pb_column(self, monkeypatch):
-        """spot 表无市净率列 (港股兜底表) → book_value=None, 不报错."""
+    def test_akshare_quote_no_pb_field(self, monkeypatch):
+        """接口未回市净率字段 → book_value=None, 不报错."""
         from tracker.providers import global_stocks as gs
         from tracker.symbols import parse
 
-
-        df = pd.DataFrame(
-            {
-                "代码": ["00700"],
-                "名称": ["腾讯控股"],
-                "最新价": [430.0],
-                "昨收": [431.0],
-                "涨跌幅": [-0.37],
-            }
+        monkeypatch.setattr(
+            gs, "_ak_quote_raw", lambda p: self._em(f43=430.0, f58="腾讯控股")
         )
-        monkeypatch.setattr(gs, "_ak_spot", lambda market: df)
         quote = gs._akshare_quote(parse("0700.HK"))
         assert quote.book_value is None
         assert quote.price == 430.0
 
     def test_akshare_quote_backfills_market_cap(self, monkeypatch):
-        """spot 总市值列 (本地币种) → 填入 Quote.market_cap."""
+        """总市值 (本地币种) → 填入 Quote.market_cap (港股现在也有)."""
         from tracker.providers import global_stocks as gs
         from tracker.symbols import parse
 
-        df = pd.DataFrame(
-            {
-                "代码": ["600519"],
-                "名称": ["贵州茅台"],
-                "最新价": [1500.0],
-                "昨收": [1490.0],
-                "涨跌幅": [0.67],
-                "总市值": [1.9e12],
-            }
+        monkeypatch.setattr(
+            gs, "_ak_quote_raw", lambda p: self._em(f43=430.0, f116=3.9e12)
         )
-        monkeypatch.setattr(gs, "_ak_spot", lambda market: df)
-        quote = gs._akshare_quote(parse("600519.SS"))
-        assert quote.currency == "CNY"
-        assert quote.market_cap == 1.9e12
+        quote = gs._akshare_quote(parse("0700.HK"))
+        assert quote.currency == "HKD"
+        assert quote.market_cap == 3.9e12
 
     def test_akshare_quote_mcap_zero_or_missing(self, monkeypatch):
-        """总市值缺失/非正 → market_cap=None (回落 fundamentals)."""
+        """总市值缺失("-")/非正 → market_cap=None (回落 fundamentals)."""
         from tracker.providers import global_stocks as gs
         from tracker.symbols import parse
 
-        df = pd.DataFrame(
-            {
-                "代码": ["600519", "000001"],
-                "名称": ["贵州茅台", "平安银行"],
-                "最新价": [1500.0, 12.0],
-                "昨收": [1490.0, 12.1],
-                "涨跌幅": [0.67, -0.83],
-                "总市值": [None, 0.0],
-            }
-        )
-        monkeypatch.setattr(gs, "_ak_spot", lambda market: df)
-        assert gs._akshare_quote(parse("600519.SS")).market_cap is None
-        assert gs._akshare_quote(parse("000001.SZ")).market_cap is None
+        for mc in ("-", 0.0):
+            monkeypatch.setattr(
+                gs, "_ak_quote_raw", lambda p, mc=mc: self._em(f43=1500.0, f116=mc)
+            )
+            assert gs._akshare_quote(parse("600519.SS")).market_cap is None
 
-    def test_akshare_quote_no_mcap_column(self, monkeypatch):
-        """无总市值列 (表结构变化) → market_cap=None, 不报错."""
+    def test_akshare_quote_no_mcap_field(self, monkeypatch):
+        """无总市值字段 (接口变化) → market_cap=None, 不报错."""
         from tracker.providers import global_stocks as gs
         from tracker.symbols import parse
 
-        df = pd.DataFrame(
-            {"代码": ["00700"], "名称": ["腾讯控股"], "最新价": [430.0], "昨收": [431.0]}
+        monkeypatch.setattr(
+            gs, "_ak_quote_raw", lambda p: self._em(f43=430.0, f58="腾讯控股")
         )
-        monkeypatch.setattr(gs, "_ak_spot", lambda market: df)
         quote = gs._akshare_quote(parse("0700.HK"))
         assert quote.market_cap is None
         assert quote.price == 430.0
+
+    def test_akshare_quote_suspended_symbol_raises(self, monkeypatch):
+        """停牌/无成交: 东财最新价是 "-" → 抛错回退 yfinance, 不给 0/NaN 价."""
+        from tracker.providers import global_stocks as gs
+        from tracker.symbols import parse
+
+        monkeypatch.setattr(
+            gs, "_ak_quote_raw", lambda p: self._em(f43="-", f58="艾融软件")
+        )
+        with pytest.raises(RuntimeError, match="无有效最新价"):
+            gs._akshare_quote(parse("830799.BJ"))
+
+    def test_akshare_quote_unavailable_raises(self, monkeypatch):
+        """接口失败 (None) → 抛可读错误, 由源链降级。"""
+        from tracker.providers import global_stocks as gs
+        from tracker.symbols import parse
+
+        monkeypatch.setattr(gs, "_ak_quote_raw", lambda p: None)
+        with pytest.raises(RuntimeError, match="行情不可用"):
+            gs._akshare_quote(parse("600519.SS"))
+
 
 @pytest.fixture
 def no_bvps_fixture():

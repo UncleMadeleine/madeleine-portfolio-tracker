@@ -36,31 +36,68 @@ def _isolate_cache(monkeypatch, tmp_path):
     monkeypatch.setattr(orch.cache_mod, "set_cached", lambda q: None)
 
 
-def test_ak_spot_routes_bj_to_cn_spot(monkeypatch):
-    """北交所 (.BJ) 与沪深共用东财 A 股快照; 缺映射会让 BJ 永远降级 yfinance."""
-    import sys
+def test_ak_quote_secid_market_segment():
+    """东财 secid 市场段: 沪段 1 (含 900xxx B股/688 科创), 深段 0 (含 200xxx
+    B股/300 创业板), 北交所 0 段, 港股 116 段 + 5 位代码。
+
+    按代码首位判会错: 900xxx (沪B) 与 300xxx (创业板) 首位都非 6, 但东财把
+    900xxx 归在上海段 1 —— 必须按交易所后缀判。
+    """
+    from tracker.providers import global_stocks as gs
+    from tracker.symbols import parse
+
+    cases = {
+        "600519.SS": "1.600519",  # 沪市主板
+        "688981.SS": "1.688981",  # 科创板
+        "900901.SS": "1.900901",  # 沪 B (上海段, 不是 0)
+        "000001.SZ": "0.000001",  # 深市主板
+        "300750.SZ": "0.300750",  # 创业板
+        "200596.SZ": "0.200596",  # 深 B
+        "830799.BJ": "0.830799",  # 北交所
+        "920819.BJ": "0.920819",  # 北交所新股号段
+        "0700.HK": "116.00700",  # 港股 4 位补零到 5 位
+        "82318.HK": "116.82318",  # 港股人民币柜台 5 位
+    }
+    for sym, want in cases.items():
+        assert gs._ak_secid(parse(sym)) == want, sym
+
+
+def test_ak_quote_raw_single_flight_and_failure_placeholder(monkeypatch):
+    """单代码行情: 并发首拉只发一次请求; 失败写短 TTL 占位 (不反复打东财)."""
+    import time
 
     import tracker.providers.global_stocks as gs
+    from tracker.symbols import parse
 
-    calls = []
-    df = pd.DataFrame(
-        {"代码": ["920100"], "最新价": [12.5], "昨收": [12.0], "涨跌幅": [4.17]}
+    calls = {"n": 0, "fail": 0}
+
+    def fake_fetch(secid):
+        calls["n"] += 1
+        return {"f43": 1500.0}
+
+    monkeypatch.setattr(gs, "_ak_quote_fetch", fake_fetch)
+    monkeypatch.setattr(gs, "_ak_quote_cache", {})
+    p = parse("600519.SS")
+    assert gs._ak_quote_raw(p) == {"f43": 1500.0}
+    assert gs._ak_quote_raw(p) == {"f43": 1500.0}  # TTL 内命中缓存
+    assert calls["n"] == 1
+
+    # 失败 → None + 占位: TTL 内不再发请求 (占位 TTL 远小于成功 TTL)
+    def failing_fetch(secid):
+        calls["fail"] += 1
+        return None
+
+    monkeypatch.setattr(gs, "_ak_quote_fetch", failing_fetch)
+    monkeypatch.setattr(gs, "_ak_quote_cache", {})
+    assert gs._ak_quote_raw(p) is None
+    assert gs._ak_quote_raw(p) is None
+    assert calls["fail"] == 1  # 占位命中, 没有新增请求
+    # 占位过期后恢复重试
+    monkeypatch.setattr(
+        gs, "_ak_quote_cache", {"1.600519": (time.time() - 999, None)}
     )
-
-    class FakeAk:
-        def stock_zh_a_spot_em(self):
-            calls.append("cn")
-            return df
-
-        def stock_hk_spot_em(self):
-            calls.append("hk")
-            return pd.DataFrame()
-
-    monkeypatch.setitem(sys.modules, "akshare", FakeAk())
-    monkeypatch.setattr(gs, "_ak_spot_cache", {})
-    out = gs._ak_spot(Market.BJ)
-    assert calls == ["cn"]
-    assert list(out["代码"]) == ["920100"]
+    gs._ak_quote_raw(p)
+    assert calls["fail"] == 2
 
 
 def test_get_quotes_mixed_crypto_and_stocks_split_routing(monkeypatch):

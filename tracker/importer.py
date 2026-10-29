@@ -26,8 +26,8 @@ from typing import Any
 from .storage import (
     PORTFOLIO_PATH as DEFAULT_PORTFOLIO,
     backup_file,
+    edit_portfolio,
     load_portfolio,
-    save_portfolio,
 )
 from .symbols import parse
 
@@ -260,16 +260,21 @@ def apply_import(
     与其它自定义键。dry_run=True 或 rows 为空时不写文件 (written=False)。
     """
     target = Path(portfolio)
-    data: dict = load_portfolio(target) if target.exists() else {}
-    merged, stats = merge_holdings(data.get("holdings", []), rows, mode)
     written = False
     backup = None
-    if not dry_run and rows:
-        backup = backup_file(target)
-        data["holdings"] = merged
-        data.setdefault("base_currency", "CNY")
-        save_portfolio(data, target)
-        written = True
+    if dry_run or not rows:
+        # 不写盘: 合并结果仅用于预览 (统计与总数), 读锁都不必拿
+        data: dict = load_portfolio(target) if target.exists() else {}
+        merged, stats = merge_holdings(data.get("holdings", []), rows, mode)
+    else:
+        # 锁内读-改-写: 读盘也在临界区内, 与并发的 CLI/页面编辑互不丢失
+        # (旧写法 load→merge→save 全量替换, 窗口内的并发写入会被静默覆盖)
+        with edit_portfolio(target) as data:
+            merged, stats = merge_holdings(data.get("holdings", []), rows, mode)
+            backup = backup_file(target)
+            data["holdings"] = merged
+            data.setdefault("base_currency", "CNY")
+            written = True
     return {
         "mode": mode,
         "dry_run": bool(dry_run),

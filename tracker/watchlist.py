@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from .storage import (
     WATCHLIST_PATH as DEFAULT_WATCHLIST,
+    edit_watchlist,
     load_watchlist,
     normalize_watch_entry,
     parse_lists,
@@ -17,6 +18,7 @@ from .storage import (
 
 __all__ = [
     "DEFAULT_WATCHLIST",
+    "edit_watchlist",
     "load_watchlist",
     "normalize_watch_entry",
     "parse_lists",

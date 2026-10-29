@@ -16,7 +16,7 @@ import pandas as pd
 import streamlit as st
 
 from tracker import importer, longport as longport_mod, storage
-from tracker.storage import CorruptDataError
+from tracker.storage import CorruptDataError, DataFileLocked
 
 _CHAIN_LABELS = {
     "eth": "Ethereum",
@@ -177,13 +177,16 @@ def _longport_watchlist_section() -> None:
         icon=":material/star_outline:",
         key="imp_lp_wl_confirm",
     ):
-        data = storage.load_watchlist(storage.WATCHLIST_PATH)
-        merged, stats = importer.merge_watchlist(
-            data.get("watchlist", []), rows, importer.MODE_APPEND
-        )
-        storage.backup_file(storage.WATCHLIST_PATH)
-        data["watchlist"] = merged
-        storage.save_watchlist(data)
+        try:
+            with storage.edit_watchlist(storage.WATCHLIST_PATH) as data:
+                merged, stats = importer.merge_watchlist(
+                    data.get("watchlist", []), rows, importer.MODE_APPEND
+                )
+                storage.backup_file(storage.WATCHLIST_PATH)
+                data["watchlist"] = merged
+        except DataFileLocked as e:
+            st.error(f"自选导入失败: {e}")
+            return
         st.session_state.pop("imp_lp_wl", None)
         st.toast(
             f"自选导入完成: 新增 {len(stats['added'])} · "
@@ -320,7 +323,7 @@ def _preview_and_confirm(state_key: str, mode: str, on_saved, note: str = "") ->
             storage.backup_file(storage.PORTFOLIO_PATH)
             data["holdings"] = merged
             storage.save_portfolio(data)
-        except (CorruptDataError, OSError) as e:
+        except (CorruptDataError, OSError) as e:  # DataFileLocked 是 OSError 子类
             # portfolio.json 损坏且 .bak 也损坏 / 只读: 可读错误而不是整页
             # traceback (用户此时需要的是知道去修数据文件)
             st.error(f"导入失败: {e}")

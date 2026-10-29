@@ -387,7 +387,7 @@ tracker/
 ├── longport.py         长桥行情/历史/持仓接入（可选依赖 longport，失败静默回退）
 ├── longport_oauth.py   长桥 OAuth 授权子进程（独立进程运行, 状态写 var/longport_oauth_state.json）
 ├── importer.py         **统一导入管道**：四来源采集 → 追加/覆盖合并 → 备份写盘
-├── ibkr_sync.py        IBKR 持仓导入兼容入口（委托 importer，等价 import ibkr，缺省覆盖）
+├── ibkr_sync.py        IBKR 持仓导入兼容入口（委托 importer，等价 import ibkr，缺省追加合并）
 ├── ashare_sync.py      A股券商文件解析 + 兼容入口（等价 import file，缺省追加合并）
 └── wallet.py           链上钱包余额查询（EVM 五链 + TRON + Solana, 只读）
 数据目录（$TRACKER_HOME > 源码树仓库根 > 平台用户目录, 规则见 tracker/paths.py;
@@ -491,7 +491,8 @@ python -m tracker.cli import ibkr --overwrite        # 覆盖全部持仓
 - 保留原有 `base_currency`；`avg_cost` 取自 IBKR（合约货币每股均价，含佣金）；英股（LSE 主板/AIM）IBKR 与行情同以便士报价，已自动 ÷100 折成英镑（`.IL` 国际挂盘币种由 IBKR 自报，不折算）
 - 无法映射为规范代码的标的（权证/期权/基金等）会跳过并在控制台提示
 - 反向映射规则：`SEHK + CNY/CNH → .SS/.SZ`（沪深港通，6 位代码；`8` 开头 5 位为港股人民币柜台，归 `.HK`）；`SHSE + USD → .SS (B股)`；`SZSE + HKD → .SZ (B股)`；`SEHK + HKD/USD → .HK`（USD 为港股美元柜台）；`IBIS/FWB/GETX/SWB + EUR → .DE`（仅认德国交易所，泛欧所落 skipped）；`IOB → .IL`（LSE 国际挂盘，如 `KAP.IL` Kazatomprom GDR；币种 USD/GBP/EUR 混杂，不能落进 GBP/USD 兜底拼出 `KAP.L` 或裸 `KAP`）；`LSE + GBP/GBX → .L`；`TSE + CAD → .TO`；`TSXV + CAD → .V`；`CSE + CAD → .CN`；`NEO/NEOE + CAD → .NE`；`ASX + AUD → .AX`；`TSEJ/XJPX + JPY → .T`（东京；裸 `TSE` 是多伦多，不进东京分支）；`KRX/KSE + KRW → .KS`（KOSPI）；`KOSDAQ/XKOS → .KQ`（必须前置判定，否则 KOSDAQ 落进 KRW 兜底被误归 `.KS`）；`SGX/SES → .SI`（SGD 与 USD 计价证券均归 `.SI`）；`B3/BVMF/BOVESPA + BRL → .SA`；`SMART + USD → 原码`
-- 兼容入口：`python -m tracker.cli sync` / `python -m tracker.ibkr_sync`（默认覆盖，加 `--append` 追加）
+- 兼容入口：`python -m tracker.cli sync` / `python -m tracker.ibkr_sync`（缺省**追加合并**，与 `import ibkr`/`import file` 一致；`--overwrite` 才覆盖全部，`--append` 为兼容 no-op）
+- 所有写入路径（CLI/页面/导入）统一走 `storage.edit_*` 锁内读-改-写：并发保存不会互相覆盖（`flock` 跨进程 + 进程内 `RLock`，锁文件 `<path>.lock` 持久保留）
 
 ### 长桥 (LongPort) 账户
 

@@ -2,7 +2,7 @@
 
 兼容入口 — 导入功能已统一到 tracker.importer (CLI: tracker import ibkr);
 本模块保留 python -m tracker.ibkr_sync 与 `tracker sync` 调用路径。
-默认覆盖写入 (历史 sync 语义); --append 切换为追加合并。
+缺省追加合并 (与 tracker import ibkr / import file 一致); --overwrite 才覆盖全部。
 """
 
 from __future__ import annotations
@@ -24,10 +24,14 @@ def run_sync(args) -> None:
     except Exception as e:
         _finish_with_error(f"{e} (请确认 IB Gateway 已登录运行, 且 API 连接已启用)")
 
+    # 与统一入口 tracker import ibkr / import file 一致: 缺省追加合并,
+    # --overwrite 才覆盖全部。(旧版缺省为覆盖, 会让按「导入默认追加」文档走的
+    # 用户在执行 sync 时静默丢掉加密钱包/手工录入/券商文件导入的持仓)
+    # --append 保留为兼容参数: 它现在是缺省行为, 传不传一个样。
     mode = (
-        importer.MODE_APPEND
-        if getattr(args, "append", False)
-        else importer.MODE_OVERWRITE
+        importer.MODE_OVERWRITE
+        if getattr(args, "overwrite", False)
+        else importer.MODE_APPEND
     )
     result = importer.apply_import(
         rows, args.portfolio, mode=mode, dry_run=args.dry_run
@@ -96,7 +100,12 @@ def main(argv=None) -> None:
     ap.add_argument(
         "--append",
         action="store_true",
-        help="追加合并 (按代码更新/新增); 缺省覆盖全部持仓",
+        help="追加合并 (按代码更新/新增) — 缺省行为, 保留兼容旧调用",
+    )
+    ap.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="覆盖全部持仓 (清空后重写, 写前自动备份 .bak)",
     )
     ap.add_argument("--json", action="store_true", help="输出 JSON 而非表格")
     args = ap.parse_args(argv)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from ..storage import load_portfolio, save_portfolio
+from ..storage import edit_portfolio, load_portfolio
 from ..symbols import parse
 from ._common import _finish_with_error, _print_json, _sym
 
@@ -21,28 +21,29 @@ def portfolio_add(args) -> None:
         _finish_with_error(f"持仓数量必须为正数, 得到: {args.quantity}")
     if args.avg_cost is not None and args.avg_cost < 0:
         _finish_with_error(f"成本价不能为负数, 得到: {args.avg_cost}")
-    data = load_portfolio(args.portfolio)
-    holdings = data.setdefault("holdings", [])
-    changed: list[str] = []
-    skipped: list[str] = []
-    for s in args.symbols:
-        try:
-            p = parse(s)
-        except ValueError as e:
-            skipped.append(f"跳过 {s}: {e}")
-            continue
-        found = next((h for h in holdings if _sym(h) == p.yahoo), None)
-        if found is None:
-            h: dict = {"symbol": p.yahoo, "quantity": args.quantity}
-            if args.avg_cost is not None:
-                h["avg_cost"] = args.avg_cost
-            holdings.append(h)
-            changed.append(f"新增 {p.yahoo} 数量 {args.quantity}")
-        else:
-            found["quantity"] = args.quantity
-            if args.avg_cost is not None:
-                found["avg_cost"] = args.avg_cost
-            changed.append(f"更新 {p.yahoo} 数量 {args.quantity}")
+    # 锁内读-改-写: 读也在临界区内, 并发进程的写入不会被本次的全量替换覆盖
+    with edit_portfolio(args.portfolio) as data:
+        holdings = data.setdefault("holdings", [])
+        changed: list[str] = []
+        skipped: list[str] = []
+        for s in args.symbols:
+            try:
+                p = parse(s)
+            except ValueError as e:
+                skipped.append(f"跳过 {s}: {e}")
+                continue
+            found = next((h for h in holdings if _sym(h) == p.yahoo), None)
+            if found is None:
+                h: dict = {"symbol": p.yahoo, "quantity": args.quantity}
+                if args.avg_cost is not None:
+                    h["avg_cost"] = args.avg_cost
+                holdings.append(h)
+                changed.append(f"新增 {p.yahoo} 数量 {args.quantity}")
+            else:
+                found["quantity"] = args.quantity
+                if args.avg_cost is not None:
+                    found["avg_cost"] = args.avg_cost
+                changed.append(f"更新 {p.yahoo} 数量 {args.quantity}")
     if not changed:
         # 全部代码都无法识别: 不写盘 (否则会在 --portfolio 指向的新路径上
         # 凭空建一个空持仓文件), 非 0 退出让调用方/Agent 知道有失败
@@ -52,7 +53,6 @@ def portfolio_add(args) -> None:
             for s in skipped:
                 print(f"⚠ {s}")
         _finish_with_error("没有可添加的有效代码")
-    save_portfolio(data, args.portfolio)
     if args.json:
         _print_json(
             {"changed": changed, "skipped": skipped, "holdings": data.get("holdings", [])}
@@ -67,18 +67,17 @@ def portfolio_remove(args) -> None:
     """删除持仓."""
     if not args.symbols:
         _finish_with_error("请指定要删除的代码, 如: portfolio remove AAPL")
-    data = load_portfolio(args.portfolio)
-    targets: set[str] = set()
-    for s in args.symbols:
-        try:
-            targets.add(parse(s).yahoo)
-        except ValueError:
-            targets.add(s.strip().upper())
-    original = data.get("holdings", [])
-    remaining = [h for h in original if _sym(h) not in targets]
-    removed = [_sym(h) for h in original if _sym(h) in targets]
-    data["holdings"] = remaining
-    save_portfolio(data, args.portfolio)
+    with edit_portfolio(args.portfolio) as data:
+        targets: set[str] = set()
+        for s in args.symbols:
+            try:
+                targets.add(parse(s).yahoo)
+            except ValueError:
+                targets.add(s.strip().upper())
+        original = data.get("holdings", [])
+        remaining = [h for h in original if _sym(h) not in targets]
+        removed = [_sym(h) for h in original if _sym(h) in targets]
+        data["holdings"] = remaining
     if args.json:
         _print_json({"removed": removed})
         return
@@ -122,10 +121,9 @@ def portfolio_set_base(args) -> None:
     currency = args.currency or (args.symbols[0] if args.symbols else None)
     if not currency:
         _finish_with_error("请指定基础货币, 如: portfolio set-base USD")
-    data = load_portfolio(args.portfolio)
-    old = data.get("base_currency", "CNY")
-    data["base_currency"] = currency.upper()
-    save_portfolio(data, args.portfolio)
+    with edit_portfolio(args.portfolio) as data:
+        old = data.get("base_currency", "CNY")
+        data["base_currency"] = currency.upper()
     if args.json:
         _print_json({"base_currency": data["base_currency"], "previous": old})
         return

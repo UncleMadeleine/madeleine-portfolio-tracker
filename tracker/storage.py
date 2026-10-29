@@ -16,7 +16,15 @@ import math
 import os
 import shutil
 import tempfile
+import threading
+import time
+from contextlib import contextmanager
 from pathlib import Path
+
+try:  # Unix 有 flock; Windows 没有 → 退化为进程内锁 (仍防同进程多线程丢更新)
+    import fcntl
+except ImportError:  # pragma: no cover - 平台相关
+    fcntl = None
 
 from .paths import data_home
 from .symbols import parse, type_for_symbol
@@ -34,6 +42,94 @@ DEFAULT_BASE_CURRENCY = "CNY"
 
 class CorruptDataError(ValueError):
     """数据文件损坏且无法从 .bak 恢复 (CLI 据此给出可读错误而非 traceback)."""
+
+
+class DataFileLocked(OSError):
+    """数据文件被其它进程持有且长时间不释放, 本次保存未执行.
+
+    读-改-写全程持锁, 对方挂死时不无锁写入 (那会把对方的更新静默覆盖掉),
+    而是报可读错误让用户知道保存没成功。
+    """
+
+
+# ---------------------------------------------------------------------------
+# 跨进程/跨线程写锁 (读-改-写的互斥)
+# ---------------------------------------------------------------------------
+
+# 进程内 per-path 线程锁: Streamlit 后台刷新线程与脚本线程可能同时保存,
+# 同一进程内的交错 read-modify-write 同样丢更新
+_io_locks: dict[str, threading.RLock] = {}
+_io_locks_guard = threading.Lock()
+# 等待其它进程释放 flock 的上限: 临界区只是「读一个小 JSON + 原子写」, 正常
+# 毫秒级; 超时说明对方挂死了
+_LOCK_WAIT = 30.0
+
+
+#: 当前线程已持锁的路径 (flock 按 open file description 归属, 同进程再开一个
+#: fd 抢同一文件会自锁 → 必须放行重入, 否则 edit_* 里调 save_* 必死锁)
+_held_paths = threading.local()
+
+
+@contextmanager
+def _file_lock(path: Path):
+    """持有 path 同名 .lock 的排他锁, 覆盖整个读-改-写临界区。
+
+    save_* 的语义是「读磁盘 → 合并 → 整体覆写」: 两个写者交错的
+    read-modify-write 会静默丢更新 (实测 4 进程各追加 20 条只剩 25 条,
+    55 次编辑无声消失)。os.replace 只保证不写出半截文件, 管不了写者之间的
+    竞争, 故临界区要全程持锁 —— 而且**读也必须在临界区内** (光锁写不够:
+    调用方 load→改→save 的读在锁外, 窗口内的并发写入仍会被全量替换覆盖)。
+
+    双层: 进程内 RLock (同线程嵌套不死锁) + 跨进程 flock。锁文件**永不删除**
+    —— 删掉正被持有的锁文件会让后来者锁到另一个 inode 上, 形同虚设; 遗留的
+    空 .lock 文件无害 (flock 随 fd 关闭/进程退出自动释放)。
+    """
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    key = str(p)
+    held = getattr(_held_paths, "paths", None)
+    if held is None:
+        held = set()
+        _held_paths.paths = held
+    if key in held:  # 同线程重入: 直接放行 (RLock + 已持 flock)
+        yield
+        return
+    with _io_locks_guard:
+        tlock = _io_locks.setdefault(key, threading.RLock())
+    tlock.acquire()
+    try:
+        if fcntl is None:  # Windows: 只有进程内锁
+            held.add(key)
+            try:
+                yield
+            finally:
+                held.discard(key)
+            return
+        fd = os.open(key + ".lock", os.O_CREAT | os.O_RDWR, 0o644)
+        try:
+            deadline = time.monotonic() + _LOCK_WAIT
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise DataFileLocked(
+                            f"{p} 正被其它进程写入 (锁等待超过 {_LOCK_WAIT:.0f} 秒), "
+                            f"本次保存未执行; 请检查是否有其它 tracker 进程/页面 "
+                            f"在写同一数据目录"
+                        )
+                    time.sleep(0.05)
+            held.add(key)
+            try:
+                yield
+            finally:
+                held.discard(key)
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+    finally:
+        tlock.release()
 
 
 # ---------------------------------------------------------------------------
@@ -268,21 +364,23 @@ def save_portfolio(data: dict, path: str | Path = PORTFOLIO_PATH) -> None:
     """保存持仓/基础货币 (写盘唯一入口)。
 
     保留文件中其它键 (_说明 等文档/自定义字段), holdings 逐行清洗并覆写权威 type。
+    读-改-写全程持 <path>.lock (见 _file_lock): 并发保存不会静默丢更新。
     """
     p = Path(path)
-    if p.exists():
-        # 损坏/不可读的旧文件不能静默当 {} —— 同 _read_json_or_recover 注释:
-        # 直接覆盖会把 _说明 等自定义字段连同原持仓一起清掉 (数据丢失),
-        # 走 .bak 恢复, 仍失败则抛可读错误。
-        merged = _read_json_or_recover(p)
-    else:
-        merged = {}
-    merged.update(data)
-    merged.setdefault("base_currency", DEFAULT_BASE_CURRENCY)
-    merged["holdings"] = [
-        _stamp_type(r) for r in _clean_rows(merged.get("holdings", []))
-    ]
-    _write_json(merged, p)
+    with _file_lock(p):
+        if p.exists():
+            # 损坏/不可读的旧文件不能静默当 {} —— 同 _read_json_or_recover 注释:
+            # 直接覆盖会把 _说明 等自定义字段连同原持仓一起清掉 (数据丢失),
+            # 走 .bak 恢复, 仍失败则抛可读错误。
+            merged = _read_json_or_recover(p)
+        else:
+            merged = {}
+        merged.update(data)
+        merged.setdefault("base_currency", DEFAULT_BASE_CURRENCY)
+        merged["holdings"] = [
+            _stamp_type(r) for r in _clean_rows(merged.get("holdings", []))
+        ]
+        _write_json(merged, p)
 
 
 # ---------------------------------------------------------------------------
@@ -465,27 +563,29 @@ def save_watchlist(data: dict, path: str | Path = WATCHLIST_PATH) -> None:
     与 save_portfolio 一致: 保留文件中已有其它键 (_说明 等文档/自定义字段)。
     symbol 经 normalize_watch_entry 归一后按代码去重 (lists 并集, 其余字段
     非空者补齐): 别名 (如 D05.SG/D05.SI) 与规范形态不会在文件里裂成两条。
+    读-改-写全程持 path 同名 .lock (见 _file_lock): 并发保存不丢更新。
     """
     p = Path(path)
-    if p.exists():
-        # 与 save_portfolio 一致: 损坏文件不静默当 {} 覆盖掉已有数据。
-        merged = _read_json_or_recover(p)
-    else:
-        merged = {}
-    merged["watchlist"] = dedupe_watch_entries(
-        # _clean_rows: 与 save_portfolio 同一道清洗 —— data_editor 空单元格 /
-        # CLI 传入 nan/inf 会在 json.dumps(allow_nan=False) 处直接抛
-        # ValueError ("Out of range float values are not JSON compliant"),
-        # 让保存整条失败。非有限阈值/覆盖值应直接剔除, 而不是炸写盘。
-        _clean_rows(
-            [
-                normalize_watch_entry(dict(raw))
-                for raw in data.get("watchlist", [])
-                if isinstance(raw, dict)
-            ]
+    with _file_lock(p):
+        if p.exists():
+            # 与 save_portfolio 一致: 损坏文件不静默当 {} 覆盖掉已有数据。
+            merged = _read_json_or_recover(p)
+        else:
+            merged = {}
+        merged["watchlist"] = dedupe_watch_entries(
+            # _clean_rows: 与 save_portfolio 同一道清洗 —— data_editor 空单元格 /
+            # CLI 传入 nan/inf 会在 json.dumps(allow_nan=False) 处直接抛
+            # ValueError ("Out of range float values are not JSON compliant"),
+            # 让保存整条失败。非有限阈值/覆盖值应直接剔除, 而不是炸写盘。
+            _clean_rows(
+                [
+                    normalize_watch_entry(dict(raw))
+                    for raw in data.get("watchlist", [])
+                    if isinstance(raw, dict)
+                ]
+            )
         )
-    )
-    _write_json(merged, p)
+        _write_json(merged, p)
 
 
 # ---------------------------------------------------------------------------
@@ -538,9 +638,61 @@ def save_settings(data: dict, path: str | Path = SETTINGS_PATH) -> None:
     # 与 save_portfolio/save_watchlist 一致: 保留文件中已有自定义键 (_说明 等),
     # 只覆盖本次写入的已知键。settings 属可重建的轻量配置, 损坏且无 .bak 时
     # 不阻断保存 (load_settings 同样回退默认值), 避免设置页彻底不可写。
-    try:
-        merged = _read_json_or_recover(p) if p.exists() else {}
-    except CorruptDataError:
-        merged = {}
-    merged.update({**DEFAULT_SETTINGS, **data})
-    _write_json(merged, p)
+    # 读-改-写全程持 path 同名 .lock (见 _file_lock)。
+    with _file_lock(p):
+        try:
+            merged = _read_json_or_recover(p) if p.exists() else {}
+        except CorruptDataError:
+            merged = {}
+        merged.update({**DEFAULT_SETTINGS, **data})
+        _write_json(merged, p)
+
+
+# ---------------------------------------------------------------------------
+# 锁内读-改-写 (并发安全的编辑入口)
+# ---------------------------------------------------------------------------
+#
+# save_* 是「用调用方给的全量数据替换磁盘」的低层原语; 直接用它做编辑就是
+# load→改→save, 读在锁外 —— 并发进程/页面在这段窗口里的写入会被静默覆盖
+# (实测 4 进程各追加 20 条只剩 25 条)。edit_* 把读也搬进临界区, 调用方在
+# with 块里改完即写, 全程互斥。
+
+
+@contextmanager
+def edit_portfolio(path: str | Path = PORTFOLIO_PATH):
+    """锁内读-改-写持仓; with 块退出时自动走 save_portfolio 的清洗/打标。
+
+        with edit_portfolio() as data:
+            data["holdings"] = [...]
+
+    文件不存在时给空组合 (调用方无需分支)。块内抛异常则不写盘。
+    """
+    p = Path(path)
+    with _file_lock(p):
+        data = (
+            load_portfolio(p)
+            if p.exists()
+            else {"base_currency": DEFAULT_BASE_CURRENCY, "holdings": []}
+        )
+        yield data
+        save_portfolio(data, p)
+
+
+@contextmanager
+def edit_watchlist(path: str | Path = WATCHLIST_PATH):
+    """锁内读-改-写自选; with 块退出时自动走 save_watchlist 的归一/去重。"""
+    p = Path(path)
+    with _file_lock(p):
+        data = load_watchlist(p)
+        yield data
+        save_watchlist(data, p)
+
+
+@contextmanager
+def edit_settings(path: str | Path = SETTINGS_PATH):
+    """锁内读-改-写设置; with 块退出时自动走 save_settings 的合并。"""
+    p = Path(path)
+    with _file_lock(p):
+        data = load_settings(p)
+        yield data
+        save_settings(data, p)

@@ -13,7 +13,7 @@ from ..services.watchlist import (
     entries_for,
     triggered_entries,
 )
-from ..watchlist import load_watchlist, parse_lists, save_watchlist
+from ..watchlist import edit_watchlist, load_watchlist, parse_lists
 from ._common import _finish_with_error, _print_json, _records, _sym
 
 
@@ -21,51 +21,52 @@ def watchlist_add(args) -> None:
     """添加代码到自选 (已存在则合并列表与阈值)."""
     if not args.symbols:
         _finish_with_error("请指定要添加的代码, 如: watchlist add AAPL 600519.SS")
-    data = load_watchlist(args.file)
-    entries = data.setdefault("watchlist", [])
-    lists = parse_lists(args.wl_list) if args.wl_list else []
-    changed: list[str] = []
-    skipped: list[str] = []
-    for s in args.symbols:
-        try:
-            p = parse(s)
-        except ValueError as e:
-            skipped.append(f"跳过 {s}: {e}")
-            continue
-        found = next((e for e in entries if _sym(e) == p.yahoo), None)
-        if found is None:
-            e: dict = {"symbol": p.yahoo, "lists": lists or ["默认"]}
-            if args.metric is not None:
-                e["metric"] = args.metric
-            if args.upper1 is not None:
-                e["upper_1"] = args.upper1
-            if args.upper2 is not None:
-                e["upper_2"] = args.upper2
-            if args.lower1 is not None:
-                e["lower_1"] = args.lower1
-            if args.lower2 is not None:
-                e["lower_2"] = args.lower2
-            if args.note is not None:
-                e["note"] = args.note
-            entries.append(e)
-            changed.append(f"新增 {p.yahoo}")
-        else:
-            cur = found.setdefault("lists", [])
-            for name in lists:
-                if name not in cur:
-                    cur.append(name)
-            for key, val in (
-                ("metric", args.metric),
-                ("upper_1", args.upper1),
-                ("upper_2", args.upper2),
-                ("lower_1", args.lower1),
-                ("lower_2", args.lower2),
-            ):
-                if val is not None:
-                    found[key] = val
-            if args.note is not None:
-                found["note"] = args.note
-            changed.append(f"更新 {p.yahoo}")
+    # 锁内读-改-写: 读也在临界区内, 并发进程的写入不会被本次全量替换覆盖
+    with edit_watchlist(args.file) as data:
+        entries = data.setdefault("watchlist", [])
+        lists = parse_lists(args.wl_list) if args.wl_list else []
+        changed: list[str] = []
+        skipped: list[str] = []
+        for s in args.symbols:
+            try:
+                p = parse(s)
+            except ValueError as e:
+                skipped.append(f"跳过 {s}: {e}")
+                continue
+            found = next((e for e in entries if _sym(e) == p.yahoo), None)
+            if found is None:
+                e: dict = {"symbol": p.yahoo, "lists": lists or ["默认"]}
+                if args.metric is not None:
+                    e["metric"] = args.metric
+                if args.upper1 is not None:
+                    e["upper_1"] = args.upper1
+                if args.upper2 is not None:
+                    e["upper_2"] = args.upper2
+                if args.lower1 is not None:
+                    e["lower_1"] = args.lower1
+                if args.lower2 is not None:
+                    e["lower_2"] = args.lower2
+                if args.note is not None:
+                    e["note"] = args.note
+                entries.append(e)
+                changed.append(f"新增 {p.yahoo}")
+            else:
+                cur = found.setdefault("lists", [])
+                for name in lists:
+                    if name not in cur:
+                        cur.append(name)
+                for key, val in (
+                    ("metric", args.metric),
+                    ("upper_1", args.upper1),
+                    ("upper_2", args.upper2),
+                    ("lower_1", args.lower1),
+                    ("lower_2", args.lower2),
+                ):
+                    if val is not None:
+                        found[key] = val
+                if args.note is not None:
+                    found["note"] = args.note
+                changed.append(f"更新 {p.yahoo}")
     if not changed:
         # 全部代码都无法识别: 不写盘 (否则会在 --file 指向的新路径上凭空
         # 建一个空自选文件), 非 0 退出让调用方/Agent 知道有失败
@@ -75,7 +76,6 @@ def watchlist_add(args) -> None:
             for s in skipped:
                 print(f"⚠ {s}")
         _finish_with_error("没有可添加的有效代码")
-    save_watchlist(data, args.file)
     if args.json:
         _print_json(
             {"changed": changed, "skipped": skipped, "watchlist": data.get("watchlist", [])}
@@ -90,40 +90,39 @@ def watchlist_remove(args) -> None:
     """从自选删除代码 (可仅从指定列表移除)."""
     if not args.symbols:
         _finish_with_error("请指定要删除的代码, 如: watchlist remove AAPL")
-    data = load_watchlist(args.file)
-    targets: set[str] = set()
-    for s in args.symbols:
-        try:
-            targets.add(parse(s).yahoo)
-        except ValueError:
-            targets.add(s.strip().upper())
-    # --list 允许多个列表 (逗号分隔, 与 add/entries_for 行为一致);
-    # 直接拿原串比对单个列表名会永远匹配不上, 导致静默删不掉
-    scope = set(parse_lists(args.wl_list)) if args.wl_list else set()
-    remaining: list[dict] = []
-    removed: list[str] = []
-    for e in data.get("watchlist", []):
-        sym = _sym(e)
-        if sym in targets:
-            if scope:
-                # 仅从指定列表移除; 仍属其他列表则保留
-                cur = e.get("lists") or []
-                keep = [n for n in cur if n not in scope]
-                if len(keep) != len(cur):
-                    removed.append(sym)
-                    if keep:
-                        e["lists"] = keep
+    with edit_watchlist(args.file) as data:
+        targets: set[str] = set()
+        for s in args.symbols:
+            try:
+                targets.add(parse(s).yahoo)
+            except ValueError:
+                targets.add(s.strip().upper())
+        # --list 允许多个列表 (逗号分隔, 与 add/entries_for 行为一致);
+        # 直接拿原串比对单个列表名会永远匹配不上, 导致静默删不掉
+        scope = set(parse_lists(args.wl_list)) if args.wl_list else set()
+        remaining: list[dict] = []
+        removed: list[str] = []
+        for e in data.get("watchlist", []):
+            sym = _sym(e)
+            if sym in targets:
+                if scope:
+                    # 仅从指定列表移除; 仍属其他列表则保留
+                    cur = e.get("lists") or []
+                    keep = [n for n in cur if n not in scope]
+                    if len(keep) != len(cur):
+                        removed.append(sym)
+                        if keep:
+                            e["lists"] = keep
+                            remaining.append(e)
+                        # 已不属于任何列表 → 整体删除 (不入 remaining)
+                    else:
+                        # 不在指定列表中 → 保留不动
                         remaining.append(e)
-                    # 已不属于任何列表 → 整体删除 (不入 remaining)
                 else:
-                    # 不在指定列表中 → 保留不动
-                    remaining.append(e)
+                    removed.append(sym)
             else:
-                removed.append(sym)
-        else:
-            remaining.append(e)
-    data["watchlist"] = remaining
-    save_watchlist(data, args.file)
+                remaining.append(e)
+        data["watchlist"] = remaining
     if args.json:
         _print_json({"removed": removed})
         return
@@ -289,19 +288,22 @@ def watchlist_import_longport(args) -> None:
         )
         return
 
-    data = {"watchlist": []} if args.overwrite else load_watchlist(args.file)
-    merged, stats = importer.merge_watchlist(
-        data.get("watchlist", []),
-        rows,
-        importer.MODE_OVERWRITE if args.overwrite else importer.MODE_APPEND,
-    )
-    backup = None
-    if args.overwrite:
-        p = Path(args.file)
-        if p.exists():
-            backup = storage.backup_file(p)
-    data["watchlist"] = merged
-    save_watchlist(data, args.file)
+    # 锁内读-改-写: append 模式下读盘也在临界区内, 与并发编辑互不丢失
+    # (覆盖模式本就是全量替换, 锁保证不会与别人的写交出错半截)
+    with edit_watchlist(args.file) as data:
+        if args.overwrite:
+            data["watchlist"] = []
+        merged, stats = importer.merge_watchlist(
+            data.get("watchlist", []),
+            rows,
+            importer.MODE_OVERWRITE if args.overwrite else importer.MODE_APPEND,
+        )
+        backup = None
+        if args.overwrite:
+            p = Path(args.file)
+            if p.exists():
+                backup = storage.backup_file(p)
+        data["watchlist"] = merged
     verb = "覆盖写入" if args.overwrite else "追加合并"
     if args.json:
         _print_json(

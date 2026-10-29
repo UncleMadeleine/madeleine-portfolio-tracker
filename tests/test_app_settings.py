@@ -129,7 +129,12 @@ def test_save_portfolio_failure_leaves_original_intact(tmp_path):
             {"holdings": [{"symbol": "AAPL", "quantity": object()}]}, path
         )
     assert path.read_text(encoding="utf-8") == before
-    assert [p.name for p in tmp_path.iterdir()] == ["portfolio.json"]
+    # .lock 是持久化的读写互斥锁文件 (storage._file_lock), 故意不删;
+    # 除此之外不得留下 .tmp 之类的半截产物
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        "portfolio.json",
+        "portfolio.json.lock",
+    ]
 
 
 def test_save_portfolio_corrupt_raises_not_wipe(tmp_path):

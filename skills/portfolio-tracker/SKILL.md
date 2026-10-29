@@ -51,7 +51,7 @@ tracker-ui          # pip 安装后起 Streamlit 页面 (等价 streamlit run tr
 | `longport-login` | 长桥 OAuth 登录 (浏览器授权) | `longport-login` (token 缓存于 ~/.longport/openapi/tokens/<client_id>, 自动刷新), `longport-login --json` 只出授权 URL (供脚本), `-o <文件>` 写 URL 到文件 |
 | `report` | 自选监控阈值报告 | `report -f json -o report.json`, `report -f csv -w 科技` |
 | `export` | 组合快照导出 | `export -f md -o snapshot.md`, `export -f json` |
-| `sync` | IBKR 同步 (兼容入口→import ibkr; **注意 sync 缺省覆盖全部持仓**, `--append` 才追加, 与 import ibkr 相反) | `sync --dry-run` |
+| `sync` | IBKR 同步 (兼容入口→import ibkr; 缺省追加合并, 与 import 一致, `--overwrite` 才覆盖) | `sync --dry-run` |
 | `import-wallet` | 链上钱包导入 (兼容入口→import wallet; 缺省只查询, `--add`/`--overwrite` 才写盘) | `import-wallet eth 0x... --add` |
 | `cache` | 行情磁盘缓存 | `cache info`, `cache clear` |
 | `init` | 首次使用: 模板落地到数据目录 | `init`, `init --force` |
@@ -294,11 +294,14 @@ Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致);
    .venv/bin/python -m tracker.cli watchlist import-longport            # 追加合并到 watchlist.json (--overwrite 覆盖)
    .venv/bin/python -m tracker.cli import wallet eth 0x... --dry-run   # 链上余额预览 (eth/bsc/polygon/arbitrum/avalanche/tron/solana)
    .venv/bin/python -m tracker.cli import file 持仓.csv --dry-run      # A股券商 CSV/Excel 预览
-   .venv/bin/python -m tracker.cli sync --dry-run               # 兼容入口, 等价 import ibkr (但 sync 缺省覆盖全部持仓!)
+   .venv/bin/python -m tracker.cli sync --dry-run               # 兼容入口, 等价 import ibkr (缺省追加合并)
    ```
    `import` 子命令默认追加合并 (按代码更新数量/成本, 其余保留); `--overwrite` 覆盖全部;
    持仓导入任何写盘前自动备份 `.bak` (自选 `import-longport` 仅 `--overwrite` 时备份)。
-   兼容入口 `sync` (→import ibkr) 相反: 缺省**覆盖**全部持仓, `--append` 才追加。
+   兼容入口 `sync` (→import ibkr) 同口径: 缺省追加合并, `--overwrite` 覆盖全部, `--append` 为兼容 no-op。
+   并发写安全: 所有写盘路径走 `storage.edit_portfolio/edit_watchlist` 锁内读-改-写
+   (跨进程 flock + 进程内 RLock, 锁文件 `<path>.lock`), 并发保存不会互相覆盖; 锁等待超 30s 报
+   `DataFileLocked` 可读错误而不是静默丢更新。
    Gateway 端口由 `ibkr.json` 的 `mode` 决定: paper=4002 / live=4001; 显式 `"port"` 优先; env `IBKR_MODE` 可临时覆盖。
    长桥行情: 各取数子命令加 `--longport` (如 `quote AAPL --longport`), 或 settings.json `"use_longport": true`。
 

@@ -30,7 +30,7 @@ import sys
 
 # 暴露 prices 供测试 monkeypatch (cli.prices.get_quotes)
 from .. import prices  # noqa: F401
-from ..storage import PORTFOLIO_PATH as DEFAULT_PORTFOLIO, CorruptDataError
+from ..storage import PORTFOLIO_PATH as DEFAULT_PORTFOLIO, CorruptDataError, DataFileLocked
 from ..watchlist import DEFAULT_WATCHLIST  # storage 门面 (watchlist.json 常量)
 from ._common import VERSION, _finish_with_error
 from .cache import cmd_cache
@@ -784,7 +784,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  tracker sync --dry-run                # 预览同步结果, 不写入\n"
             "  tracker sync --mode paper             # 模拟账户 (端口 4002)\n"
             "  tracker sync --mode live --json       # 实盘账户 + JSON 输出\n"
-            "  tracker sync --append                 # 追加合并 (缺省覆盖全部持仓)\n"
+            "  tracker sync --overwrite              # 覆盖全部持仓 (缺省追加合并)\n"
         ),
     )
     p_sync.add_argument("--portfolio", default=str(DEFAULT_PORTFOLIO))
@@ -798,7 +798,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_sync.add_argument(
         "--append",
         action="store_true",
-        help="追加合并 (按代码更新/新增); 缺省覆盖全部持仓",
+        help="追加合并 (按代码更新/新增) — 缺省行为, 保留兼容旧调用",
+    )
+    p_sync.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="覆盖全部持仓 (清空后重写, 写前自动备份 portfolio.json.bak)",
     )
     p_sync.add_argument("--json", action="store_true")
     p_sync.set_defaults(func=cmd_sync)
@@ -918,6 +923,10 @@ def main(argv=None) -> None:
             return
         args.func(args)
     except CorruptDataError as e:
+        _finish_with_error(str(e))
+    except DataFileLocked as e:
+        # 数据文件被其它进程持有 (读-改-写锁等待超时): 本次保存未执行,
+        # 给可读错误而不是裸 traceback
         _finish_with_error(str(e))
     except BrokenPipeError:
         # 管道消费方提前关闭 (`tracker search 腾讯 | jq ...` 是官方推荐用法):

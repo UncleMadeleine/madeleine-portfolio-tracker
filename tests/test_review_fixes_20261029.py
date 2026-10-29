@@ -189,3 +189,218 @@ class TestBrokerPositionFilters:
         )
         assert rows == []
         assert any("占位代码" in s for s in skipped)
+
+
+class TestStorageCrossProcessLock:
+    """读-改-写全程持锁: 并发保存不丢更新 (修复前 4 进程各追加 20 条只剩 25 条)。"""
+
+    _WORKER = """
+import sys
+sys.path.insert(0, @@ROOT@@)
+from tracker import storage
+
+path, n, tag, mode = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
+for i in range(n):
+    sym = "SYM%s_%d" % (tag, i)
+    if mode == "portfolio":
+        with storage.edit_portfolio(path) as data:
+            holdings = list(data.get("holdings", []))
+            holdings.append({"symbol": sym, "quantity": 1})
+            data["holdings"] = holdings
+    else:
+        with storage.edit_watchlist(path) as data:
+            entries = list(data.get("watchlist", []))
+            entries.append({"symbol": sym, "lists": ["默认"]})
+            data["watchlist"] = entries
+"""
+
+    @pytest.mark.parametrize(
+        "mode,fname,key",
+        [("portfolio", "portfolio.json", "holdings"), ("watchlist", "watchlist.json", "watchlist")],
+    )
+    def test_concurrent_appends_all_survive(self, tmp_path, mode, fname, key):
+        """4 进程各追加 20 条: 锁内读-改-写 → 80 条全在 (旧写法只剩 ~25)。"""
+        import json
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        root = str(Path(__file__).resolve().parent.parent)
+        target = tmp_path / fname
+        seed = {"base_currency": "CNY", "holdings": []} if mode == "portfolio" else {"watchlist": []}
+        target.write_text(json.dumps(seed), encoding="utf-8")
+        script = tmp_path / "lock_worker.py"
+        script.write_text(self._WORKER.replace("@@ROOT@@", repr(root)), encoding="utf-8")
+
+        procs = [
+            subprocess.Popen(
+                [sys.executable, str(script), str(target), "20", str(w), mode],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+            )
+            for w in range(4)
+        ]
+        for pr in procs:
+            assert pr.wait(timeout=120) == 0, pr.stderr.read().decode()
+
+        data = json.loads(target.read_text(encoding="utf-8"))
+        syms = [e["symbol"] for e in data[key]]
+        assert len(syms) == 80, f"期望 80 条, 实际 {len(syms)} (并发丢更新)"
+        assert len(set(syms)) == 80
+
+    def test_lock_file_is_persistent_not_deleted(self, tmp_path):
+        """.lock 故意不删 (删掉被持有的锁文件会让后来者锁到另一个 inode)。"""
+        p = tmp_path / "p.json"
+        storage.save_portfolio({"holdings": []}, p)
+        assert (tmp_path / "p.json.lock").exists()
+
+    def test_reentrant_lock_same_thread(self, tmp_path):
+        """同线程嵌套持锁不死锁 (edit_* 内部调 save_*, 同进程再开 fd 会自锁)。"""
+        p = tmp_path / "p.json"
+        storage.save_portfolio({"holdings": []}, p)
+        with storage.edit_portfolio(p) as data:
+            data["base_currency"] = "USD"
+            # 内层再取同路径锁: 必须放行 (同进程再开 fd 抢 flock 会自锁)
+            with storage.edit_portfolio(p) as inner:
+                inner["base_currency"] = "HKD"
+        # 外层退出时用它自己的副本再写一次 (嵌套同路径编辑的既有语义),
+        # 关键是全程没有死锁、文件始终是合法 JSON
+        assert json.loads(p.read_text(encoding="utf-8"))["base_currency"] == "USD"
+
+    def test_edit_portfolio_creates_missing_file(self, tmp_path):
+        """文件不存在时 edit_* 给空组合, 调用方无需分支。"""
+        p = tmp_path / "sub" / "p.json"
+        with storage.edit_portfolio(p) as data:
+            assert data["holdings"] == []
+            data["holdings"] = [{"symbol": "AAPL", "quantity": 1}]
+        assert json.loads(p.read_text(encoding="utf-8"))["holdings"][0]["symbol"] == "AAPL"
+
+    def test_edit_portfolio_no_write_on_exception(self, tmp_path):
+        """块内抛异常不写盘 (锁随 with 退出释放, 不留半截状态)。"""
+        p = tmp_path / "p.json"
+        storage.save_portfolio({"holdings": [{"symbol": "AAPL", "quantity": 1}]}, p)
+        before = p.read_text(encoding="utf-8")
+        with pytest.raises(RuntimeError):
+            with storage.edit_portfolio(p) as data:
+                data["holdings"] = []
+                raise RuntimeError("boom")
+        assert p.read_text(encoding="utf-8") == before
+
+    def test_locked_peer_raises_readable_error(self, tmp_path):
+        """对方长时间持锁 → DataFileLocked 可读错误 (不无锁写入、不无限等)。"""
+        import fcntl
+        import os
+
+        p = tmp_path / "p.json"
+        storage.save_portfolio({"holdings": []}, p)
+        # 自己占住 .lock 模拟挂死的对方进程
+        fd = os.open(str(p) + ".lock", os.O_CREAT | os.O_RDWR, 0o644)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            with pytest.raises(storage.DataFileLocked, match="正被其它进程写入"):
+                storage._LOCK_WAIT = 0.3  # 测试里不用等 30s
+                try:
+                    with storage.edit_portfolio(p) as data:
+                        data["holdings"] = []
+                finally:
+                    storage._LOCK_WAIT = 30.0
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+
+
+class TestIbkrSyncDefaultAppend:
+    """tracker sync 缺省改为追加合并 (旧缺省覆盖会静默丢掉其它来源持仓)。"""
+
+    def _args(self, **kw):
+        import types
+
+        base = dict(
+            portfolio=None, dry_run=False, json=True, mode=None,
+            append=False, overwrite=False,
+        )
+        base.update(kw)
+        return types.SimpleNamespace(**base)
+
+    def test_default_appends(self, tmp_path, monkeypatch, capsys):
+        import json
+
+        from tracker import ibkr, ibkr_sync
+
+        class C:
+            symbol, exchange, primaryExchange, currency = "MSFT", "NYSE", "", "USD"
+
+        class P:
+            contract, position, avgCost = C(), 5, 100.0
+
+        monkeypatch.setattr(ibkr, "fetch_positions", lambda cfg: [P()])
+        monkeypatch.setattr(ibkr, "load_config", lambda: {})
+        p = tmp_path / "p.json"
+        p.write_text(
+            json.dumps(
+                {
+                    "base_currency": "CNY",
+                    "holdings": [
+                        {"symbol": "BTC-USD", "quantity": 1},
+                        {"symbol": "600519.SS", "quantity": 10},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        ibkr_sync.run_sync(self._args(portfolio=str(p)))
+        out = json.loads(capsys.readouterr().out)
+        assert out["mode"] == "append"
+        syms = sorted(h["symbol"] for h in json.loads(p.read_text())["holdings"])
+        assert syms == ["600519.SS", "BTC-USD", "MSFT"]
+
+    def test_overwrite_still_supported_with_backup(self, tmp_path, monkeypatch, capsys):
+        import json
+        from pathlib import Path
+
+        from tracker import ibkr, ibkr_sync
+
+        class C:
+            symbol, exchange, primaryExchange, currency = "MSFT", "NYSE", "", "USD"
+
+        class P:
+            contract, position, avgCost = C(), 5, 100.0
+
+        monkeypatch.setattr(ibkr, "fetch_positions", lambda cfg: [P()])
+        monkeypatch.setattr(ibkr, "load_config", lambda: {})
+        p = tmp_path / "p.json"
+        p.write_text(
+            json.dumps({"base_currency": "CNY", "holdings": [{"symbol": "AAPL", "quantity": 1}]}),
+            encoding="utf-8",
+        )
+        ibkr_sync.run_sync(self._args(portfolio=str(p), overwrite=True))
+        out = json.loads(capsys.readouterr().out)
+        assert out["mode"] == "overwrite"
+        syms = [h["symbol"] for h in json.loads(p.read_text())["holdings"]]
+        assert syms == ["MSFT"]
+        assert Path(str(p) + ".bak").exists()
+
+    def test_append_flag_is_compat_noop(self, tmp_path, monkeypatch, capsys):
+        """旧调用方传的 --append 仍是缺省行为, 不会因此变成覆盖。"""
+        import json
+
+        from tracker import ibkr, ibkr_sync
+
+        class C:
+            symbol, exchange, primaryExchange, currency = "MSFT", "NYSE", "", "USD"
+
+        class P:
+            contract, position, avgCost = C(), 5, 100.0
+
+        monkeypatch.setattr(ibkr, "fetch_positions", lambda cfg: [P()])
+        monkeypatch.setattr(ibkr, "load_config", lambda: {})
+        p = tmp_path / "p.json"
+        p.write_text(
+            json.dumps({"base_currency": "CNY", "holdings": [{"symbol": "AAPL", "quantity": 1}]}),
+            encoding="utf-8",
+        )
+        ibkr_sync.run_sync(self._args(portfolio=str(p), append=True))
+        out = json.loads(capsys.readouterr().out)
+        assert out["mode"] == "append"
+        syms = sorted(h["symbol"] for h in json.loads(p.read_text())["holdings"])
+        assert syms == ["AAPL", "MSFT"]

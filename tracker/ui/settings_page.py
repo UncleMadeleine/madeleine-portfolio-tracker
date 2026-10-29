@@ -6,6 +6,7 @@ import streamlit as st
 
 from . import settings as S
 from tracker import storage
+from tracker.storage import DataFileLocked
 
 _COLOR_SAMPLE_PCT = "+2.35%"
 
@@ -156,15 +157,19 @@ def _save_display() -> None:
     crypto_source = str(st.session_state.get("set_crypto_source") or "auto")
     if crypto_source not in storage.CRYPTO_SOURCES:
         crypto_source = "auto"
-    storage.save_settings(
-        {
-            "color_scheme": st.session_state.get("set_color_scheme", S.SCHEME_CN),
-            "prefer_akshare": bool(st.session_state.get("set_prefer_akshare")),
-            "use_ibkr": bool(st.session_state.get("set_use_ibkr")),
-            "use_longport": bool(st.session_state.get("set_use_longport")),
-            "crypto_source": crypto_source,
-        }
-    )
+    try:
+        storage.save_settings(
+            {
+                "color_scheme": st.session_state.get("set_color_scheme", S.SCHEME_CN),
+                "prefer_akshare": bool(st.session_state.get("set_prefer_akshare")),
+                "use_ibkr": bool(st.session_state.get("set_use_ibkr")),
+                "use_longport": bool(st.session_state.get("set_use_longport")),
+                "crypto_source": crypto_source,
+            }
+        )
+    except DataFileLocked as e:
+        st.error(f"设置保存失败: {e}")
+        return
     changed = {
         k: st.session_state.get(f"set_{k}", old.get(k)) for k in source_keys
     }
@@ -197,8 +202,10 @@ def _save_display() -> None:
 def _save_base() -> None:
     """切换基础货币立即写入 portfolio.json (与原侧栏行为一致)."""
     new_base = st.session_state.get("set_base_currency", "CNY")
-    data = storage.load_portfolio(storage.PORTFOLIO_PATH)
-    storage.save_portfolio(
-        {"base_currency": new_base, "holdings": data.get("holdings", [])}
-    )
+    try:
+        with storage.edit_portfolio(storage.PORTFOLIO_PATH) as data:
+            data["base_currency"] = new_base
+    except DataFileLocked as e:
+        st.error(f"基础货币保存失败: {e}")
+        return
     st.toast(f"基础货币已保存为 {new_base}")

@@ -28,6 +28,7 @@ import streamlit as st
 from tracker import cache as cache_mod, prices, storage
 from tracker.analytics import build_view, by_symbol, summarize
 from tracker.fx import get_fx_rates
+from tracker.storage import DataFileLocked
 from tracker.symbols import parse
 from tracker.services.watchlist import (
     build_watchlist_view,
@@ -643,32 +644,42 @@ def render_portfolio_page() -> None:
                     if dups:
                         st.error(f"重复代码 (已去重): {', '.join(sorted(set(dups)))}")
                 if not bad:
-                    # 保留编辑器不展示的溯源键 (如钱包导入的 import_source), 否则页面
-                    # 保存一次就丢掉, 后续多钱包导入会退化成同代码互相覆盖
-                    extra = {
-                        _norm_sym(h.get("symbol", "")): {
-                            k: v
-                            for k, v in h.items()
-                            if k not in ("symbol", "quantity", "avg_cost", "type")
-                        }
-                        for h in portfolio.get("holdings", [])
-                    }
-                    for r in clean:
-                        r.update(extra.get(r["symbol"], {}))
-                        # 手改过数量: 来源分量已与 quantity 不一致, 作废分量表
-                        # (否则下次钱包导入会把旧分量加回来, 数量虚增);
-                        # 未改数量时保留分量表, 多钱包来源记账不丢
-                        q = r.get("quantity")
-                        q = float(q) if isinstance(q, (int, float)) else 0.0
-                        sq = r.get("source_quantities")
-                        if (
-                            isinstance(sq, dict)
-                            and sq
-                            and q != sum(float(v or 0) for v in sq.values())
-                        ):
-                            r.pop("source_quantities", None)
-                            r["import_source"] = r.get("import_source") or ""
-                    storage.save_portfolio({"base_currency": base, "holdings": clean})
+                    # 锁内读-改-写: 读盘 (溯源键来源) 与写盘在同一临界区,
+                    # 并发的导入/其它页面编辑不会互相覆盖 (旧写法 load→改→save
+                    # 全量替换, 窗口内的并发写入会被静默丢掉)
+                    try:
+                        with storage.edit_portfolio(storage.PORTFOLIO_PATH) as pf:
+                            # 保留编辑器不展示的溯源键 (如钱包导入的 import_source),
+                            # 否则页面保存一次就丢掉, 后续多钱包导入会退化成同代码互相覆盖
+                            extra = {
+                                _norm_sym(h.get("symbol", "")): {
+                                    k: v
+                                    for k, v in h.items()
+                                    if k
+                                    not in ("symbol", "quantity", "avg_cost", "type")
+                                }
+                                for h in pf.get("holdings", [])
+                            }
+                            for r in clean:
+                                r.update(extra.get(r["symbol"], {}))
+                                # 手改过数量: 来源分量已与 quantity 不一致, 作废分量表
+                                # (否则下次钱包导入会把旧分量加回来, 数量虚增);
+                                # 未改数量时保留分量表, 多钱包来源记账不丢
+                                q = r.get("quantity")
+                                q = float(q) if isinstance(q, (int, float)) else 0.0
+                                sq = r.get("source_quantities")
+                                if (
+                                    isinstance(sq, dict)
+                                    and sq
+                                    and q != sum(float(v or 0) for v in sq.values())
+                                ):
+                                    r.pop("source_quantities", None)
+                                    r["import_source"] = r.get("import_source") or ""
+                            pf["base_currency"] = base
+                            pf["holdings"] = clean
+                    except DataFileLocked as e:
+                        st.error(f"持仓保存失败: {e}")
+                        return
                     cached_quotes.clear()
                     cached_fx.clear()
                     # 必须 rerun: 本次渲染的 holdings 仍是 data_editor 原始行
@@ -819,7 +830,12 @@ def render_portfolio_page() -> None:
                     if dups:
                         st.error(f"重复代码 (已去重): {', '.join(sorted(set(dups)))}")
                 if not bad:
-                    storage.save_watchlist({"watchlist": rows}, WATCHLIST_PATH)
+                    try:
+                        with storage.edit_watchlist(WATCHLIST_PATH) as wl:
+                            wl["watchlist"] = rows
+                    except DataFileLocked as e:
+                        st.error(f"自选保存失败: {e}")
+                        return
                     cached_quotes.clear()
                     if dups:
                         st.toast("自选已保存 (重复行已移除)")

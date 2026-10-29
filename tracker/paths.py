@@ -40,22 +40,35 @@ def _looks_like_repo(root: Path) -> bool:
     return any((root / m).exists() for m in _REPO_MARKERS)
 
 
+def _abs_env(name: str) -> Path | None:
+    """读取环境变量并展开 ~; 相对路径按 XDG 规范忽略 (返回 None)。
+
+    否则 TRACKER_HOME=data / XDG_DATA_HOME=~/x 这类值会把数据目录变成相对
+    CWD 的目录 —— 换个工作目录数据就「消失」, 且 ~ 不展开直接建出名字带
+    波浪号的目录。
+    """
+    v = os.environ.get(name)
+    if not v:
+        return None
+    p = Path(v).expanduser()
+    return p if p.is_absolute() else None
+
+
 def _platform_data_dir() -> Path:
     if sys.platform.startswith("win"):
         base = os.environ.get("APPDATA") or (Path.home() / "AppData" / "Roaming")
         return Path(base) / "tracker"
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Application Support" / "tracker"
-    xdg = os.environ.get("XDG_DATA_HOME")
-    base = Path(xdg) if xdg else Path.home() / ".local" / "share"
+    base = _abs_env("XDG_DATA_HOME") or Path.home() / ".local" / "share"
     return base / "tracker"
 
 
 def data_home() -> Path:
     """用户数据目录 (portfolio.json 等用户数据 + var/ 运行产物)。"""
-    env = os.environ.get("TRACKER_HOME")
+    env = _abs_env("TRACKER_HOME")
     if env:
-        return Path(env).expanduser()
+        return env
     root = _legacy_root()
     if _looks_like_repo(root):
         return root  # 源码树 / editable: 数据留在仓库根 (与旧版一致)

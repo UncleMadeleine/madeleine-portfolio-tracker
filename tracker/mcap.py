@@ -72,7 +72,7 @@ def _map_by_closest_date(price_df: pd.DataFrame, pairs: pd.Series) -> pd.DataFra
     返回 date (Timestamp) / close (value) 两列, 升序去重。
     """
     lookup = {pd.Timestamp(k).normalize(): v for k, v in pairs.items()}
-    dates = pd.to_datetime(price_df["date"]).dt.normalize()
+    dates = pd.to_datetime(price_df["date"], errors="coerce").dt.normalize()
     out = pd.DataFrame(
         {"date": dates, "close": dates.map(lookup)},
     ).dropna(subset=["close"])
@@ -138,6 +138,8 @@ def to_common_currency(
             out[code] = df
             continue
         conv = df.copy()
+        # 公入入口: date 列可能是字符串 (旧缓存/调用方自造帧), 统一转datetime
+        conv["date"] = pd.to_datetime(conv["date"], errors="coerce")
         rates = {pd.Timestamp(r["date"]).normalize(): float(r["close"]) for _, r in fx_df.iterrows()}
         factor = [
             rates[d.normalize()] if d.normalize() in rates else None
@@ -151,12 +153,26 @@ def to_common_currency(
                 v * rate if rate is not None else None for v, rate in zip(conv[col], factor)
             ]
         conv = conv.dropna(subset=price_cols + ["date"] if "date" in conv.columns else price_cols)
+        if conv.empty:
+            # 汇率历史与市值区间**完全没有重叠**: 原来静默 return df (未折算的
+            # 原币), 而 _render_mcap_summary/CLI 把所有行都标成 target —— 图上
+            # 一条美元市值一条港币市值混算且无任何告警。与 fx_df is None 分支
+            # 同口径告警后保持原币。
+            warnings.append(
+                f"{code}: {ccy}→{target} 汇率与市值区间无重叠, 保持原币"
+            )
+            out[code] = df
+            continue
+        dropped = len(df) - len(conv)
+        if dropped:
+            # 部分重叠: 无汇率的日子被静默丢弃, 序列被截断 —— 记明示
+            warnings.append(
+                f"{code}: {dropped} 个交易日无 {ccy}→{target} 汇率, 已丢弃"
+            )
         out[code] = (
             conv.drop_duplicates(subset="date", keep="last")
             .sort_values("date")
             .reset_index(drop=True)
-            if not conv.empty
-            else df
         )
     return out, warnings
 
@@ -324,23 +340,30 @@ def history_for(symbol: str, price_df: pd.DataFrame) -> McapResult:
 
     if mcap_pairs is None:
         # 近似兜底: 当前市值 (fundamentals 6h 缓存批量) × 价格比例
-        from . import fundamentals
+        pass  # 落到下面统一执行 (em/shares 无重叠日期也走这条)
 
-        try:
-            snapshot = fundamentals.fetch_market_caps([p.yahoo]).get(p.yahoo)
-        except Exception:
-            snapshot = None
-        if snapshot is None or snapshot <= 0:
-            return McapResult(symbol, None, None, price_ccy, reason="无市值数据")
-        approx = approx_frame(float(snapshot), price_df)
-        if approx.empty:
-            return McapResult(symbol, None, None, price_ccy, reason="无有效价格")
-        return McapResult(symbol, ohlcv_shim(approx), "approx", price_ccy)
+    attached = None
+    if mcap_pairs is not None:
+        attached = _map_by_closest_date(price_df, mcap_pairs)
+    if attached is not None and not attached.empty:
+        return McapResult(symbol, ohlcv_shim(attached), source, price_ccy)
 
-    attached = _map_by_closest_date(price_df, mcap_pairs)
-    if attached.empty:
-        return McapResult(symbol, None, None, price_ccy, reason="市值与K线无重叠日期")
-    return McapResult(symbol, ohlcv_shim(attached), source, price_ccy)
+    # 到这里有两种情况: (a) em/shares 接口返回 None; (b) 返回了数据但与
+    # K 线区间**零重叠** (事件日期错位 / 缓存里只存了另一段历史)。原来 (b)
+    # 直接判死「市值与K线无重叠日期」, 而同样的输入若接口返回 None 是能走
+    # 近似兜底出数的 —— 口径不一致, 白丢可用数据。统一落到近似兜底。
+    from . import fundamentals
+
+    try:
+        snapshot = fundamentals.fetch_market_caps([p.yahoo]).get(p.yahoo)
+    except Exception:
+        snapshot = None
+    if snapshot is None or snapshot <= 0:
+        return McapResult(symbol, None, None, price_ccy, reason="无市值数据")
+    approx = approx_frame(float(snapshot), price_df)
+    if approx.empty:
+        return McapResult(symbol, None, None, price_ccy, reason="无有效价格")
+    return McapResult(symbol, ohlcv_shim(approx), "approx", price_ccy)
 
 
 def compare_market_caps(

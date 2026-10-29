@@ -36,7 +36,9 @@ from .rules import (
 def list_names(data: dict) -> list[str]:
     names: list[str] = []
     for e in (data or {}).get("watchlist", []):
-        for n in e.get("lists", []) or []:
+        # lists 可能是手写/第三方写入的逗号分隔字符串: 不过 parse_lists 的话
+        # 这里会按字符迭代 ("科技" → ["科","技"]), 过滤静默失效
+        for n in parse_lists(e.get("lists", [])):
             if n and n not in names:
                 names.append(n)
     return names or ["默认"]
@@ -70,7 +72,9 @@ def entries_for(data: dict, name: str | None = None) -> list[dict]:
     matched = [
         e
         for e in (data or {}).get("watchlist", [])
-        if names & set(e.get("lists", []) or [])
+        # lists 未归一 (字符串) 时按字符迭代会让 names & set("科技") 永远空集,
+        # 过滤静默失效 —— 统一过 parse_lists
+        if names & set(parse_lists(e.get("lists", [])))
     ]
     return dedupe_watch_entries(matched)
 
@@ -125,7 +129,16 @@ def build_watchlist_view(
         from .. import fundamentals
 
         pool = book_values if metric == METRIC_PB else market_caps
-        missing = [s for s in fund_syms if s not in pool]
+        # 只缺**该指标**的代码才发请求: fund_syms 是 pb∪mcap 的并集, 原来
+        # 不按指标过滤, 处理一个 pb 条目时会把 mcap-only 的代码也拿去求 BVPS
+        # (反之亦然) —— 白发请求, 还多受一份限流
+        wanted = {
+            str(ne["symbol"]).strip()
+            for ne in norm_entries
+            if metric_for_entry(ne) == metric
+            and any(v is not None for v in parse_thresholds(ne).values())
+        }
+        missing = [s for s in fund_syms if s not in pool and s in wanted]
         if not missing:
             return
         fetcher = (
@@ -148,7 +161,11 @@ def build_watchlist_view(
         thresholds = parse_thresholds(e)
         has_thresholds = any(v is not None for v in thresholds.values())
         q = quotes.get(p.yahoo)
-        if q is None or q.price is None or not math.isfinite(q.price):
+        # price<=0 与 NaN 一视同仁: 0/负价会让 pb 分支算出 PB=0/负 →
+        # evaluate_thresholds 误判「跌破下限」并 triggered=True (providers 注释
+        # 明确「0、NaN、负价不能当成有效行情」); 生产链路虽已过滤, 这里补上
+        # 与 price 分支 (metric_value_for_quote) 一致的守卫
+        if q is None or q.price is None or not math.isfinite(q.price) or q.price <= 0:
             issues.append(f"{p.yahoo}: 行情缺失")
             continue
         price = q.price

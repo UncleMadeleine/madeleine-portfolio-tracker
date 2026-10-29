@@ -1296,7 +1296,7 @@ def compare_payload(
     """
     lines = []
     precisions = []
-    for i, (sym, df) in enumerate(frames.items()):
+    for sym, df in frames.items():
         d = resample_ohlc(df, period) if period != "daily" else clean_ohlc(df)
         if d.empty:
             continue
@@ -1319,7 +1319,10 @@ def compare_payload(
             lines.append(
                 {
                     "name": sym,
-                    "color": COMPARE_PALETTE[i % len(COMPARE_PALETTE)],
+                    # 用输出序号取色: 输入序号 i 会在前面某只代码被清空
+                    # (清洗后无有效K线) 时让第一条可见线拿到 PALETTE[1],
+                    # 与「首色取蓝便于与红绿涨跌色区分」的意图不符
+                    "color": COMPARE_PALETTE[len(lines) % len(COMPARE_PALETTE)],
                     "data": data,
                 }
             )
@@ -1380,7 +1383,7 @@ def crypto_compare_payload(
     共享时间轴与十字光标 (窗格分隔线可拖拽调高)。
     """
     coins = []
-    for i, (sym, df) in enumerate(frames.items()):
+    for sym, df in frames.items():
         d = resample_ohlc(df, period) if period != "daily" else clean_ohlc(df)
         if d.empty:
             continue
@@ -1407,7 +1410,8 @@ def crypto_compare_payload(
         coins.append(
             {
                 "name": sym,
-                "color": COMPARE_PALETTE[i % len(COMPARE_PALETTE)],
+                # 同 compare_payload: 输出序号取色, 空数据代码不占位
+                "color": COMPARE_PALETTE[len(coins) % len(COMPARE_PALETTE)],
                 "precision": precision,
                 "minMove": 10**-precision,
                 "candles": candles,

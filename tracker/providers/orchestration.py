@@ -227,7 +227,12 @@ def get_quotes(
             batch_plist = plist
             if prefer_akshare:
                 batch_plist = [p for p in plist if p.market is not Market.HK]
-            quotes.update(_yahoo_batch(batch_plist))
+            try:
+                quotes.update(_yahoo_batch(batch_plist))
+            except Exception as e:  # noqa: BLE001 - 批量失败不能让整个域崩
+                # 批量是优化不是必需: 失败则全部代码落逐代码源链 (那里每源
+                # 单独 try, 且域间循环无保护 —— 一抛会连带 cn/crypto 域不执行)
+                notes.append(f"yfinance 批量行情异常: {e} (已回退逐代码取数)")
             plist = [p for p in plist if p.yahoo not in quotes]
             if not plist:
                 continue

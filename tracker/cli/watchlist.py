@@ -25,11 +25,12 @@ def watchlist_add(args) -> None:
     entries = data.setdefault("watchlist", [])
     lists = parse_lists(args.wl_list) if args.wl_list else []
     changed: list[str] = []
+    skipped: list[str] = []
     for s in args.symbols:
         try:
             p = parse(s)
         except ValueError as e:
-            changed.append(f"跳过 {s}: {e}")
+            skipped.append(f"跳过 {s}: {e}")
             continue
         found = next((e for e in entries if _sym(e) == p.yahoo), None)
         if found is None:
@@ -65,11 +66,24 @@ def watchlist_add(args) -> None:
             if args.note is not None:
                 found["note"] = args.note
             changed.append(f"更新 {p.yahoo}")
+    if not changed:
+        # 全部代码都无法识别: 不写盘 (否则会在 --file 指向的新路径上凭空
+        # 建一个空自选文件), 非 0 退出让调用方/Agent 知道有失败
+        if args.json:
+            _print_json({"changed": [], "skipped": skipped})
+        else:
+            for s in skipped:
+                print(f"⚠ {s}")
+        _finish_with_error("没有可添加的有效代码")
     save_watchlist(data, args.file)
     if args.json:
-        _print_json({"changed": changed, "watchlist": data.get("watchlist", [])})
+        _print_json(
+            {"changed": changed, "skipped": skipped, "watchlist": data.get("watchlist", [])}
+        )
         return
     print("✅ " + "; ".join(changed))
+    for s in skipped:
+        print(f"⚠ {s}")
 
 
 def watchlist_remove(args) -> None:

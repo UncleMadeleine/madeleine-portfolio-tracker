@@ -148,6 +148,35 @@ def _is_corruption(exc: sqlite3.DatabaseError) -> bool:
     return any(m in msg for m in ("not a database", "malformed", "corrupt"))
 
 
+#: IN (?,?,...) 占位符分块大小: SQLite 默认变量上限 32766, 自选股上千时
+#: 一条 SQL 会直接 OperationalError("too many SQL variables")。
+_CHUNK = 400
+
+
+def _chunks(seq: list, size: int = _CHUNK):
+    for i in range(0, len(seq), size):
+        yield seq[i : i + size]
+
+
+def _read_all(sql: str, params) -> list:
+    """只读查询; 锁竞争 (OperationalError, busy timeout 5s 后仍拿不到锁)
+    视为「无缓存」返回空列表, 不让裸 traceback 打死 CLI/页面。
+
+    并发场景真实存在: Streamlit 后台刷新线程写库的同时 CLI 或另一页面读库。
+    """
+    try:
+        with sqlite3.connect(CACHE_DB) as con:
+            return con.execute(sql, params).fetchall()
+    except sqlite3.OperationalError:
+        return []
+
+
+def _read_one(sql: str, params):
+    """单行只读查询; 锁竞争/库不可用时返回 None (同 _read_all 语义)。"""
+    rows = _read_all(sql, params)
+    return rows[0] if rows else None
+
+
 def _ensure_db() -> None:
     CACHE_DB.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -194,11 +223,10 @@ def get_ohlc_cached(
 ) -> pd.DataFrame | None:
     """读取缓存的日线 OHLC; 未命中 / 过期 / 载荷损坏返回 None."""
     _ensure_db()
-    with sqlite3.connect(CACHE_DB) as con:
-        row = con.execute(
-            "SELECT payload FROM ohlc_cache WHERE symbol=? AND months=? AND fetched_at > ?",
-            (symbol, int(months), time.time() - ttl),
-        ).fetchone()
+    row = _read_one(
+        "SELECT payload FROM ohlc_cache WHERE symbol=? AND months=? AND fetched_at > ?",
+        (symbol, int(months), time.time() - ttl),
+    )
     if row is None:
         return None
     try:
@@ -254,11 +282,10 @@ def get_fundamental_cached(symbol: str, ttl: int = 21600) -> dict | None:
     """
     _ensure_db()
     now = time.time()
-    with sqlite3.connect(CACHE_DB) as con:
-        row = con.execute(
-            "SELECT book_value, market_cap, fetched_at FROM fundamentals WHERE symbol = ?",
-            (symbol,),
-        ).fetchone()
+    row = _read_one(
+        "SELECT book_value, market_cap, fetched_at FROM fundamentals WHERE symbol = ?",
+        (symbol,),
+    )
     if row is None:
         return None
     bv, mc, fetched_at = row
@@ -334,13 +361,13 @@ def get_cached_with_age(
     now = time.time()
     hits: dict[str, Quote] = {}
     ages: dict[str, float] = {}
-    with sqlite3.connect(CACHE_DB) as con:
-        rows = con.execute(
+    for chunk in _chunks(list(symbols)):
+        rows = _read_all(
             f"SELECT symbol, name, price, prev_close, change_pct, currency, book_value, market_cap, source, fetched_at "
             f"FROM quotes "
-            f"WHERE symbol IN ({','.join('?' * len(symbols))}) AND fetched_at > ?",
-            [*symbols, now - ttl],
-        ).fetchall()
+            f"WHERE symbol IN ({','.join('?' * len(chunk))}) AND fetched_at > ?",
+            [*chunk, now - ttl],
+        )
         for sym, name, price, prev, chg, ccy, bv, mc, src, fetched_at in rows:
             if price is not None and price > 0:
                 hits[sym] = Quote(
@@ -365,7 +392,13 @@ def get_cached(symbols: list[str], ttl: int = CACHE_TTL) -> dict[str, "Quote"]:
 
 
 def set_cached(quotes: dict[str, "Quote"]) -> None:
-    """将 Quote 写入缓存, 更新 fetched_at. 过滤掉 price<=0 的脏数据."""
+    """将 Quote 写入缓存, 更新 fetched_at. 过滤掉 price<=0 的脏数据.
+
+    book_value/market_cap 与 set_fundamental_cached 同口径用 COALESCE 保留
+    库中旧值: yfinance/OpenBB 路径不填这两个指标 (恒 None), 无条件覆盖会把
+    上一轮 akshare/长桥写进去的 BVPS 与总市值抹成 NULL, 首屏 PB/市值提醒
+    随之拿不到值。
+    """
     if not quotes:
         return
     _ensure_db()
@@ -396,8 +429,8 @@ def set_cached(quotes: dict[str, "Quote"]) -> None:
             ON CONFLICT(symbol) DO UPDATE SET
                 name=excluded.name, price=excluded.price,
                 prev_close=excluded.prev_close, change_pct=excluded.change_pct,
-                currency=excluded.currency, book_value=excluded.book_value,
-                market_cap=excluded.market_cap,
+                currency=excluded.currency, book_value=COALESCE(excluded.book_value, quotes.book_value),
+                market_cap=COALESCE(excluded.market_cap, quotes.market_cap),
                 source=excluded.source, fetched_at=excluded.fetched_at
             """,
             rows,
@@ -428,12 +461,12 @@ def get_fx_cached(
     now = time.time()
     rates: dict[str, float] = {}
     ages: dict[str, float] = {}
-    with sqlite3.connect(CACHE_DB) as con:
-        rows = con.execute(
+    for chunk in _chunks(curs):
+        rows = _read_all(
             f"SELECT currency, rate, fetched_at FROM fx_rates "
-            f"WHERE base=? AND currency IN ({','.join('?' * len(curs))}) AND fetched_at > ?",
-            [base, *curs, now - ttl],
-        ).fetchall()
+            f"WHERE base=? AND currency IN ({','.join('?' * len(chunk))}) AND fetched_at > ?",
+            [base, *chunk, now - ttl],
+        )
         for ccy, rate, fetched_at in rows:
             if rate is None or rate <= 0:
                 continue
@@ -469,19 +502,25 @@ def set_fx_cached(base: str, rates: dict[str, float]) -> None:
 def clear_fx() -> int:
     """清汇率磁盘缓存: 数据源偏好 (IBKR 开关) 变化后强制按新链路重取."""
     _ensure_db()
-    with _lock, sqlite3.connect(CACHE_DB) as con:
-        n = con.execute("DELETE FROM fx_rates").rowcount
-        con.commit()
-        return n
+    try:
+        with _lock, sqlite3.connect(CACHE_DB) as con:
+            n = con.execute("DELETE FROM fx_rates").rowcount
+            con.commit()
+            return n
+    except sqlite3.OperationalError as e:
+        raise RuntimeError(f"缓存数据库忙或不可用 ({e}); 稍后重试") from e
 
 
 def clear_quotes() -> int:
     """只清实时行情缓存 (保留 K线/基本面): 数据源偏好切换后强制按新源链重取."""
     _ensure_db()
-    with _lock, sqlite3.connect(CACHE_DB) as con:
-        n = con.execute("DELETE FROM quotes").rowcount
-        con.commit()
-        return n
+    try:
+        with _lock, sqlite3.connect(CACHE_DB) as con:
+            n = con.execute("DELETE FROM quotes").rowcount
+            con.commit()
+            return n
+    except sqlite3.OperationalError as e:
+        raise RuntimeError(f"缓存数据库忙或不可用 ({e}); 稍后重试") from e
 
 
 def clear_ohlc() -> int:
@@ -492,10 +531,13 @@ def clear_ohlc() -> int:
     配套, 由设置页在源变化时调用 (clear 全清亦可, 但会连基本面一起清)。
     """
     _ensure_db()
-    with _lock, sqlite3.connect(CACHE_DB) as con:
-        n = con.execute("DELETE FROM ohlc_cache").rowcount
-        con.commit()
-        return n
+    try:
+        with _lock, sqlite3.connect(CACHE_DB) as con:
+            n = con.execute("DELETE FROM ohlc_cache").rowcount
+            con.commit()
+            return n
+    except sqlite3.OperationalError as e:
+        raise RuntimeError(f"缓存数据库忙或不可用 ({e}); 稍后重试") from e
 
 
 # ---------- 财经日历 (财报/分红事件) 缓存 ----------
@@ -509,10 +551,9 @@ def get_calendar_row(key: str) -> dict | None:
     存统一 6h —— 这里不套 WHERE fetched_at, 只给原始时间戳。
     """
     _ensure_db()
-    with sqlite3.connect(CACHE_DB) as con:
-        row = con.execute(
-            "SELECT payload, fetched_at FROM calendar_cache WHERE key = ?", (key,)
-        ).fetchone()
+    row = _read_one(
+        "SELECT payload, fetched_at FROM calendar_cache WHERE key = ?", (key,)
+    )
     if row is None:
         return None
     try:
@@ -551,11 +592,10 @@ def get_series_cached(key: str, ttl: int) -> pd.DataFrame | None:
     与 OHLC 缓存同构: 整段 JSON 载荷按 key 覆盖, TTL 过期重取。
     """
     _ensure_db()
-    with sqlite3.connect(CACHE_DB) as con:
-        row = con.execute(
-            "SELECT payload FROM series_cache WHERE key=? AND fetched_at > ?",
-            (key, time.time() - ttl),
-        ).fetchone()
+    row = _read_one(
+        "SELECT payload FROM series_cache WHERE key=? AND fetched_at > ?",
+        (key, time.time() - ttl),
+    )
     if row is None:
         return None
     try:
@@ -591,35 +631,43 @@ def set_series_cached(key: str, df: pd.DataFrame) -> None:
 
 
 def info() -> dict:
-    """缓存统计: 记录总数 / 有效条数 / 数据库大小."""
+    """缓存统计: 记录总数 / 有效条数 / 数据库大小.
+
+    库被其它进程独占 (OperationalError) 时抛 RuntimeError 可读错误, 而不是
+    裸 traceback —— 否则用户连 `cache info` 这条自检路径都用不了。
+    """
     _ensure_db()
     now = time.time()
-    with sqlite3.connect(CACHE_DB) as con:
-        total = con.execute("SELECT COUNT(*) FROM quotes").fetchone()[0]
-        fresh = con.execute(
-            "SELECT COUNT(*) FROM quotes WHERE fetched_at > ?", (now - CACHE_TTL,)
-        ).fetchone()[0]
-        # 陈旧期内的条数: 首屏可先渲染后刷新 (stale-while-revalidate)
-        usable = con.execute(
-            "SELECT COUNT(*) FROM quotes WHERE fetched_at > ?", (now - STALE_TTL,)
-        ).fetchone()[0]
-        ohlc_total = con.execute("SELECT COUNT(*) FROM ohlc_cache").fetchone()[0]
-        ohlc_fresh = con.execute(
-            "SELECT COUNT(*) FROM ohlc_cache WHERE fetched_at > ?", (now - OHLC_TTL,)
-        ).fetchone()[0]
-        fx_total = con.execute("SELECT COUNT(*) FROM fx_rates").fetchone()[0]
-        fx_fresh = con.execute(
-            "SELECT COUNT(*) FROM fx_rates WHERE fetched_at > ?", (now - FX_FRESH_TTL,)
-        ).fetchone()[0]
-        oldest, newest = con.execute(
-            "SELECT MIN(fetched_at), MAX(fetched_at) FROM quotes"
-        ).fetchone()
-        series_total = con.execute("SELECT COUNT(*) FROM series_cache").fetchone()[0]
-        series_fresh = con.execute(
-            "SELECT COUNT(*) FROM series_cache WHERE fetched_at > ?",
-            (now - OHLC_TTL,),
-        ).fetchone()[0]
-        cal_total = con.execute("SELECT COUNT(*) FROM calendar_cache").fetchone()[0]
+    try:
+        with sqlite3.connect(CACHE_DB) as con:
+            total = con.execute("SELECT COUNT(*) FROM quotes").fetchone()[0]
+            fresh = con.execute(
+                "SELECT COUNT(*) FROM quotes WHERE fetched_at > ?", (now - CACHE_TTL,)
+            ).fetchone()[0]
+            # 陈旧期内的条数: 首屏可先渲染后刷新 (stale-while-revalidate)
+            usable = con.execute(
+                "SELECT COUNT(*) FROM quotes WHERE fetched_at > ?", (now - STALE_TTL,)
+            ).fetchone()[0]
+            ohlc_total = con.execute("SELECT COUNT(*) FROM ohlc_cache").fetchone()[0]
+            ohlc_fresh = con.execute(
+                "SELECT COUNT(*) FROM ohlc_cache WHERE fetched_at > ?", (now - OHLC_TTL,)
+            ).fetchone()[0]
+            fx_total = con.execute("SELECT COUNT(*) FROM fx_rates").fetchone()[0]
+            fx_fresh = con.execute(
+                "SELECT COUNT(*) FROM fx_rates WHERE fetched_at > ?",
+                (now - FX_FRESH_TTL,),
+            ).fetchone()[0]
+            oldest, newest = con.execute(
+                "SELECT MIN(fetched_at), MAX(fetched_at) FROM quotes"
+            ).fetchone()
+            series_total = con.execute("SELECT COUNT(*) FROM series_cache").fetchone()[0]
+            series_fresh = con.execute(
+                "SELECT COUNT(*) FROM series_cache WHERE fetched_at > ?",
+                (now - OHLC_TTL,),
+            ).fetchone()[0]
+            cal_total = con.execute("SELECT COUNT(*) FROM calendar_cache").fetchone()[0]
+    except sqlite3.OperationalError as e:
+        raise RuntimeError(f"缓存数据库忙或不可用 ({e}); 稍后重试") from e
     size = CACHE_DB.stat().st_size if CACHE_DB.exists() else 0
     return {
         "db": str(CACHE_DB),
@@ -649,12 +697,16 @@ def info() -> dict:
 def clear() -> int:
     """清空全部缓存 (行情 + K线 + 基本面 + 汇率), 返回删除条数."""
     _ensure_db()
-    with _lock, sqlite3.connect(CACHE_DB) as con:
-        n_quotes = con.execute("DELETE FROM quotes").rowcount
-        n_ohlc = con.execute("DELETE FROM ohlc_cache").rowcount
-        n_fx = con.execute("DELETE FROM fx_rates").rowcount
-        n_series = con.execute("DELETE FROM series_cache").rowcount
-        n_cal = con.execute("DELETE FROM calendar_cache").rowcount
-        con.commit()
-        n_fund = con.execute("DELETE FROM fundamentals").rowcount
-        return n_quotes + n_ohlc + n_fund + n_fx + n_series + n_cal
+    try:
+        with _lock, sqlite3.connect(CACHE_DB) as con:
+            n_quotes = con.execute("DELETE FROM quotes").rowcount
+            n_ohlc = con.execute("DELETE FROM ohlc_cache").rowcount
+            n_fx = con.execute("DELETE FROM fx_rates").rowcount
+            n_series = con.execute("DELETE FROM series_cache").rowcount
+            n_cal = con.execute("DELETE FROM calendar_cache").rowcount
+            con.commit()
+            n_fund = con.execute("DELETE FROM fundamentals").rowcount
+            con.commit()
+            return n_quotes + n_ohlc + n_fund + n_fx + n_series + n_cal
+    except sqlite3.OperationalError as e:
+        raise RuntimeError(f"缓存数据库忙或不可用 ({e}); 稍后重试") from e

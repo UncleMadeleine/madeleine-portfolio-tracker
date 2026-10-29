@@ -64,7 +64,11 @@ def cmd_kline(args) -> None:
 
     p = _resolve_or_fail(args.symbol)
     if p.yahoo != args.symbol.strip().upper():
-        print(f"ℹ {args.symbol} → {p.yahoo} ({p.market_label})")
+        # 归一化提示走 stderr: --json 的 stdout 必须纯净 (周期降级提示与
+        # index_kline/compare 同口径), 否则 json.loads(stdout) 直接失败
+        print(
+            f"ℹ {args.symbol} → {p.yahoo} ({p.market_label})", file=sys.stderr
+        )
     try:
         df = prices.get_ohlc(
             p.yahoo,

@@ -31,6 +31,7 @@ def _yahoo_pair(pair: str) -> float | None:
     hit = _pair_cache.get(pair)
     if hit and now - hit[1] < _PAIR_TTL:
         return hit[0]
+    rate = None
     try:
         start = (date.today() - timedelta(days=30)).isoformat()
         res = _obb().currency.price.historical(
@@ -42,10 +43,16 @@ def _yahoo_pair(pair: str) -> float | None:
         s = df["close"].dropna()
         if s.empty:
             return None
-        rate = float(s.iloc[-1])
+        candidate = float(s.iloc[-1])
+        # 与 _cfets_table/_yahoo_pair_history/cache.set_fx_cached 同口径挡
+        # <=0: 负汇率 (Yahoo 脏收盘) 会一路传到 build_view 的 mv = mv_local*rate,
+        # 市值变负、权重归一与盈亏全错; _pair_rate 的 `if rate:` 只挡得住 0
+        if math.isfinite(candidate) and candidate > 0:
+            rate = candidate
     except Exception:
         return None
-    _pair_cache[pair] = (rate, now)
+    if rate is not None:
+        _pair_cache[pair] = (rate, now)
     return rate
 
 
@@ -173,8 +180,15 @@ def get_fx_history(src: str, dst: str, start_date, end_date=None):
     import pandas as pd
 
     src, dst = str(src).upper(), str(dst).upper()
-    start_s = str(start_date)
-    end_s = str(end_date) if end_date else ""
+    # 起止日期统一归一成 YYYY-MM-DD: 调用方传 pd.Timestamp / datetime 时
+    # str() 会带上 " 00:00:00", 同一语义的两次调用缓存键不同 (6h 缓存永远
+    # 命中不了), 且该字符串会作为 end_date 传给 OpenBB (schema 是 date 类型)
+    start_s = (
+        pd.Timestamp(start_date).strftime("%Y-%m-%d")
+        if start_date
+        else (date.today() - timedelta(days=30)).isoformat()
+    )
+    end_s = pd.Timestamp(end_date).strftime("%Y-%m-%d") if end_date else ""
     key = (src, dst, start_s, end_s)
     now = time.time()
     hit = _fx_hist_cache.get(key)

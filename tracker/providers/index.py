@@ -29,7 +29,9 @@ import json
 import pandas as pd
 
 from ..symbols import INDEX_CATALOG, ParsedSymbol, index_key
+from ..util import with_timeout
 from .base import Provider
+from .global_stocks import _AK_HIST_TIMEOUT
 
 __all__ = ["IndexProvider"]
 
@@ -322,7 +324,11 @@ def _ak_futures_history(
     单合约历史不在目录口径内 (futures_zh_daily_sina 需指定具体合约月).
     """
     symbol = _catalog(p)["futures"]
-    raw = _ak().futures_main_sina(symbol=symbol)
+    # 底层 requests.get 无 timeout: TCP 半开时可挂到分钟级, 而 index-kline
+    # 跑在主线程 → 整条命令卡死无提示
+    raw = with_timeout(
+        lambda: _ak().futures_main_sina(symbol=symbol), _AK_HIST_TIMEOUT
+    )
     if raw is None or raw.empty:
         raise RuntimeError(f"主力连续 {symbol}: akshare 返回空数据")
     df = raw.rename(
@@ -352,9 +358,13 @@ def _ak_index_history(
     if not ak_code:
         raise ValueError(f"{p.yahoo}: akshare 源未收录该指数")
     if ak_code.startswith(("sh", "sz")):
-        raw = _ak().stock_zh_index_daily(symbol=ak_code)
+        raw = with_timeout(
+            lambda: _ak().stock_zh_index_daily(symbol=ak_code), _AK_HIST_TIMEOUT
+        )
     else:
-        raw = _ak().index_us_stock_sina(symbol=ak_code)
+        raw = with_timeout(
+            lambda: _ak().index_us_stock_sina(symbol=ak_code), _AK_HIST_TIMEOUT
+        )
     df = raw.rename(columns={raw.columns[0]: "date"})
     keep = [
         c for c in ("date", "open", "high", "low", "close", "volume") if c in df.columns

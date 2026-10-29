@@ -66,7 +66,14 @@ def _read_json(path: str | Path) -> dict:
             continue
     if text is None:
         raise CorruptDataError(f"{path} 编码无法识别 (非 UTF-8/GBK 文本)")
-    data = json.loads(text)
+    data = json.loads(
+        text,
+        # 手改/旧版/第三方工具可能写入非标准 JSON 字面量 NaN/Infinity/-Infinity
+        # (json.loads 默认接受)。读侧归一成 None, 与写侧 allow_nan=False 口径
+        # 一致: 否则下一次保存同一个文件会抛
+        # "Out of range float values are not JSON compliant" 而失败。
+        parse_constant=lambda _c: None,
+    )
     # 合法 JSON 但顶层不是对象 (如手滑把数组/字符串写进 portfolio.json):
     # 不能静默当 {} —— 调用方 (_read_json_or_recover) 会据此想恢复/报错,
     # 回 {} 会让下一次保存直接把可恢复的内容覆盖成空组合
@@ -111,20 +118,74 @@ def _read_json_or_recover(path: str | Path) -> dict:
 def _write_json(data: dict, path: str | Path) -> None:
     """原子写: 先写同目录临时文件再 os.replace, 中断不会把原文件截断成半截 JSON。"""
     p = Path(path)
+    # 父目录不存在 (全新安装未跑过 tracker init / TRACKER_HOME 指向未建目录)
+    # 时 mkstemp 直接 FileNotFoundError 裸 traceback; 与 cli/_common.
+    # atomic_write_text 同口径先建目录。
+    p.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False)
+    # 保存前把当前内容刷新成 .bak: _read_json_or_recover 在主文件损坏时直接
+    # 读 .bak 当恢复结果, 若 .bak 还是数月前导入时的快照, 恢复会把期间的
+    # 全部编辑静默丢掉。备份失败 (只读目录等) 不阻断保存本身。
+    try:
+        backup_file(p)
+    except OSError:
+        pass
     fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=f".{p.name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(payload)
             f.flush()
             os.fsync(f.fileno())
+        # mkstemp 建出的临时文件是 0600, os.replace 会原样带给正式文件 ——
+        # 容器内跨 UID 读 (CLI 与 Streamlit 不同用户) 会失败。按普通 open()
+        # 的语义落权限: 已存在则保留原 mode, 新建则 0666 & ~umask。
+        try:
+            os.chmod(tmp, p.stat().st_mode & 0o7777 if p.exists() else 0o666 & ~_umask())
+        except OSError:
+            pass
         os.replace(tmp, p)
+        # fsync 父目录: 只 fsync 文件不保证 rename 的目录项落盘, 掉电后可能
+        # 表现为"最后一次保存丢了" (旧内容还在, 不会损坏)。
+        try:
+            dfd = os.open(str(p.parent), getattr(os, "O_DIRECTORY", os.O_RDONLY))
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
+        except OSError:
+            pass
     except BaseException:
         try:
             os.unlink(tmp)
         except OSError:
             pass
         raise
+
+
+def _umask() -> int:
+    """读取当前 umask (os.umask 是读-写原子对, 取完立刻还原)。"""
+    cur = os.umask(0o022)
+    os.umask(cur)
+    return cur
+
+
+def _require_entry_list(data: dict, key: str, path: str | Path) -> list:
+    """校验 data[key] 是「对象数组」; 结构畸形抛 CorruptDataError。
+
+    合法 JSON 但结构畸形 (如 {"holdings": ["AAPL"]} / {"watchlist": [null]})
+    时, 下游 dict(r) 会抛裸 ValueError/TypeError —— 既不可读, 也绕过了
+    _read_json_or_recover 的 .bak 恢复路径。这里统一转成 CorruptDataError,
+    自动获得「可读错误 + .bak 恢复」。
+    """
+    raw = data.get(key, [])
+    if raw is None:
+        raw = []
+    if not isinstance(raw, list) or any(not isinstance(x, dict) for x in raw):
+        raise CorruptDataError(
+            f"{path} 的 {key} 结构畸形 (应为对象数组, "
+            f"实际类型: {type(raw).__name__})"
+        )
+    return raw
 
 
 def _stamp_type(row: dict) -> dict:
@@ -162,7 +223,7 @@ def load_portfolio(path: str | Path = PORTFOLIO_PATH) -> dict:
         return {"base_currency": DEFAULT_BASE_CURRENCY, "holdings": []}
     data = _read_json_or_recover(path)
     data.setdefault("base_currency", DEFAULT_BASE_CURRENCY)
-    data.setdefault("holdings", [])
+    data["holdings"] = _require_entry_list(data, "holdings", path)
     return data
 
 
@@ -172,6 +233,10 @@ def _clean_rows(rows: list) -> list[dict]:
     ±Infinity 同样过不了 json.dumps(allow_nan=False); 嵌套 dict/list 里的
     非有限值也会让整行炸掉 (如 source_quantities 台账), 故递归清洗:
     顶层非有限值整键剔除 (原语义), 嵌套非有限值置 null。
+
+    非映射行 (手写 JSON 里混进字符串/数字) 直接跳过: dict(r) 会抛裸
+    ValueError ("dictionary update sequence element #0 has length 1"),
+    写盘整条失败。
     """
 
     def _clean(v):
@@ -185,6 +250,8 @@ def _clean_rows(rows: list) -> list[dict]:
 
     out = []
     for r in rows:
+        if not isinstance(r, dict):
+            continue
         clean = {}
         for k, v in dict(r).items():
             if v is None:
@@ -228,7 +295,17 @@ def parse_lists(v) -> list[str]:
     if v is None or (isinstance(v, float) and v != v):  # NaN
         return ["默认"]
     if isinstance(v, list):
-        items = [str(x).strip() for x in v]
+        # 元素里的 None / NaN / ±Inf 经 str() 会变成 "None"/"nan"/"inf" 成为
+        # 一个列表名 (自选股悄悄归到叫 "nan" 的列表, --list 默认 永远匹配不到),
+        # 与 rules._num 同口径剔除。
+        items = []
+        for x in v:
+            if x is None or (isinstance(x, float) and not math.isfinite(x)):
+                continue
+            s = str(x).strip()
+            if s.lower() in ("nan", "inf", "-inf", "infinity", "-infinity", "none"):
+                continue
+            items.append(s)
     else:
         items = [x.strip() for x in str(v).replace("，", ",").split(",")]
     return [x for x in items if x] or ["默认"]
@@ -334,12 +411,20 @@ def load_watchlist(path: str | Path = WATCHLIST_PATH) -> dict:
     raw = _read_json_or_recover(p)
     if "watchlist" in raw:
         entries = []
-        for e in raw["watchlist"]:
+        for e in _require_entry_list(raw, "watchlist", path):
             e = dict(e)
             e["lists"] = parse_lists(e.get("lists"))
             entries.append(normalize_watch_entry(e))
         return {"watchlist": dedupe_watch_entries(entries)}
     if "watchlists" in raw:
+        groups = raw["watchlists"]
+        if not isinstance(groups, dict) or any(
+            not isinstance(v, list) or any(not isinstance(e, dict) for e in v)
+            for v in groups.values()
+        ):
+            raise CorruptDataError(
+                f"{path} 的 watchlists 结构畸形 (应为 对象→对象数组)"
+            )
         merged: dict[str, dict] = {}
         for name, lst in raw["watchlists"].items():
             for e in lst:
@@ -393,7 +478,11 @@ def save_watchlist(data: dict, path: str | Path = WATCHLIST_PATH) -> None:
         # ValueError ("Out of range float values are not JSON compliant"),
         # 让保存整条失败。非有限阈值/覆盖值应直接剔除, 而不是炸写盘。
         _clean_rows(
-            [normalize_watch_entry(dict(raw)) for raw in data.get("watchlist", [])]
+            [
+                normalize_watch_entry(dict(raw))
+                for raw in data.get("watchlist", [])
+                if isinstance(raw, dict)
+            ]
         )
     )
     _write_json(merged, p)

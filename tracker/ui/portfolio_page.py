@@ -286,12 +286,25 @@ def _load_quotes(
     if not stale:
         return hits, errors, []
     if not hits:
-        with st.spinner("拉取行情 (首次加载需初始化数据引擎)..."):
-            out = cached_quotes(
-                fetchable, prefer_akshare, use_ibkr, use_longport, crypto_source
-            )
+        try:
+            with st.spinner("拉取行情 (首次加载需初始化数据引擎)..."):
+                out = cached_quotes(
+                    fetchable, prefer_akshare, use_ibkr, use_longport, crypto_source
+                )
+        except Exception as e:  # noqa: BLE001 - 取数链路异常不能穿透成整页 traceback
+            # 网络超时/HTTP 失败多在 providers 内部被吞掉返回 errors (走
+            # render_portfolio_page 的优雅降级分支), 但取数链路自身抛异常
+            # (openbb 冷启动失败 / sqlite locked / provider 未预期异常) 会
+            # 直接穿到 Streamlit 显示 traceback。这里接住: 落空结果 +
+            # 可读错误, 保持 dirty + age=inf 让看门狗按最短间隔自动补刷。
+            plan["q_age"] = float("inf")
+            plan["dirty"] = True
+            return {}, {**errors, "行情": f"行情获取异常: {e}"}, []
         plan["q_age"] = 0.0  # 刚同步取完数, 不必立刻保温
-        return out
+        # 本地 errors (无法识别的代码) 必须并回: 这些代码已被排除出
+        # fetchable, get_quotes 的 errors 不可能包含它们, 直接 return out
+        # 会让用户看不到「代码无法识别」
+        return out[0], {**errors, **out[1]}, out[2]
     # 陈旧数据秒渲染 + 挂后台刷新
     plan["dirty"] = True
     return hits, errors, []
@@ -323,8 +336,13 @@ def _load_fx(
     if not stale:
         return ({**hits, base: 1.0}), missing
     if not hits:
-        with st.spinner("拉取汇率..."):
-            out = cached_fx(base, currencies, use_ibkr)
+        try:
+            with st.spinner("拉取汇率..."):
+                out = cached_fx(base, currencies, use_ibkr)
+        except Exception as e:  # noqa: BLE001 - 同 _load_quotes: 异常不穿透成 traceback
+            plan["f_age"] = float("inf")
+            plan["dirty"] = True
+            return {base: 1.0}, [f"汇率获取异常: {e}"]
         plan["f_age"] = 0.0  # 刚同步取完数, 不必立刻保温
         return out
     # 陈旧汇率秒取 + 挂后台刷新
@@ -653,10 +671,12 @@ def render_portfolio_page() -> None:
                     storage.save_portfolio({"base_currency": base, "holdings": clean})
                     cached_quotes.clear()
                     cached_fx.clear()
-                    if dups:
-                        st.toast("持仓已保存 (重复行已移除)")
-                    else:
-                        st.toast("持仓已保存")
+                    # 必须 rerun: 本次渲染的 holdings 仍是 data_editor 原始行
+                    # (含重复行), 而落盘的 clean 已去重剔除 —— 不 rerun 的话
+                    # 同一次渲染里的 KPI/明细表按未去重行计算, 重复代码市值
+                    # 当场双计, 与保存提示自相矛盾 (自选保存分支同款处理)
+                    st.toast("持仓已保存" + (" (重复行已移除)" if dups else ""))
+                    st.rerun()
             if c2.button(
                 "重载",
                 icon=":material/refresh:",

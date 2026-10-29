@@ -24,11 +24,12 @@ def portfolio_add(args) -> None:
     data = load_portfolio(args.portfolio)
     holdings = data.setdefault("holdings", [])
     changed: list[str] = []
+    skipped: list[str] = []
     for s in args.symbols:
         try:
             p = parse(s)
         except ValueError as e:
-            changed.append(f"跳过 {s}: {e}")
+            skipped.append(f"跳过 {s}: {e}")
             continue
         found = next((h for h in holdings if _sym(h) == p.yahoo), None)
         if found is None:
@@ -42,11 +43,24 @@ def portfolio_add(args) -> None:
             if args.avg_cost is not None:
                 found["avg_cost"] = args.avg_cost
             changed.append(f"更新 {p.yahoo} 数量 {args.quantity}")
+    if not changed:
+        # 全部代码都无法识别: 不写盘 (否则会在 --portfolio 指向的新路径上
+        # 凭空建一个空持仓文件), 非 0 退出让调用方/Agent 知道有失败
+        if args.json:
+            _print_json({"changed": [], "skipped": skipped})
+        else:
+            for s in skipped:
+                print(f"⚠ {s}")
+        _finish_with_error("没有可添加的有效代码")
     save_portfolio(data, args.portfolio)
     if args.json:
-        _print_json({"changed": changed, "holdings": data.get("holdings", [])})
+        _print_json(
+            {"changed": changed, "skipped": skipped, "holdings": data.get("holdings", [])}
+        )
         return
     print("✅ " + "; ".join(changed))
+    for s in skipped:
+        print(f"⚠ {s}")
 
 
 def portfolio_remove(args) -> None:

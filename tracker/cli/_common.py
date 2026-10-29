@@ -47,7 +47,9 @@ def atomic_write_text(path: str | Path, text: str) -> None:
     """原子写文本文件 (tmp + os.replace), 目录不存在则创建.
 
     与 storage._write_json 同一策略: 写入中途中断不会留下半截文件,
-    目标目录不存在时自动建目录 (否则直接抛 FileNotFoundError traceback).
+    目标目录不存在时自动建目录 (否则直接抛 FileNotFoundError traceback)。
+    权限按普通 open() 语义 (mkstemp 是 0600, 直接 replace 会让 export/report
+    产出的文件其它用户/容器内其它 UID 读不到)。
     """
     import tempfile
 
@@ -59,6 +61,15 @@ def atomic_write_text(path: str | Path, text: str) -> None:
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
+        try:
+            os.chmod(
+                tmp,
+                p.stat().st_mode & 0o7777
+                if p.exists()
+                else 0o666 & ~_current_umask(),
+            )
+        except OSError:
+            pass
         os.replace(tmp, p)
     except BaseException:
         try:
@@ -66,6 +77,13 @@ def atomic_write_text(path: str | Path, text: str) -> None:
         except OSError:
             pass
         raise
+
+
+def _current_umask() -> int:
+    """读取当前 umask (os.umask 是读-写原子对, 取完立刻还原)。"""
+    cur = os.umask(0o022)
+    os.umask(cur)
+    return cur
 
 
 def _sanitize(d: dict) -> dict:

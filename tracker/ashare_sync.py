@@ -95,6 +95,24 @@ _COST_KEYS = (
 )
 
 
+def _strip_unit(col: str) -> str:
+    """剥掉列名里的单位/括号后缀: "成本价(元)"→"成本价", "持仓数量/股"→"持仓数量".
+
+    券商导出普遍带单位 (成本价(元) / 持仓数量(股) / 参考成本价（元）), 原来
+    只做精确+去空格小写匹配, 这类列名全部落空 —— 数量列落空整个文件被拒,
+    成本列落空则盈亏数据静默丢失。
+    """
+    s = str(col).strip()
+    for opener, closer in (("(", ")"), ("（", "）")):
+        i = s.find(opener)
+        if i > 0 and closer in s[i:]:
+            s = s[:i]
+    # 斜杠单位后缀: 成本价/元, 持仓数量/股
+    if "/" in s:
+        s = s.split("/", 1)[0]
+    return s.strip()
+
+
 def _pick_col(df: pd.DataFrame, keys: tuple[str, ...]) -> str | None:
     cols = {str(c).strip(): c for c in df.columns}
     for k in keys:
@@ -105,23 +123,58 @@ def _pick_col(df: pd.DataFrame, keys: tuple[str, ...]) -> str | None:
     for k in keys:
         if k.replace(" ", "").lower() in norm:
             return norm[k.replace(" ", "").lower()]
+    # 再容错: 剥掉列名的单位/括号后缀后精确匹配 (成本价(元) → 成本价)
+    stripped = {_strip_unit(k): c for k, c in cols.items()}
+    for k in keys:
+        hit = stripped.get(_strip_unit(k))
+        if hit is not None:
+            return hit
+    # 最后: 剥单位后的子串包含匹配 (候选键是列名的子串, 如「成本价」⊂「参考成本价元」
+    # 这类无法靠剥后缀命名的形态); 短键 (<2 字符) 不子串匹配, 避免误命中
+    norm_stripped = {_strip_unit(k).replace(" ", "").lower(): c for k, c in cols.items()}
+    for k in keys:
+        kk = _strip_unit(k).replace(" ", "").lower()
+        if len(kk) < 2:
+            continue
+        for col_norm, orig in norm_stripped.items():
+            if kk in col_norm:
+                return orig
     return None
 
 
 def _to_float(v) -> float | None:
-    """数值归一; 容忍千分位逗号/空格 ("1,000"/"1 000" → 1000, 券商导出常见)."""
+    """数值归一; 容忍千分位逗号/空格/货币符号/百分号/括号负数.
+
+    券商导出常见 "¥1,680.50" / "12.34%" / "(1,000)" (会计负数); 原来只处理
+    千分位, 这类值全部返回 None —— 成本列静默丢失 (数量是对的, 用户不会
+    注意到成本没了), 盈亏数据整块消失。
+    """
     if v is None:
         return None
-    s = str(v).strip().replace(",", "").replace("\u00a0", "").replace(" ", "")
+    s = (
+        str(v)
+        .strip()
+        .replace(",", "")
+        .replace("\u00a0", "")
+        .replace(" ", "")
+        # 全角逗号/空格 (中文导出)
+        .replace("，", "")
+        .replace("　", "")
+    )
+    # 货币符号与百分号: 只剥前后缀, 不动中间
+    s = s.strip("¥￥$€£%")
     if not s:
         return None
+    neg = False
+    if s.startswith("(") and s.endswith(")"):  # 会计格式负数
+        neg, s = True, s[1:-1]
     try:
         f = float(s)
     except (TypeError, ValueError):
         return None
     if pd.isna(f):
         return None
-    return float(f)
+    return -f if neg else float(f)
 
 
 def parse_positions_file(path: str | Path) -> tuple[list[dict], list[str]]:
@@ -184,7 +237,21 @@ def parse_positions_file(path: str | Path) -> tuple[list[dict], list[str]]:
             continue
         if qty == 0:
             continue
-        avg_cost = _to_float(r[cost_col]) if cost_col else None
+        avg_cost = None
+        if cost_col:
+            avg_cost = _to_float(r[cost_col])
+            if avg_cost is None and str(r[cost_col]).strip() not in (
+                "",
+                "nan",
+                "None",
+                "NaN",
+            ):
+                # 成本列有值但解析不了: 显式记入 skipped (数量列失败本来就记,
+                # 成本列原来是静默丢 —— 盈亏数据少了一半用户毫无察觉)
+                skipped.append(
+                    f"{raw_code}: 成本列 {cost_col!r} 值 {r[cost_col]!r} "
+                    f"无法解析, 按缺失处理"
+                )
         rows.append(
             {
                 "symbol": yahoo,
@@ -204,6 +271,10 @@ def run_sync(args) -> None:
         _finish_with_error(str(e))
     except (ValueError, RuntimeError) as e:
         _finish_with_error(f"{args.file}: 解析失败 ({e})")
+    except OSError as e:
+        # 目录/无权限 (Tab 补全极常见): IsADirectoryError/PermissionError 都是
+        # OSError, 与 cli/importer.py 同口径给可读错误而不是裸 traceback
+        _finish_with_error(f"{args.file}: 读取失败 ({e.strerror or e})")
 
     # 与统一入口 tracker import file 一致: 缺省追加合并, --overwrite 才覆盖全部。
     # (旧版缺省为覆盖, 会让按「导入默认追加」文档走的用户静默丢掉其它持仓)

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime
 
-from ._common import _print_json
+from ._common import _print_json, _finish_with_error
 
 
 def cmd_cache(args) -> None:
@@ -12,13 +13,19 @@ def cmd_cache(args) -> None:
     from .. import cache as cache_mod
 
     if args.action == "clear":
-        n = cache_mod.clear()
+        try:
+            n = cache_mod.clear()
+        except (RuntimeError, sqlite3.Error) as e:
+            _finish_with_error(f"清空缓存失败: {e}")
         if args.json:
             _print_json({"cleared": n})
         else:
             print(f"✅ 已清空行情缓存 ({n} 条)")
         return
-    info = cache_mod.info()
+    try:
+        info = cache_mod.info()
+    except (RuntimeError, sqlite3.Error) as e:
+        _finish_with_error(f"读取缓存统计失败: {e}")
     if args.json:
         _print_json(info)
         return

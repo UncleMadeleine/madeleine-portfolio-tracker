@@ -79,9 +79,25 @@ class TestWatchlistCli:
     def test_add_invalid_symbol_skipped(self, tmp_path, capsys):
         f = tmp_path / "w.json"
         f.write_text(json.dumps({"watchlist": []}), encoding="utf-8")
-        out = _run(capsys, "watchlist", "add", "BAD.ZZ", "--file", str(f))
-        assert "跳过" in out
+        # 全部代码都无法识别: 不写盘 (不在新路径上凭空建空文件), 非 0 退出
+        with pytest.raises(SystemExit) as exc:
+            _run(capsys, "watchlist", "add", "BAD.ZZ", "--file", str(f))
+        assert exc.value.code != 0
+        cap = capsys.readouterr()
+        assert "跳过 BAD.ZZ" in cap.out
+        assert "没有可添加的有效代码" in cap.err
         assert _load(f)["watchlist"] == []
+
+    def test_add_partial_failure_writes_valid_and_reports(self, tmp_path, capsys):
+        f = tmp_path / "w.json"
+        f.write_text(json.dumps({"watchlist": []}), encoding="utf-8")
+        out = _run(
+            capsys, "watchlist", "add", "AAPL", "BAD.ZZ", "--file", str(f)
+        )
+        # 有效代码照常写入, 无效代码以 ⚠ 明示 (不混在 ✅ 里)
+        assert "新增 AAPL" in out
+        assert "⚠ 跳过 BAD.ZZ" in out
+        assert _load(f)["watchlist"][0]["symbol"] == "AAPL"
 
     def test_remove_normalized_hk(self, tmp_path, capsys):
         f = tmp_path / "w.json"

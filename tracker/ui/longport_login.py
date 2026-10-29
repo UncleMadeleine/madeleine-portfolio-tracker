@@ -59,6 +59,10 @@ def _start_login() -> None:
     # 已有存活的授权子进程时不重复启动: 子进程独占 callback_port,
     # 第二个进程会因端口占用写 error, 与旧进程的成功交错造成状态混乱
     if _popens() is not None:
+        # 子进程存活但状态文件过期 (卡死/超过 10 分钟没写状态) 时, 按钮早退
+        # 会让用户无限点击无任何反馈。给可见提示, 并允许「取消」杀掉旧进程
+        # 重来 (见 render_login_section 的取消分支)。
+        st.toast("授权流程仍在进行中 (浏览器应已打开授权页); 卡住可点「取消」后重试")
         return
     _write_state({"status": "starting"})
     proc = subprocess.Popen(

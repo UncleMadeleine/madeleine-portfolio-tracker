@@ -310,7 +310,14 @@ def cmd_compare(args) -> None:
         )
     )
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(charting.fig_to_html(fig), encoding="utf-8")
+    if out.is_dir():
+        _finish_with_error(f"输出路径是一个目录, 请指定文件: {out}")
+    try:
+        out.write_text(charting.fig_to_html(fig), encoding="utf-8")
+    except OSError as e:
+        # 目录/坏父路径/只读: 与 report/export 同口径给可读错误 + 退出码,
+        # 而不是 IsADirectoryError 裸 traceback
+        _finish_with_error(f"对比图写入失败: {out} ({e})")
     # 终端摘要: 区间涨跌 (+ 市值模式的最新市值与口径)
     mcap_mod = None
     if metric == "mcap":

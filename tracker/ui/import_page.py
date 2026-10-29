@@ -16,6 +16,7 @@ import pandas as pd
 import streamlit as st
 
 from tracker import importer, longport as longport_mod, storage
+from tracker.storage import CorruptDataError
 
 _CHAIN_LABELS = {
     "eth": "Ethereum",
@@ -305,11 +306,19 @@ def _preview_and_confirm(state_key: str, mode: str, on_saved, note: str = "") ->
         icon=":material/download_done:",
         key=f"{state_key}_confirm",
     ):
-        data = storage.load_portfolio(storage.PORTFOLIO_PATH)
-        merged, stats = importer.merge_holdings(data.get("holdings", []), rows, mode)
-        storage.backup_file(storage.PORTFOLIO_PATH)
-        data["holdings"] = merged
-        storage.save_portfolio(data)
+        try:
+            data = storage.load_portfolio(storage.PORTFOLIO_PATH)
+            merged, stats = importer.merge_holdings(
+                data.get("holdings", []), rows, mode
+            )
+            storage.backup_file(storage.PORTFOLIO_PATH)
+            data["holdings"] = merged
+            storage.save_portfolio(data)
+        except (CorruptDataError, OSError) as e:
+            # portfolio.json 损坏且 .bak 也损坏 / 只读: 可读错误而不是整页
+            # traceback (用户此时需要的是知道去修数据文件)
+            st.error(f"导入失败: {e}")
+            return
         st.session_state.pop(state_key, None)
         if callable(on_saved):
             on_saved()

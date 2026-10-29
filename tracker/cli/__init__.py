@@ -25,6 +25,8 @@
 from __future__ import annotations
 
 import argparse
+import os
+import sys
 
 # 暴露 prices 供测试 monkeypatch (cli.prices.get_quotes)
 from .. import prices  # noqa: F401
@@ -65,6 +67,23 @@ def _add_crypto_source_arg(p: argparse.ArgumentParser) -> None:
         default="auto",
         help="加密货币数据源优先 (默认 auto: Binance→Gate.io→Hyperliquid→yfinance)",
     )
+
+
+def positive_int(value: str) -> int:
+    """正整数校验: --months/--rows/--limit 传 0/负值时给 argparse 类型错误.
+
+    不校验的后果: --rows -1 会被 df.tail(-1) 解释成「除最后一行外全部」
+    静默丢最新一根K线; --months 0/-5 会把数据源噪音 (Yahoo "start date
+    cannot be after end date") 当错误抛给用户; --limit 0 把参数错误伪装成
+    「无匹配结果」。
+    """
+    try:
+        n = int(value)
+    except (TypeError, ValueError) as e:
+        raise argparse.ArgumentTypeError(f"需为整数: {value!r}") from e
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"需为正整数 (>=1), 得到: {n}")
+    return n
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -352,8 +371,10 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_h.add_argument("symbol")
-    p_h.add_argument("--months", type=int, default=12)
-    p_h.add_argument("--rows", type=int, default=10, help="表格模式打印最近 N 行")
+    p_h.add_argument("--months", type=positive_int, default=12)
+    p_h.add_argument(
+        "--rows", type=positive_int, default=10, help="表格模式打印最近 N 行"
+    )
     p_h.add_argument("--akshare", action="store_true")
     p_h.add_argument(
         "--ibkr", action="store_true", help="优先使用 IBKR 行情 (需 IB Gateway)"
@@ -382,7 +403,9 @@ def build_parser() -> argparse.ArgumentParser:
         "symbol",
         help="Yahoo 代码或名称片段 (非法代码自动搜索回退), 如 AAPL 0700.HK 腾讯",
     )
-    p_k.add_argument("--months", type=int, default=12, help="拉取近 N 个月日线")
+    p_k.add_argument(
+        "--months", type=positive_int, default=12, help="拉取近 N 个月日线"
+    )
     p_k.add_argument(
         "--period",
         choices=["daily", "weekly", "monthly"],
@@ -475,7 +498,9 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_s.add_argument("query", help="代码片段 / 中文名 / 英文名, 如 700 腾讯 maotai")
-    p_s.add_argument("--limit", type=int, default=10, help="最多返回条数 (默认 10)")
+    p_s.add_argument(
+        "--limit", type=positive_int, default=10, help="最多返回条数 (默认 10)"
+    )
     p_s.add_argument(
         "--exact",
         action="store_true",
@@ -508,7 +533,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_cmp.add_argument(
         "symbols", nargs="+", help="2+ 个代码/名称片段 (宽松输入, 自动搜索回退)"
     )
-    p_cmp.add_argument("--months", type=int, default=12, help="对比近 N 个月 (默认 12)")
+    p_cmp.add_argument(
+        "--months", type=positive_int, default=12, help="对比近 N 个月 (默认 12)"
+    )
     p_cmp.add_argument(
         "--period",
         choices=["daily", "weekly", "monthly"],
@@ -588,7 +615,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="指数代码 IX.<KEY>, 如 IX.DXY / IX.VIX / IX.URANIUM / IX.CSI300",
     )
     p_ik.add_argument("--list", action="store_true", help="列出已收录指数目录")
-    p_ik.add_argument("--months", type=int, default=12, help="拉取近 N 个月日线")
+    p_ik.add_argument(
+        "--months", type=positive_int, default=12, help="拉取近 N 个月日线"
+    )
     p_ik.add_argument(
         "--period",
         choices=["daily", "weekly", "monthly"],
@@ -826,13 +855,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--tokenlist", default=None, help="外部 tokenlist JSON 路径 (覆盖内置列表)"
     )
     p_wallet.add_argument("--base-currency", default="USD", help="计价货币 (默认 USD)")
-    p_wallet.add_argument(
+    # --add 与 --overwrite 必须互斥: 不同现时 wallet.py 里 --overwrite 静默
+    # 胜出, 用户意图「追加」实际执行「覆盖全部持仓」, 且摘要无任何迹象
+    p_wallet_mode = p_wallet.add_mutually_exclusive_group()
+    p_wallet_mode.add_argument(
         "--add", action="store_true", help="将余额追加写入 portfolio.json"
     )
-    p_wallet.add_argument(
+    p_wallet_mode.add_argument(
         "--overwrite",
         action="store_true",
-        help="覆盖全部持仓 (与 --add 互斥语义, 指定即写入)",
+        help="覆盖全部持仓 (与 --add 互斥, 指定即写入)",
     )
     p_wallet.add_argument("--json", action="store_true", help="输出 JSON")
     p_wallet.set_defaults(func=cmd_import_wallet)
@@ -887,3 +919,14 @@ def main(argv=None) -> None:
         args.func(args)
     except CorruptDataError as e:
         _finish_with_error(str(e))
+    except BrokenPipeError:
+        # 管道消费方提前关闭 (`tracker search 腾讯 | jq ...` 是官方推荐用法):
+        # Python 默认在退出时 flush stdout 再抛一次 BrokenPipeError 并打
+        # "Exception ignored" 噪音 + 退出码 120。把 stdout 指向 devnull 后
+        # 按 SIGPIPE 惯例 (128+13) 退出。
+        try:
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(devnull, sys.stdout.fileno())
+        except OSError:
+            pass
+        raise SystemExit(141)

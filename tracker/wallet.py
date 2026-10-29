@@ -832,7 +832,12 @@ def _import_solana(
              "params": [address]},
             timeout,
         )
-        sol_lamports = int((res or {}).get("value") or 0)
+        # 节点可能返回畸形 result ({"result": "0x0"} / 数字而非对象):
+        # 直接 .get 会抛 AttributeError, 而调用处只捕 RuntimeError → 用户看到
+        # 裸 traceback (与 _tron_account 的 isinstance 守卫同口径)
+        if not isinstance(res, dict):
+            raise RuntimeError(f"RPC 返回结构异常 ({type(res).__name__})")
+        sol_lamports = int(res.get("value") or 0)
     except RuntimeError as e:
         errors.append(f"SOL 余额查询失败: {e}")
 
@@ -858,7 +863,13 @@ def _import_solana(
         except RuntimeError as e:
             errors.append(f"SPL 代币账户查询失败 ({program_id[:8]}…): {e}")
             continue
-        for item in (res or {}).get("value") or []:
+        if not isinstance(res, dict):
+            errors.append(
+                f"SPL 代币账户查询失败 ({program_id[:8]}…): "
+                f"RPC 返回结构异常 ({type(res).__name__})"
+            )
+            continue
+        for item in res.get("value") or []:
             try:
                 info = item["account"]["data"]["parsed"]["info"]
                 ta = info["tokenAmount"]

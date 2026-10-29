@@ -237,6 +237,17 @@ def render_crypto_compare_chart(data: dict, *, height: int = 560) -> None:
     _KLINE_CHART(key="crypto_compare_chart", data=data, height=height)
 
 
+def _naive_dates(s: pd.Series) -> pd.Series:
+    """日期列统一剥时区 (naive 原样返回): 跨 frame 直接 min() 比较时
+    tz-naive 与 tz-aware 混用会抛 TypeError 把整页打死 (磁盘 OHLC 缓存往返回填
+    的是字符串→naive, 个别数据源可能给 aware)。"""
+    d = pd.to_datetime(s)
+    try:
+        return d.dt.tz_localize(None)
+    except TypeError:
+        return d
+
+
 def _build_ratio_payload(
     frames: dict[str, pd.DataFrame],
     ratio_cfg: tuple[str, str, bool],
@@ -257,10 +268,12 @@ def _build_ratio_payload(
         cur_num = parse(ratio_num).currency
         cur_den = parse(ratio_den).currency
         fx_pair = f"{cur_den}{cur_num}"
-        start_ts = min(
-            frames[ratio_num]["date"].min(),
-            frames[ratio_den]["date"].min(),
-        ) - pd.Timedelta(days=10)
+        # 两个 frame 的 date 可能一个 tz-naive 一个 tz-aware (磁盘 OHLC 缓存
+        # 往返回填的是字符串→naive, 个别源可能给 aware): 直接 min() 会抛
+        # TypeError 把整页打死。先统一剥掉时区再比。
+        d_num = _naive_dates(frames[ratio_num]["date"])
+        d_den = _naive_dates(frames[ratio_den]["date"])
+        start_ts = min(d_num.min(), d_den.min()) - pd.Timedelta(days=10)
         fx_df = fx.get_fx_history(
             cur_den,
             cur_num,
@@ -741,7 +754,7 @@ def render_kline_controls(
     c1, c2, c3, c4 = st.columns([3, 1, 1, 1], vertical_alignment="bottom")
     ksym = c1.text_input(
         "代码",
-        value=qs[0] if qs else "AAPL",
+        value="",
         key="kline_symbol",
         placeholder="如: AAPL · 600519.SS · 0700.HK · SAP.DE · BP.L · BTC-USD",
     )
@@ -771,8 +784,10 @@ def render_kline_controls(
         format_func=lambda v: charting.PERIOD_LABELS[v],
         key="kline_period",
     )
-    # 范围模式提交判定: 代码变化 (回车/快捷 pill/搜索选择) 或点「查询」;
-    # 首次渲染只记录输入框当前值, 不视为提交 (页面启动不预加载任何 K线)。
+    # 提交门控 (两种模式共用): 代码变化 (回车/快捷 pill/搜索选择) 或点「查询」
+    # 才算提交; 首次渲染只记录输入框当前值, 不视为提交 (页面启动不预加载任何
+    # K线 —— 输入框刻意不给默认值, 否则默认模式 (滑动) 一打开就发起一次上市
+    # 以来全量历史请求, 而 Yahoo 限流是 IP 级, 大组合下会连累其余查询)。
     # 「最近查看」rerun 标志在此统一消费: 范围模式借它保持已查询状态
     # (图表以 kline_current_df 重绘, 不再取数); 滑动模式本来就渲染。
     if "kline_last_symbol" not in st.session_state:
@@ -872,6 +887,14 @@ def render_kline_controls(
     if yahoo is None:
         return
 
+    # 已有取数结果 (改周期/均线/指标等图表参数) 时两种模式都直接重渲染,
+    # 不再要求提交; 无结果且未提交 → 提示, 不取数
+    submitted = submitted or st.session_state.get("kline_queried") is True
+    if not submitted:
+        st.info("输入代码后回车或点「查询」获取数据 —— 页面启动不会预加载任何 K线。")
+        return
+    st.session_state["kline_last_symbol"] = ksym
+
     if kmode == "滑动":
         _render_slide_mode(
             yahoo,
@@ -889,11 +912,6 @@ def render_kline_controls(
     # ---- 范围模式 (旧流程兜底) ----
     # 已查询标志取数成功后置位 (两种模式共用): 范围模式曾只在滑动模式赋值,
     # 纯范围流程改均线/周期/成交量后整张图退回「点查询」提示页, 只能重按
-    submitted = submitted or st.session_state.get("kline_queried") is True
-    if not submitted:
-        st.info("输入代码后回车或点「查询」获取数据 —— 页面启动不会预加载任何 K线。")
-        return
-    st.session_state["kline_last_symbol"] = ksym
     src = (prefer_akshare, use_ibkr, use_longport, crypto_source)
     # 范围模式: 代码/范围/数据源设置变化才重新取数; 其余参数变化只重绘。
     data_changed = (

@@ -19,8 +19,14 @@ from .base import Provider, Quote, SymbolEntry
 from .em_suggest import parse_symbol_safe
 
 _AK_TIMEOUT = 6.0
+# akshare 单代码日K (stock_zh_a_hist / stock_hk_hist): 接口不传 timeout,
+# 给硬超时防挂死 (单代码请求通常 1-3s, 30s 覆盖慢网/重试)
+_AK_HIST_TIMEOUT = 30.0
+# akshare 全市场 spot 失败占位 TTL: 真实耗时 40-100s (东财分页 + 页间 sleep),
+# 6s 超时必然失败; 不占位的话每次调用都重新起一条全市场拉取线程
+_AK_FAIL_TTL = 15.0
 # 按市场独立缓存: 某市场接口失败不影响其它市场, 且失败不占用 TTL (可重试)
-_ak_spot_cache: dict[Market, tuple[float, pd.DataFrame]] = {}
+_ak_spot_cache: dict[Market, tuple[float, pd.DataFrame, bool]] = {}
 _ak_spot_lock = threading.Lock()
 _ak_spot_inflight: dict[Market, threading.Lock] = {}  # per-market 并发首拉去重
 _AK_SPOT_TTL = 60
@@ -232,7 +238,15 @@ def _yahoo_batch(parsed: list[ParsedSymbol]) -> dict[str, Quote]:
     # 与 _yahoo_quote 同理: _obb() 冷启动 (首次 import openbb + 触达 provider
     # 注册表) 必须在计时区外完成, 否则第一块请求还没发出预算已耗尽。取一次
     # 引用, 所有块共用 (openbb 是进程内单例)。
-    quote_fn = _obb().equity.price.quote
+    try:
+        quote_fn = _obb().equity.price.quote
+    except Exception:
+        # openbb 未装 / 版本不兼容 / 在非主线程初始化失败 (signal 限制):
+        # 不能向上抛 —— orchestration.get_quotes 的域间循环没有保护, 一抛会
+        # 让后面的 cn/crypto 域一起不执行 (违反「任一域失败不影响其它域」),
+        # 且 CLI 批量查询/组合页直接崩。返回空表, 由逐代码源链兜底
+        # (_fetch_domain 内每个源都单独 try, 失败进负缓存)。
+        return out
     for start in range(0, len(parsed), _YAHOO_CHUNK):
         if start:
             time.sleep(_CHUNK_PAUSE * (2 if empty_streak else 1))
@@ -269,11 +283,16 @@ def _yahoo_quote_currency(yahoo: str) -> str:
     """LSE 等代码的报价币种 (yfinance fast_info); 失败/缺失返回 ""。
 
     仅用于历史K线的便士折算判定, 任何异常都安全返回空串 (调用方按便士兜底)。
+    fast_info 内部走网络且 requests 无 timeout, TCP 半开时可以挂到分钟级,
+    而它是在 _yahoo_history 已经取到数据之后才调 —— 故套 with_timeout 硬超时。
     """
     try:
         import yfinance as yf
 
-        return str(yf.Ticker(yahoo).fast_info.get("currency") or "").strip()
+        ccy = with_timeout(
+            lambda: yf.Ticker(yahoo).fast_info.get("currency"), _QUOTE_TIMEOUT
+        )
+        return str(ccy or "").strip()
     except Exception:
         return ""
 
@@ -314,33 +333,42 @@ def _yahoo_history(
 
 
 def _ak_spot(market: Market) -> pd.DataFrame:
-    """全域 spot 快照 (按市场缓存 60s); 并发首拉以 per-key 锁去重, 只发一次请求."""
+    """全域 spot 快照 (按市场缓存 60s); 并发首拉以 per-key 锁去重, 只发一次请求.
+
+    失败 (超时/异常/空表) 也写一个短 TTL 失败占位: 全市场 spot 单次要
+    40-100s (东财分页 + 页间 sleep), 超时后若不占位, 下一次调用会重新起
+    一条拉取线程 —— _fetch_domain 8 并发时每轮 8 条废弃线程持续打东财,
+    50 只 A 股就是 50 轮。占位让 TTL 内后续调用直接失败降级。
+    """
     global _ak_spot_cache
     now = pd.Timestamp.now().timestamp()
     with _ak_spot_lock:
         hit = _ak_spot_cache.get(market)
-        if hit and now - hit[0] < _AK_SPOT_TTL:
-            return hit[1]
+        if hit:
+            ts, df, failed = hit
+            ttl = _AK_FAIL_TTL if failed else _AK_SPOT_TTL
+            if now - ts < ttl:
+                return df
         gate = _ak_spot_inflight.setdefault(market, threading.Lock())
     acquired = gate.acquire(blocking=False)
     try:
         if acquired:  # 本线程负责拉取; 其它线程等拉取方写回缓存后读结果
+            df = pd.DataFrame()
             ak = _ak()
             fetcher = {
+                # 北交所与 A股共用一个东财端点: 缓存键复用 CN, 否则同一份
+                # 全市场数据会被抓两份
                 Market.CN: ak.stock_zh_a_spot_em,
                 Market.BJ: ak.stock_zh_a_spot_em,
                 Market.HK: ak.stock_hk_spot_em,
             }.get(market)
-            if fetcher is None:
-                return pd.DataFrame()
-            try:
-                df = with_timeout(fetcher, _AK_TIMEOUT)
-            except Exception:
-                return pd.DataFrame()
-            if df.empty:
-                return df
+            if fetcher is not None:
+                try:
+                    df = with_timeout(fetcher, _AK_TIMEOUT)
+                except Exception:
+                    df = pd.DataFrame()
             with _ak_spot_lock:
-                _ak_spot_cache[market] = (now, df)
+                _ak_spot_cache[market] = (now, df, bool(df.empty))
             return df
         gate.acquire()
         gate.release()  # 拉取方已 pop 此 gate: 立即释放, 不留持有者
@@ -353,8 +381,11 @@ def _ak_spot(market: Market) -> pd.DataFrame:
     # 未获 gate: 拉取方已完成, 重读缓存; 缓存仍空 (拉取失败) 则返回空表
     with _ak_spot_lock:
         hit = _ak_spot_cache.get(market)
-    if hit and now - hit[0] < _AK_SPOT_TTL:
-        return hit[1]
+    if hit:
+        ts, df, failed = hit
+        ttl = _AK_FAIL_TTL if failed else _AK_SPOT_TTL
+        if now - ts < ttl:
+            return df
     return pd.DataFrame()
 
 
@@ -419,7 +450,9 @@ def _akshare_history(
         }
         if end:
             kwargs["end_date"] = end
-        df = ak.stock_zh_a_hist(**kwargs)
+        # 硬超时: akshare 的 requests.get 不传 timeout, TCP 半开时可挂到分钟级,
+        # 而 get_history 跑在主线程 (CLI history/kline/compare) —— 整条命令卡死。
+        df = with_timeout(ak.stock_zh_a_hist, _AK_HIST_TIMEOUT, **kwargs)
     else:
         ak_code = p.ak_code or ""
         if not ak_code or not ak_code.isdigit():
@@ -432,9 +465,13 @@ def _akshare_history(
         }
         if end:
             kwargs["end_date"] = end
-        df = ak.stock_hk_hist(**kwargs)
-        if df.empty:
-            raise RuntimeError(f"{p.yahoo}: akshare HK history 无数据")
+        df = with_timeout(ak.stock_hk_hist, _AK_HIST_TIMEOUT, **kwargs)
+    # 两个分支统一守卫: akshare 无数据时返回完全无列的空表, 直接走到下面
+    # rename/to_datetime 会抛裸 KeyError 'date' (原来只有 HK 分支有守卫,
+    # A股分支的报错变成 "历史数据获取失败 ('date')", 看不出是「东财无该股
+    # 历史」); 非空但缺日期/收盘列 (接口 schema 变更) 同样给可读错误。
+    if df.empty:
+        raise RuntimeError(f"{p.yahoo}: akshare 无历史数据")
     df = df.rename(
         columns={
             "日期": "date",
@@ -445,6 +482,8 @@ def _akshare_history(
             "成交量": "volume",
         }
     )
+    if "date" not in df.columns or "close" not in df.columns:
+        raise RuntimeError(f"{p.yahoo}: akshare 历史数据缺少日期/收盘列")
     df["date"] = pd.to_datetime(df["date"])
     df = df.dropna(subset=["close"])
     keep = [

@@ -90,6 +90,18 @@ def test_slide_mode_renders_default_symbol(kline_app):
     assert len(kline_app.metric) == 4
 
 
+def test_page_open_does_not_preload_kline(kline_app):
+    """页面启动不预加载: 输入框无默认值, 首渲染零取数 (零交互).
+
+    修复前输入框默认填 qs[0]/AAPL, 滑动模式不看提交门控 —— 一打开页面就
+    发起一次上市以来全量历史请求; Yahoo 限流是 IP 级, 大组合下会连累其余
+    查询, 与「页面启动不会预加载任何 K线」的文案相反。
+    """
+    assert kline_app._calls["n"] == 0
+    assert len(kline_app.metric) == 0
+    assert any("页面启动不会预加载" in i.value for i in kline_app.info)
+
+
 def test_slide_mode_param_change_redraws_not_refetches(kline_app):
     """滑动模式: 空转 rerun 与周期/均线变化都只重绘, 不清图表、不重取数."""
     kline_app.text_input[1].set_value("AAPL").run()
@@ -196,6 +208,7 @@ def test_range_mode_offers_60_months(kline_app):
         "近 36 个月",
         "近 60 个月",
     ]
+    kline_app.text_input[1].set_value("AAPL").run()  # 输入代码即查询
     kline_app.selectbox[0].set_value(60).run()  # 选中 5 年可正常取数渲染
     assert len(kline_app.metric) == 4
 

@@ -10,6 +10,35 @@ from .prices import Quote
 from .symbols import parse
 
 
+def _as_float(v):
+    """NaN/None/空串/非有限字符串 → None; 其余 float(); 不可解析抛 ValueError.
+
+    `isinstance(x, float) and isnan` 只挡得住真 NaN: 手改 JSON / 券商 CSV
+    粘贴的字面量 "nan"/"NaN"/"inf" 能正常 float() 成功, 漏进去会让整行
+    market_value/cost/pnl 变 NaN (明细显示 NaN, 汇总又因 cost_mask 把该行
+    静默排除, 两个口径不一致)。这里按 rules._num 同口径统一判伪。
+    """
+    if v is None:
+        return None
+    if isinstance(v, str):
+        s = v.strip()
+        if s.lower() in (
+            "",
+            "nan",
+            "none",
+            "null",
+            "inf",
+            "-inf",
+            "infinity",
+            "-infinity",
+        ):
+            return None
+        v = float(s)  # 不可解析 → ValueError, 由调用方记 issue
+    if isinstance(v, float) and not math.isfinite(v):
+        return None
+    return float(v)
+
+
 def build_view(
     holdings, quotes: dict[str, Quote], fx: dict[str, float]
 ) -> tuple[pd.DataFrame, list[str]]:
@@ -27,23 +56,22 @@ def build_view(
             continue
         # Streamlit data_editor 清空单元格会产生 NaN; `NaN or 0` 仍得 NaN, 需显式判
         raw_qty = h.get("quantity")
-        if raw_qty is None or (isinstance(raw_qty, float) and math.isnan(raw_qty)):
-            raw_qty = 0
         try:
-            qty = float(raw_qty or 0)
-        except (TypeError, ValueError):
+            qty = _as_float(raw_qty)
+        except ValueError:
             # 手改 JSON 成非数字字符串 (Excel 粘贴 "N/A" 等): 记 issue 跳过该行,
             # 不让 ValueError 穿透 snapshot/export/UI 变裸 traceback
             issues.append(f"{p.yahoo}: 数量无法解析 ({raw_qty!r}), 跳过")
             continue
-        cost = h.get("avg_cost")
-        if cost is None or (isinstance(cost, float) and math.isnan(cost)) or cost == "":
-            cost = None
-        else:
+        if qty is None:
+            qty = 0.0
+        cost = None
+        raw_cost = h.get("avg_cost")
+        if raw_cost is not None and raw_cost != "":
             try:
-                cost = float(cost)
-            except (TypeError, ValueError):
-                issues.append(f"{p.yahoo}: 成本无法解析 ({cost!r}), 按缺失处理")
+                cost = _as_float(raw_cost)
+            except ValueError:
+                issues.append(f"{p.yahoo}: 成本无法解析 ({raw_cost!r}), 按缺失处理")
                 cost = None
         q = quotes.get(p.yahoo)
         if q is None or q.price is None or not math.isfinite(q.price):
@@ -119,7 +147,15 @@ def summarize(view: pd.DataFrame) -> dict:
     total_value = float(view["market_value"].sum())
     cost_mask = view["cost"].notna() & view["pnl"].notna()
     covered_value = float(view.loc[cost_mask, "market_value"].sum())
-    total_cost = float(view["cost"].sum()) if cost_mask.any() else None
+    total_cost = (
+        # 成本按**绝对值求和** (毛成本): 多空混合时带符号净额会让分母严重偏离
+        # 真实投入资本 (多 1000/空 1500 → 净 -500, 收益率放大约 5 倍), 且净额
+        # 趋近 0 时收益率变成 None 或反号; 单行口径 (build_view) 本就是
+        # pnl/abs(cost_base), 组合级与之一致。纯多头时两者相等, 显示值不变。
+        float(view.loc[cost_mask, "cost"].abs().sum())
+        if cost_mask.any()
+        else None
+    )
     total_pnl = float(view["pnl"].sum()) if cost_mask.any() else None
     today = float(view["today_pnl"].sum()) if view["today_pnl"].notna().any() else None
     # 盈亏口径仅覆盖有成本数据的部分; 覆盖率供展示层标注

@@ -611,6 +611,11 @@ def positions_to_rows(positions: list) -> tuple[list[dict], list[str]]:
     skipped: list[str] = []
     for pos in positions:
         raw = str(getattr(pos, "symbol", "") or "").strip()
+        # 未挂牌占位代码 (打新中签 N 前缀): 与 watchlist_to_rows 同口径过滤,
+        # 否则导入即死码, 每轮快照报「行情缺失」且 append 合并反复带回来
+        if _is_unquoted_placeholder(raw):
+            skipped.append(f"{raw}: 未挂牌/未定价占位代码, 已跳过")
+            continue
         y_mapped = longport_to_yahoo(raw)
         if not y_mapped:
             skipped.append(f"{raw} 无法映射为内部代码 (市场不支持)")

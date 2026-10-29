@@ -26,6 +26,7 @@ import pandas as pd
 from .paths import TEMPLATES_DIR, data_home
 from .prices import Quote
 from .symbols import Market, ParsedSymbol, is_pence, type_for_symbol
+from .symbol_migrations import migrate_symbol
 
 # 用户真实配置落数据目录 (源码树即仓库根; pip 安装后 ~/.tracker/ibkr.json);
 # 模板随包分发, env IBKR_CONFIG 优先于两者
@@ -823,6 +824,17 @@ def positions_to_rows(positions) -> tuple[list[dict], list[str]]:
                 " 无法映射为 Yahoo 代码"
             )
             continue
+        # 退市/改码迁移 (symbol_migrations): 账户侧仍留着旧代码 (ERJ/BRFS/QD
+        # 等 2025 年改码标的) 时, 不迁移会把死码写进 portfolio.json, 每轮快照
+        # 报「行情缺失」且 append 合并反复带回来 (长桥持仓路径同口径)
+        y_before = y
+        y, mig = migrate_symbol(y)
+        if mig and y == y_before:
+            # 已退市且无接替码: 跳过并说明 (不能让死码入账)
+            skipped.append(f"{raw} 已退市: {mig}")
+            continue
+        if mig:
+            skipped.append(f"{raw} → {y} ({mig})")
         # 英股 (LSE 主板/AIM) 的 avgCost 与行情同为便士口径 (IBKR 对英镑柜台以
         # 便士报价而 currency 报 GBP, 见 _is_pence_quote): ÷100 折成英镑, 与
         # quote_from_ticker 及项目规范 (avg_cost 按当地货币英镑计) 对齐。

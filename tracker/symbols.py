@@ -471,6 +471,12 @@ def normalize(symbol: str) -> str:
         suffix = "SI"  # SGX: Yahoo 规范后缀 .SI; .SG 别名归一 (yfinance 无 .SG 数据)
     elif suffix == "JP":
         suffix = "T"  # 东京: Yahoo 规范后缀 .T; .JP 别名归一
+    elif suffix in ("KS", "KQ"):
+        # 韩股 Yahoo 代码是 6 位带前导零 (005930.KS): 与港股补零同口径,
+        # 否则 5930.KS 这类输入 parse 合法但 yfinance/akshare 取不到数,
+        # 只报「行情缺失」而不提示代码形态不对
+        if head.isdigit():
+            head = head.lstrip("0").zfill(6)
     return f"{head}.{suffix}"
 
 

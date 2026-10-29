@@ -228,7 +228,7 @@ python -m tracker.cli longport-login --json    # 长桥 OAuth 授权 URL（脚�
 | 韩股 | `.KS` / `.KQ` | `005930.KS` `005935.KS` `035720.KQ` | KRW | global | KRX 韩国交易所：`.KS`=KOSPI 主板、`.KQ`=KOSDAQ；6 位代码保留前导零；普通股与优先股为并列代码（三星电子 `005930.KS` / 优先股 `005935.KS`）；`.KR` 不作为别名（两板同族无法判归哪板） |
 | 新加坡股 | `.SI` | `D05.SI` `NIO.SI` | SGD / USD | global | SGX；`.SG` 别名自动归一为 `.SI`（yfinance 无 `.SG` 数据）；SGX 同时有 SGD 计价（`D05.SI`）与 USD 计价（`NIO.SI`）证券，IBKR 侧按代码自辨币种 |
 | 巴西股 | `.SA` | `PETR4.SA` | BRL | global | B3；IBKR 交易所代号 `B3`（旧 `BVMF` 已下线） |
-| 加密货币 | `-QUOTE` | `BTC-USD` `ETH-USDT` | 计价货币 | crypto | 连字符 `BASE-QUOTE`（Yahoo crypto 规范）；无分隔符 `BTCUSD` 自动补全 |
+| 加密货币 | `-QUOTE` | `BTC-USD` `ETH-USDT` | 计价货币 | crypto | 连字符 `BASE-QUOTE`（Yahoo crypto 规范）；无分隔符 `BTCUSD` 自动补全；稳定币计价（USDT/USDC/FDUSD…）按 USD 等价估值 |
 
 **互斥保证**：点后缀/裸代码永远是股票，连字符+计价货币永远是加密货币（单字母连字符 `BRK-B`
 是美股类别股、`P+系列字母` 连字符如 `WFC-PL` 是美股优先股，都不是 crypto）。推导唯一入口 `symbols.type_for_symbol()`；测试用例、搜索结果、
@@ -554,6 +554,13 @@ python -m tracker.cli import wallet polygon 0x... --tokenlist my_tokens.json
 - 轻钱包策略：EVM 链主币 `eth_getBalance` + ERC-20 `balanceOf` 批量调用；TRON 走 TronGrid `GET /v1/accounts` 一次取回 TRX + TRC-20；Solana 走 `getBalance` + `getTokenAccountsByOwner`(jsonParsed) 取回 SOL + 全部 SPL（wSOL 并入 SOL），内置主流代币 tokenlist，可用外部 JSON 覆盖
 - 不依赖 web3.py/tronpy/solana-py，EVM/Solana 直接 HTTP JSON-RPC，TRON 直接 HTTP
 - 兼容入口：`python -m tracker.cli import-wallet`（`--add` 追加写入 / `--overwrite` 覆盖）
+
+**稳定币计价 = USD 等价估值**：`BTC-USDT` / `BTC-USDC` / `BTC-FDUSD` 等稳定币计价的代码，
+估值口径一律按 USD（`symbols.valuation_currency` 单一权威点，`parse` / 行情源 / 汇率链共用）。
+原因：汇率链（CFETS + Yahoo 法币对）没有 `USDT→X` 通道，不归一会让持仓/自选整行拿不到汇率、
+被静默排除出视图（总市值/权重/盈亏整体少算）。代价是稳定币脱锚时估值有同幅误差（历史约 3% 级别），
+需要精确口径时直接持有 `BTC-USD`。钱包导入的 `--base-currency USDT/USDC` 同样归一为 USD
+（否则会生成 `USDT-USDT` 这种任何数据源都没有的自配对）。
 
 ---
 

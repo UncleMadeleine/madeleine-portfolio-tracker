@@ -538,9 +538,17 @@ def _load_tokenlist(tokenlist_path: str | None) -> dict[str, dict[str, dict[str,
 
 
 def _symbol_for_token(symbol: str, chain: str, base_currency: str = "USD") -> str:
-    """将代币符号映射为 Yahoo Finance 风格代码 (BASE-QUOTE)."""
+    """将代币符号映射为 Yahoo Finance 风格代码 (BASE-QUOTE).
+
+    稳定币计价 (--base-currency USDT/USDC…) 归一为 USD: 与估值口径一致
+    (symbols.valuation_currency), 否则会产出 USDT-USDT 这种自配对 ——
+    Binance/Gate 都没有该交易对, 导入后永远取不到数; 且估值链没有 USDT
+    汇率通道, 持仓会被排除出视图。
+    """
+    from .symbols import valuation_currency
+
     base = symbol.upper()
-    quote = base_currency.upper()
+    quote = valuation_currency(base_currency)
     return f"{base}-{quote}"
 
 

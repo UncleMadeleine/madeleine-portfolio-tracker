@@ -214,6 +214,38 @@ def test_yf_crypto_quote_missing_price_raises(monkeypatch):
         crypto_mod._yf_quote(parse("BTC-USD"))
 
 
+def test_yf_crypto_quote_stablecoin_reported_currency_normalized(monkeypatch):
+    """yfinance 对 BTC-USDT 自报 currency=USDT: 必须按 USD 等价归一。
+
+    直接采用数据源自报币种会把 symbols.parse 的归一结果绕回去, 估值链又拿
+    不到 USDT 汇率 (BTC-USD 与 BTC-USDT 估值口径必须一致)。
+    """
+    info = {
+        "lastPrice": 61000.0,
+        "previousClose": 60000.0,
+        "currency": "USDT",
+    }
+
+    class FakeInfo:
+        def get(self, key, default=None):
+            return info.get(key, default)
+
+    class FakeTicker:
+        def __init__(self, symbol):
+            assert symbol == "BTC-USDT"
+
+        @property
+        def fast_info(self):
+            return FakeInfo()
+
+    monkeypatch.setattr(
+        crypto_mod, "_yf", lambda: types.SimpleNamespace(Ticker=FakeTicker)
+    )
+    q = crypto_mod._yf_quote(parse("BTC-USDT"))
+    assert q.symbol == "BTC-USDT"  # 代码形态保留 (数据源交易对)
+    assert q.currency == "USD"  # 估值口径归一
+
+
 @pytest.mark.parametrize("bad", [0.0, -1.0, float("nan"), float("inf")])
 def test_yf_crypto_quote_non_positive_price_raises(monkeypatch, bad):
     """0/负/NaN/inf 都是无效价 (与 Binance/Gate/Hyperliquid 同一守卫).

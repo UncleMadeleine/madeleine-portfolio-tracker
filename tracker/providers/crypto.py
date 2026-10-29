@@ -314,6 +314,18 @@ def _yf():
     return yfinance
 
 
+def _quote_ccy(p: ParsedSymbol, reported: str | None = None) -> str:
+    """行情币种: 数据源自报 (缺失时符号推导), 再按 USD 等价稳定币归一。
+
+    yfinance 对 BTC-USDT 自报 currency="USDT", 直接采用会把 parse() 的归一
+    结果绕回去 —— 估值链又拿不到 USDT 汇率。币种口径必须与
+    symbols.valuation_currency 单一权威点一致 (BTC-USD 与 BTC-USDT 估值同口径)。
+    """
+    from ..symbols import valuation_currency
+
+    return valuation_currency(str(reported or p.currency).upper())
+
+
 def _yf_quote(p: ParsedSymbol) -> Quote:
     """yfinance 直连降级: fast_info 含 lastPrice."""
     info = _yf().Ticker(p.yahoo).fast_info
@@ -336,7 +348,7 @@ def _yf_quote(p: ParsedSymbol) -> Quote:
         price=price,
         prev_close=float(prev) if prev and pd.notna(prev) else None,
         change_pct=float(chg) if chg is not None and pd.notna(chg) else None,
-        currency=str(info.get("currency") or p.currency).upper(),
+        currency=_quote_ccy(p, info.get("currency")),
         source="yfinance",
     )
 

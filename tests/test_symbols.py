@@ -289,11 +289,14 @@ def test_parse_crypto_unknown_base_with_hyphen():
 
 
 def test_parse_crypto_stablecoin_quote():
-    # 稳定币计价: BTC-USDT 也识别为 crypto, 币种保留 USDT
+    # 稳定币计价按 USD 等价估值: 代码保留 BTC-USDT (数据源交易对), 币种口径
+    # 归一为 USD —— 否则汇率链没有 USDT 通道, 持仓整行被排除出视图
     p = parse("BTC-USDT")
     assert p.market is Market.CRYPTO
-    assert p.currency == "USDT"
+    assert p.currency == "USD"
     assert p.yahoo == "BTC-USDT"
+    # 大小写不敏感
+    assert parse("btc-usdt").currency == "USD"
 
 
 def test_normalize_crypto_stablecoin_no_separator():
@@ -316,13 +319,14 @@ def test_parse_crypto_non_crypto_hyphen_is_error():
 
 def test_parse_crypto_alt_quote_assets():
     # 币本位计价 (search 目录会产出 BTC/ETH/BNB/FDUSD 计价的交易对):
-    # 必须识别为 crypto 并保留计价货币, 不能落回美股/USD
+    # 必须识别为 crypto 并保留计价货币, 不能落回美股/USD。
+    # 例外: FDUSD 是 USD 等价稳定币, 估值口径归一为 USD (见 valuation_currency)
     for sym, ccy in (
         ("ETH-BTC", "BTC"),
         ("ARKM-BTC", "BTC"),
         ("WIF-ETH", "ETH"),
         ("PEPE-BNB", "BNB"),
-        ("BTC-FDUSD", "FDUSD"),
+        ("BTC-FDUSD", "USD"),
     ):
         p = parse(sym)
         assert p.market is Market.CRYPTO, sym
@@ -402,3 +406,24 @@ def test_is_pence_case_insensitive():
     assert not is_pence("GBP")
     assert not is_pence("USD")
     assert not is_pence("")
+
+
+def test_valuation_currency_stablecoin():
+    """稳定币计价归一为 USD (估值口径单一权威点), 法币/币本位原样。"""
+    from tracker.symbols import STABLE_USD_QUOTES, valuation_currency
+
+    for ccy in STABLE_USD_QUOTES:
+        assert valuation_currency(ccy) == "USD"
+        assert valuation_currency(ccy.lower()) == "USD"
+    for ccy in ("USD", "EUR", "CNY", "HKD", "BTC", "ETH", "BNB"):
+        assert valuation_currency(ccy) == ccy
+    assert valuation_currency("") == ""
+    assert valuation_currency(None) == ""
+
+
+def test_parse_crypto_usd_pair_and_stablecoin_same_valuation():
+    """BTC-USD 与 BTC-USDT 估值口径一致 (都是 USD), 代码形态各自保留。"""
+    usd = parse("BTC-USD")
+    usdt = parse("BTC-USDT")
+    assert usd.yahoo == "BTC-USD" and usdt.yahoo == "BTC-USDT"
+    assert usd.currency == usdt.currency == "USD"

@@ -210,7 +210,13 @@ def _wallet_section(mode: str, on_saved) -> None:
         placeholder="0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
         key="imp_wallet_addr",
     )
-    w_base = st.selectbox("计价货币", _WALLET_BASES, key="imp_wallet_base")
+    w_base = st.selectbox(
+        "计价货币",
+        _WALLET_BASES,
+        key="imp_wallet_base",
+        help="USDT/USDC 与 USD 等价估值 (稳定币口径), 生成的代码统一为 TOKEN-USD; "
+        "EUR/CNY 按对应法币计价。",
+    )
     if st.button("查询余额", icon=":material/search:", key="imp_wallet_query"):
         if not w_addr.strip():
             st.warning("请输入链上地址")

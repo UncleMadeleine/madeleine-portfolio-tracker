@@ -6,6 +6,7 @@ import math
 import time
 from datetime import date, timedelta
 
+from .symbols import valuation_currency
 from .util import with_timeout
 
 _PAIR_TTL = 600
@@ -117,7 +118,10 @@ def _finite(r: float | None) -> float | None:
 
 
 def get_rate(src: str, dst: str, use_ibkr: bool = False) -> float | None:
-    src, dst = src.upper(), dst.upper()
+    # 稳定币计价按 USD 等价: USDT/USDC/FDUSD… 与 USD 同值, 先归一再查表。
+    # 不归一的后果: CFETS/Yahoo 法币对都没有 USDT→X 通道, 持仓/自选整行
+    # 拿不到汇率被排除出视图; portfolio 的 base_currency 是稳定币时同样中招。
+    src, dst = valuation_currency(src), valuation_currency(dst)
     if src == dst:
         return 1.0
     if use_ibkr:
@@ -179,7 +183,8 @@ def get_fx_history(src: str, dst: str, start_date, end_date=None):
     """
     import pandas as pd
 
-    src, dst = str(src).upper(), str(dst).upper()
+    # 与 get_rate 同口径: 稳定币计价按 USD 等价 (比例线汇率调整也要能折算)
+    src, dst = valuation_currency(src), valuation_currency(dst)
     # 起止日期统一归一成 YYYY-MM-DD: 调用方传 pd.Timestamp / datetime 时
     # str() 会带上 " 00:00:00", 同一语义的两次调用缓存键不同 (6h 缓存永远
     # 命中不了), 且该字符串会作为 end_date 传给 OpenBB (schema 是 date 类型)

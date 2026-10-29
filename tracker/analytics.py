@@ -7,7 +7,7 @@ import math
 import pandas as pd
 
 from .prices import Quote
-from .symbols import parse
+from .symbols import COIN_QUOTES, parse
 
 
 def _as_float(v):
@@ -79,7 +79,14 @@ def build_view(
             continue
         rate = fx.get(q.currency)
         if rate is None:
-            issues.append(f"{p.yahoo}: 缺少 {q.currency} 汇率")
+            if q.currency in COIN_QUOTES:
+                # 币本位计价 (ETH-BTC 等): 既非法币也非 USD 等价稳定币,
+                # 没有任何汇率通道, 明说原因而不是笼统的「缺少 BTC 汇率」
+                issues.append(
+                    f"{p.yahoo}: 币本位计价 ({q.currency}), 无法按 USD 等价估值, 跳过"
+                )
+            else:
+                issues.append(f"{p.yahoo}: 缺少 {q.currency} 汇率")
             continue
         mv_local = qty * q.price
         mv = mv_local * rate
@@ -147,14 +154,12 @@ def summarize(view: pd.DataFrame) -> dict:
     total_value = float(view["market_value"].sum())
     cost_mask = view["cost"].notna() & view["pnl"].notna()
     covered_value = float(view.loc[cost_mask, "market_value"].sum())
+    # 成本按**绝对值求和** (毛成本): 多空混合时带符号净额会让分母严重偏离
+    # 真实投入资本 (多 1000/空 1500 → 净 -500, 收益率放大约 5 倍), 且净额
+    # 趋近 0 时收益率变成 None 或反号; 单行口径 (build_view) 本就是
+    # pnl/abs(cost_base), 组合级与之一致。纯多头时两者相等, 显示值不变。
     total_cost = (
-        # 成本按**绝对值求和** (毛成本): 多空混合时带符号净额会让分母严重偏离
-        # 真实投入资本 (多 1000/空 1500 → 净 -500, 收益率放大约 5 倍), 且净额
-        # 趋近 0 时收益率变成 None 或反号; 单行口径 (build_view) 本就是
-        # pnl/abs(cost_base), 组合级与之一致。纯多头时两者相等, 显示值不变。
-        float(view.loc[cost_mask, "cost"].abs().sum())
-        if cost_mask.any()
-        else None
+        float(view.loc[cost_mask, "cost"].abs().sum()) if cost_mask.any() else None
     )
     total_pnl = float(view["pnl"].sum()) if cost_mask.any() else None
     today = float(view["today_pnl"].sum()) if view["today_pnl"].notna().any() else None

@@ -593,6 +593,13 @@ class TestSymbolForToken:
     def test_custom_currency(self):
         assert wallet_mod._symbol_for_token("USDT", "eth", "EUR") == "USDT-EUR"
 
+    def test_stablecoin_base_normalized_to_usd(self):
+        """稳定币计价归一为 USD: 否则会产出 USDT-USDT 自配对 (任何数据源都
+        没有该交易对, 导入后永远取不到数), 估值链也没有 USDT 汇率通道。"""
+        for base in ("USDT", "USDC", "FDUSD"):
+            assert wallet_mod._symbol_for_token("ETH", "eth", base) == "ETH-USD"
+            assert wallet_mod._symbol_for_token("USDT", "eth", base) == "USDT-USD"
+
     def test_lowercase_normalized(self):
         result = wallet_mod._symbol_for_token("eth", "eth")
         assert result == "ETH-USD"

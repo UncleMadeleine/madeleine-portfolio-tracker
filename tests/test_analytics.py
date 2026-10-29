@@ -347,3 +347,29 @@ def test_by_symbol_from_built_view():
     out = by_symbol(view, top=1)
     assert out["symbol"].tolist() == ["BTC-USD", "其他"]
     assert out["market_value"].tolist() == [210000.0, 10500.0]
+
+
+def test_build_view_stablecoin_quote_valued_as_usd():
+    """稳定币计价的持仓按 USD 等价估值, 不因「缺少 USDT 汇率」被排除出视图。
+
+    修复前 parse 给出 currency=USDT, 汇率链没有该通道 → 整行 skip,
+    snapshot 只留一条「缺少 USDT 汇率」, 总市值静默少算。
+    """
+    holdings = [{"symbol": "BTC-USDT", "quantity": 0.5, "avg_cost": 90000.0}]
+    quotes = {"BTC-USDT": make_quote("BTC-USDT", 100000.0, ccy="USD")}
+    view, issues = build_view(holdings, quotes, {"USD": 7.1, "CNY": 1.0})
+    assert issues == []
+    assert len(view) == 1
+    row = view.iloc[0]
+    assert row["market_value"] == pytest.approx(0.5 * 100000.0 * 7.1)
+    assert row["cost"] == pytest.approx(0.5 * 90000.0 * 7.1)
+    assert row["currency"] == "USD"
+
+
+def test_build_view_coin_quote_reports_reason():
+    """币本位计价 (ETH-BTC) 无汇率通道: 明说原因而不是笼统的「缺少 BTC 汇率」。"""
+    holdings = [{"symbol": "ETH-BTC", "quantity": 10}]
+    quotes = {"ETH-BTC": make_quote("ETH-BTC", 0.05, ccy="BTC")}
+    view, issues = build_view(holdings, quotes, {"USD": 7.1})
+    assert view.empty
+    assert any("币本位计价 (BTC)" in i for i in issues)

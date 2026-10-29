@@ -82,12 +82,18 @@ tracker-ui          # pip 安装后起 Streamlit 页面 (等价 streamlit run tr
 | 澳股 | `.AX` | `BHP.AX` | AUD | global | |
 | 新加坡股 | `.SI` | `D05.SI` | SGD / USD | global | `.SG` 别名自动归一为 `.SI` (yfinance 无 `.SG` 数据); SGX 有 SGD 与 USD 计价证券 |
 | 巴西股 | `.SA` | `PETR4.SA` | BRL | global | B3; IBKR 交易所代号 `B3` (旧 `BVMF` 已下线) |
-| 加密货币 | `-QUOTE` | `BTC-USD` `ETH-USDT` | 计价货币 | crypto | 无分隔符 `BTCUSD` 自动补全 |
+| 加密货币 | `-QUOTE` | `BTC-USD` `ETH-USDT` | 计价货币 | crypto | 无分隔符 `BTCUSD` 自动补全; 稳定币计价按 USD 等价估值 |
 | 指数 | `IX.<KEY>` | `IX.DXY` `IX.VIX` `IX.CEMPI` `IX.LC` `IX.URANIUM` `IX.HSAHP` | 各异 | index | 已收录 51 个, `index-kline --list` 可查 |
 
 - 推导唯一入口: `symbols.type_for_symbol()`; 单字母连字符是美股类别股 (`BRK-B` → global),
   `P+系列字母` 连字符 (`WFC-PL`) 是美股优先股, 都不是 crypto。
 - 加密货币无分隔符写法 (`BTCUSD`/`ETHUSDT`/`BTCFDUSD`) 保存时自动补全为 `BASE-QUOTE`。
+- **稳定币计价 = USD 等价估值**: `BTC-USDT`/`BTC-USDC`/`BTC-FDUSD` 等代码形态保留 (数据源交易对),
+  但估值币种归一为 USD (`symbols.valuation_currency`, parse/行情源/汇率链共用的单一权威点)。
+  汇率链 (CFETS + Yahoo 法币对) 没有 `USDT→X` 通道, 不归一会让持仓/自选整行拿不到汇率被
+  排除出视图 (总市值/权重/盈亏少算); 代价是脱锚时 (历史 ~3% 级) 有同幅误差, 精确口径请持有
+  `BTC-USD`。钱包导入 `--base-currency USDT/USDC` 同样归一为 USD (避免 `USDT-USDT` 自配对)。
+  币本位计价 (`ETH-BTC` 等) 不折算, 视图给「币本位计价, 无法按 USD 等价估值」的明确原因。
 - B股: 沪 B (900xxx.SS) 以**美元**交易, 深 B (200xxx.SZ) 以**港币**交易, `avg_cost` 按实际交易币种。
 - 英股 `.L`/`.AL` (LSE 主板/AIM): IBKR 与 Yahoo 均以**便士**报价, 行情与 IBKR 导入的 `avg_cost` 都由系统 ÷100 折成英镑; `.IL` (IOB) 币种由数据源自报 (KAP.IL=USD), 不折算。
 - 测试用例、搜索结果、IBKR 导入 (`ibkr_to_yahoo`) 产出的代码均符合本规范。

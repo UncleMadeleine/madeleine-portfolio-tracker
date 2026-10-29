@@ -7,6 +7,16 @@ def no_cfets(monkeypatch):
     monkeypatch.setattr(fx, "_cfets_rate", lambda s, d: None)
 
 
+#: 方向感知的 CFETS mock: 1 外币兑 CNY (USD=7.1, CNY=1.0)
+_TABLE = {"USD": 7.1, "CNY": 1.0}
+
+
+def cfets(monkeypatch):
+    monkeypatch.setattr(
+        fx, "_cfets_rate", lambda s, d: _TABLE[s] / _TABLE[d] if s in _TABLE and d in _TABLE else None
+    )
+
+
 def test_get_rate_identity():
     assert fx.get_rate("USD", "USD") == 1.0
 
@@ -205,3 +215,41 @@ def test_fx_history_failure_returns_none(monkeypatch):
     monkeypatch.setattr(fx, "_fx_hist_cache", {})
     monkeypatch.setattr(fx, "_yahoo_pair_history", lambda *a, **kw: None)
     assert fx.get_fx_history("HKD", "CNY", "2025-01-01") is None
+
+
+# ---------- 稳定币计价按 USD 等价估值 ----------
+
+
+def test_stablecoin_quote_equals_usd(monkeypatch):
+    """USDT/USDC/FDUSD… 计价与 USD 同口径: 汇率链没有稳定币→X 通道,
+    不归一会让持仓整行拿不到汇率被排除出视图。"""
+    cfets(monkeypatch)
+    assert fx.get_rate("USDT", "CNY") == fx.get_rate("USD", "CNY") == 7.1
+    assert fx.get_rate("CNY", "USDC") == fx.get_rate("CNY", "USD")
+    # 自反: 稳定币 ↔ USD 恒为 1
+    assert fx.get_rate("USDT", "USD") == 1.0
+    assert fx.get_rate("FDUSD", "USDC") == 1.0
+
+
+def test_stablecoin_base_currency_resolves(monkeypatch):
+    """base_currency 是稳定币 (钱包导入 --base-currency USDT) 时也能取到汇率."""
+    cfets(monkeypatch)
+    rates, missing = fx.get_fx_rates("USDT", ["USD", "CNY"])
+    assert missing == []
+    assert rates["USD"] == 1.0
+    assert abs(rates["CNY"] - 1 / 7.1) < 1e-12
+
+
+def test_stablecoin_fx_history_substituted(monkeypatch):
+    """历史汇率 (比例线汇率调整) 同样按 USD 等价折算, 缓存键也归一."""
+    monkeypatch.setattr(fx, "_fx_hist_cache", {})
+    seen = []
+
+    def fake(pair, start, end=None):
+        seen.append(pair)
+        return _fx_frame([7.1])
+
+    monkeypatch.setattr(fx, "_yahoo_pair_history", fake)
+    df = fx.get_fx_history("USDT", "CNY", "2025-01-01")
+    assert df is not None and df["close"].iloc[0] == 7.1
+    assert seen == ["USDCNY=X"]  # 请求的就是 USD 直盘

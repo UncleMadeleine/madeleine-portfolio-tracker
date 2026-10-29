@@ -409,6 +409,24 @@ _CRYPTO_QUOTES: set[str] = {
 }
 
 
+STABLE_USD_QUOTES: frozenset[str] = frozenset(
+    {"USDT", "USDC", "FDUSD", "BUSD", "TUSD", "DAI"}
+)
+
+#: 币本位计价 (既非法币也非 USD 等价稳定币): 无法折算, 视图层给明确原因
+COIN_QUOTES: frozenset[str] = frozenset({"BTC", "ETH", "BNB"})
+
+
+def valuation_currency(ccy: str) -> str:
+    """计价货币 -> 估值货币: USD 等价稳定币归一为 USD, 其余原样 (大小写不敏感).
+
+    单一权威点: symbols.parse / providers.crypto 的行情币种 / fx 的汇率查表
+    都走这里, 保证「代码 -> 行情 -> 估值」全链路口径一致。
+    """
+    c = str(ccy or "").strip().upper()
+    return "USD" if c in STABLE_USD_QUOTES else c
+
+
 def _is_us_preferred(quote: str) -> bool:
     """美股优先股系列后缀: Yahoo 惯例 BASE-P<系列字母> (WFC-PL / BAC-PL / GS-PA).
 
@@ -550,7 +568,9 @@ def parse(symbol: str) -> ParsedSymbol:
                 raw=symbol.strip(),
                 yahoo=yahoo,
                 market=Market.CRYPTO,
-                currency=quote,
+                # 稳定币计价按 USD 等价估值 (BTC-USDT 的币种口径即 USD):
+                # 否则汇率链没有 USDT 通道, 持仓整行被排除出视图
+                currency=valuation_currency(quote),
                 type="crypto",
             )
     if "-" in yahoo and "." not in yahoo:

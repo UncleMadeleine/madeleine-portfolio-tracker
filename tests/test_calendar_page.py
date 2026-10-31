@@ -155,8 +155,10 @@ def test_refresh_button_bypasses_cache(monkeypatch, fake_calendar_result):
     fake = FakeCache()
     calls = {}
 
-    def fake_fetch(symbols, months, use_longport, refresh):
+    def fake_fetch(symbols, months, use_longport, refresh, progress=None):
         calls["refresh"] = refresh
+        if progress is not None:
+            progress(1, 1, "测试")
         return fake_calendar_result
 
     monkeypatch.setattr(cp, "cached_calendar", fake)
@@ -173,6 +175,81 @@ def test_refresh_button_bypasses_cache(monkeypatch, fake_calendar_result):
     assert not at.exception, at.exception
     assert fake.cleared is True
     assert calls["refresh"] is True
+
+
+def test_cache_miss_blocks_with_progress_fetch(monkeypatch, fake_calendar_result):
+    """完全无缓存: 探针返回 None → 阻塞取数 (带 progress 回调) 并正常渲染."""
+    from streamlit.testing.v1 import AppTest
+
+    import tracker.ui.calendar_page as cp
+
+    seen = {}
+
+    def fake_cached(*a, **kw):
+        return None
+
+    fake_cached.clear = lambda: seen.setdefault("cleared", True)  # type: ignore[attr-defined]
+
+    def fake_fetch(symbols, months, use_longport, refresh, progress=None):
+        seen["refresh"] = refresh
+        seen["has_progress"] = progress is not None
+        if progress is not None:
+            progress(1, 2, "AAPL")
+            progress(2, 2, None)
+        return fake_calendar_result
+
+    monkeypatch.setattr(cp, "cached_calendar", fake_cached)
+    monkeypatch.setattr(cp, "_fetch_calendar", fake_fetch)
+    monkeypatch.setattr(cp, "_resolve_scope", lambda: ["AAPL", "600519.SS"])
+    monkeypatch.setattr(cp, "_watch_lists", lambda: [])
+    monkeypatch.setattr(cp, "load_watchlist", lambda *a, **kw: {"watchlist": []})
+    at = AppTest.from_string(
+        "import tracker.ui.calendar_page as cp\ncp.render_calendar_page()"
+    )
+    at.run(timeout=60)
+    assert not at.exception, at.exception
+    assert seen["refresh"] is False
+    assert seen["has_progress"] is True
+    assert seen["cleared"] is True  # 取完后清探针缓存, 下次直接读新盘
+    texts = " ".join(m.value for m in at.markdown)
+    assert "报 AAPL" in texts
+
+
+def test_stale_peek_shows_banner(monkeypatch, fake_calendar_result):
+    """缓存探针命中陈旧数据: 立即渲染 + 提示后台刷新 (不触发阻塞取数)."""
+    from streamlit.testing.v1 import AppTest
+
+    import tracker.ui.calendar_page as cp
+
+    data = {
+        **fake_calendar_result,
+        "cache": {"used": True, "stale": True, "stale_age": 7200.0, "partial": False},
+    }
+
+    def fake_cached(*a, **kw):
+        return data
+
+    fake_cached.clear = lambda: None  # type: ignore[attr-defined]
+
+    def boom(*a, **kw):
+        raise AssertionError("陈旧缓存命中时不应阻塞取数")
+
+    monkeypatch.setattr(cp, "cached_calendar", fake_cached)
+    monkeypatch.setattr(cp, "_fetch_calendar", boom)
+    # 不真正起后台线程 (本用例只验证陈旧缓存横幅)
+    monkeypatch.setattr(cp, "_start_calendar_refresh", lambda *a, **kw: False)
+    monkeypatch.setattr(cp, "_resolve_scope", lambda: ["AAPL", "600519.SS"])
+    monkeypatch.setattr(cp, "_watch_lists", lambda: [])
+    monkeypatch.setattr(cp, "load_watchlist", lambda *a, **kw: {"watchlist": []})
+    at = AppTest.from_string(
+        "import tracker.ui.calendar_page as cp\ncp.render_calendar_page()"
+    )
+    at.run(timeout=60)
+    assert not at.exception, at.exception
+    caps = " ".join(c.value for c in at.caption)
+    assert "先展示约 2.0 小时前的缓存" in caps
+    texts = " ".join(m.value for m in at.markdown)
+    assert "报 AAPL" in texts
 
 
 def test_calendar_page_fetch_failure_shows_warning(monkeypatch):

@@ -104,8 +104,12 @@ def _fetch_domain(
     prefer_akshare: bool,
     errors: dict[str, str],
     crypto_source: str = "auto",
+    on_done=None,
 ) -> dict[str, Quote]:
-    """一个域内并发走源链: 返回 {yahoo: Quote}, 失败写 errors + 负缓存."""
+    """一个域内并发走源链: 返回 {yahoo: Quote}, 失败写 errors + 负缓存.
+
+    on_done(yahoo) 每结算一只回调一次 (成功/失败都算), 供首屏进度条推进。
+    """
     provider = resolve({"global": "GLOBAL", "cn": "CN", "crypto": "CRYPTO"}[domain])
 
     def _one(p: ParsedSymbol):
@@ -135,6 +139,8 @@ def _fetch_domain(
             else:
                 out[yahoo] = result_or_exc
                 neg_clear(yahoo)
+            if on_done is not None:
+                on_done(yahoo)
     return out
 
 
@@ -149,46 +155,66 @@ def get_quotes(
     use_ibkr: bool = False,
     use_longport: bool = False,
     crypto_source: str = "auto",
+    progress=None,
 ) -> tuple[dict[str, Quote], dict[str, str], list[str]]:
-    """多代码实时行情: 缓存 → 长桥/IBKR 批量 (可选, IBKR 优先) → 按域 provider 取数 → 回写缓存."""
+    """多代码实时行情: 缓存 → 长桥/IBKR 批量 (可选, IBKR 优先) → 按域 provider 取数 → 回写缓存.
+
+    progress(done, total, label) 可选: 按已结算代码数推进, 供首屏冷启动
+    进度条使用 (缓存命中/批量返回/逐代码成功或失败都计入 settled)。
+    """
     quotes: dict[str, Quote] = {}
     notes: list[str] = []
     by_yahoo, errors = _parse_all(symbols)
     if not by_yahoo:
         return quotes, errors, notes
+    total = len(by_yahoo)
+    settled = set(quotes)
+
+    def _emit(label: str | None = None) -> None:
+        if progress is not None:
+            progress(min(len(settled), total), total, label)
 
     # 优先读本地缓存
     cached = cache_mod.get_cached(list(by_yahoo.keys()))
     if cached:
         quotes.update(cached)
+        settled.update(cached)
         # 磁盘缓存命中同样是取数成功: 清出负缓存, 别让 TTL 内的旧失败
         # 继续挡住已能取到数的代码
         for yahoo in cached:
             neg_clear(yahoo)
+    _emit("读取本地缓存")
     if len(quotes) == len(by_yahoo):
+        _emit(None)
         return quotes, errors, notes
 
     # 可选批量前置: 长桥先取, IBKR 后取并覆盖 —— 两源都启用时 IBKR 优先级更高
     if use_longport:
+        _emit("长桥批量行情")
         try:
             from .. import longport as lp_mod
 
             lp_quotes, reason = lp_mod.get_quotes_longport(list(by_yahoo.values()))
             quotes.update(lp_quotes)
+            settled.update(lp_quotes)
             if reason:
                 notes.append(f"长桥不可用: {reason} (已回退默认数据源)")
         except Exception as e:  # noqa: BLE001 - 长桥属可选增强
             notes.append(f"长桥接入异常: {e}")
+        _emit("长桥批量行情")
     if use_ibkr:
+        _emit("IBKR 批量行情")
         try:
             from .. import ibkr as ibkr_mod
 
             ib_quotes, reason = ibkr_mod.get_quotes_ibkr(list(by_yahoo.values()))
             quotes.update(ib_quotes)
+            settled.update(ib_quotes)
             if reason:
                 notes.append(f"IBKR 不可用: {reason} (已回退默认数据源)")
         except Exception as e:  # noqa: BLE001 - IBKR 属可选增强
             notes.append(f"IBKR 接入异常: {e}")
+        _emit("IBKR 批量行情")
     groups: dict[str, list[ParsedSymbol]] = {}
     for p in by_yahoo.values():
         if p.yahoo in quotes:
@@ -227,18 +253,39 @@ def get_quotes(
             batch_plist = plist
             if prefer_akshare:
                 batch_plist = [p for p in plist if p.market is not Market.HK]
+            _emit("yfinance 批量行情")
             try:
-                quotes.update(_yahoo_batch(batch_plist))
+                batch = _yahoo_batch(batch_plist)
+                quotes.update(batch)
+                settled.update(batch)
             except Exception as e:  # noqa: BLE001 - 批量失败不能让整个域崩
                 # 批量是优化不是必需: 失败则全部代码落逐代码源链 (那里每源
                 # 单独 try, 且域间循环无保护 —— 一抛会连带 cn/crypto 域不执行)
                 notes.append(f"yfinance 批量行情异常: {e} (已回退逐代码取数)")
+            _emit("yfinance 批量行情")
             plist = [p for p in plist if p.yahoo not in quotes]
             if not plist:
                 continue
-        quotes.update(
-            _fetch_domain(domain, plist, prefer_akshare, errors, crypto_source)
-        )
+
+        if progress is not None:
+            def _on_done(yahoo: str) -> None:
+                settled.add(yahoo)
+                _emit(yahoo)
+
+            quotes.update(
+                _fetch_domain(
+                    domain,
+                    plist,
+                    prefer_akshare,
+                    errors,
+                    crypto_source,
+                    on_done=_on_done,
+                )
+            )
+        else:
+            quotes.update(
+                _fetch_domain(domain, plist, prefer_akshare, errors, crypto_source)
+            )
 
     # 只回写本次真正取到的新鲜行情 (IBKR/akshare/yahoo), 缓存命中项不重写,
     # 否则 set_cached 会刷新其 fetched_at, TTL 被无限延长
@@ -250,6 +297,7 @@ def get_quotes(
     # IBKR/长桥路径拿到的成功行情同样要清, 否则源恢复后仍被 TTL 挡住
     for yahoo in quotes:
         neg_clear(yahoo)
+    _emit(None)
     return quotes, errors, notes
 
 

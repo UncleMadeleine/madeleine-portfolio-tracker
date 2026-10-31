@@ -60,6 +60,32 @@ def test_failed_symbols_do_not_block_others(monkeypatch):
     assert set(calls) == {"AAPL", "MSFT", "SLOW"}
 
 
+def test_progress_callback_tracks_settled(monkeypatch):
+    """首屏冷启动进度: 批量命中与逐代码回退都计入 done, 最终 100%."""
+    _patch_batch(monkeypatch, {"AAPL"})
+
+    def fake_fetch_domain(
+        domain, plist, prefer_akshare, errors, crypto_source="auto", on_done=None
+    ):
+        out = {}
+        for p in plist:
+            out[p.yahoo] = _q(p.yahoo)
+            if on_done is not None:
+                on_done(p.yahoo)
+        return out
+
+    monkeypatch.setattr(orch, "_fetch_domain", fake_fetch_domain)
+    seen: list[tuple[int, int, str | None]] = []
+    quotes, errors, _notes = orch.get_quotes(
+        ["AAPL", "MSFT"],
+        progress=lambda d, t, label: seen.append((d, t, label)),
+    )
+    assert set(quotes) == {"AAPL", "MSFT"} and not errors
+    assert seen
+    assert seen[-1][0] == seen[-1][1] == 2
+    assert any(label == "MSFT" for _, _, label in seen)
+
+
 def test_negative_cache_skips_refetch(monkeypatch):
     """全部源失败的代码进负缓存: TTL 内第二次调用不再触达源链."""
     calls: list[str] = []

@@ -446,6 +446,38 @@ class TestFirstScreenStaleWhileRevalidate:
         assert any("2,130" in str(m.value) for m in at.metric)
         assert not _plan_dirty(at)
 
+    def test_cold_start_reports_progress(self, monkeypatch, tmp_path, _clean_quote_state):
+        """冷启动阻塞取数带 progress 回调 (done/total/label 推进到 100%)."""
+        seen: list[tuple[int, int, str | None]] = []
+
+        def fake(symbols, progress=None, **_kw):
+            from tracker.providers.base import Quote
+
+            assert progress is not None, "冷启动应挂进度回调"
+            progress(0, len(symbols), "读取本地缓存")
+            seen.append((len(symbols), len(symbols), None))
+            progress(len(symbols), len(symbols), None)
+            return (
+                {
+                    s: Quote(
+                        symbol=s,
+                        name="Apple",
+                        price=150.0,
+                        prev_close=148.0,
+                        change_pct=0.01,
+                        currency="USD",
+                    )
+                    for s in symbols
+                },
+                {},
+                [],
+            )
+
+        at = _boot(monkeypatch, tmp_path, get_quotes=fake)
+        assert seen == [(1, 1, None)]
+        # 进度条取完即移除, 页面仍应完整渲染
+        assert any("2,130" in str(m.value) for m in at.metric)
+
     def test_base_currency_holding_does_not_dirty_plan(
         self, monkeypatch, tmp_path, _clean_quote_state
     ):

@@ -28,12 +28,17 @@
     按代码+窗口过滤 (新增自选 6h 内不可见, refresh 取新)。
   - 整批 longport: key="lp:<market>:<category>:<YYYY-MM>", 永远按整月请求/
     缓存, 读取时再裁到窗口分片, 避免月中窗口把半个月结果缓存成整月。
+
+首屏性能: fetch_calendar(stale_ok=True, cache_only=True) 只读缓存并允许
+CAL_STALE_TTL (7 天) 内的旧行, 页面据此秒开 + 后台重取; cache_only 且无
+任何可用缓存行时返回 None, 调用方改走带 progress 回调的阻塞取数。
 """
 
 from __future__ import annotations
 
 import re
 import threading
+import time
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 
@@ -45,6 +50,7 @@ __all__ = [
     "DATE_STATUS_LABELS",
     "CAL_TTL",
     "CAL_NEG_TTL",
+    "CAL_STALE_TTL",
     "window_from_months",
     "cn_periods_for_window",
     "cn_dividend_periods_for_window",
@@ -56,6 +62,10 @@ __all__ = [
 CAL_TTL = cache_mod.CALENDAR_TTL
 # 单票空结果负缓存 TTL: Yahoo 无数据的标的 24h 内不重试
 CAL_NEG_TTL = 86400
+# 陈旧可渲染期: 超过正/负缓存 TTL 但未超过该年龄的日历仍先展示, 由页面/
+# 后台线程静默重取 (与行情 cache.STALE_TTL 同构的 stale-while-revalidate)。
+# 日历是低频数据, 展示 7 天内的旧结果远比首屏干等整批网络请求可用。
+CAL_STALE_TTL = 7 * 86400
 # 预约披露覆盖窗口: 报表期结束到实际/预约披露最长间隔约 4 个月 (年报),
 # 报表期在窗口开始前 130 天内的仍可能披露落在窗口内, 一并拉取
 _CN_PERIOD_BACKDAYS = 130
@@ -159,12 +169,63 @@ def _in_window(d: date | None, start: date, end: date) -> bool:
 
 def _age_exceeded(fetched_at, ttl: float) -> bool:
     """缓存行时间戳 + ttl 是否过期 (脏时间戳当过期处理)."""
-    import time as _time
+    return _age_of(fetched_at) > ttl
 
+
+def _age_of(fetched_at) -> float:
+    """缓存行年龄 (秒); 脏/缺失时间戳视为无限旧 (必然回源)."""
     try:
-        return float(fetched_at) <= 0 or (_time.time() - float(fetched_at)) > ttl
+        ts = float(fetched_at)
     except (TypeError, ValueError):
-        return True
+        return float("inf")
+    if ts <= 0:
+        return float("inf")
+    return max(0.0, time.time() - ts)
+
+
+class _ProgressReporter:
+    """取数进度累加器: 计划总量可后续追加 (长桥兜底按需才知道工作量).
+
+    对外仍是 fetch_calendar(progress=(done, total, label)) 的旧契约:
+    label 是当前代码/阶段的可读文本, total 可能随阶段增加。UI 用
+    done/total 画进度条, CLI 直接打印文本。
+    """
+
+    def __init__(self, cb=None):
+        self._cb = cb
+        self.done = 0
+        self.total = 0
+
+    def plan(self, n: int) -> None:
+        if n > 0:
+            self.total += int(n)
+
+    def step(self, label: str | None = None) -> None:
+        self.done += 1
+        if self._cb is not None:
+            # total 只会追加不会回退; done 超过计划量时至少保证分母不倒退
+            self._cb(self.done, max(self.total, self.done), label)
+
+    def finish(self) -> None:
+        if self._cb is not None:
+            total = max(self.total, self.done)
+            self._cb(total, total, None)
+
+
+def _merge_cache_meta(meta: dict, part: dict | None) -> None:
+    """合并分片缓存元数据 (stale/missing/stale_age/used) 到累计 meta."""
+    if not part:
+        return
+    meta["stale"] = bool(meta.get("stale")) or bool(part.get("stale"))
+    meta["missing"] = bool(meta.get("missing")) or bool(part.get("missing"))
+    meta["used"] = bool(meta.get("used")) or bool(part.get("used"))
+    try:
+        meta["stale_age"] = max(
+            float(meta.get("stale_age") or 0.0),
+            float(part.get("stale_age") or 0.0),
+        )
+    except (TypeError, ValueError):
+        pass
 
 
 def _is_valid_eps(v: float) -> bool:
@@ -254,41 +315,64 @@ def _fetch_global_one(symbol: str, refresh: bool) -> list[dict]:
 
 
 def _fetch_global_events(
-    symbols: list[str], start: date, end: date, refresh: bool, progress=None
+    symbols: list[str],
+    start: date,
+    end: date,
+    refresh: bool,
+    reporter: _ProgressReporter | None = None,
+    stale_ok: bool = False,
+    cache_only: bool = False,
 ) -> tuple[dict[str, list[dict]], list[str], dict]:
     """yfinance 单票循环 → {symbol: 窗口过滤后事件}, issues, 执行统计.
 
     命中缓存的代码零请求零间隔; 未命中的逐只发出并隔 _YF_PAUSE (防连发
     429), 单票失败注记进 issues 不拖丢整批。
+
+    stale_ok: 过期但仍在 CAL_STALE_TTL 内的缓存先返回 (页面秒开, 后台重取)。
+    cache_only: 只读缓存, 缺失/过老的行不进 todo (由调用方决定是否回源)。
+    stats 额外记录 stale (用过陈旧行) / missing (缓存缺失) / stale_age。
     """
     out: dict[str, list[dict]] = {s: [] for s in symbols}
     issues: list[str] = []
-    stats = {"fresh": 0, "cached": 0, "fail": 0}
+    stats = {"fresh": 0, "cached": 0, "fail": 0, "stale": 0, "missing": 0}
+    stale_age = 0.0
     todo: list[str] = []
+    if reporter is not None:
+        reporter.plan(len(symbols))
     for s in symbols:
-        if not refresh:
-            row = cache_mod.get_calendar_row(f"g:{s}")
-            if row is not None:
-                evs, ttl = row["events"], (CAL_TTL if row["events"] else CAL_NEG_TTL)
-                if not _age_exceeded(row["fetched_at"], ttl):
-                    # 窗口过滤也放在单票保护内: 脏缓存 (NaT/非 dict 行) 只拖丢
-                    # 这一只, 不能让整批 fetch_calendar 抛出。
-                    try:
-                        out[s] = _window_rows(
-                            evs, start, end, source="yfinance", symbol=s
-                        )
-                    except Exception as e:  # noqa: BLE001 - 单票脏数据不拖整批
-                        stats["fail"] += 1
-                        issues.append(
-                            f"{s}: yfinance 缓存行异常 ({type(e).__name__}: {e})"[:160]
-                        )
-                    else:
-                        stats["cached"] += 1
-                    continue
+        row = None if refresh else cache_mod.get_calendar_row(f"g:{s}")
+        if row is not None:
+            evs = row["events"]
+            ttl = CAL_TTL if evs else CAL_NEG_TTL
+            age = _age_of(row["fetched_at"])
+            usable = age <= ttl or (stale_ok and age <= CAL_STALE_TTL)
+            if usable:
+                if age > ttl:
+                    stats["stale"] += 1
+                    stale_age = max(stale_age, age)
+                # 窗口过滤也放在单票保护内: 脏缓存 (NaT/非 dict 行) 只拖丢
+                # 这一只, 不能让整批 fetch_calendar 抛出。
+                try:
+                    out[s] = _window_rows(
+                        evs, start, end, source="yfinance", symbol=s
+                    )
+                except Exception as e:  # noqa: BLE001 - 单票脏数据不拖整批
+                    stats["fail"] += 1
+                    issues.append(
+                        f"{s}: yfinance 缓存行异常 ({type(e).__name__}: {e})"[:160]
+                    )
+                else:
+                    stats["cached"] += 1
+                if reporter is not None:
+                    reporter.step(s)
+                continue
+        if cache_only:
+            stats["missing"] += 1
+            if reporter is not None:
+                reporter.step(s)
+            continue
         todo.append(s)
     for i, s in enumerate(todo):
-        if progress:
-            progress(i + 1, len(todo), s)
         try:
             evs = _fetch_global_one(s, refresh)
             out[s] = _window_rows(evs, start, end, source="yfinance", symbol=s)
@@ -296,12 +380,11 @@ def _fetch_global_events(
         except Exception as e:  # noqa: BLE001 - 单票失败不拖丢整批
             stats["fail"] += 1
             issues.append(f"{s}: yfinance 日历失败 ({type(e).__name__}: {e})"[:160])
+        if reporter is not None:
+            reporter.step(s)
         if i < len(todo) - 1:
-            import time as _t
-
-            _t.sleep(_YF_PAUSE)
-    if progress and todo:
-        progress(len(todo), len(todo), None)
+            time.sleep(_YF_PAUSE)
+    stats["stale_age"] = stale_age
     return out, issues, stats
 
 
@@ -547,69 +630,139 @@ _CN_BOARDS = ("沪深A股", "京市A股")
 
 
 def _fetch_cn_yysj_board(
-    board: str, period: str, refresh: bool
-) -> tuple[list[dict], str | None]:
-    """单个板块的预约披露 (缓存优先, TTL 6h) → events, error.
+    board: str,
+    period: str,
+    refresh: bool,
+    stale_ok: bool = False,
+    cache_only: bool = False,
+    reporter: _ProgressReporter | None = None,
+) -> tuple[list[dict], str | None, dict]:
+    """单个板块的预约披露 (缓存优先, TTL 6h) → events, error, meta.
 
     分板块独立缓存: 一块接口失败只影响该板, 不会把另一板的成功结果一起丢掉,
-    也不会把「缺一块」的合并结果缓存 6h。
+    也不会把「缺一块」的合并结果缓存 6h。meta 记录该行是否陈旧/缺失。
     """
     key = f"cn:yysj:{period}:{board}"
-    if not refresh:
-        row = cache_mod.get_calendar_row(key)
-        if row is not None and not _age_exceeded(row["fetched_at"], CAL_TTL):
-            return row["events"], None
+    meta = {"stale": False, "missing": False, "stale_age": 0.0, "used": False}
+    row = None if refresh else cache_mod.get_calendar_row(key)
+    if row is not None:
+        age = _age_of(row["fetched_at"])
+        if age <= CAL_TTL or (stale_ok and age <= CAL_STALE_TTL):
+            meta.update(stale=age > CAL_TTL, stale_age=age, used=True)
+            if reporter is not None:
+                reporter.step(f"{period} {board}")
+            return row["events"], None, meta
+    if cache_only:
+        meta["missing"] = True
+        if reporter is not None:
+            reporter.step(f"{period} {board}")
+        return [], None, meta
     import akshare as ak
 
     try:
         with _quiet_stderr():
             df = ak.stock_yysj_em(symbol=board, date=period)
     except Exception as e:  # noqa: BLE001 - 单板失败注记并继续另一板
-        return [], f"akshare 预约披露 {period} {board} 失败 ({e})"[:200]
+        if reporter is not None:
+            reporter.step(f"{period} {board}")
+        return [], f"akshare 预约披露 {period} {board} 失败 ({e})"[:200], meta
     evs = _cn_normalize_disclosure(df, period)
     cache_mod.set_calendar_row(key, evs)
-    return evs, None
+    if reporter is not None:
+        reporter.step(f"{period} {board}")
+    return evs, None, meta
 
 
-def _fetch_cn_fhps_period(period: str, refresh: bool) -> tuple[list[dict], str | None]:
-    """单个报表期的分红送转 (缓存优先, TTL 6h) → events, error."""
+def _fetch_cn_fhps_period(
+    period: str,
+    refresh: bool,
+    stale_ok: bool = False,
+    cache_only: bool = False,
+    reporter: _ProgressReporter | None = None,
+) -> tuple[list[dict], str | None, dict]:
+    """单个报表期的分红送转 (缓存优先, TTL 6h) → events, error, meta."""
     key = f"cn:fhps:{period}"
-    if not refresh:
-        row = cache_mod.get_calendar_row(key)
-        if row is not None and not _age_exceeded(row["fetched_at"], CAL_TTL):
-            return row["events"], None
+    meta = {"stale": False, "missing": False, "stale_age": 0.0, "used": False}
+    row = None if refresh else cache_mod.get_calendar_row(key)
+    if row is not None:
+        age = _age_of(row["fetched_at"])
+        if age <= CAL_TTL or (stale_ok and age <= CAL_STALE_TTL):
+            meta.update(stale=age > CAL_TTL, stale_age=age, used=True)
+            if reporter is not None:
+                reporter.step(f"{period} 分红")
+            return row["events"], None, meta
+    if cache_only:
+        meta["missing"] = True
+        if reporter is not None:
+            reporter.step(f"{period} 分红")
+        return [], None, meta
     import akshare as ak
 
     try:
         with _quiet_stderr():
             df = ak.stock_fhps_em(date=period)
     except Exception as e:  # noqa: BLE001 - 分红失败只在 events 缺口上可见
-        return [], f"akshare 分红 {period} 失败 ({e})"[:200]
+        if reporter is not None:
+            reporter.step(f"{period} 分红")
+        return [], f"akshare 分红 {period} 失败 ({e})"[:200], meta
     evs = _cn_normalize_fhps(df)
     cache_mod.set_calendar_row(key, evs)
-    return evs, None
+    if reporter is not None:
+        reporter.step(f"{period} 分红")
+    return evs, None, meta
 
 
-def _fetch_cn_period(period: str, refresh: bool) -> tuple[dict, list[str]]:
-    """一个报表期的整市场日历 (预约披露 + 分红, 各自独立缓存) → events, issues."""
+def _fetch_cn_period(
+    period: str,
+    refresh: bool,
+    stale_ok: bool = False,
+    cache_only: bool = False,
+    reporter: _ProgressReporter | None = None,
+) -> tuple[dict, list[str]]:
+    """一个报表期的整市场日历 (预约披露 + 分红, 各自独立缓存) → events, issues.
+
+    meta 挂在 data 上 (stale/missing/stale_age/used), 保持原有二元组返回结构。
+    """
     evs: list[dict] = []
     issues: list[str] = []
+    meta = {"stale": False, "missing": False, "stale_age": 0.0, "used": False}
     for board in _CN_BOARDS:
-        board_evs, issue = _fetch_cn_yysj_board(board, period, refresh)
+        board_evs, issue, bmeta = _fetch_cn_yysj_board(
+            board,
+            period,
+            refresh,
+            stale_ok=stale_ok,
+            cache_only=cache_only,
+            reporter=reporter,
+        )
         evs.extend(board_evs)
         if issue:
             issues.append(issue)
-    fhps_evs, issue = _fetch_cn_fhps_period(period, refresh)
+        _merge_cache_meta(meta, bmeta)
+    fhps_evs, issue, fmeta = _fetch_cn_fhps_period(
+        period,
+        refresh,
+        stale_ok=stale_ok,
+        cache_only=cache_only,
+        reporter=reporter,
+    )
     evs.extend(fhps_evs)
     if issue:
         issues.append(issue)
-    return {"events": evs}, issues
+    _merge_cache_meta(meta, fmeta)
+    return {"events": evs, **meta}, issues
 
 
 def _fetch_cn_events(
-    symbols: set[str], start: date, end: date, refresh: bool
-) -> tuple[list[dict], list[str], dict[str, str]]:
-    """cn 域事件: 每报表期整批缓存 + 本窗口过滤. → events, issues, names.
+    symbols: set[str],
+    start: date,
+    end: date,
+    refresh: bool,
+    stale_ok: bool = False,
+    cache_only: bool = False,
+    reporter: _ProgressReporter | None = None,
+) -> tuple[list[dict], list[str], dict[str, str], dict]:
+    """cn 域事件: 每报表期整批缓存 + 本窗口过滤. → events, issues, names, meta.
 
     预约披露用 130 天回看; 分红送转单独用 15 个月回看 (旧报告期的方案可能在
     窗口内才实施), 只对预约披露集合之外的老报告期补拉 fhps。
@@ -617,6 +770,7 @@ def _fetch_cn_events(
     events: list[dict] = []
     issues: list[str] = []
     names: dict[str, str] = {}
+    meta = {"stale": False, "missing": False, "stale_age": 0.0, "used": False}
 
     def take(rows: list[dict]) -> None:
         for ev in rows:
@@ -628,19 +782,36 @@ def _fetch_cn_events(
                     names[sym] = ev["name"]
 
     earn_periods = cn_periods_for_window(start, end)
+    earn_set = set(earn_periods)
+    div_extra = [
+        p for p in cn_dividend_periods_for_window(start, end) if p not in earn_set
+    ]
+    if reporter is not None:
+        reporter.plan(len(earn_periods) * 3 + len(div_extra))
     for period in earn_periods:
-        data, p_issues = _fetch_cn_period(period, refresh)
+        data, p_issues = _fetch_cn_period(
+            period,
+            refresh,
+            stale_ok=stale_ok,
+            cache_only=cache_only,
+            reporter=reporter,
+        )
         issues.extend(p_issues)
         take(data["events"])
-    seen = set(earn_periods)
-    for period in cn_dividend_periods_for_window(start, end):
-        if period in seen:
-            continue
-        period_evs, issue = _fetch_cn_fhps_period(period, refresh)
+        _merge_cache_meta(meta, data)
+    for period in div_extra:
+        period_evs, issue, pmeta = _fetch_cn_fhps_period(
+            period,
+            refresh,
+            stale_ok=stale_ok,
+            cache_only=cache_only,
+            reporter=reporter,
+        )
         if issue:
             issues.append(issue)
         take(period_evs)
-    return events, issues, names
+        _merge_cache_meta(meta, pmeta)
+    return events, issues, names, meta
 
 
 # ---------------------------------------------------------------------------
@@ -752,12 +923,19 @@ def _fetch_lp_month_events(
     seg_end: date,
     cfg: dict | None = None,
     refresh: bool = False,
+    stale_ok: bool = False,
+    cache_only: bool = False,
+    stats: dict | None = None,
+    reporter: _ProgressReporter | None = None,
 ) -> tuple[list[dict], str | None]:
     """一个 (market, category, 月) 的整批日历 (缓存优先, TTL 6h) → events, error.
 
     永远按**整月**请求并缓存 (key 只到 YYYY-MM), 返回时再裁到 [seg_start,
     seg_end]。否则月中窗口会先把半个月的结果缓存成整月, 后续完整月窗口
     复用时会缺前半月的日期。
+
+    stats/reporter 为可选副作用 (公开返回结构保持二元组): 记录 stale/missing
+    供首屏 SWR 判定, reporter 供进度条按请求推进。
     """
     month_start = seg_start.replace(day=1)
     nxt = date(
@@ -767,15 +945,33 @@ def _fetch_lp_month_events(
     )
     month_end = nxt - timedelta(days=1)
     key = f"lp:{market}:{category}:{month_start.strftime('%Y-%m')}"
-    if not refresh:
-        row = cache_mod.get_calendar_row(key)
-        if row is not None and not _age_exceeded(row["fetched_at"], CAL_TTL):
+    row = None if refresh else cache_mod.get_calendar_row(key)
+    if row is not None:
+        age = _age_of(row["fetched_at"])
+        if age <= CAL_TTL or (stale_ok and age <= CAL_STALE_TTL):
+            if stats is not None:
+                stats["used"] = True
+                if age > CAL_TTL:
+                    stats["stale"] = True
+                    stats["stale_age"] = max(
+                        float(stats.get("stale_age") or 0.0), age
+                    )
+            if reporter is not None:
+                reporter.step(f"{market}/{category} {month_start:%Y-%m}")
             return _seg_rows(row["events"], seg_start, seg_end), None
+    if cache_only:
+        if stats is not None:
+            stats["missing"] = True
+        if reporter is not None:
+            reporter.step(f"{market}/{category} {month_start:%Y-%m}")
+        return [], None
     try:
         from longport.openapi import CalendarCategory
 
         api = _lp_config_builder(cfg)
     except Exception as e:  # noqa: BLE001 - 统一转错误信息
+        if reporter is not None:
+            reporter.step(f"{market}/{category} {month_start:%Y-%m}")
         return [], f"长桥日历不可用: {type(e).__name__}: {e}"[:200]
     evs: list[dict] = []
     cursor = month_start.isoformat()
@@ -799,10 +995,14 @@ def _fetch_lp_month_events(
             if not cursor or cursor > end_iso or cursor <= prev:
                 break
     except Exception as e:  # noqa: BLE001 - 带日期的错误兜底
+        if reporter is not None:
+            reporter.step(f"{market}/{category} {month_start:%Y-%m}")
         return _seg_rows(evs, seg_start, seg_end), (
             f"长桥日历({market}/{category})失败: {type(e).__name__}: {e}"[:200]
         )
     cache_mod.set_calendar_row(key, evs)
+    if reporter is not None:
+        reporter.step(f"{market}/{category} {month_start:%Y-%m}")
     return _seg_rows(evs, seg_start, seg_end), None
 
 
@@ -821,6 +1021,10 @@ def _fetch_longport_events(
     end: date,
     cfg: dict | None = None,
     refresh: bool = False,
+    stale_ok: bool = False,
+    cache_only: bool = False,
+    stats: dict | None = None,
+    reporter: _ProgressReporter | None = None,
 ) -> tuple[dict[str, list[dict]], str | None]:
     """长桥整批兜底: 只拉长桥支持且自选中存在的市场 → {symbol: 窗口事件}."""
     markets = sorted({_lp_market_axis(s) for s in symbols} - {None})
@@ -828,11 +1032,23 @@ def _fetch_longport_events(
         return {}, None
     out: dict[str, list[dict]] = {s: [] for s in symbols}
     err = None
+    months = _month_starts(start, end)
+    if reporter is not None:
+        reporter.plan(len(markets) * len(_LP_CATEGORIES) * len(months))
     for market in markets:
         for category in _LP_CATEGORIES:
-            for seg_start, seg_end in _month_starts(start, end):
+            for seg_start, seg_end in months:
                 evs, e = _fetch_lp_month_events(
-                    market, category, seg_start, seg_end, cfg=cfg, refresh=refresh
+                    market,
+                    category,
+                    seg_start,
+                    seg_end,
+                    cfg=cfg,
+                    refresh=refresh,
+                    stale_ok=stale_ok,
+                    cache_only=cache_only,
+                    stats=stats,
+                    reporter=reporter,
                 )
                 if e and err is None:
                     err = e
@@ -865,7 +1081,9 @@ def fetch_calendar(
     use_longport: bool = False,
     names: dict[str, str] | None = None,
     progress=None,
-) -> dict:
+    stale_ok: bool = False,
+    cache_only: bool = False,
+) -> dict | None:
     """组合/自选的财经日历 → {"window", "events", "issues", "sources", "names"}.
 
     symbols: 内部规范代码列表 (crypto/index 由调用方过滤, 这里再保一层静默跳过)。
@@ -874,7 +1092,12 @@ def fetch_calendar(
     start/end: 显式窗口; 只给一侧时以给定日期为锚用 months 推另一侧, 两侧
     都缺省才用「本月起 months 个月」。start 晚于 end 视为调用错误。
     events 按 (date, symbol) 升序; issues 为主源失败/兜底结果的可读注记。
-    progress(done, total, symbol) 供 CLI 打进度 (refresh 大自选时可见)。
+    progress(done, total, label) 供 CLI/UI 打进度 (label 为代码或阶段文本)。
+
+    stale_ok: 过期但未超过 CAL_STALE_TTL 的缓存行先返回, 由调用方决定是否
+    后台重取 (页面首屏 SWR)。
+    cache_only: 只读缓存, 绝不发网络。无任何可用缓存行时返回 None, 调用方
+    改走阻塞取数; 部分缺失/陈旧时结果 cache 字段标记 partial/stale。
     """
     symbols = list(dict.fromkeys(str(s).strip().upper() for s in symbols if s))
     if start is None and end is None:
@@ -904,39 +1127,80 @@ def fetch_calendar(
     events: list[dict] = []
     issues: list[str] = []
     names: dict[str, str] = dict(names or {})  # 调用方映射为基底, 域内名称补齐
+    meta = {"stale": False, "missing": False, "stale_age": 0.0, "used": False}
+    reporter = _ProgressReporter(progress) if progress is not None else None
+
+    def _lp_fetch(symset: set[str], lp_stats: dict):
+        """长桥兜底取数.
+
+        正常路径 (无 stale/cache_only/progress) 保持旧调用签名, 兼容既有
+        monkeypatch; 需要缓存元数据/进度时才追加关键字。
+        """
+        if stale_ok or cache_only or reporter is not None:
+            return _fetch_longport_events(
+                symset,
+                start,
+                end,
+                refresh=refresh,
+                stale_ok=stale_ok,
+                cache_only=cache_only,
+                stats=lp_stats,
+                reporter=reporter,
+            )
+        return _fetch_longport_events(symset, start, end, refresh=refresh)
 
     # ---- cn 域 ----
     if cn_syms:
-        cn_events, cn_issues, cn_names = _fetch_cn_events(
-            cn_syms, start, end, refresh
+        cn_events, cn_issues, cn_names, cn_meta = _fetch_cn_events(
+            cn_syms,
+            start,
+            end,
+            refresh,
+            stale_ok=stale_ok,
+            cache_only=cache_only,
+            reporter=reporter,
         )
         events.extend(cn_events)
         issues.extend(cn_issues)
         names.update(cn_names)
+        _merge_cache_meta(meta, cn_meta)
         # 开兜底时对 akshare 没有事件的 SH/SZ 代码逐只补长桥 (不再要求整批
         # 失败: 混合持仓下缺票同样应该兜底)
         got = {e["symbol"] for e in cn_events}
         missing_cn = cn_syms - got
         if missing_cn and use_longport:
+            lp_stats = {"stale": False, "missing": False, "stale_age": 0.0}
             try:
-                lp_out, lp_err = _fetch_longport_events(
-                    missing_cn, start, end, refresh=refresh
-                )
+                lp_out, lp_err = _lp_fetch(missing_cn, lp_stats)
             except Exception as e:  # noqa: BLE001 - 兜底失败不拖主流程
                 lp_out, lp_err = {}, f"长桥日历不可用: {e}"[:200]
             for _sym, evs2 in lp_out.items():
                 events.extend(evs2)
             if lp_err:
                 issues.append(lp_err)
+            _merge_cache_meta(meta, lp_stats)
 
     # ---- global 域 ----
     if global_syms:
-        global_out, g_issues, _stats = _fetch_global_events(
-            global_syms, start, end, refresh, progress=progress
+        global_out, g_issues, g_stats = _fetch_global_events(
+            global_syms,
+            start,
+            end,
+            refresh,
+            reporter=reporter,
+            stale_ok=stale_ok,
+            cache_only=cache_only,
         )
         for _sym, evs2 in global_out.items():
             events.extend(evs2)
         issues.extend(g_issues)
+        if g_stats["stale"]:
+            meta["stale"] = True
+            meta["stale_age"] = max(meta["stale_age"], g_stats["stale_age"])
+        if g_stats["missing"]:
+            meta["missing"] = True
+        if g_stats["cached"]:
+            meta["used"] = True
         # use_longport 兜底: 主链完全无事件的 US/HK 代码补长桥日历
         if use_longport:
             empty_syms = {s for s, evs2 in global_out.items() if not evs2}
@@ -946,10 +1210,9 @@ def fetch_calendar(
                 if _lp_market_axis(s) in ("US", "HK")
             }
             if lpable:
+                lp_stats = {"stale": False, "missing": False, "stale_age": 0.0}
                 try:
-                    lp_out, lp_err = _fetch_longport_events(
-                        lpable, start, end, refresh=refresh
-                    )
+                    lp_out, lp_err = _lp_fetch(lpable, lp_stats)
                 except Exception as e:  # noqa: BLE001
                     lp_out, lp_err = {}, f"长桥日历不可用: {e}"[:200]
                 for _sym, evs3 in lp_out.items():
@@ -957,6 +1220,10 @@ def fetch_calendar(
                         events.extend(evs3)
                 if lp_err:
                     issues.append(lp_err)
+                _merge_cache_meta(meta, lp_stats)
+
+    if reporter is not None:
+        reporter.finish()
 
     names = {k: v for k, v in (names or {}).items() if k and v}
     for ev in events:
@@ -980,6 +1247,9 @@ def fetch_calendar(
         src = ev.get("source") or "yfinance"
         sources[src] = sources.get(src, 0) + 1
     events.sort(key=lambda e: (e["date"], e["symbol"], e["type"]))
+    if cache_only and not meta["used"]:
+        # 完全没有可渲染的缓存: 首屏只能阻塞取数, 由调用方处理
+        return None
     return {
         "window": {
             "start": start.isoformat(),
@@ -990,4 +1260,10 @@ def fetch_calendar(
         "issues": issues,
         "sources": sources,
         "names": names,
+        "cache": {
+            "used": bool(meta["used"]),
+            "stale": bool(meta["stale"]),
+            "stale_age": round(float(meta["stale_age"] or 0.0), 1),
+            "partial": bool(meta["missing"]),
+        },
     }

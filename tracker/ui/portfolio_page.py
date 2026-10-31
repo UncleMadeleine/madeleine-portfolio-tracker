@@ -244,6 +244,55 @@ def _local_quote_errors(fetch_symbols) -> dict[str, str]:
     return errors
 
 
+def _fetch_quotes_with_progress(
+    fetchable: tuple[str, ...],
+    prefer_akshare: bool,
+    use_ibkr: bool,
+    use_longport: bool,
+    crypto_source: str,
+) -> tuple[dict, dict, list]:
+    """冷启动阻塞取行情 (无任何可展示缓存) + 实时进度条.
+
+    只有真正要发网络时才走到这里: 缓存陈旧/部分缺失走后台 SWR, 不会卡住
+    首屏。进度按已结算代码数推进 (批量返回、逐代码成功/失败都计入), 避免
+    大组合 (数百自选) 冷启动时页面只转一个无信息量的 spinner。
+    """
+    bar = st.progress(
+        0.0, text="拉取行情 (首次加载需初始化数据引擎)..."
+    )
+    last = {"frac": -1.0, "at": 0.0}
+
+    def _on_progress(done, total, label) -> None:
+        total = max(int(total or 0), int(done or 0), 1)
+        frac = min(max(float(done) / total, 0.0), 1.0)
+        now = time.monotonic()
+        # 大组合逐代码回调可达数百次: 进度增幅 <1% 且距上次 <0.2s 时跳过,
+        # 避免把 Streamlit 增量消息刷爆 (完成时 frac=1 仍必刷)。
+        if (
+            frac < 1.0
+            and frac - last["frac"] < 0.01
+            and now - last["at"] < 0.2
+        ):
+            return
+        last["frac"], last["at"] = frac, now
+        text = f"拉取行情 {done}/{total}"
+        if label:
+            text += f" · {label}"
+        bar.progress(frac, text=text)
+
+    try:
+        return prices.get_quotes(
+            list(fetchable),
+            prefer_akshare=prefer_akshare,
+            use_ibkr=use_ibkr,
+            use_longport=use_longport,
+            crypto_source=crypto_source,
+            progress=_on_progress,
+        )
+    finally:
+        bar.empty()
+
+
 def _load_quotes(
     fetch_symbols: tuple[str, ...],
     prefer_akshare: bool,
@@ -288,10 +337,9 @@ def _load_quotes(
         return hits, errors, []
     if not hits:
         try:
-            with st.spinner("拉取行情 (首次加载需初始化数据引擎)..."):
-                out = cached_quotes(
-                    fetchable, prefer_akshare, use_ibkr, use_longport, crypto_source
-                )
+            out = _fetch_quotes_with_progress(
+                fetchable, prefer_akshare, use_ibkr, use_longport, crypto_source
+            )
         except Exception as e:  # noqa: BLE001 - 取数链路异常不能穿透成整页 traceback
             # 网络超时/HTTP 失败多在 providers 内部被吞掉返回 errors (走
             # render_portfolio_page 的优雅降级分支), 但取数链路自身抛异常
@@ -337,13 +385,17 @@ def _load_fx(
     if not stale:
         return ({**hits, base: 1.0}), missing
     if not hits:
+        bar = st.progress(0.0, text="拉取汇率...")
         try:
-            with st.spinner("拉取汇率..."):
-                out = cached_fx(base, currencies, use_ibkr)
+            bar.progress(0.4, text="拉取汇率 (CFETS/Yahoo)...")
+            out = cached_fx(base, currencies, use_ibkr)
+            bar.progress(1.0, text="汇率已获取")
         except Exception as e:  # noqa: BLE001 - 同 _load_quotes: 异常不穿透成 traceback
             plan["f_age"] = float("inf")
             plan["dirty"] = True
             return {base: 1.0}, [f"汇率获取异常: {e}"]
+        finally:
+            bar.empty()
         plan["f_age"] = 0.0  # 刚同步取完数, 不必立刻保温
         return out
     # 陈旧汇率秒取 + 挂后台刷新
@@ -889,7 +941,7 @@ def render_portfolio_page() -> None:
 
     # 查看范围前置到取数之前: 行情只拉「持仓 + 当前范围自选」。自选 600+ 时
     # 全量冷启动既慢又会把 Yahoo 打到限流 (IP 级, 连累 K线页); 选具体列表
-    # 只拉该列表。cached_quotes 按 symbols 元组缓存, 5 分钟内切回原范围命中。
+    # 只拉该列表。行情磁盘缓存按 symbols 元组命中, 5 分钟内切回原范围秒回。
     scope = st.selectbox(
         "查看范围",
         ["全部"] + list_names(watch),

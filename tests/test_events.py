@@ -682,6 +682,140 @@ class _LpApi:
         return _LpResp(self._infos, self._next)
 
 
+class TestCalendarStaleWhileRevalidate:
+    """cache_only 探针 + stale_ok: 首屏先渲染旧日历, 后台再刷新。"""
+
+    def test_cache_only_returns_none_without_cache(self):
+        assert (
+            events.fetch_calendar(
+                ["AAPL"], months=2, stale_ok=True, cache_only=True
+            )
+            is None
+        )
+
+    def test_cache_only_fresh_global_row(self):
+        from tracker import cache as cache_mod
+
+        w_start, _w_end = window_from_months(2)
+        ev_date = (w_start + timedelta(days=10)).isoformat()
+        cache_mod.set_calendar_row(
+            "g:AAPL",
+            [
+                {
+                    "type": "earnings",
+                    "date": ev_date,
+                    "date_status": "estimate",
+                }
+            ],
+        )
+
+        def boom(_symbol):
+            raise AssertionError("cache_only 不应发网络")
+
+        old = events._yf_calendar_rows
+        events._yf_calendar_rows = boom
+        try:
+            r = events.fetch_calendar(
+                ["AAPL"], months=2, stale_ok=True, cache_only=True
+            )
+        finally:
+            events._yf_calendar_rows = old
+        assert r is not None
+        assert [e["symbol"] for e in r["events"]] == ["AAPL"]
+        assert r["cache"] == {
+            "used": True,
+            "stale": False,
+            "stale_age": 0.0,
+            "partial": False,
+        }
+
+    def test_cache_only_stale_row_renders_and_flags_stale(self):
+        from tracker import cache as cache_mod
+
+        w_start, _w_end = window_from_months(2)
+        ev_date = (w_start + timedelta(days=10)).isoformat()
+        cache_mod.set_calendar_row(
+            "g:AAPL",
+            [{"type": "earnings", "date": ev_date, "date_status": "estimate"}],
+        )
+        _age_calendar_row("g:AAPL", events.CAL_TTL + 60)
+        r = events.fetch_calendar(
+            ["AAPL"], months=2, stale_ok=True, cache_only=True
+        )
+        assert r is not None
+        assert r["cache"]["used"] is True
+        assert r["cache"]["stale"] is True
+        assert r["cache"]["partial"] is False
+        assert r["cache"]["stale_age"] >= events.CAL_TTL
+
+    def test_cache_only_beyond_stale_window_is_miss(self):
+        from tracker import cache as cache_mod
+
+        w_start, _w_end = window_from_months(2)
+        ev_date = (w_start + timedelta(days=10)).isoformat()
+        cache_mod.set_calendar_row(
+            "g:AAPL",
+            [{"type": "earnings", "date": ev_date, "date_status": "estimate"}],
+        )
+        _age_calendar_row("g:AAPL", events.CAL_STALE_TTL + 60)
+        assert (
+            events.fetch_calendar(
+                ["AAPL"], months=2, stale_ok=True, cache_only=True
+            )
+            is None
+        )
+
+    def test_cache_only_partial_when_one_key_missing(self, no_network_calendar):
+        from tracker import cache as cache_mod
+
+        w_start, _w_end = window_from_months(2)
+        ev_date = (w_start + timedelta(days=10)).isoformat()
+        cache_mod.set_calendar_row(
+            "g:AAPL",
+            [{"type": "earnings", "date": ev_date, "date_status": "estimate"}],
+        )
+        # MSFT 无缓存 → used (AAPL) 但 partial
+        r = events.fetch_calendar(
+            ["AAPL", "MSFT"], months=2, stale_ok=True, cache_only=True
+        )
+        assert r is not None
+        assert r["cache"]["used"] is True
+        assert r["cache"]["partial"] is True
+
+    def test_cache_only_after_cn_fetch_is_complete(self, no_network_calendar):
+        """cn 整批取数落盘后, 缓存探针应完整命中 (used=True, partial=False)."""
+        first = events.fetch_calendar(["600519.SS"], months=2)
+        assert first is not None
+        r = events.fetch_calendar(
+            ["600519.SS"], months=2, stale_ok=True, cache_only=True
+        )
+        assert r is not None
+        assert r["cache"]["used"] is True
+        assert r["cache"]["partial"] is False
+        assert r["cache"]["stale"] is False
+        assert any(e["symbol"] == "600519.SS" for e in r["events"])
+
+    def test_progress_reports_plan_and_finishes(self, no_network_calendar, monkeypatch):
+        monkeypatch.setattr(events, "_YF_PAUSE", 0)
+        seen: list[tuple[int, int, str | None]] = []
+        events.fetch_calendar(
+            ["AAPL", "600519.SS"],
+            months=2,
+            refresh=True,
+            progress=lambda d, t, label: seen.append((d, t, label)),
+        )
+        assert seen, "应至少回调一次进度"
+        assert seen[-1][0] == seen[-1][1], "结束时 done 必须等于 total"
+        assert any(label and "AAPL" in label for _, _, label in seen)
+        # A股整批 (预约披露/分红) 与海外单票都参与同一个进度序列
+        assert any(label and "沪深A股" in label for _, _, label in seen)
+
+    def test_progress_callback_absent_does_not_change_result(self, no_network_calendar):
+        a = events.fetch_calendar(["AAPL"], months=2)
+        b = events.fetch_calendar(["AAPL"], months=2)
+        assert a["events"] == b["events"]
+
+
 class TestLongportBatchCache:
     _START = date(2026, 10, 1)
     _END = date(2026, 10, 31)

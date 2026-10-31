@@ -37,7 +37,7 @@ tracker-ui          # pip 安装后起 Streamlit 页面 (等价 streamlit run tr
 | 子命令 | 作用 | 常用示例 |
 |---|---|---|
 | `snapshot` | 持仓+自选快照(含阈值提醒) | `snapshot --json`, `snapshot --base USD`, `snapshot --watchlist 科技` |
-| `quote` | 实时行情 | `quote AAPL 600519.SS` |
+| `quote` | 实时行情 | `quote AAPL 600519.SS`, `quote AAPL --refresh` (跳过 5min 磁盘/负缓存) |
 | `watchlist` | 自选管理 list/add/remove/import-longport | `watchlist list`, `watchlist add TSLA --list 科技 --upper1 420`, `watchlist import-longport --dry-run` (长桥自选导入, 分组→列表, 代码归一) |
 | `portfolio` | 持仓管理 list/add/remove/set-base | `portfolio list`, `portfolio add AAPL --quantity 10 --avg-cost 180`, `portfolio set-base USD` |
 | `fx` | 汇率 | `fx USD CNY` |
@@ -45,7 +45,7 @@ tracker-ui          # pip 安装后起 Streamlit 页面 (等价 streamlit run tr
 | `kline` | K线蜡烛图 (HTML+摘要) | `kline AAPL --months 6 --ma 5,20,60`, `kline 0700.HK --period weekly --open`, `--json` 出数据, `--refresh` 强刷 |
 | `calendar` | 财报/重大事件日历 (持仓+自选) | `calendar`, `calendar --months 3 --json`, `calendar --watchlist 科技`, `--longport` 开长桥兜底, `--refresh` 强刷 |
 | `search` | 代码/名称搜索→规范代码 | `search 腾讯 --json`, `search 700 --limit 5`, `search AAPL --exact` |
-| `compare` | 多股走势对比 (归一化) | `compare AAPL 0700.HK 600519.SS`, `compare AAPL NVDA --json`, `--raw` 不归一化 (原币种), `--ratio 分子 分母` 额外画比例线 (跨币种默认按历史汇率调整), `--metric mcap` 市值对比 (统一折算 `--currency`, 缺省组合基础货币) |
+| `compare` | 多股走势对比 (归一化) | `compare AAPL 0700.HK 600519.SS`, `compare AAPL NVDA --json`, `--raw` 不归一化 (原币种), `--ratio 分子 分母` 额外画比例线 (默认原币比值, `--ratio-fx` 历史汇率调整), `--metric mcap` 市值对比 (统一折算 `--currency`, 缺省组合基础货币), `--refresh` 强制刷新 (含比例线汇率缓存) |
 | `index-kline` | 宏观/风险指数K线 (IX.<KEY>) | `index-kline IX.DXY --months 12`, `index-kline IX.CSI300 --list` (指数默认无成交量副图, `--volume` 才显示) |
 | `import` | 统一持仓导入 (ibkr/longport/wallet/file) | `import ibkr --dry-run`, `import longport --dry-run`, `import wallet eth 0x... --dry-run`, `import file 持仓.csv --dry-run` |
 | `longport-login` | 长桥 OAuth 登录 (浏览器授权) | `longport-login` (token 缓存于 ~/.longport/openapi/tokens/<client_id>, 自动刷新), `longport-login --json` 只出授权 URL (供脚本), `-o <文件>` 写 URL 到文件 |
@@ -139,6 +139,7 @@ Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致);
 
 - `portfolio.json`: `{"base_currency": "CNY", "holdings": [{"symbol", "type", "quantity", "avg_cost"}]}`
   `type` 为系统维护的内部域标记, 保存时自动按 `symbols.type_for_symbol()` 推导/覆写。
+  `base_currency` 大小写不敏感, 读取/保存时归一为大写 (如 `usd`→`USD`); 非法/空值回退 `CNY`。
   均为用户本地数据 (已 gitignore), 模板随包分发在 `tracker/templates/portfolio.example.json`。
 - `watchlist.json`: 扁平条目列表, 一个代码可属多个列表, 支持两级阈值与指标基准:
   ```json
@@ -157,6 +158,8 @@ Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致);
   mcap; 否则 price (手写键既是数据覆盖值, 也会在缺省 metric 时暗示基准; 想保留
   覆盖键又用 price 基准需显式写 `metric: "price"`; 页面「指标基准」留空会钉为 price)。
   指标缺失 (crypto/无数据源) → 「指标无数据」, 不判区间内、不误报触发。
+  可选 `name` 显示名: 日历页在数据源无名称时用它补全; 页面保存自选会保留编辑器
+  未展示的字段 (含 `name` 与自定义键)。
   `type` 由系统自动维护 (读取/保存时均会补写覆写), 手改无效。
 - `settings.json`: 页面显示与数据源偏好 (已 gitignore, 模板 `tracker/templates/settings.example.json`):
   `color_scheme` (cn 红涨绿跌 / intl 绿涨红跌, 默认 cn) · `prefer_akshare` (默认 false) ·
@@ -257,7 +260,7 @@ Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致);
    .venv/bin/python -m tracker.cli kline AAPL --months 12 --ma 5,20,60
    .venv/bin/python -m tracker.cli kline 600519.SS --period weekly --open   # 周K + 自动开浏览器
    ```
-   支持 `--period daily|weekly|monthly`、`--no-volume`、`--refresh`、`--json`。页面侧 K线是独立页面: `streamlit run tracker/ui/app.py` 后侧边栏「K线」, 可查任意代码, 输入后才取数 (不预加载)。页面「范围」模式与指数K线/对比页范围下拉为 3/6/12/24/36/60 个月 (最长 5 年; 滑动模式本就一次加载上市以来全量历史); IBKR 源历史K线按 ≤365 天窗口分块拼接 (单次请求上限), 5 年区间同样可用。
+   支持 `--period daily|weekly|monthly`、`--no-volume`、`--refresh`（穿透页面/磁盘 K线缓存与负缓存）、`--json`。页面侧 K线是独立页面: `streamlit run tracker/ui/app.py` 后侧边栏「K线」, 可查任意代码, 输入后才取数 (不预加载)。页面「范围」模式与指数K线/对比页范围下拉为 3/6/12/24/36/60 个月 (最长 5 年; 滑动模式本就一次加载上市以来全量历史); IBKR 源历史K线按 ≤365 天窗口分块拼接 (单次请求上限), 5 年区间同样可用。
 
 8c. **多股对比 / 指数K线**:
    ```
@@ -265,11 +268,13 @@ Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致);
    .venv/bin/python -m tracker.cli compare 601155.SS 1030.HK --ratio 601155.SS 1030.HK  # 额外比例线
    # 比例线: --ratio 分子 分母 (须在对比代码中), 默认是原币报价的直接比值;
    #         --ratio-fx 打开历史汇率调整; --json 的 ratio 字段含均值/区间涨跌/序列
-   # compare 与 kline 参数对齐, 均支持 --ibkr / --longport 前置源开关
+   # compare 与 kline 参数对齐, 均支持 --ibkr / --longport 前置源开关;
+   # --refresh 穿透页面/磁盘 K线、市值/基本面与比例线历史汇率缓存
    .venv/bin/python -m tracker.cli compare 0700.HK 600519.SS --metric mcap        # 市值对比 (统一折算基础货币)
    .venv/bin/python -m tracker.cli compare AAPL NVDA --metric mcap --currency USD # 指定折算币种
    # 市值模式口径: A股=东财历史总市值 (真实日频); 美股/港股等=历史股本×收盘价
    # (yfinance shares_full); 股本不可得时按当前市值×价格比例近似 (--json sources 有标注);
+   # 序列币种跟随实际报价币种 (.IL / 港股美元柜台按数据源自报), 再统一折算;
    # crypto/指数无市值语义会被跳过并告警; --raw 不归一化 (图表按亿显示, JSON 为原值)
    .venv/bin/python -m tracker.cli index-kline IX.DXY --months 12 --json   # 指数K线数据
    .venv/bin/python -m tracker.cli index-kline --list          # 全部已收录指数 (按分组)
@@ -302,6 +307,8 @@ Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致);
    并发写安全: 所有写盘路径走 `storage.edit_portfolio/edit_watchlist` 锁内读-改-写
    (跨进程 flock + 进程内 RLock, 锁文件 `<path>.lock`), 并发保存不会互相覆盖; 锁等待超 30s 报
    `DataFileLocked` 可读错误而不是静默丢更新。
+   钱包多来源台账: 手工在页面/`portfolio add` 改总数量后, 该条目 `source_quantities` 会作废
+   (避免下次导入把旧分量加回), `import_source` 保留, 同来源后续导入仍按覆盖该来源处理。
    Gateway 端口由 `ibkr.json` 的 `mode` 决定: paper=4002 / live=4001; 显式 `"port"` 优先; env `IBKR_MODE` 可临时覆盖。
    长桥行情: 各取数子命令加 `--longport` (如 `quote AAPL --longport`), 或 settings.json `"use_longport": true`。
 

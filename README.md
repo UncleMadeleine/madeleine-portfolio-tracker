@@ -132,6 +132,7 @@ python -m tracker.cli search 腾讯 --json
 # 多股走势对比（归一化起点=100）
 python -m tracker.cli compare AAPL 0700.HK 600519.SS
 python -m tracker.cli compare 601155.SS 1030.HK --ratio 601155.SS 1030.HK  # 比例线
+python -m tracker.cli compare AAPL NVDA --refresh  # 强制刷新 (含比例线历史汇率缓存)
 
 # 多股市值对比（统一折算币种; A股东财历史总市值, 美股/港股等历史股本×收盘价）
 python -m tracker.cli compare 0700.HK 600519.SS --metric mcap
@@ -260,7 +261,7 @@ K线页支持两种输入方式：
 - **日K / 周K / 月K** 一键切换（周K 按 W-FRI 对齐）
 - 数据经过**清洗校验**（去重/排序，丢弃 high<low 等自相矛盾的脏行），英股便士自动换算
 - **双层缓存**：SQLite 磁盘缓存 30 分钟（`cache info` 可查看），页面另有内存缓存；CLI `--refresh` 强制刷新
-- **强制刷新**：页面「强制刷新」按钮 / CLI `--refresh` 会清页面缓存、跳过磁盘 K线缓存并穿透市值/基本面负缓存；单只查询页只失效当前代码的页面缓存，不影响其它代码。数据源偶发失败后可立即重试，不必等缓存或 6h 负缓存过期
+- **强制刷新**：页面「强制刷新」按钮 / CLI `--refresh`（`quote`/`kline`/`compare`/`calendar`）会清对应页面缓存、跳过对应磁盘缓存（行情/K线/日历/市值），并穿透基本面/汇率历史等负缓存；单只查询页只失效当前代码的页面缓存，不影响其它代码。数据源偶发失败后可立即重试，不必等缓存或 6h 负缓存过期
 
 CLI 导出的独立 HTML 用 **plotly**：
 
@@ -292,6 +293,9 @@ python -m tracker.cli kline 0700.HK --period weekly --open  # 周K + 自动打�
 `BASE-QUOTE` 加密货币代码，各币画**独立窗格蜡烛图**（BTC ~10 万 vs SHIB ~0.00002 量级悬殊，
 同轴归一化不可读，故不做归一化、保留原始价格），共享时间轴与十字光标，下方同样给出区间涨跌。
 
+> 市值指标（`--metric mcap` / 页面「指标: 市值」）的序列币种跟随实际报价币种：
+> `.IL`、港股人民币/美元柜台等按数据源自报换算，统一折算前不会按市场默认币种硬编码。
+
 > 比值线（两标的收盘价相除画成折线）已支持，见上；把比值画成 K 线（OHLC）仍在 Roadmap 中。
 
 ---
@@ -312,6 +316,7 @@ python -m tracker.cli kline 0700.HK --period weekly --open  # 周K + 自动打�
 ```
 
 - **同一代码属于多个列表**：如 TSLA 同时在「科技」和「美股」，配置集中在一处，改一次全生效
+- **可选 `name` 显示名**：日历页在数据源没有名称时用 `name` 补全事件名称；页面保存自选会保留编辑器未展示的字段（含 `name` 与自定义键），不会丢配置
 - **阈值基准 `metric`**：`price`（默认，可省略）= 按现价判定，阈值按当地货币；`pb` = 按市净率（现价 ÷ 每股净资产）判定，阈值是 PB 倍数；`mcap` = 按总市值判定，阈值是当地货币绝对金额。指标基准以 `metric` 为准：显式写 `metric`（`price`/`pb`/`mcap`）时以它为准；**省略 `metric` 时**，若条目含手写 `pb`（每股净资产）/ `mcap`（总市值）覆盖键，则基准推断为对应指标，否则按 `price`——即手写键既是数据覆盖值，也会在缺省 `metric` 时暗示基准。页面「指标基准」留空会显式钉为 `price`，不受此推断影响；若想保留 `pb`/`mcap` 覆盖键又用 `price` 基准，需显式写 `metric: "price"`。每股净资产来源按优先级：条目手写 `pb` 键 (离线可用) > 行情自带 (长桥 calc_indexes / akshare 东财, 实时口径) > Yahoo Finance fundamentals (缓存 6 小时)；总市值来源同优先级：条目手写 `mcap` 键 > 行情自带 (akshare 东财 / 长桥) > fundamentals。crypto 与无数据标的指标缺失时显示「指标无数据」，不误判触发
 - 触发等级（从高到低）：`🔴 突破上限 II` / `🟠 突破上限 I` / `🟢 跌破下限 II` / `🟡 跌破下限 I`；触发项排在最前
 - 距离列：`距上限 I%` / `距上限 II%` / `距下限 I%` / `距下限 II%` = 触发还需变动百分之几（上下限同口径；上限为负 / 下限为正 = 已越过）
@@ -474,10 +479,13 @@ IBKR_CONFIG=/data/my-ibkr.json python -m tracker.cli snapshot --ibkr
 
 - **追加合并**（默认）：按代码更新 `quantity`/`avg_cost`，新代码追加，其余持仓保留。
   钱包导入额外带来源标记（链 + 地址）：同一地址重复导入仍是覆盖（幂等），
-  不同地址/链的同名代币（如 eth 与 bsc 上的 `USDT-USD`）会累加，不会互相覆盖
+  不同地址/链的同名代币（如 eth 与 bsc 上的 `USDT-USD`）会累加，不会互相覆盖。
+  手工在页面或 `portfolio add` 改写某代码总数量后，该条目的 `source_quantities`
+  来源台账会作废（避免下次导入把旧分量加回来），`import_source` 保留：
+  同一来源后续导入仍按“覆盖该来源”处理。
 - **覆盖**（`--overwrite`）：清空现有持仓后重写
 
-写盘前自动备份 `portfolio.json.bak`；保留 `base_currency` 与文件中的其它自定义键；
+写盘前自动备份 `portfolio.json.bak`；保留 `base_currency`（大小写不敏感，读取/保存时归一为大写，非法/空值回退 `CNY`）与文件中的其它自定义键；
 写盘为原子操作（临时文件 + `os.replace`），中断不会留下半截 JSON；若 `portfolio.json` /
 `watchlist.json` 损坏，读取时自动尝试同名 `.bak` 恢复，仍失败则报可读错误退出（不会静默清空数据）。
 `--dry-run` 仅预览不写入；采集结果为空时即使覆盖模式也不会清空文件。
@@ -589,7 +597,7 @@ python -m tracker.cli import wallet polygon 0x... --tokenlist my_tokens.json
 - CFETS 汇率为中间价，与离岸 CNH 有细微差异，组合展示场景可忽略
 - `今日估算` 按各持仓 `涨跌幅 × 当前市值` 近似，非精确日内盯市
 - IBKR 行情需本机运行 IB Gateway 且 API 已启用；A股/港股/B股数据若无市场数据订阅，`reqTickers` 可能返回空值，自动回退 Yahoo/akshare
-- IBKR A股合约默认映射为 `SEHK/CNY`，若你的账户显示不同交易所代码，在 `ibkr.json` 中修改 `exchanges.CN`；B股合约根据 IBKR 返回的 `SHSE/USD` 或 `SZSE/HKD` 自动识别
+- IBKR A股经沪深港通通道：沪 `SEHKNTL` / 科创 `SEHKSTAR` / 深 `SEHKSZSE`，计价 CNH；若你的账户显示不同交易所代码，在 `ibkr.json` 的 `exchanges` 中修改对应键（`CN_SH` / `CN_STAR` / `CN_SZ`）；B股合约根据 IBKR 返回的 `SHSE/USD` 或 `SZSE/HKD` 自动识别
 - 长桥行情/持仓需 `pip install longport` 并完成登录；未安装/未配置时 `--longport` 与 `import longport` 报可读错误并回退默认数据源
 
 ---
@@ -661,7 +669,7 @@ A **local-first** portfolio tracker supporting **A-shares / B-shares / Beijing S
 3. Look up K-line & fundamentals by symbol **or name** (fuzzy search)
 4. Dual frontends — Streamlit for humans, unified JSON CLI for agents (hermes / openclaw)
 5. Read-only broker integration — IBKR Gateway, LongPort (OAuth login), A-share broker file import, Hyperliquid quotes
-6. K-line comparison (normalized overlay, done) and **ratio mode** (planned)
+6. K-line comparison (normalized overlay and optional ratio line, done) and **ratio-as-candles** (planned)
 
 ### Features
 
@@ -671,7 +679,7 @@ A **local-first** portfolio tracker supporting **A-shares / B-shares / Beijing S
 - **LongPort integration** — optional quotes/history/positions source (OAuth login), silent fallback to default sources
 - **K-line charts** — daily/weekly/monthly, MA overlays, volume, MACD/RSI/KDJ/Bollinger; slide mode loads full listing history by default
 - **Macro/risk index K-lines** — dedicated `IX.<KEY>` symbol space (USD index, VIX, CSI 300, commodity main-continuous futures — gold, silver, eggs, soybean meal, soybeans, hogs, lithium carbonate — uranium spot/long-term (Cameco monthly), cement indices, ...), separate page & `index-kline` subcommand, dedicated provider source chain
-- **Multi-symbol comparison** — same-coordinate overlay normalized to 100; plus a crypto-only sub-tab on the K-line page (independent per-coin candle panes, raw prices, shared time axis)
+- **Multi-symbol comparison** — same-coordinate overlay normalized to 100, optional ratio line with history-FX adjustment; plus a crypto-only sub-tab on the K-line page (independent per-coin candle panes, raw prices, shared time axis)
 - **Financial calendar** — earnings, scheduled disclosures, ex-dividend/record dates for holdings & watchlist over the current and next months (yfinance per-symbol + akshare bulk, optional LongPort fallback), dedicated page & `calendar` subcommand
 - **Unified import pipeline** — IBKR account / LongPort account / on-chain wallet (5 EVM chains + TRON + Solana) / A-share broker CSV-Excel file, each with append-merge or overwrite mode (auto .bak backup); same logic drives the Streamlit「导入」page
 - **Unified CLI** — 19 subcommands (snapshot, quote, watchlist, portfolio, report, export, fx, history, kline, calendar, search, compare, index-kline, import, longport-login, cache, init; `sync` / `import-wallet` kept as compat aliases); all support machine-readable output (`--json`, or `-f json` for report/export)

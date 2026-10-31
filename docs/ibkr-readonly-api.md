@@ -100,8 +100,9 @@ is not available"）判定。
 
 1. **只读能力是用户 Gateway 的服务端设置，不是代码里的 `readonly=True`。**
    - `tracker/ibkr.py` 的 `ib.connect(..., readonly=True, fetchFields=StartupFetchNONE)`
-     仅表示：客户端库不自动拉订单/成交；`StartupFetchNONE` 连持仓/账户更新也不自动拉，
-     需要时显式 `reqPositions`。二者都不赋予也不限制任何权限。
+     仅表示：客户端库不自动拉订单/成交；`StartupFetchNONE` 跳过账户更新/订单等同步请求。
+     `ib_async` 的 `connectAsync` 仍会无条件调用一次 `reqPositions`（持仓不受该开关影响），
+     本项目 `fetch_positions()` 直接读这份缓存即可。二者都不赋予也不限制任何权限。
    - 真正决定能不能写的是 Gateway 的 **Read-Only API**（`readOnlyApi`）默认勾选状态。
 2. **禁止引入任何写 API**：`placeOrder` / `cancelOrder` / `reqGlobalCancel` /
    `exerciseOptions` / `replaceFA` / `updateConfig` / `updateDisplayGroup` /

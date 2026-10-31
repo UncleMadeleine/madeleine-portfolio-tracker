@@ -301,6 +301,7 @@ def _build_ratio_payload(
     frames: dict[str, pd.DataFrame],
     ratio_cfg: tuple[str, str, bool],
     cmp_period: str,
+    refresh: bool = False,
 ) -> dict | None:
     """比例线 payload (股价模式): 两代码收盘价相除, 跨币种可选汇率调整."""
     ratio_num, ratio_den, fx_adjust = ratio_cfg
@@ -323,11 +324,15 @@ def _build_ratio_payload(
         d_num = _naive_dates(frames[ratio_num]["date"])
         d_den = _naive_dates(frames[ratio_den]["date"])
         start_ts = min(d_num.min(), d_den.min()) - pd.Timedelta(days=10)
+        # 仅在强制刷新时追加 refresh: 兼容既有 monkeypatch/第三方签名的
+        # get_fx_history(src, dst, start, end) 调用形态。
+        fx_kwargs = {"refresh": True} if refresh else {}
         fx_df = fx.get_fx_history(
             cur_den,
             cur_num,
             start_ts.strftime("%Y-%m-%d"),
             pd.Timestamp.today().strftime("%Y-%m-%d"),
+            **fx_kwargs,
         )
         fx_missing = fx_df is None
     try:
@@ -350,10 +355,13 @@ def _price_compare_payload(
     ratio_cfg: tuple[str, str, bool] | None,
     cmp_period: str,
     norm: bool,
+    refresh: bool = False,
 ) -> dict:
     """股价对比 payload (走势对比页原有路径复用)."""
     ratio_payload = (
-        _build_ratio_payload(frames, ratio_cfg, cmp_period) if ratio_cfg else None
+        _build_ratio_payload(frames, ratio_cfg, cmp_period, refresh=refresh)
+        if ratio_cfg
+        else None
     )
     return charting.compare_payload(
         frames,
@@ -618,7 +626,9 @@ def render_compare_controls(
                 "拖动平移 / 滚轮缩放, 悬停查看当日各代码取值。"
             )
         return
-    payload = _price_compare_payload(frames, ratio_cfg, cmp_period, norm)
+    payload = _price_compare_payload(
+        frames, ratio_cfg, cmp_period, norm, refresh=force_refresh
+    )
     render_compare_chart(payload, height=560)
     if ratio_payload := payload.get("ratio"):
         den_expr = ratio_payload["denominator"]

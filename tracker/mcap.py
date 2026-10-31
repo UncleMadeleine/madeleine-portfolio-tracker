@@ -278,7 +278,20 @@ def _price_currency_for(p) -> str:
     providers/global_stocks._yahoo_history 的便士折算判据)。市值 = 股本 ×
     该价格, 币种必须与价格一致, 否则 compare --metric mcap 会拿 USD 数字按
     GBP 汇率折算 (约 1.3 倍偏差) 且不告警。
+
+    港股同理: 港股多柜台 (HKD 主柜台 / CNY 人民币柜台 / USD 柜台) 在 Yahoo
+    代码上可能同形, parse() 只能按 8 开头 5 位推导出 CNY, 美元柜台 (如
+    9188.HK) 会被当成 HKD。用数据源自报的报价币种纠正, 否则市值折算错误
+    约 7.8 倍。
     """
+    if p.market is Market.HK:
+        # 人民币柜台 parse 已权威推导为 CNY, 不必发网络请求
+        if p.currency != "HKD":
+            return p.currency
+        from .providers.global_stocks import _yahoo_quote_currency
+
+        ccy = _yahoo_quote_currency(p.yahoo).strip().upper()
+        return ccy or "HKD"
     if p.market is not Market.GB:
         return p.currency
     from .providers.global_stocks import _yahoo_quote_currency

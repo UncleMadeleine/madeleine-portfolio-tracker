@@ -317,6 +317,17 @@ def test_parse_crypto_non_crypto_hyphen_is_error():
         parse("FOO-BAR")
 
 
+def test_parse_rejects_malformed_crypto_hyphen_forms():
+    """空 base/quote 或连续连字符不能被当成加密货币放行.
+
+    这些形态归一后仍是 "-USD"/"BTC-"/"BTC--USD", 数据源永远查不到;
+    修复前 parse 会产出伪 crypto 代码, 持仓/自选里留下静默死代码。
+    """
+    for bad in ("-USD", "BTC-", "BTC--USD", "USD--BTC"):
+        with pytest.raises(ValueError):
+            parse(bad)
+
+
 def test_parse_crypto_alt_quote_assets():
     # 币本位计价 (search 目录会产出 BTC/ETH/BNB/FDUSD 计价的交易对):
     # 必须识别为 crypto 并保留计价货币, 不能落回美股/USD。

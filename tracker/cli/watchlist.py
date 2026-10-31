@@ -21,18 +21,31 @@ def watchlist_add(args) -> None:
     """添加代码到自选 (已存在则合并列表与阈值)."""
     if not args.symbols:
         _finish_with_error("请指定要添加的代码, 如: watchlist add AAPL 600519.SS")
+    # 先解析再进锁: 全部代码无效时必须在任何写盘动作之前退出。
+    # edit_watchlist 的 with 块正常退出时无条件保存, 把校验放在块内
+    # 会导致「没有可添加代码」也把 --file 指向的新路径写成空文件。
+    parsed: list = []
+    skipped: list[str] = []
+    for s in args.symbols:
+        try:
+            parsed.append(parse(s))
+        except ValueError as e:
+            skipped.append(f"跳过 {s}: {e}")
+    if not parsed:
+        # 全部代码都无法识别: 不写盘 (否则会在 --file 指向的新路径上凭空
+        # 建一个空自选文件), 非 0 退出让调用方/Agent 知道有失败
+        if args.json:
+            _print_json({"changed": [], "skipped": skipped})
+        else:
+            for s in skipped:
+                print(f"⚠ {s}")
+        _finish_with_error("没有可添加的有效代码")
     # 锁内读-改-写: 读也在临界区内, 并发进程的写入不会被本次全量替换覆盖
     with edit_watchlist(args.file) as data:
         entries = data.setdefault("watchlist", [])
         lists = parse_lists(args.wl_list) if args.wl_list else []
         changed: list[str] = []
-        skipped: list[str] = []
-        for s in args.symbols:
-            try:
-                p = parse(s)
-            except ValueError as e:
-                skipped.append(f"跳过 {s}: {e}")
-                continue
+        for p in parsed:
             found = next((e for e in entries if _sym(e) == p.yahoo), None)
             if found is None:
                 e: dict = {"symbol": p.yahoo, "lists": lists or ["默认"]}
@@ -67,15 +80,6 @@ def watchlist_add(args) -> None:
                 if args.note is not None:
                     found["note"] = args.note
                 changed.append(f"更新 {p.yahoo}")
-    if not changed:
-        # 全部代码都无法识别: 不写盘 (否则会在 --file 指向的新路径上凭空
-        # 建一个空自选文件), 非 0 退出让调用方/Agent 知道有失败
-        if args.json:
-            _print_json({"changed": [], "skipped": skipped})
-        else:
-            for s in skipped:
-                print(f"⚠ {s}")
-        _finish_with_error("没有可添加的有效代码")
     if args.json:
         _print_json(
             {"changed": changed, "skipped": skipped, "watchlist": data.get("watchlist", [])}

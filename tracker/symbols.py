@@ -519,9 +519,14 @@ def type_for_symbol(yahoo: str) -> str:
         is_us_class = len(quote) == 1 and quote.isalpha()
         # parse() 对无法识别的连字符代码显式报错; 打标只需处理三类合法形态:
         # crypto (BASE-QUOTE, 计价货币为法币/稳定币), 美股类别股 (单字母后缀),
-        # 美股优先股系列 (WFC-PL)
+        # 美股优先股系列 (WFC-PL). 连字符两侧为空 (BTC- / -USD / BTC--USD)
+        # 属畸形代码, 不能打 crypto 标记。
         if (
-            not is_us_class
+            base
+            and quote
+            and not base.startswith("-")
+            and not base.endswith("-")
+            and not is_us_class
             and not _is_us_preferred(quote)
             and (base in _KNOWN_CRYPTO or quote in _CRYPTO_QUOTES)
         ):
@@ -563,6 +568,10 @@ def parse(symbol: str) -> ParsedSymbol:
         )
     if "-" in yahoo and "." not in yahoo:
         base, _, quote = yahoo.rpartition("-")
+        # 连字符两侧不能为空 / 以连字符收尾: "-USD"、"BTC-"、"BTC--USD"
+        # 会被下面的宽松规则当成加密货币放行, 生成数据源永远查不到的伪代码。
+        if not base or not quote or base.startswith("-") or base.endswith("-"):
+            raise ValueError(f"无法识别的代码: {symbol}")
         if quote in _CRYPTO_QUOTES:
             return ParsedSymbol(
                 raw=symbol.strip(),

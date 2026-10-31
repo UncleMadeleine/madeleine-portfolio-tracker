@@ -48,7 +48,13 @@ def resolve_inputs(symbols: list[str]) -> tuple[list[str], list[str]]:
     return codes, warnings
 
 
-def _build_ratio(frames: dict[str, object], ratio_args, period: str, fx_adjust: bool):
+def _build_ratio(
+    frames: dict[str, object],
+    ratio_args,
+    period: str,
+    fx_adjust: bool,
+    refresh: bool = False,
+):
     """--ratio: 两个代码 → 比例线 payload (默认原币比值, 可选历史汇率调整)."""
     from .. import charting, fx as fx_mod
     from ..symbols import parse as _parse
@@ -78,11 +84,15 @@ def _build_ratio(frames: dict[str, object], ratio_args, period: str, fx_adjust: 
             start_ts = min(
                 frames[numerator]["date"].min(), frames[denominator]["date"].min()
             ) - pd.Timedelta(days=10)
+            # 仅 --refresh 时追加 refresh, 兼容既有
+            # get_fx_history(src, dst, start, end) monkeypatch 签名。
+            fx_kwargs = {"refresh": True} if refresh else {}
             fx_df = fx_mod.get_fx_history(
                 cur_den,
                 cur_num,
                 start_ts.strftime("%Y-%m-%d"),
                 pd.Timestamp.today().strftime("%Y-%m-%d"),
+                **fx_kwargs,
             )
             fx_missing = fx_df is None
             if fx_missing:
@@ -168,6 +178,7 @@ def cmd_compare(args) -> None:
             args.ratio,
             period,
             fx_adjust=getattr(args, "ratio_fx", False) and metric != "mcap",
+            refresh=getattr(args, "refresh", False),
         )
         if getattr(args, "ratio", None)
         else None

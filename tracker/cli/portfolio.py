@@ -21,17 +21,27 @@ def portfolio_add(args) -> None:
         _finish_with_error(f"持仓数量必须为正数, 得到: {args.quantity}")
     if args.avg_cost is not None and args.avg_cost < 0:
         _finish_with_error(f"成本价不能为负数, 得到: {args.avg_cost}")
+    # 先解析再进锁: edit_portfolio 的 with 块正常退出时无条件保存, 校验若放在
+    # 块内, 「没有可添加代码」也会在 --portfolio 指向的新路径创建空持仓文件。
+    parsed: list = []
+    skipped: list[str] = []
+    for s in args.symbols:
+        try:
+            parsed.append(parse(s))
+        except ValueError as e:
+            skipped.append(f"跳过 {s}: {e}")
+    if not parsed:
+        if args.json:
+            _print_json({"changed": [], "skipped": skipped})
+        else:
+            for s in skipped:
+                print(f"⚠ {s}")
+        _finish_with_error("没有可添加的有效代码")
     # 锁内读-改-写: 读也在临界区内, 并发进程的写入不会被本次的全量替换覆盖
     with edit_portfolio(args.portfolio) as data:
         holdings = data.setdefault("holdings", [])
         changed: list[str] = []
-        skipped: list[str] = []
-        for s in args.symbols:
-            try:
-                p = parse(s)
-            except ValueError as e:
-                skipped.append(f"跳过 {s}: {e}")
-                continue
+        for p in parsed:
             found = next((h for h in holdings if _sym(h) == p.yahoo), None)
             if found is None:
                 h: dict = {"symbol": p.yahoo, "quantity": args.quantity}
@@ -43,16 +53,24 @@ def portfolio_add(args) -> None:
                 found["quantity"] = args.quantity
                 if args.avg_cost is not None:
                     found["avg_cost"] = args.avg_cost
+                # 多钱包/多来源导入会维护 source_quantities 台账, quantity 是
+                # 各来源分量之和。这里手工改写总数量后若台账仍与 quantity
+                # 不一致, 下一次钱包导入会把旧分量加回来 (静默覆盖手改值)。
+                # 与组合页保存口径一致: 数量对不上台账就作废台账。
+                sq = found.get("source_quantities")
+                if isinstance(sq, dict):
+                    try:
+                        same = args.quantity == sum(
+                            float(v or 0) for v in sq.values()
+                        )
+                    except (TypeError, ValueError):
+                        same = False
+                    if not same:
+                        found.pop("source_quantities", None)
+                        # 保留原 import_source (与组合页保存口径一致): 同一来源
+                        # 下次导入仍按「覆盖该来源」处理, 不会被当成新来源累加。
+                        found["import_source"] = found.get("import_source") or ""
                 changed.append(f"更新 {p.yahoo} 数量 {args.quantity}")
-    if not changed:
-        # 全部代码都无法识别: 不写盘 (否则会在 --portfolio 指向的新路径上
-        # 凭空建一个空持仓文件), 非 0 退出让调用方/Agent 知道有失败
-        if args.json:
-            _print_json({"changed": [], "skipped": skipped})
-        else:
-            for s in skipped:
-                print(f"⚠ {s}")
-        _finish_with_error("没有可添加的有效代码")
     if args.json:
         _print_json(
             {"changed": changed, "skipped": skipped, "holdings": data.get("holdings", [])}

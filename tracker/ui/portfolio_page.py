@@ -28,7 +28,7 @@ import streamlit as st
 from tracker import cache as cache_mod, prices, storage
 from tracker.analytics import build_view, by_symbol, summarize
 from tracker.fx import get_fx_rates
-from tracker.storage import DataFileLocked
+from tracker.storage import CorruptDataError, DataFileLocked
 from tracker.symbols import parse
 from tracker.services.watchlist import (
     build_watchlist_view,
@@ -727,9 +727,11 @@ def render_portfolio_page() -> None:
                                 ):
                                     r.pop("source_quantities", None)
                                     r["import_source"] = r.get("import_source") or ""
-                            pf["base_currency"] = base
                             pf["holdings"] = clean
-                    except DataFileLocked as e:
+                            # 基础货币由「设置」页单独维护: 这里不写回渲染开始时
+                            # 读到的旧 base, 否则另一标签页刚改的设置会被持仓保存
+                            # 用陈旧快照覆盖 (即使本次保存已持锁)。
+                    except (DataFileLocked, CorruptDataError, OSError) as e:
                         st.error(f"持仓保存失败: {e}")
                         return
                     cached_quotes.clear()
@@ -822,6 +824,28 @@ def render_portfolio_page() -> None:
                 width="stretch",
                 key="save_watchlist",
             ):
+                # 编辑器只展示固定列: 保存时保留未展示的字段 (如手写的 name,
+                # 脚本/第三方追加的自定义键), 否则一次 UI 保存就会静默丢数据
+                # (日历页的名称叠加正是读取 name 字段)。
+                editor_keys = {
+                    "symbol",
+                    "lists",
+                    "metric",
+                    "upper_1",
+                    "upper_2",
+                    "lower_1",
+                    "lower_2",
+                    "pb",
+                    "mcap",
+                    "note",
+                    "type",
+                }
+                extra = {
+                    _norm_sym(e.get("symbol", "")): {
+                        k: v for k, v in e.items() if k not in editor_keys
+                    }
+                    for e in entries
+                }
                 rows = []
                 bad, dups = [], []
                 seen = set()
@@ -856,6 +880,7 @@ def render_portfolio_page() -> None:
                     e = normalize_watch_entry(r)
                     e["symbol"] = key
                     e["lists"] = parse_lists(e.get("lists"))
+                    e = {**extra.get(key, {}), **e}
                     # data_editor 清空单元格会产生 NaN; note 若是 NaN 会让
                     # save_watchlist 的 allow_nan=False 直接抛 ValueError
                     for k in (
@@ -885,7 +910,7 @@ def render_portfolio_page() -> None:
                     try:
                         with storage.edit_watchlist(WATCHLIST_PATH) as wl:
                             wl["watchlist"] = rows
-                    except DataFileLocked as e:
+                    except (DataFileLocked, CorruptDataError, OSError) as e:
                         st.error(f"自选保存失败: {e}")
                         return
                     cached_quotes.clear()

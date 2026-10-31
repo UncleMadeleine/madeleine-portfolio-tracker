@@ -204,6 +204,21 @@ def test_price_currency_pence_and_usd_lines(monkeypatch):
     assert mcap._price_currency_for(_parse("KAP.IL")) == "USD"
 
 
+def test_price_currency_hk_usd_counter(monkeypatch):
+    """港股美元柜台 (9188.HK) 的市值币种必须跟随报价币种 USD, 不是 HKD."""
+    import tracker.providers.global_stocks as gs
+
+    monkeypatch.setattr(gs, "_yahoo_quote_currency", lambda y: "USD")
+    assert mcap._price_currency_for(_parse("9188.HK")) == "USD"
+    # 人民币柜台 parse 已按 8 开头 5 位推导为 CNY, 直接返回, 不发网络
+    monkeypatch.setattr(
+        gs,
+        "_yahoo_quote_currency",
+        lambda y: (_ for _ in ()).throw(AssertionError("不应查询人民币柜台")),
+    )
+    assert mcap._price_currency_for(_parse("82318.HK")) == "CNY"
+
+
 def _parse(symbol: str):
     from tracker.symbols import parse
 

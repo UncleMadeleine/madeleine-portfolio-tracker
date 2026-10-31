@@ -51,6 +51,28 @@ def test_load_portfolio_missing_file_returns_empty(tmp_path):
     assert data == {"base_currency": "CNY", "holdings": []}
 
 
+def test_load_portfolio_normalizes_base_currency(tmp_path):
+    """手写小写/非字符串 base_currency 归一为 uppercase, 避免汇率查表 miss.
+
+    UI 的汇率链按大写 q.currency 取 rate; 小写 "cny" 会让本币持仓被误报
+    「缺少 CNY 汇率」, 非字符串则在 .upper() 处直接抛异常。
+    """
+    path = tmp_path / "portfolio.json"
+    path.write_text(
+        json.dumps({"base_currency": " usd ", "holdings": []}), encoding="utf-8"
+    )
+    assert storage.load_portfolio(path)["base_currency"] == "USD"
+
+    path.write_text(json.dumps({"base_currency": 840, "holdings": []}), encoding="utf-8")
+    assert storage.load_portfolio(path)["base_currency"] == "CNY"
+
+
+def test_save_portfolio_normalizes_base_currency(tmp_path):
+    path = tmp_path / "portfolio.json"
+    storage.save_portfolio({"base_currency": "usd", "holdings": []}, path)
+    assert json.loads(path.read_text(encoding="utf-8"))["base_currency"] == "USD"
+
+
 def test_load_watchlist_stamps_type(tmp_path):
     """读取侧同样补写权威 type (手改 JSON 无效)."""
     path = tmp_path / "watchlist.json"

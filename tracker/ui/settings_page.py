@@ -6,7 +6,7 @@ import streamlit as st
 
 from . import settings as S
 from tracker import storage
-from tracker.storage import DataFileLocked
+from tracker.storage import CorruptDataError, DataFileLocked
 
 _COLOR_SAMPLE_PCT = "+2.35%"
 
@@ -167,7 +167,7 @@ def _save_display() -> None:
                 "crypto_source": crypto_source,
             }
         )
-    except DataFileLocked as e:
+    except (DataFileLocked, CorruptDataError, OSError) as e:
         st.error(f"设置保存失败: {e}")
         return
     changed = {
@@ -205,7 +205,7 @@ def _save_base() -> None:
     try:
         with storage.edit_portfolio(storage.PORTFOLIO_PATH) as data:
             data["base_currency"] = new_base
-    except DataFileLocked as e:
+    except (DataFileLocked, CorruptDataError, OSError) as e:
         st.error(f"基础货币保存失败: {e}")
         return
     st.toast(f"基础货币已保存为 {new_base}")

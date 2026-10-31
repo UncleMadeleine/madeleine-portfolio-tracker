@@ -40,6 +40,19 @@ SETTINGS_PATH = _DATA_HOME / "settings.json"
 DEFAULT_BASE_CURRENCY = "CNY"
 
 
+def _normalize_base_currency(value) -> str:
+    """基础货币归一: 去空白并大写; 非字符串/空值回退默认货币.
+
+    portfolio.json 可能被手工编辑成小写 ("usd") 或非字符串 (840)。UI 的
+    汇率查找、对比折算与设置页下拉都按大写币种比较: 小写会让本币持仓
+    查不到 1.0 汇率、被误报「缺少 CNY 汇率」; 非字符串则直接在 .upper()
+    处抛异常。读取与保存两侧都归一, 避免把非法形态继续写回磁盘。
+    """
+    if isinstance(value, str) and value.strip():
+        return value.strip().upper()
+    return DEFAULT_BASE_CURRENCY
+
+
 class CorruptDataError(ValueError):
     """数据文件损坏且无法从 .bak 恢复 (CLI 据此给出可读错误而非 traceback)."""
 
@@ -318,7 +331,7 @@ def load_portfolio(path: str | Path = PORTFOLIO_PATH) -> dict:
     if not Path(path).exists():
         return {"base_currency": DEFAULT_BASE_CURRENCY, "holdings": []}
     data = _read_json_or_recover(path)
-    data.setdefault("base_currency", DEFAULT_BASE_CURRENCY)
+    data["base_currency"] = _normalize_base_currency(data.get("base_currency"))
     data["holdings"] = _require_entry_list(data, "holdings", path)
     return data
 
@@ -376,7 +389,9 @@ def save_portfolio(data: dict, path: str | Path = PORTFOLIO_PATH) -> None:
         else:
             merged = {}
         merged.update(data)
-        merged.setdefault("base_currency", DEFAULT_BASE_CURRENCY)
+        merged["base_currency"] = _normalize_base_currency(
+            merged.get("base_currency")
+        )
         merged["holdings"] = [
             _stamp_type(r) for r in _clean_rows(merged.get("holdings", []))
         ]

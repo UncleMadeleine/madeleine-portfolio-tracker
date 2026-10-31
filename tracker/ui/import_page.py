@@ -316,13 +316,12 @@ def _preview_and_confirm(state_key: str, mode: str, on_saved, note: str = "") ->
         key=f"{state_key}_confirm",
     ):
         try:
-            data = storage.load_portfolio(storage.PORTFOLIO_PATH)
-            merged, stats = importer.merge_holdings(
-                data.get("holdings", []), rows, mode
+            # 统一走 importer.apply_import: 读-改-写在同一把文件锁内完成。
+            # 旧写法先 load_portfolio 再 merge 再 save_portfolio, 读在锁外,
+            # 与并发的 CLI/其它页面编辑会互相覆盖 (静默丢持仓)。
+            result = importer.apply_import(
+                rows, storage.PORTFOLIO_PATH, mode=mode
             )
-            storage.backup_file(storage.PORTFOLIO_PATH)
-            data["holdings"] = merged
-            storage.save_portfolio(data)
         except (CorruptDataError, OSError) as e:  # DataFileLocked 是 OSError 子类
             # portfolio.json 损坏且 .bak 也损坏 / 只读: 可读错误而不是整页
             # traceback (用户此时需要的是知道去修数据文件)
@@ -332,7 +331,7 @@ def _preview_and_confirm(state_key: str, mode: str, on_saved, note: str = "") ->
         if callable(on_saved):
             on_saved()
         st.toast(
-            f"{_MODE_LABELS[mode]}完成: 新增 {len(stats['added'])} · "
-            f"更新 {len(stats['updated'])}, 共 {len(merged)} 条持仓"
+            f"{_MODE_LABELS[mode]}完成: 新增 {len(result['added'])} · "
+            f"更新 {len(result['updated'])}, 共 {result['total']} 条持仓"
         )
         st.rerun()

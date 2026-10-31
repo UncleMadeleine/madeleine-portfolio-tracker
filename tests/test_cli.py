@@ -88,6 +88,13 @@ class TestWatchlistCli:
         assert "没有可添加的有效代码" in cap.err
         assert _load(f)["watchlist"] == []
 
+    def test_add_invalid_symbol_does_not_create_new_file(self, tmp_path, capsys):
+        """全部无效时连 --file 指向的新文件都不能创建 (edit 上下文会无条件保存)."""
+        f = tmp_path / "new-w.json"
+        with pytest.raises(SystemExit):
+            _run(capsys, "watchlist", "add", "BAD.ZZ", "--file", str(f))
+        assert not f.exists()
+
     def test_add_partial_failure_writes_valid_and_reports(self, tmp_path, capsys):
         f = tmp_path / "w.json"
         f.write_text(json.dumps({"watchlist": []}), encoding="utf-8")
@@ -269,6 +276,58 @@ class TestPortfolioCli:
         )
         with pytest.raises(SystemExit):
             _run(capsys, "portfolio", "add", "AAPL", "--portfolio", str(f))
+
+    def test_add_invalid_symbol_does_not_create_new_file(self, tmp_path, capsys):
+        """全部无效时不在 --portfolio 新路径凭空创建空持仓文件."""
+        f = tmp_path / "new-p.json"
+        with pytest.raises(SystemExit):
+            _run(
+                capsys,
+                "portfolio",
+                "add",
+                "BAD.ZZ",
+                "--portfolio",
+                str(f),
+                "--quantity",
+                "1",
+            )
+        assert not f.exists()
+
+    def test_add_manual_quantity_invalidates_wallet_ledger(self, tmp_path, capsys):
+        """手工改总数量后作废旧来源台账, 避免下次钱包导入把旧分量加回来."""
+        f = tmp_path / "p.json"
+        f.write_text(
+            json.dumps(
+                {
+                    "base_currency": "CNY",
+                    "holdings": [
+                        {
+                            "symbol": "BTC-USD",
+                            "quantity": 10,
+                            "source_quantities": {"wallet:eth:0xabc": 10},
+                            "import_source": "wallet:eth:0xabc",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        _run(
+            capsys,
+            "portfolio",
+            "add",
+            "BTC-USD",
+            "--portfolio",
+            str(f),
+            "--quantity",
+            "3.5",
+        )
+        h = _load(f)["holdings"][0]
+        assert h["quantity"] == 3.5
+        assert "source_quantities" not in h
+        # import_source 保留: 同一钱包来源下次导入按覆盖该来源处理 (幂等),
+        # 不会与手改数量相加造成数量虚增。
+        assert h["import_source"] == "wallet:eth:0xabc"
 
     def test_add_normalizes_hk(self, tmp_path, capsys):
         f = tmp_path / "p.json"

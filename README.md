@@ -24,13 +24,14 @@ Madeleine Portfolio Tracker 是一款**本地优先**的投资组合追踪工具
 - **多币种持仓追踪** — 自动汇率换算，统一基础货币展示
 - **自选股阈值提醒** — 价格 / 市净率 (PB) / 总市值 (mcap) 三指标基准，两级上限/下限，触发分级，距离预测
 - **长桥 (LongPort) 行情接入** — 可选行情/历史/持仓源（OAuth 登录），自带 PB (calc_indexes 实时口径) 反推每股净资产，失败自动回退默认数据源
+- **EODHD 付费源 (BYOK)** — 自备 token 的增强源：历史 K 线默认在 yfinance 之前（拆股+分红复权），实时行情默认仅在默认源失败时兜底（`quotes=primary` 时走 `s=` 批量，每批 15 个代码）；PB/市值可用 EODHD fundamentals 补/替换 yfinance；LSE 便士折算、`.IL` 豁免、按交易所映射 EODHD ticker；未配置 token 时完全不影响免费链路
 - **K 线蜡烛图** — 日K / 周K / 月K，MA 均线，成交量，MACD / RSI / KDJ / 布林带，滑动模式默认加载上市以来全量历史
 - **宏观/风险指数K线** — 独立 IX.<KEY> 代码规范（美元指数 / VIX / 沪深 300 / 商品期货主力连续（黄金·白银·鸡蛋·豆粕·豆一·豆二·生猪·碳酸锂）/ 铀现货与长协价（Cameco 月度 U3O8）/ 水泥网建材指数 / 恒生官网港股指数（恒生指数·国企·恒生科技·红筹·恒生综合·恒指波幅 等共 12 个）/ 恒生AH股溢价指数 等，共 51 个，`index-kline --list` 可查全部），独立页面与 `index-kline` 子命令，独立 provider 源链
 - **多股对比** — 任意代码同坐标系折线对比，归一化（起点=100）跨币种跨量级比较
 - **财经日历** — 持仓/自选的本月与下月财报、预约披露、除权除息/派息事件（yfinance 单票 + akshare 整批，长桥可选兜底），独立页面与 `calendar` 子命令；首屏先展示磁盘缓存并后台刷新，冷启动带 A股整批/海外单票进度条
 - **首屏性能** — 组合与日历均采用 stale-while-revalidate：先渲染 30 分钟 / 7 天内的旧缓存秒开，后台静默重取；仅在完全无缓存时阻塞取数（组合/日历均显示实时进度条）
 - **Streamlit 可视化页面** — 组合明细 / 资产配置 / 自选提醒 / K线查询（含多股走势对比）/ 指数K线 / 日历 / 设置
-- **统一 CLI** — 19 个子命令（快照、报价、持仓、自选、监控报告、导出、汇率、历史、K线、日历、搜索、对比、指数K线、导入、长桥登录、同步、钱包导入、缓存、初始化），全部支持机器可读输出（`--json`，`report`/`export` 为 `-f json`）
+- **统一 CLI** — 20 个子命令（快照、报价、持仓、自选、监控报告、导出、汇率、历史、K线、日历、搜索、对比、指数K线、导入、长桥登录、EODHD 自检、同步、钱包导入、缓存、初始化），全部支持机器可读输出（`--json`，`report`/`export` 为 `-f json`）
 - **链上钱包导入** — EVM 五链 + TRON + Solana 共七条链地址余额只读查询，一键写入持仓
 - **A股券商持仓导入** — 解析券商客户端导出的 CSV/Excel 持仓文件
 
@@ -180,6 +181,10 @@ python -m tracker.cli import longport --dry-run        # 长桥账户持仓预�
 python -m tracker.cli longport-login                       # OAuth 浏览器授权登录（token 自动缓存刷新）
 python -m tracker.cli quote AAPL 0700.HK --longport --json # 指定子命令走长桥行情
 
+# EODHD (BYOK: 自备 token, 可选付费源; 未配置时不影响免费链路)
+python -m tracker.cli eodhd status                         # 查看是否可用 / token 掩码 / 角色
+python -m tracker.cli eodhd test AAPL 0700.HK --json       # 实打一次行情 + 最近 7 天历史 + 基本面
+
 # 运行单元测试（全离线；禁网护栏兜底：漏打桩的测试秒红而非挂起）
 python -m pytest tests/ -q
 
@@ -204,6 +209,8 @@ python -m tracker.cli kline AAPL --json        # K 线数据（不生成图表�
 python -m tracker.cli index-kline IX.DXY --json # 指数K线数据 (IX.<KEY>, 不生成图表)
 python -m tracker.cli export -f json           # 完整快照 JSON
 python -m tracker.cli longport-login --json    # 长桥 OAuth 授权 URL（脚本消费，不自动开浏览器）
+python -m tracker.cli eodhd status --json      # EODHD BYOK 是否可用（token 掩码，不泄露明文）
+python -m tracker.cli eodhd test AAPL --json   # EODHD 连通性自检（行情 + 最近 7 天历史 + 基本面）
 ```
 
 - 无交互、无 TUI 依赖，纯 stdout；错误走 stderr 并以非零码退出
@@ -338,17 +345,18 @@ tracker/ui/           Streamlit 页面包（streamlit run tracker/ui/app.py / �
 ├── kline_page.py       「K线」页面（搜索框 + lightweight-charts 组件 + 上市以来全量滑动 + 多股走势对比 + 加密货币对比）
 ├── index_page.py       「指数K线」页面（IX.<KEY> 分组下拉, 独立于股票 K线页）
 ├── import_page.py      「导入」页面（IBKR 账户 / 长桥账户 / 链上钱包 / 券商文件, 追加合并或覆盖）
-├── settings_page.py    「设置」页面（配色 / 数据源 / 基础货币）
+├── settings_page.py    「设置」页面（配色 / 数据源 / EODHD BYOK / 基础货币）
 ├── longport_login.py   长桥 OAuth 登录引导（独立子进程, 状态文件 <数据目录>/var/longport_oauth_state.json）
 └── settings.py         settings.json 读写（涨跌配色 / prefer_akshare / use_ibkr / use_longport / crypto_source）+ portfolio 读写助手
 tracker/
 ├── __main__.py         python -m tracker 入口（转发到 cli）
 ├── paths.py            数据目录解析（TRACKER_HOME > 仓库根 > 平台用户目录）+ 包内资源定位
-├── cli/                CLI 包（python -m tracker.cli，19 个子命令各一个模块）
+├── cli/                CLI 包（python -m tracker.cli，20 个子命令各一个模块）
 │   ├── __init__.py       argparse 注册与分发
 │   ├── _common.py        JSON 序列化 / 代码归一化 / 原子写 / 错误退出
 │   ├── __main__.py       python -m tracker.cli 入口
 │   ├── init.py           首次使用: 包内模板 → 数据目录（pip 安装后必走一步）
+│   ├── eodhd.py          EODHD BYOK 状态 / 连通性自检
 │   ├── snapshot.py       快照（持仓 + 自选 + 阈值触发）
 │   ├── quote.py          实时行情
 │   ├── watchlist.py      自选管理（list/add/remove/import-longport）与阈值提醒
@@ -393,6 +401,7 @@ tracker/
 ├── mcap.py             历史市值序列（A股东财历史总市值 / 全球历史股本×收盘价 / 当前市值近似; 市值对比用）
 ├── ibkr.py             IBKR 行情接入 + 持仓读取（可选依赖 ib_async，失败静默回退）
 ├── longport.py         长桥行情/历史/持仓接入（可选依赖 longport，失败静默回退）
+├── eodhd.py            EODHD BYOK 接入（token 自备; 行情/历史源, 配置与自检, 失败静默回退）
 ├── longport_oauth.py   长桥 OAuth 授权子进程（独立进程运行, 状态写 var/longport_oauth_state.json）
 ├── importer.py         **统一导入管道**：四来源采集 → 追加/覆盖合并 → 备份写盘
 ├── ibkr_sync.py        IBKR 持仓导入兼容入口（委托 importer，等价 import ibkr，缺省追加合并）
@@ -410,6 +419,9 @@ ibkr.json               IBKR 真实配置（已 gitignore; 模板 tracker/templa
                          env IBKR_CONFIG 可指定其他路径）
 longport.json           长桥真实配置（已 gitignore; 模板 tracker/templates/longport.example.json,
                          env LONGPORT_CONFIG 可指定其他路径）
+eodhd.json               EODHD 真实配置（BYOK token / 角色 / 复权口径; 已 gitignore, 模板
+                         tracker/templates/eodhd.example.json, env EODHD_CONFIG 可指定其他路径;
+                         token 也可用 env TRACKER_EODHD_TOKEN 注入, 优先级更高）
 var/                    运行时生成产物（行情缓存 quotes_cache.db、kline/compare 图表 HTML、
                          longport_oauth_state.json 长桥登录状态）, 位于数据目录下,
                          可随时整目录删除（重建即自动再生成）
@@ -433,7 +445,7 @@ tests/                  单元测试（离线, mock）
 
 | type | 覆盖代码 | 实时行情优先级 | 历史K线优先级 |
 |----------|----------|----------------|----------------|
-| **global** | 裸代码（美股）、`.HK/.DE/.L/.TO/.AX/.T/.KS/.KQ/.SI/.SA…` | 长桥(可选) → IBKR(可选) → yfinance 批量 → 港股 akshare | IBKR(可选) → 长桥(可选) → yfinance（港股可 `--akshare` 翻转） |
+| **global** | 裸代码（美股）、`.HK/.DE/.L/.TO/.AX/.T/.KS/.KQ/.SI/.SA…` | 长桥(可选) → IBKR(可选) → **EODHD(可选, primary 时)** → yfinance 批量 → 港股 akshare → EODHD(可选, fallback) | IBKR(可选) → 长桥(可选) → **EODHD(可选, primary)** → yfinance（港股可 `--akshare` 翻转） → EODHD(可选, fallback) |
 | **cn** | `.SS/.SZ/.BJ`（A/B股、北交所） | 长桥(可选前置) → **akshare 优先** → yfinance | 长桥(可选前置) → **akshare 优先** → yfinance |
 | **crypto** | `BASE-QUOTE`（`BTC-USD`） | **Binance API** → Gate.io 现货 → Hyperliquid 永续（仅USD系） → yfinance | **Binance klines** → Gate.io → Hyperliquid → yfinance |
 | **index** | `IX.<KEY>`（`IX.DXY` 美元指数 / `IX.VIX` 恐慌指数 / `IX.CSI300` 沪深 300 / `IX.AU` 黄金 · `IX.AG` 白银 · `IX.JD` 鸡蛋 · `IX.M` 豆粕 · `IX.A` 豆一 · `IX.B` 豆二 · `IX.LH` 生猪 · `IX.LC` 碳酸锂主力连续 / `IX.URANIUM` 铀现货价 · `IX.URANIUM_LT` 铀长协价 / `IX.CEMPI` 水泥价格指数 / `IX.HSI` 恒生指数 · `IX.HSTECH` 恒生科技指数 等恒生官网港股指数 / `IX.HSAHP` AH股溢价指数 …） | —（指数无实时行情, 不参与持仓聚合） | 中国指数 **akshare 优先** → yfinance；美股 SPX/NDX/DJI 有新浪兜底；水泥网/商品期货/恒生官网/Cameco 铀价为专属源（无兜底） |
@@ -454,6 +466,13 @@ tests/                  单元测试（离线, mock）
 - IBKR 断开时自动静默回退下一级数据源，不影响页面运行；持仓同步见下方
 - 长桥 (LongPort) 可选前置行情/历史源：`settings.json` `"use_longport": true` 或子命令 `--longport` 启用；
   两源都启用时 IBKR 优先级更高，长桥不可用自动回退默认源（详见下方「长桥 (LongPort) 账户」）
+- EODHD 可选付费源 (BYOK)：`eodhd.json` 填 token（或 env `TRACKER_EODHD_TOKEN`）后生效，未配置时
+  完全不影响免费链路。默认历史K线 `priority=primary`（在 yfinance 之前，IBKR/长桥之后），
+  实时行情 `quotes=fallback`（仅在默认源失败时兜底）、`quotes=primary` 时走 `s=` 批量
+  （每批 15 个代码，仍按 ticker 计费）并回落 yfinance；PB/市值 `fundamentals=fallback`
+  只补 yfinance 缺失字段（`primary` 可改为 EODHD 优先）。EODHD 行情不带币种与 PB/市值字段：
+  行情币种按本项目代码规范推导（`.IL`/港股美元柜台等可用 `currency_overrides` 覆盖）。
+  LSE `.L/.AL` 默认按便士 ÷100，英镑计价标的用 `lse_gbp_symbols` 豁免。详见「配置 EODHD (BYOK)」
 - Hyperliquid 永续价为 Binance、Gate.io 之后的第三加密源（markPx 与现货存在基差，仅 USD 系计价代码）
 
 ---
@@ -535,6 +554,51 @@ python -m tracker.cli watchlist import-longport --overwrite  # 覆盖现有自�
 - UI 登录引导在「导入」页长桥标签（授权在独立子进程运行，状态经 `var/longport_oauth_state.json`）；
   授权子进程独占 `callback_port`（默认 60355），同一端口只能跑一个登录流程
 
+### EODHD (BYOK) 付费源
+
+EODHD 是可选付费数据源，token 自备（免费套餐每天 20 次调用，长期使用需付费）。
+**不配置 token 时零影响**，所有取数仍走原有免费链路。
+
+```bash
+# 1) 配置 token: 编辑数据目录 eodhd.json（tracker init 会生成模板）
+#    或直接注入环境变量（优先级更高，适合容器/CI）:
+export TRACKER_EODHD_TOKEN=your_token
+
+# 2) 自检（不写持仓、不污染缓存）
+python -m tracker.cli eodhd status
+python -m tracker.cli eodhd test AAPL 0700.HK --json
+
+# 3) 之后 quote/history/kline/compare/snapshot/watchlist 会自动按配置接入
+python -m tracker.cli kline AAPL --months 12
+```
+
+`eodhd.json` 字段（模板见 `tracker/templates/eodhd.example.json`）：
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `enabled` | `true` | 总开关；token 为空时仍视为不可用（`tracker eodhd status` 会说明原因） |
+| `token` | `""` | API token；env `TRACKER_EODHD_TOKEN` / `EODHD_API_TOKEN` 覆盖 |
+| `priority` | `primary` | 历史K线角色：`primary`=在 yfinance 之前（IBKR/长桥之后）/ `fallback`=最后兜底 |
+| `quotes` | `fallback` | 实时行情：`off` / `fallback`（默认源失败才用）/ `primary`（EODHD 优先；走 `s=` 批量，每批 15 个代码，批量失败的再回落默认源） |
+| `fundamentals` | `fallback` | PB（每股净资产）/市值：`off` / `fallback`（先 yfinance，只补缺失字段）/ `primary`（先用 EODHD `Highlights.BookValue` / `MarketCapitalization`，缺失再补 yfinance） |
+| `adjustment` | `adjusted` | `adjusted`=用 adjusted_close（拆股+分红复权）并同比例缩放 OHLC；`raw`=原始成交价 |
+| `lse_pence` | `true` | LSE `.L/.AL` 按便士 ÷100 折成英镑 |
+| `lse_gbp_symbols` | `[]` | 本身以英镑报价的 LSE 标的（常见于 ETF），不做便士折算 |
+| `currency_overrides` | `{}` | 个别标的币种覆盖，如 `{"KAP.IL": "USD"}`（EODHD 行情不返回币种） |
+| `timeout` | `10` | 单次 HTTP 超时（秒） |
+
+- 代码映射：Yahoo 规范代码 → EODHD `SYMBOL.EXCHANGE`（`AAPL.US` / `0700.HK` /
+  `BP.LSE` / `SAP.XETRA` / `RY.TO` / `BHP.AU` / `9984.TSE` / `005930.KO` / `PETR4.SA` …）；
+  未覆盖的市场返回 None，自动跳过（不影响其它源）
+- 当前只接全球股票域：A股/B股与加密已有更合适的免费主源，不走 EODHD
+- EODHD 实时行情不带名称、PB、总市值：行情币种按代码规范推导（例外用 `currency_overrides`）；
+  PB/市值可由 `fundamentals` 使用 EODHD 自带基本面（默认 `fallback` 只补 yfinance 缺失字段，
+  结果与其他基本面一样缓存 6h）
+- `quotes=primary` 时用 `s=` 参数批量请求（每批 15 个代码），批量未命中/失败的代码自动回落
+  yfinance 批量与逐代码源链；EODHD 按 ticker 计费，批量只降低延迟、不减少调用次数
+- EODHD 的 `adjusted_close` 会随新分红整体重算：本项目按区间整段重取、不做尾部拼接，
+  缓存 TTL 到期后自然刷新
+
 ### A股券商文件导入
 
 A股券商无跨券商统一 API（监管对个人程序化接入持续收紧），采用**文件导入**模式：
@@ -599,6 +663,7 @@ python -m tracker.cli import wallet polygon 0x... --tokenlist my_tokens.json
 - IBKR 行情需本机运行 IB Gateway 且 API 已启用；A股/港股/B股数据若无市场数据订阅，`reqTickers` 可能返回空值，自动回退 Yahoo/akshare
 - IBKR A股经沪深港通通道：沪 `SEHKNTL` / 科创 `SEHKSTAR` / 深 `SEHKSZSE`，计价 CNH；若你的账户显示不同交易所代码，在 `ibkr.json` 的 `exchanges` 中修改对应键（`CN_SH` / `CN_STAR` / `CN_SZ`）；B股合约根据 IBKR 返回的 `SHSE/USD` 或 `SZSE/HKD` 自动识别
 - 长桥行情/持仓需 `pip install longport` 并完成登录；未安装/未配置时 `--longport` 与 `import longport` 报可读错误并回退默认数据源
+- EODHD 为 BYOK 付费源：免费套餐 20 次/天；`quotes=primary`/`fundamentals=primary` 都会逐代码消耗调用次数（自选 600+ 时注意额度）；EODHD 行情本身不返回名称/币种/PB/总市值（PB/市值需 `fundamentals` 角色，行情币种用 `currency_overrides` 覆盖例外）；LSE 便士口径可用 `lse_pence` / `lse_gbp_symbols` 调整
 
 ---
 
@@ -616,7 +681,7 @@ python -m tracker.cli import wallet polygon 0x... --tokenlist my_tokens.json
 - [ ] 交易流水记录与分批成本（FIFO）
 - [ ] 分红/拆分事件跟踪
 - [ ] 历史净值曲线（按日聚合组合市值）
-- [ ] EODHD 付费 provider 接入（升级数据质量）
+- [x] EODHD 付费 provider 接入（BYOK token 自备；历史K线 primary、行情 fallback，LSE 便士/复权口径可配）
 
 ---
 
@@ -677,12 +742,13 @@ A **local-first** portfolio tracker supporting **A-shares / B-shares / Beijing S
 - **Watchlist with price / PB / market-cap threshold alerts** — two-level upper/lower thresholds, severity levels, distance prediction
 - **IBKR integration** — TWS / IB Gateway snapshots + position sync, automatic fallback
 - **LongPort integration** — optional quotes/history/positions source (OAuth login), silent fallback to default sources
+- **EODHD BYOK (optional paid source)** — bring your own token; EOD history primary by default (split+dividend adjusted), quotes fallback-only by default (`quotes=primary` batches 15 symbols per `s=` request); PB/market-cap can use EODHD fundamentals (`fundamentals=fallback` fills only missing fields); LSE pence handling, per-exchange ticker mapping, zero impact when unconfigured
 - **K-line charts** — daily/weekly/monthly, MA overlays, volume, MACD/RSI/KDJ/Bollinger; slide mode loads full listing history by default
 - **Macro/risk index K-lines** — dedicated `IX.<KEY>` symbol space (USD index, VIX, CSI 300, commodity main-continuous futures — gold, silver, eggs, soybean meal, soybeans, hogs, lithium carbonate — uranium spot/long-term (Cameco monthly), cement indices, ...), separate page & `index-kline` subcommand, dedicated provider source chain
 - **Multi-symbol comparison** — same-coordinate overlay normalized to 100, optional ratio line with history-FX adjustment; plus a crypto-only sub-tab on the K-line page (independent per-coin candle panes, raw prices, shared time axis)
 - **Financial calendar** — earnings, scheduled disclosures, ex-dividend/record dates for holdings & watchlist over the current and next months (yfinance per-symbol + akshare bulk, optional LongPort fallback), dedicated page & `calendar` subcommand
 - **Unified import pipeline** — IBKR account / LongPort account / on-chain wallet (5 EVM chains + TRON + Solana) / A-share broker CSV-Excel file, each with append-merge or overwrite mode (auto .bak backup); same logic drives the Streamlit「导入」page
-- **Unified CLI** — 19 subcommands (snapshot, quote, watchlist, portfolio, report, export, fx, history, kline, calendar, search, compare, index-kline, import, longport-login, cache, init; `sync` / `import-wallet` kept as compat aliases); all support machine-readable output (`--json`, or `-f json` for report/export)
+- **Unified CLI** — 20 subcommands (snapshot, quote, watchlist, portfolio, report, export, fx, history, kline, calendar, search, compare, index-kline, import, longport-login, eodhd, cache, init; `sync` / `import-wallet` kept as compat aliases); all support machine-readable output (`--json`, or `-f json` for report/export)
 
 ### Quick Start
 
@@ -704,6 +770,7 @@ tracker snapshot --json
 tracker quote AAPL 600519.SS BTC-USD
 tracker kline AAPL --months 12
 tracker import ibkr --dry-run
+tracker eodhd status                    # optional paid source (BYOK); no-op unless token is set
 tracker import file positions.csv --dry-run
 tracker longport-login && tracker import longport --dry-run
 ```
@@ -718,11 +785,12 @@ Quotes are fetched with a priority chain:
 
 1. **LongPort** (optional, `use_longport` / `--longport`) — HK/US/CN quotes & history, silent fallback
 2. **IBKR** (TWS / IB Gateway) — real-time if subscribed, delayed otherwise, batch snapshot (higher priority than LongPort when both enabled)
-3. **yfinance** (via OpenBB) — batch quote (1 request) + individual retry
-4. **akshare** (East Money) — A-shares / HK spot + history (CN domain: akshare first)
-5. **FX** — CFETS for full XXX/CNY table, direct/inverse/USD bridge fallback
-6. **Indices** — `IX.<KEY>` historical only: CN indices via akshare (Sina), US SPX/NDX/DJI via yfinance with Sina fallback, cement / commodity-futures / Cameco uranium indices on dedicated sources (no fallback)
-7. **Crypto** — Binance → Gate.io → Hyperliquid perpetuals (USD-quoted only) → yfinance; reorder with `settings.json` `crypto_source` or `--crypto-source`
+3. **EODHD** (optional BYOK, `eodhd.json` / `TRACKER_EODHD_TOKEN`) — history primary by default (ahead of yfinance, behind IBKR/LongPort), live quotes fallback-only by default; errors fall through to the next source
+4. **yfinance** (via OpenBB) — batch quote (1 request) + individual retry
+5. **akshare** (East Money) — A-shares / HK spot + history (CN domain: akshare first)
+6. **FX** — CFETS for full XXX/CNY table, direct/inverse/USD bridge fallback
+7. **Indices** — `IX.<KEY>` historical only: CN indices via akshare (Sina), US SPX/NDX/DJI via yfinance with Sina fallback, cement / commodity-futures / Cameco uranium indices on dedicated sources (no fallback)
+8. **Crypto** — Binance → Gate.io → Hyperliquid perpetuals (USD-quoted only) → yfinance; reorder with `settings.json` `crypto_source` or `--crypto-source`
 
 IBKR/LongPort disconnects silently fall back to the next source; the page continues running without interruption.
 
@@ -733,7 +801,7 @@ tracker/ui/        Streamlit dashboard (app.py + cli_main() console entry + klin
 tracker/           Core package: paths.py (data-dir resolution), cli/ subcommands (incl. init),
                    providers/, symbols, symbol_migrations, storage, prices, fx, search,
                    cache, charting, analytics, watchlist, services/, importer, ibkr,
-                   longport, longport_oauth, ibkr_sync, ashare_sync, wallet
+                   longport, longport_oauth, eodhd, ibkr_sync, ashare_sync, wallet
 tracker/templates/ Packaged config templates + streamlit theme (shipped in the wheel; `tracker init` copies them into the data dir)
 tracker/assets/    Vendored lightweight-charts standalone JS (offline, no extra dependency)
 pyproject.toml     Packaging metadata (dependency extras, console scripts, package-data)
@@ -743,6 +811,7 @@ watchlist.json     Watchlist config (editable via page; lives in the data dir)
 settings.json      Display & data-source settings (lives in the data dir)
 ibkr.json          IBKR config (gitignored; template in tracker/templates/)
 longport.json      LongPort config (gitignored; template in tracker/templates/)
+eodhd.json         EODHD BYOK config (gitignored; template in tracker/templates/; token can also come from TRACKER_EODHD_TOKEN)
 tests/             Unit tests (offline, mocked)
 ```
 

@@ -40,7 +40,7 @@ class TestDataHomeResolution:
     def test_templates_are_package_resources(self):
         # 模板必须随包分发 (wheel 内 tracker/templates/), 安装后才能 tracker init
         assert paths.TEMPLATES_DIR == paths.PACKAGE_DIR / "templates"
-        for name in ("portfolio", "watchlist", "settings", "ibkr", "longport"):
+        for name in ("portfolio", "watchlist", "settings", "ibkr", "longport", "eodhd"):
             tpl = paths.TEMPLATES_DIR / f"{name}.example.json"
             assert tpl.exists(), tpl
             assert isinstance(json.loads(tpl.read_text(encoding="utf-8")), dict)
@@ -105,7 +105,7 @@ class TestInitCommand:
         home = tmp_path / "home"
         monkeypatch.setenv("TRACKER_HOME", str(home))
         self._run(["init"])
-        for name in ("portfolio", "watchlist", "settings", "ibkr", "longport"):
+        for name in ("portfolio", "watchlist", "settings", "ibkr", "longport", "eodhd"):
             dst = home / f"{name}.json"
             assert dst.exists()
             assert dst.read_text(encoding="utf-8") == (
@@ -133,7 +133,7 @@ class TestInitCommand:
         payload = json.loads(capsys.readouterr().out)
         assert payload["ok"] is True
         assert payload["data_home"] == str(home)
-        assert len(payload["created"]) == 5
+        assert len(payload["created"]) == 6
 
 
 class TestVersionSingleSource:

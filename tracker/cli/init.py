@@ -20,6 +20,7 @@ _TEMPLATES = {
     "settings": "settings.example.json",
     "ibkr": "ibkr.example.json",
     "longport": "longport.example.json",
+    "eodhd": "eodhd.example.json",
 }
 
 
@@ -37,6 +38,12 @@ def cmd_init(args) -> None:
         if not src.exists():  # 模板缺失 (异常构建): 跳过而不是报错中断
             continue
         dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+        if name == "eodhd":
+            # eodhd.json 会存 API token: 首次生成即收紧为仅属主可读写
+            try:
+                dst.chmod(0o600)
+            except OSError:
+                pass
         created.append(dst)
 
     if getattr(args, "json", False):

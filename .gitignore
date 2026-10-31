@@ -35,6 +35,10 @@ ibkr.json
 # 长桥真实配置 (含 client_id/app_key 等凭据), 模板见 tracker/templates/longport.example.json
 longport.json
 
+# EODHD 真实配置 (含 API token), 模板见 tracker/templates/eodhd.example.json
+eodhd.json
+eodhd.json.bak
+
 # OpenBB
 .openbb_platform/
 

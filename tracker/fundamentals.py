@@ -2,17 +2,22 @@
 
 数据源: OpenBB equity.fundamental.metrics (provider=yfinance), 覆盖
 美股/港股/A股/德英加澳等 yfinance 支持的股权标的; crypto 无此数据。
+EODHD (BYOK, 可选) 可补/替换全球股票域:
+  - fundamentals=primary: 先用 EODHD (BookValue / MarketCapitalization),
+    EODHD 缺失的字段再由 OpenBB 补齐
+  - fundamentals=fallback (默认): 先走 OpenBB, 只对仍缺失的字段调用 EODHD
 结果缓存 6h (book_value/market_cap 为低频报表数据); 无有效值同样落库 (负缓存),
 TTL 内不再重复请求。
 
 PB (市净率) 本身不落库: pb = price / book_value, 现价实时变化, 由
 services.watchlist 在组装视图时即时计算 (rules.metric_value_for_quote)。
-市值 (market_cap) 是 yfinance metrics 的快照口径, 同样由视图层按指标基准取用。
+市值 (market_cap) 是数据源快照口径, 同样由视图层按指标基准取用。
 """
 
 from __future__ import annotations
 
 import math
+from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 
 from . import cache as cache_mod
@@ -31,9 +36,7 @@ def _fund_metrics(symbols: list[str]) -> dict[str, dict[str, float | None]]:
     out: dict[str, dict[str, float | None]] = {
         s: {"book_value": None, "market_cap": None} for s in symbols
     }
-    res = ob.equity.fundamental.metrics(
-        symbol=symbols, provider="yfinance"
-    )
+    res = ob.equity.fundamental.metrics(symbol=symbols, provider="yfinance")
     for item in res.results:
         d = item.model_dump()
         sym = str(d.get("symbol") or "").strip()
@@ -70,25 +73,103 @@ def _load_cached(
     return out, missing
 
 
+def _empty_metrics() -> dict:
+    return {"book_value": None, "market_cap": None}
+
+
+def _complete(vals: dict | None) -> bool:
+    """两个指标都有值才算完整 (用于判断是否需要下一数据源补齐)."""
+    return bool(
+        vals
+        and vals.get("book_value") is not None
+        and vals.get("market_cap") is not None
+    )
+
+
+def _merge_fill(primary: dict | None, secondary: dict | None) -> dict:
+    """以 primary 为准, 只把 secondary 中 primary 缺失的字段补进来."""
+    out = _empty_metrics()
+    primary = primary or {}
+    secondary = secondary or {}
+    for key in ("book_value", "market_cap"):
+        out[key] = primary.get(key)
+        if out[key] is None:
+            out[key] = secondary.get(key)
+    return out
+
+
+def _eodhd_metrics(symbols: list[str]) -> dict[str, dict]:
+    """EODHD 基本面 (可选 BYOK) → {symbol: {book_value, market_cap}}.
+
+    只处理全球股票域且 token 可用的代码; 单代码失败静默跳过, 不阻断
+    yfinance/长桥等既有链路。并发 4 路, 避免自选 PB/市值提醒串行等待。
+    """
+    from . import eodhd as eodhd_mod
+
+    cfg = eodhd_mod.load_config()
+    if eodhd_mod.fundamentals_mode(cfg) == "off":
+        return {}
+    targets = [s for s in symbols if eodhd_mod.yahoo_to_eodhd(s)]
+    if not targets:
+        return {}
+
+    def _one(sym: str):
+        try:
+            return sym, eodhd_mod.fundamentals(sym)
+        except Exception:  # noqa: BLE001 - 单代码失败只跳过该代码
+            return sym, None
+
+    out: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        for sym, data in pool.map(_one, targets):
+            if not data:
+                continue
+            vals = {
+                "book_value": data.get("book_value"),
+                "market_cap": data.get("market_cap"),
+            }
+            if vals["book_value"] is not None or vals["market_cap"] is not None:
+                out[sym] = vals
+    return out
+
+
 def _fill_fundamentals(out: dict[str, dict], missing: list[str]) -> None:
-    """为缓存未命中的 symbol 批量拉取并写缓存, 结果并入 out (失败静默 None)."""
+    """为缓存未命中的 symbol 取数并写缓存 (EODHD + OpenBB 按配置组合)."""
     if not missing:
         return
-    try:
-        fresh = _fund_metrics(missing)
-    except Exception:  # noqa: BLE001 - 基本面失败不阻断快照/提醒主流程
-        fresh = {s: {"book_value": None, "market_cap": None} for s in missing}
+    from . import eodhd as eodhd_mod
+
+    mode = eodhd_mod.fundamentals_mode()
+    fresh: dict[str, dict] = {}
+    pending = list(missing)
+    if mode == "primary":
+        fresh.update(_eodhd_metrics(pending))
+        pending = [s for s in pending if not _complete(fresh.get(s))]
+
+    if pending:
+        try:
+            ob = _fund_metrics(pending)
+        except Exception:  # noqa: BLE001 - 基本面失败不阻断快照/提醒主流程
+            ob = {s: _empty_metrics() for s in pending}
+        for s in pending:
+            fresh[s] = _merge_fill(fresh.get(s), ob.get(s))
+
+    if mode == "fallback":
+        need = [s for s in missing if not _complete(fresh.get(s))]
+        if need:
+            for s, vals in _eodhd_metrics(need).items():
+                fresh[s] = _merge_fill(fresh.get(s), vals)
+
     for s in missing:
-        vals = fresh.get(s)
+        vals = fresh.get(s) or _empty_metrics()
         cache_mod.set_fundamental_cached(
             s,
-            vals.get("book_value") if vals else None,
-            market_cap=vals.get("market_cap") if vals else None,
+            vals.get("book_value"),
+            market_cap=vals.get("market_cap"),
         )
-        out[s] = cache_mod.get_fundamental_cached(s, ttl=_METRICS_TTL) or {
-            "book_value": None,
-            "market_cap": None,
-        }
+        out[s] = (
+            cache_mod.get_fundamental_cached(s, ttl=_METRICS_TTL) or _empty_metrics()
+        )
 
 
 def fetch_book_values(
@@ -96,8 +177,8 @@ def fetch_book_values(
 ) -> dict[str, float | None]:
     """批量获取每股净资产 → {symbol: book_value | None}.
 
-    磁盘缓存优先 (6h TTL), 未命中的批量走 OpenBB (单次调用), 失败静默
-    返回 None (调用方按「PB 缺失」降级, 不抛异常)。
+    磁盘缓存优先 (6h TTL), 未命中的按配置走 EODHD/OpenBB (见模块说明),
+    失败静默返回 None (调用方按「PB 缺失」降级, 不抛异常)。
     refresh=True 跳过缓存读取 (显式强制刷新, 穿透负缓存)。
     """
     out, missing = _load_cached(symbols, refresh=refresh)
@@ -110,7 +191,7 @@ def fetch_market_caps(
 ) -> dict[str, float | None]:
     """批量获取总市值 (当地货币) → {symbol: market_cap | None}.
 
-    与 PB 共用同一缓存行与 OpenBB 调用 (market_cap 与 book_value 一次返回);
+    与 PB 共用同一缓存行与外层取数调用 (OpenBB/EODHD 一次返回两个指标);
     crypto 与无数据源标的静默返回 None (调用方按「市值缺失」降级)。
     refresh=True 跳过缓存读取 (显式强制刷新, 穿透负缓存)。
     """

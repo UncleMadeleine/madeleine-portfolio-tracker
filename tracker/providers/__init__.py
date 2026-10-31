@@ -1,7 +1,7 @@
 """数据 provider 层: 三大市场域各一个 provider, 行情与搜索在数据层面按域隔离.
 
 - GlobalStocksProvider: 美股/港股/全球股票 (裸代码 · .HK · .DE · .L · .TO · .AX ...)
-  优先 IBKR, 其次 yfinance (OpenBB), 港股另以 akshare 兜底
+  优先 IBKR, 其次 EODHD (可选 BYOK), 再次 yfinance (OpenBB), 港股另以 akshare 兜底
 - CNStocksProvider: A股/B股/北交所 (.SS · .SZ · .BJ) 优先 akshare, 其次 yfinance
 - IndexProvider: 宏观/风险指数 (IX.<KEY>, IX.DXY 美元指数 / IX.VIX 恐慌指数 ...)
   独立代码规范与源链, 与股票域完全隔离

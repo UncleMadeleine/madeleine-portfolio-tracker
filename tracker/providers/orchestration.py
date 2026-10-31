@@ -254,25 +254,46 @@ def get_quotes(
         if not plist:
             continue
         if domain == "global":
+            # EODHD quotes=primary: 先走 EODHD 批量 (s= 参数, 每批 15 个),
+            # 批量未命中的代码再回落 yfinance 批量/逐代码源链。EODHD 未启用或
+            # 仅 fallback 时保持原有 yfinance 批量优化 (自选 600+ 必需)。
+            from .. import eodhd as eodhd_mod
+
+            if eodhd_mod.quote_primary():
+                _emit("EODHD 批量行情")
+                try:
+                    eod_batch, eod_errors = eodhd_mod.quotes_batch(plist)
+                    quotes.update(eod_batch)
+                    settled.update(eod_batch)
+                    for err in eod_errors[:3]:
+                        notes.append(f"EODHD 批量行情: {err}")
+                except Exception as e:  # noqa: BLE001 - 批量失败回落 yfinance
+                    notes.append(f"EODHD 批量行情异常: {e} (已回退默认源)")
+                _emit("EODHD 批量行情")
+                plist = [p for p in plist if p.yahoo not in quotes]
+                if not plist:
+                    continue
+
             # 港股 akshare 优先 (prefer_akshare) 时不能让 yfinance 批量抢先:
             # 批量的结果会直接进 quotes, 逐代码源链就不再执行, 港股永远走
             # yfinance (与设置页/CLI 声明的"港股源顺序翻转"矛盾)。
             batch_plist = plist
             if prefer_akshare:
                 batch_plist = [p for p in plist if p.market is not Market.HK]
-            _emit("yfinance 批量行情")
-            try:
-                batch = _yahoo_batch(batch_plist)
-                quotes.update(batch)
-                settled.update(batch)
-            except Exception as e:  # noqa: BLE001 - 批量失败不能让整个域崩
-                # 批量是优化不是必需: 失败则全部代码落逐代码源链 (那里每源
-                # 单独 try, 且域间循环无保护 —— 一抛会连带 cn/crypto 域不执行)
-                notes.append(f"yfinance 批量行情异常: {e} (已回退逐代码取数)")
-            _emit("yfinance 批量行情")
-            plist = [p for p in plist if p.yahoo not in quotes]
-            if not plist:
-                continue
+            if batch_plist:
+                _emit("yfinance 批量行情")
+                try:
+                    batch = _yahoo_batch(batch_plist)
+                    quotes.update(batch)
+                    settled.update(batch)
+                except Exception as e:  # noqa: BLE001 - 批量失败不能让整个域崩
+                    # 批量是优化不是必需: 失败则全部代码落逐代码源链 (那里每源
+                    # 单独 try, 且域间循环无保护 —— 一抛会连带 cn/crypto 域不执行)
+                    notes.append(f"yfinance 批量行情异常: {e} (已回退逐代码取数)")
+                _emit("yfinance 批量行情")
+                plist = [p for p in plist if p.yahoo not in quotes]
+                if not plist:
+                    continue
 
         if progress is not None:
             def _on_done(yahoo: str) -> None:

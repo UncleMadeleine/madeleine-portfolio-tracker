@@ -97,6 +97,11 @@ def get_ohlc(
             f"|a{int(prefer_akshare)}i{int(use_ibkr)}"
             f"l{int(use_longport)}c{crypto_source}"
         )
+    # EODHD (BYOK) 的角色/复权口径也必须进缓存键: 同一代码从 yfinance 切到
+    # EODHD (或反之) 后, TTL 内继续命中旧源的K线会让开关看起来没生效。
+    from . import eodhd as eodhd_mod
+
+    src_sig += eodhd_mod.cache_signature()
     cache_key = f"{p.yahoo}{src_sig}"
     if not refresh and not is_range:
         cached = cache_mod.get_ohlc_cached(cache_key, months)

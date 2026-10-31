@@ -208,9 +208,9 @@ def _ensure_db() -> None:
             # 重建仍失败 (如目录只读/磁盘满): 放弃建库, 让调用方按「无缓存」继续
             if quarantined:
                 try:
-                    CACHE_DB.with_name(
-                        f"{CACHE_DB.name}.corrupt-{stamp}"
-                    ).replace(CACHE_DB)
+                    CACHE_DB.with_name(f"{CACHE_DB.name}.corrupt-{stamp}").replace(
+                        CACHE_DB
+                    )
                 except OSError:
                     pass
 
@@ -449,11 +449,7 @@ def get_fx_cached(
     与 get_cached_with_age 同构: 首屏按 age 分新鲜/陈旧两档处理。
     """
     base = str(base).upper()
-    curs = [
-        c
-        for c in dict.fromkeys(str(x).upper() for x in currencies)
-        if c != base
-    ]
+    curs = [c for c in dict.fromkeys(str(x).upper() for x in currencies) if c != base]
     if not curs:
         return {}, {}
 
@@ -534,6 +530,18 @@ def clear_ohlc() -> int:
     try:
         with _lock, sqlite3.connect(CACHE_DB) as con:
             n = con.execute("DELETE FROM ohlc_cache").rowcount
+            con.commit()
+            return n
+    except sqlite3.OperationalError as e:
+        raise RuntimeError(f"缓存数据库忙或不可用 ({e}); 稍后重试") from e
+
+
+def clear_fundamentals() -> int:
+    """只清基本面缓存 (PB/市值): EODHD fundamentals 角色切换后重取."""
+    _ensure_db()
+    try:
+        with _lock, sqlite3.connect(CACHE_DB) as con:
+            n = con.execute("DELETE FROM fundamentals").rowcount
             con.commit()
             return n
     except sqlite3.OperationalError as e:
@@ -650,7 +658,8 @@ def info() -> dict:
             ).fetchone()[0]
             ohlc_total = con.execute("SELECT COUNT(*) FROM ohlc_cache").fetchone()[0]
             ohlc_fresh = con.execute(
-                "SELECT COUNT(*) FROM ohlc_cache WHERE fetched_at > ?", (now - OHLC_TTL,)
+                "SELECT COUNT(*) FROM ohlc_cache WHERE fetched_at > ?",
+                (now - OHLC_TTL,),
             ).fetchone()[0]
             fx_total = con.execute("SELECT COUNT(*) FROM fx_rates").fetchone()[0]
             fx_fresh = con.execute(
@@ -660,7 +669,9 @@ def info() -> dict:
             oldest, newest = con.execute(
                 "SELECT MIN(fetched_at), MAX(fetched_at) FROM quotes"
             ).fetchone()
-            series_total = con.execute("SELECT COUNT(*) FROM series_cache").fetchone()[0]
+            series_total = con.execute("SELECT COUNT(*) FROM series_cache").fetchone()[
+                0
+            ]
             series_fresh = con.execute(
                 "SELECT COUNT(*) FROM series_cache WHERE fetched_at > ?",
                 (now - OHLC_TTL,),

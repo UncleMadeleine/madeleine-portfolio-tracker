@@ -14,6 +14,7 @@
   compare   多股走势/市值对比 (归一化折线 --metric mcap 可切市值; --json 出序列)
   import    统一持仓导入 (ibkr / longport / wallet / file, 追加合并或 --overwrite 覆盖)
   longport-login 长桥 OAuth 登录 (浏览器授权, token 自动缓存刷新)
+  eodhd     EODHD BYOK 配置状态与连通性自检 (token 自备, 可选付费源)
   sync      从 IB Gateway 账户同步持仓 (已并入 import ibkr, 保留兼容)
   index-kline 宏观/风险指数K线 (IX.<KEY>, 独立于股票 kline)
   calendar  财报/重大事件日历 (组合+自选, 默认本月+下月)
@@ -35,6 +36,7 @@ from ..watchlist import DEFAULT_WATCHLIST  # storage 门面 (watchlist.json 常�
 from ._common import VERSION, _finish_with_error
 from .cache import cmd_cache
 from .calendar import cmd_calendar, months_arg
+from .eodhd import cmd_eodhd
 from .export import cmd_export
 from .compare import cmd_compare
 from .init import cmd_init
@@ -843,6 +845,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_lp.set_defaults(func=cmd_longport_login)
 
+    # ---- eodhd (BYOK 付费源: 配置状态 + 连通性自检) ----
+    p_eod = sub.add_parser(
+        "eodhd",
+        help="EODHD BYOK 配置状态与连通性自检 (token 自备, 可选付费源)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "配置: 数据目录 eodhd.json (或 env EODHD_CONFIG 指定路径),\n"
+            "token 也可用 env TRACKER_EODHD_TOKEN 注入 (优先级更高)。\n"
+            "示例:\n"
+            "  tracker eodhd status                 # 查看是否可用 / token 掩码\n"
+            "  tracker eodhd status --json          # 机器可读\n"
+            "  tracker eodhd test AAPL 0700.HK      # 实际打一次行情 + 最近 7 天历史 + 基本面\n"
+            "  tracker eodhd test AAPL --json\n"
+        ),
+    )
+    p_eod.add_argument(
+        "action", nargs="?", choices=["status", "test"], default="status"
+    )
+    p_eod.add_argument("symbols", nargs="*", help="test 的目标代码 (可多个)")
+    p_eod.add_argument(
+        "--config", default=None, help="eodhd.json 路径 (默认数据目录/eodhd.json)"
+    )
+    p_eod.add_argument("--json", action="store_true", help="输出 JSON")
+    p_eod.set_defaults(func=cmd_eodhd)
+
     # ---- import-wallet (兼容入口, 已并入 import wallet) ----
     p_wallet = sub.add_parser(
         "import-wallet",
@@ -908,7 +935,7 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
-            "  tracker init            # 生成缺失的 portfolio/watchlist/settings/ibkr/longport.json\n"
+            "  tracker init            # 生成缺失的 portfolio/watchlist/settings/ibkr/longport/eodhd.json\n"
             "  tracker init --force    # 用模板覆盖已存在的配置\n"
             "数据目录: $TRACKER_HOME > 源码树仓库根 > 平台用户目录 (~/.tracker)\n"
         ),

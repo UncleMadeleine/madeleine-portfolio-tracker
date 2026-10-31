@@ -1,6 +1,6 @@
 ---
 name: portfolio-tracker
-description: Use when the user asks to check or manage their investment portfolio, holdings, watchlist, stock prices, price-threshold alerts, exchange rates, IBKR sync, Longport (长桥) quotes/positions/login, or quote cache in this repo (madeleine-portfolio-tracker). Trigger keywords: 持仓, 组合, 自选, watchlist, 股票, 行情, 报价, quote, 汇率, fx, IBKR, 长桥, longport, 快照, snapshot, 缓存, K线, kline, 指数, index, 导入, import, 搜索, search, 对比, compare. Operate it through the CLI `python -m tracker.cli <子命令>` (alias `python -m tracker`). Also covers editing portfolio.json / watchlist.json / ibkr.json / longport.json and the Yahoo symbol conventions.
+description: Use when the user asks to check or manage their investment portfolio, holdings, watchlist, stock prices, price-threshold alerts, exchange rates, IBKR sync, Longport (长桥) quotes/positions/login, EODHD (BYOK) status/config, or quote cache in this repo (madeleine-portfolio-tracker). Trigger keywords: 持仓, 组合, 自选, watchlist, 股票, 行情, 报价, quote, 汇率, fx, IBKR, 长桥, longport, EODHD, BYOK, 快照, snapshot, 缓存, K线, kline, 指数, index, 导入, import, 搜索, search, 对比, compare. Operate it through the CLI `python -m tracker.cli <子命令>` (alias `python -m tracker`). Also covers editing portfolio.json / watchlist.json / ibkr.json / longport.json / eodhd.json and the Yahoo symbol conventions.
 ---
 
 # Madeleine Portfolio Tracker CLI
@@ -49,6 +49,7 @@ tracker-ui          # pip 安装后起 Streamlit 页面 (等价 streamlit run tr
 | `index-kline` | 宏观/风险指数K线 (IX.<KEY>) | `index-kline IX.DXY --months 12`, `index-kline IX.CSI300 --list` (指数默认无成交量副图, `--volume` 才显示) |
 | `import` | 统一持仓导入 (ibkr/longport/wallet/file) | `import ibkr --dry-run`, `import longport --dry-run`, `import wallet eth 0x... --dry-run`, `import file 持仓.csv --dry-run` |
 | `longport-login` | 长桥 OAuth 登录 (浏览器授权) | `longport-login` (token 缓存于 ~/.longport/openapi/tokens/<client_id>, 自动刷新), `longport-login --json` 只出授权 URL (供脚本), `-o <文件>` 写 URL 到文件 |
+| `eodhd` | EODHD BYOK 状态/连通性自检 | `eodhd status`, `eodhd status --json`, `eodhd test AAPL 0700.HK --json` (token 未配置时 status 说明原因, test 退出码 2) |
 | `report` | 自选监控阈值报告 | `report -f json -o report.json`, `report -f csv -w 科技` |
 | `export` | 组合快照导出 | `export -f md -o snapshot.md`, `export -f json` |
 | `sync` | IBKR 同步 (兼容入口→import ibkr; 缺省追加合并, 与 import 一致, `--overwrite` 才覆盖) | `sync --dry-run` |
@@ -102,7 +103,7 @@ tracker-ui          # pip 安装后起 Streamlit 页面 (等价 streamlit run tr
 ### 数据源优先级 (provider 层)
 
 | type | 实时行情 | 历史K线 |
-| global | 长桥(可选)→ IBKR(可选)→ yfinance 批量 → 港股 akshare 兜底 (两源同开时 IBKR 结果覆盖长桥) | IBKR(可选)→ 长桥(可选)→ yfinance (港股可 `--akshare` 翻转) |
+| global | 长桥(可选)→ IBKR(可选)→ EODHD(可选, quotes=primary)→ yfinance 批量 → 港股 akshare → EODHD(可选, quotes=fallback) (两源同开时 IBKR 结果覆盖长桥) | IBKR(可选)→ 长桥(可选)→ EODHD(可选, priority=primary)→ yfinance (港股可 `--akshare` 翻转) → EODHD(可选, fallback) |
 | cn | **akshare 优先** → yfinance (长桥可选前置, 沪深代码 .SH/.SZ) | **akshare 优先** → yfinance (长桥可选前置) |
 | crypto | **Binance API** → Gate.io 现货 → Hyperliquid 永续(仅USD系) → yfinance (偏好 `crypto_source`/`--crypto-source`) | **Binance klines** → Gate.io → Hyperliquid → yfinance |
 | index | — (指数无实时行情, 不参与持仓聚合) | 中国指数 **akshare 优先** → yfinance; 美股 SPX/NDX/DJI 有新浪兜底; 水泥网 (CEMPI 等) / 商品期货主力连续 (`IX.AU` 黄金 `IX.AG` 白银 `IX.JD` 鸡蛋 `IX.M` 豆粕 `IX.A` 豆一 `IX.B` 豆二 `IX.LH` 生猪 `IX.LC` 碳酸锂) / Cameco 铀价 (`IX.URANIUM` 现货 `IX.URANIUM_LT` 长协, 月K) / 恒生官网 (IX.HSAHP) 为专属源无兜底 |
@@ -190,6 +191,23 @@ Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致);
     WFC-PL ↔ WFC.PR.L.US; 德英加澳/北交所不支持 (行情前置自动跳过, 回落默认源)
   - 长桥账户里的退市/改码旧代码 (ERJ→EMBJ、BRFS→MBRF3.SA 等, 见 `tracker/symbol_migrations.py`)
     导入时自动迁移到接替代码, 无接替码则跳过并说明
+- `eodhd.json`: EODHD 付费源 (BYOK, 可选; env `EODHD_CONFIG` 指定路径, token 也可用
+  env `TRACKER_EODHD_TOKEN` / `EODHD_API_TOKEN` 注入且优先级更高):
+  - 未配置 token 时 `available=false`, 源链完全不受影响; 用 `tracker eodhd status` 看状态
+    (输出 token 掩码, 不泄露明文), `tracker eodhd test AAPL` 实打一次行情+最近 7 天历史+基本面
+  - 字段: `enabled` (总开关) · `token` · `priority` (历史K线 primary/fallback, 默认 primary,
+    在 IBKR/长桥之后、yfinance 之前) · `quotes` (off/fallback/primary, 默认 fallback;
+    primary 走 `s=` 批量, 每批 15 个代码, 仍按 ticker 计费) · `fundamentals`
+    (off/fallback/primary, 默认 fallback: 先 yfinance, 只补缺失的 PB/市值; primary 先 EODHD) ·
+    `adjustment` (adjusted/raw) · `lse_pence` (LSE `.L/.AL` 便士 ÷100, 默认 true) ·
+    `lse_gbp_symbols` (英镑计价标的豁免) · `currency_overrides` (EODHD 行情不带币种,
+    如 `{"KAP.IL":"USD"}`) · `timeout`
+  - 代码映射: Yahoo → EODHD `SYMBOL.EXCHANGE` (AAPL.US / 0700.HK / BP.LSE / SAP.XETRA /
+    RY.TO / BHP.AU / 9984.TSE / 005930.KO / PETR4.SA …); 未覆盖市场返回 None 自动跳过
+  - 仅接全球股票域; A股/B股/加密不走 EODHD。EODHD 行情不带名称/PB/总市值:
+    名称与币种按代码规范兜底, PB/市值仍走原基本面链路
+  - 失败一律静默回落下一源; 401/403/404/429 会把可读原因写进 `issues`/报错信息
+    (已脱敏, 不含 token)
 
 ## 常见 AI 操作流程
 
@@ -312,7 +330,17 @@ Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致);
    Gateway 端口由 `ibkr.json` 的 `mode` 决定: paper=4002 / live=4001; 显式 `"port"` 优先; env `IBKR_MODE` 可临时覆盖。
    长桥行情: 各取数子命令加 `--longport` (如 `quote AAPL --longport`), 或 settings.json `"use_longport": true`。
 
-10. **清缓存** (数据源限流/数据过期时):
+10. **EODHD BYOK 配置/自检** (可选付费源, 未配置 token 时不要动任何开关):
+    ```
+    .venv/bin/python -m tracker.cli eodhd status                 # 是否可用 / token 掩码 / 角色
+    .venv/bin/python -m tracker.cli eodhd test AAPL 0700.HK      # 实打一次行情 + 最近 7 天历史 + 基本面
+    .venv/bin/python -m tracker.cli eodhd status --config /data/eodhd.json --json
+    ```
+    改配置: 编辑数据目录 `eodhd.json` (模板 `tracker/templates/eodhd.example.json`),
+    或 `export TRACKER_EODHD_TOKEN=...`; 开关变更后建议 `cache clear` 或重启 streamlit
+    (K线缓存键含 EODHD 角色签名, 但实时行情缓存只按代码).
+
+11. **清缓存** (数据源限流/数据过期时):
     ```
     .venv/bin/python -m tracker.cli cache clear
     ```
@@ -325,6 +353,11 @@ Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致);
 - 长桥 (LongPort): `pip install longport` 为可选依赖; 未安装/未配置时 `--longport` 与 `import longport`
   报可读错误并回退默认数据源。UI 登录引导页在「导入」页长桥标签, 状态经 var/longport_oauth_state.json。
   授权子进程会独占 longport.json 的 callback_port (默认 60355), 同一端口只能跑一个登录流程。
+- EODHD: BYOK 付费源, 免费套餐 20 次/天; `quotes=primary` 走批量但每个代码仍算 1 次调用
+  (自选多时注意额度), `fundamentals=primary` 也逐代码消耗调用。LSE `.L/.AL` 默认按便士 ÷100;
+  英镑计价标的用 `lse_gbp_symbols` 豁免。行情不带币种, `.IL`/港股美元柜台等用
+  `currency_overrides`。未配置 token 时 `eodhd status` 的 reason 会说明原因, 源链自动跳过
+  (不是故障)。`eodhd test` 会同时测行情/历史/基本面三项。
 - Binance 对部分数据中心 IP 有限流; 失败自动降级 Gate.io → Hyperliquid → yfinance。
   搜索全部为在线接口; 中文查询仅东财 suggest 支持 (A股/北交所全量, 美股/港股域只认领港股行),
   美股/港股/crypto 直接搜中文名基本无结果。

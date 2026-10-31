@@ -1,0 +1,20 @@
+{
+  "_说明": "EODHD 付费数据源 (BYOK) 配置模板: 复制为 eodhd.json 后填入 token。本文件含敏感凭据, 已被 .gitignore 忽略; 也可用 env EODHD_CONFIG 指定其他路径, 或直接用 env TRACKER_EODHD_TOKEN 注入 token (优先级更高)。未配置 token 时本文件不生效, 全部取数仍走免费的 yfinance/akshare/IBKR/长桥。",
+  "_token获取": "https://eodhd.com/register 注册后可在 Dashboard 看到 API token; 免费套餐每天 20 次调用, 付费套餐才适合长期使用。",
+  "_角色": "历史K线 priority=primary 表示在 yfinance 之前使用 (IBKR/长桥仍优先); fallback 表示只在默认源全部失败后兜底。实时行情 quotes=off 关闭 / fallback 仅在默认源失败后兜底 (推荐, 不额外消耗调用) / primary 逐代码请求 EODHD (每个代码 1 API call, 自选很多时代价高)。",
+  "_基本面": "fundamentals 控制 PB(每股净资产)与总市值: off 关闭 / fallback (推荐) 先走 yfinance, 只对缺失字段调 EODHD / primary 先用 EODHD 的 Highlights.BookValue/MarketCapitalization, 缺失字段再由 yfinance 补齐。结果缓存 6h。",
+  "_复权": "adjustment=adjusted 使用 adjusted_close (拆股+分红复权) 并把 OHLC 同比例缩放, K线连续; raw 使用原始成交价。",
+  "_英股": "LSE (.L/.AL) 通常以便士报价, lse_pence=true 会 ÷100 折成英镑; 若某标的本身以英镑报价 (常见于 LSE ETF), 把它加入 lse_gbp_symbols 豁免。.IL (IOB) 不做便士折算。",
+  "_币种": "currency_overrides 可覆盖个别标的的计价币种, 如 {\"KAP.IL\": \"USD\"}。",
+  "enabled": true,
+  "token": "",
+  "base_url": "https://eodhd.com/api",
+  "timeout": 10.0,
+  "priority": "primary",
+  "quotes": "fallback",
+  "fundamentals": "fallback",
+  "adjustment": "adjusted",
+  "lse_pence": true,
+  "lse_gbp_symbols": [],
+  "currency_overrides": {}
+}

@@ -1,4 +1,4 @@
-"""全球股票 provider: 美股/港股/德英加澳/日韩 (IBKR 优先 → yfinance → 港股 akshare 兜底).
+"""全球股票 provider: 美股/港股/德英加澳/日韩 (IBKR 优先 → EODHD 可选 → yfinance → 港股 akshare 兜底).
 
 覆盖市场: 裸代码=美股, .HK=港股, .DE/.F/.BE/.DU/.HM/.MU=德股,
 .L/.IL/.AL=英股, .TO/.V/.CN/.NE=加股, .AX=澳股, .SI=新加坡 (SGX, .SG 别名归一),
@@ -553,12 +553,28 @@ class GlobalStocksProvider(Provider):
     name = "global"
 
     def quote_sources(self, p: ParsedSymbol, prefer_first: bool = False) -> list:
+        from .. import eodhd as eodhd_mod
+
+        cfg = eodhd_mod.load_config()
+        eod = eodhd_mod.available(cfg)
+        mode = cfg["quotes"] if eod else "off"
         if p.market is Market.HK:
             # prefer_first=True (--akshare / 国内网络): akshare 在前
-            if prefer_first:
-                return [_akshare_quote, _yahoo_quote]
-            return [_yahoo_quote, _akshare_quote]
-        return [_yahoo_quote]
+            base = (
+                [_akshare_quote, _yahoo_quote]
+                if prefer_first
+                else [_yahoo_quote, _akshare_quote]
+            )
+        else:
+            base = [_yahoo_quote]
+        if mode == "primary":
+            # 显式要求 akshare 优先时不抢跑: akshare → EODHD → yahoo
+            if p.market is Market.HK and prefer_first:
+                return [_akshare_quote, eodhd_mod.quote, _yahoo_quote]
+            return [eodhd_mod.quote, *base]
+        if mode == "fallback":
+            return [*base, eodhd_mod.quote]
+        return base
 
     def history_sources(
         self,
@@ -567,18 +583,30 @@ class GlobalStocksProvider(Provider):
         end_date: str | None,
         prefer_first: bool = False,
     ) -> list:
+        from .. import eodhd as eodhd_mod
+
+        cfg = eodhd_mod.load_config()
+        eod = eodhd_mod.available(cfg)
+        primary = eod and cfg["priority"] == "primary"
+        eod_src = lambda: eodhd_mod.history(p, start_date, end_date)  # noqa: E731
+        yahoo_src = lambda: _yahoo_history(p, start_date, end_date)  # noqa: E731
+        ak_src = lambda: _akshare_history(p, start_date, end_date)  # noqa: E731
         if p.market is Market.HK:
             if prefer_first:
-                return [
-                    lambda: _akshare_history(p, start_date, end_date),
-                    lambda: _yahoo_history(p, start_date, end_date),
-                ]
-            return [
-                lambda: _yahoo_history(p, start_date, end_date),
-                lambda: _akshare_history(p, start_date, end_date),
-            ]
-        # 非港股 (美股/德英加澳): 仅 yfinance
-        return [lambda: _yahoo_history(p, start_date, end_date)]
+                chain = [ak_src, yahoo_src]
+                return (
+                    [ak_src, eod_src, yahoo_src]
+                    if primary
+                    else chain + ([eod_src] if eod else [])
+                )
+            chain = [yahoo_src, ak_src]
+            return (
+                [eod_src, *chain] if primary else chain + ([eod_src] if eod else [])
+            )
+        # 非港股 (美股/德英加澳): yfinance 为主, EODHD 可选前置/兜底
+        if primary:
+            return [eod_src, yahoo_src]
+        return [yahoo_src] + ([eod_src] if eod else [])
 
     # -- 搜索: IBKR (可选) → 东财 suggest (纯数字, 补零命中港股) → yfinance Search → 合法代码直查 --
 

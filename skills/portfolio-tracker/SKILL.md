@@ -38,7 +38,7 @@ tracker-ui          # pip 安装后起 Streamlit 页面 (等价 streamlit run tr
 |---|---|---|
 | `snapshot` | 持仓+自选快照(含阈值提醒) | `snapshot --json`, `snapshot --base USD`, `snapshot --watchlist 科技` |
 | `quote` | 实时行情 | `quote AAPL 600519.SS`, `quote AAPL --refresh` (跳过 5min 磁盘/负缓存) |
-| `watchlist` | 自选管理 list/add/remove/import-longport | `watchlist list`, `watchlist add TSLA --list 科技 --upper1 420`, `watchlist import-longport --dry-run` (长桥自选导入, 分组→列表, 代码归一) |
+| `watchlist` | 自选管理 list/add/remove/triggered/import-longport | `watchlist list`, `watchlist triggered` (只输出到达阈值的自选), `watchlist triggered --json`, `watchlist add TSLA --list 科技 --upper1 420`, `watchlist import-longport --dry-run` (长桥自选导入, 分组→列表, 代码归一) |
 | `portfolio` | 持仓管理 list/add/remove/set-base | `portfolio list`, `portfolio add AAPL --quantity 10 --avg-cost 180`, `portfolio set-base USD` |
 | `fx` | 汇率 | `fx USD CNY` |
 | `history` | 历史价格 | `history AAPL --months 12` |
@@ -236,6 +236,12 @@ Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致);
    ```
    已存在代码会合并列表/更新阈值, 不会重复。mcap 阈值按当地货币绝对金额;
    想离线固定口径可手写条目 `mcap` 键 (覆盖行情/数据源取值)。
+
+4b. **只看触发阈值**:
+   ```
+   .venv/bin/python -m tracker.cli watchlist triggered            # 仅输出到达阈值的标的
+   .venv/bin/python -m tracker.cli watchlist triggered --json     # triggered 数组 + count
+   ```
 
 5. **删自选**:
    ```

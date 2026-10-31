@@ -3,7 +3,7 @@
 子命令:
   snapshot  组合 + 自选快照 (持仓 / 自选提醒 / 阈值触发)
   quote     查询单个或多个代码实时行情
-  watchlist 自选股管理 (list / add / remove) 与阈值提醒
+  watchlist 自选股管理 (list / add / remove / triggered) 与阈值提醒
   portfolio 持仓管理 (list / add / remove / set-base)
   report    导出自选监控阈值报告 (md / csv / json)
   export    导出投资组合快照为 CSV / JSON / Markdown 报表
@@ -172,6 +172,8 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "示例:\n"
             "  tracker watchlist list                          # 查看全部自选 + 行情\n"
+            "  tracker watchlist triggered                     # 只输出到达阈值的自选\n"
+            "  tracker watchlist triggered --json              # JSON: triggered 数组\n"
             "  tracker watchlist list --no-quotes             # 仅展示配置\n"
             "  tracker watchlist add AAPL --list 科技 --upper1 250 --note 苹果\n"
             "  tracker watchlist add 600519.SS --list 白酒 --lower1 1500\n"
@@ -185,7 +187,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_w.add_argument(
         "action",
         nargs="?",
-        choices=["list", "add", "remove", "import-longport"],
+        choices=["list", "add", "remove", "import-longport", "triggered"],
         default="list",
     )
     p_w.add_argument("symbols", nargs="*", help="add/remove 的目标代码")

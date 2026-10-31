@@ -146,6 +146,8 @@ python -m tracker.cli portfolio set-base USD
 
 # 自选股管理
 python -m tracker.cli watchlist list
+python -m tracker.cli watchlist triggered                    # 只输出到达阈值的自选
+python -m tracker.cli watchlist triggered --json             # 机器可读 (triggered 数组)
 python -m tracker.cli watchlist add NVDA --list 科技,美股 --upper1 260
 python -m tracker.cli watchlist remove NVDA
 python -m tracker.cli watchlist import-longport --dry-run  # 长桥自选导入预览（先 longport-login）
@@ -205,6 +207,7 @@ python -m pytest -m network
 python -m tracker.cli snapshot --json          # 持仓 + 自选 + 阈值触发，一次拿全
 python -m tracker.cli quote 0700.HK --json     # 单/多代码实时行情
 python -m tracker.cli watchlist list --json    # 自选 + 行情 + 触发状态
+python -m tracker.cli watchlist triggered --json  # 只含到达阈值的条目 (triggered/count)
 python -m tracker.cli kline AAPL --json        # K 线数据（不生成图表）
 python -m tracker.cli index-kline IX.DXY --json # 指数K线数据 (IX.<KEY>, 不生成图表)
 python -m tracker.cli export -f json           # 完整快照 JSON
@@ -329,6 +332,7 @@ python -m tracker.cli kline 0700.HK --period weekly --open  # 周K + 自动打�
 - 距离列：`距上限 I%` / `距上限 II%` / `距下限 I%` / `距下限 II%` = 触发还需变动百分之几（上下限同口径；上限为负 / 下限为正 = 已越过）
 - 页面侧栏「所属列表」列用逗号分隔编辑多归属；「自选观察」tab 顶部「查看范围」选 `全部` 或单个列表
 - CLI：`--watchlist <列表名>` 只看某个列表（`全部` 合并去重）
+- CLI 只看触发的标的：`tracker watchlist triggered`（`--json` 输出 `triggered` 数组与 `count`，适合脚本/Agent 消费）
 - CLI 添加 PB 提醒：`tracker watchlist add 600036.SS --metric pb --upper1 1.2 --lower1 0.8`
 - CLI 添加市值提醒：`tracker watchlist add AAPL --metric mcap --upper1 4000000000000`
 - 持仓与自选**共用一次批量行情请求**，多加自选不增加请求次数
@@ -359,7 +363,7 @@ tracker/
 │   ├── eodhd.py          EODHD BYOK 状态 / 连通性自检
 │   ├── snapshot.py       快照（持仓 + 自选 + 阈值触发）
 │   ├── quote.py          实时行情
-│   ├── watchlist.py      自选管理（list/add/remove/import-longport）与阈值提醒
+│   ├── watchlist.py      自选管理（list/add/remove/triggered/import-longport）与阈值提醒
 │   ├── portfolio.py      持仓管理（list/add/remove/set-base）
 │   ├── report.py         自选监控报告（md/csv/json）
 │   ├── export.py         组合快照导出（csv/json/md）

@@ -1,4 +1,4 @@
-"""watchlist 子命令: 自选股管理 (list / add / remove) 与阈值提醒."""
+"""watchlist 子命令: 自选股管理 (list / add / remove / triggered) 与阈值提醒."""
 
 from __future__ import annotations
 
@@ -136,6 +136,67 @@ def watchlist_remove(args) -> None:
         print("未找到可删除的代码 (可能不在自选中)")
 
 
+def _load_watch_view(args):
+    """拉取自选行情并组装视图; 返回 (视图, 触发条目, 问题, 取数提示)."""
+    data = load_watchlist(args.file)
+    entries = entries_for(data, args.wl_list)
+    symbols = [str(e["symbol"]) for e in entries]
+    quotes, errors, notes = prices.get_quotes(
+        symbols,
+        prefer_akshare=args.akshare,
+        use_ibkr=args.ibkr,
+        use_longport=getattr(args, "longport", False),
+        crypto_source=getattr(args, "crypto_source", "auto"),
+    )
+    wview, wissues = build_watchlist_view(entries, quotes)
+    trig = triggered_entries(wview)
+    # 与 fetch_watchlist_view 一致: 取数层与视图层可能对同一无法解析的代码
+    # 各记一次错, 按出现顺序去重
+    issues = list(
+        dict.fromkeys([f"{k}: {v}" for k, v in errors.items()] + wissues)
+    )
+    return wview, trig, issues, notes
+
+
+def _print_trigger_lines(trig: pd.DataFrame) -> None:
+    """打印触发条目 (symbol 状态 指标现值), 供 list / triggered 共用."""
+    for _, r in trig.iterrows():
+        metric = r.get("metric") or "price"
+        bv = r.get("base_value")
+        if metric == "pb" and bv is not None and pd.notna(bv):
+            base = f"PB {bv:,.2f}"
+        elif metric == "mcap" and bv is not None and pd.notna(bv):
+            base = f"市值 {bv:,.0f} {r['currency']}"
+        else:
+            base = f"现价 {r['price']:,.2f} {r['currency']}"
+        print(f"  {r['symbol']} {r['status']} {base}")
+
+
+def watchlist_triggered(args) -> None:
+    """只输出到达阈值的自选条目 (符号 + 状态 + 指标现值)."""
+    wview, trig, issues, notes = _load_watch_view(args)
+    if args.json:
+        _print_json(
+            {
+                "scope": args.wl_list or "全部",
+                "count": len(trig),
+                "triggered": _records(trig),
+                "issues": issues,
+                "notes": notes,
+            }
+        )
+        return
+    if trig.empty:
+        print("自选中暂无阈值触发。")
+    else:
+        print(f"🔔 阈值提醒 ({len(trig)}):")
+        _print_trigger_lines(trig)
+    for i in issues:
+        print(f"  ⚠ {i}")
+    for n in notes:
+        print(f"  ℹ {n}")
+
+
 def watchlist_list(args) -> None:
     """列出自选配置 (可选 --no-quotes 仅展示配置)."""
     data = load_watchlist(args.file)
@@ -173,21 +234,7 @@ def watchlist_list(args) -> None:
             print("  " + " ".join(parts))
         return
 
-    symbols = [str(e["symbol"]) for e in entries]
-    quotes, errors, notes = prices.get_quotes(
-        symbols,
-        prefer_akshare=args.akshare,
-        use_ibkr=args.ibkr,
-        use_longport=getattr(args, "longport", False),
-        crypto_source=getattr(args, "crypto_source", "auto"),
-    )
-    wview, wissues = build_watchlist_view(entries, quotes)
-    trig = triggered_entries(wview)
-    # 与 fetch_watchlist_view 一致: 取数层与视图层可能对同一无法解析的代码
-    # 各记一次错, 按出现顺序去重
-    issues = list(
-        dict.fromkeys([f"{k}: {v}" for k, v in errors.items()] + wissues)
-    )
+    wview, trig, issues, notes = _load_watch_view(args)
     if args.json:
         _print_json(
             {
@@ -232,16 +279,7 @@ def watchlist_list(args) -> None:
             print(wview[cols].to_string(index=False))
     if not trig.empty:
         print(f"\n🔔 阈值提醒 ({len(trig)}):")
-        for _, r in trig.iterrows():
-            metric = r.get("metric") or "price"
-            bv = r.get("base_value")
-            if metric == "pb" and bv is not None and pd.notna(bv):
-                base = f"PB {bv:,.2f}"
-            elif metric == "mcap" and bv is not None and pd.notna(bv):
-                base = f"市值 {bv:,.0f} {r['currency']}"
-            else:
-                base = f"现价 {r['price']:,.2f} {r['currency']}"
-            print(f"  {r['symbol']} {r['status']} {base}")
+        _print_trigger_lines(trig)
     else:
         print("\n自选中暂无阈值触发。")
     for i in issues:
@@ -340,12 +378,14 @@ def watchlist_import_longport(args) -> None:
 
 
 def cmd_watchlist(args) -> None:
-    """watchlist 子命令分发: list / add / remove / import-longport."""
+    """watchlist 子命令分发: list / add / remove / import-longport / triggered."""
     if args.action == "add":
         watchlist_add(args)
     elif args.action == "remove":
         watchlist_remove(args)
     elif args.action == "import-longport":
         watchlist_import_longport(args)
+    elif args.action == "triggered":
+        watchlist_triggered(args)
     else:
         watchlist_list(args)

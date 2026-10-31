@@ -217,6 +217,74 @@ class TestWatchlistCli:
         assert data["watchlist"][0]["symbol"] == "AAPL"
 
 
+class TestWatchlistTriggeredCli:
+    """watchlist triggered: 只输出到达阈值的自选, 不打印未触发条目."""
+
+    def _watchlist(self, tmp_path):
+        f = tmp_path / "w.json"
+        f.write_text(
+            json.dumps(
+                {
+                    "watchlist": [
+                        {"symbol": "TSLA", "lists": ["科技"], "upper_1": 420},
+                        {"symbol": "NVDA", "lists": ["科技"], "upper_1": 260},
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        return f
+
+    def _fake_quotes(
+        self,
+        symbols,
+        prefer_akshare=False,
+        use_ibkr=False,
+        use_longport=False,
+        crypto_source="auto",
+    ):
+        data = {
+            "TSLA": Quote("TSLA", "Tesla", 500.0, 480.0, 4.17, "USD"),
+            "NVDA": Quote("NVDA", "NVIDIA", 120.0, 118.0, 1.69, "USD"),
+        }
+        return {s: data[s] for s in symbols if s in data}, {}, []
+
+    def test_only_triggered_output(self, tmp_path, capsys, monkeypatch):
+        monkeypatch.setattr(cli.prices, "get_quotes", self._fake_quotes)
+        out = _run(
+            capsys, "watchlist", "triggered", "--file", str(self._watchlist(tmp_path))
+        )
+        assert "🔔 阈值提醒 (1)" in out
+        assert "TSLA" in out
+        assert "NVDA" not in out
+
+    def test_triggered_json(self, tmp_path, capsys, monkeypatch):
+        monkeypatch.setattr(cli.prices, "get_quotes", self._fake_quotes)
+        out = _run(
+            capsys,
+            "watchlist",
+            "triggered",
+            "--file",
+            str(self._watchlist(tmp_path)),
+            "--json",
+        )
+        data = json.loads(out)
+        assert data["count"] == 1
+        assert [x["symbol"] for x in data["triggered"]] == ["TSLA"]
+        assert data["triggered"][0]["status"] == "🟠 突破上限 I"
+
+    def test_no_trigger_message(self, tmp_path, capsys, monkeypatch):
+        monkeypatch.setattr(cli.prices, "get_quotes", self._fake_quotes)
+        f = tmp_path / "w.json"
+        f.write_text(
+            json.dumps({"watchlist": [{"symbol": "NVDA", "upper_1": 260}]}),
+            encoding="utf-8",
+        )
+        out = _run(capsys, "watchlist", "triggered", "--file", str(f))
+        assert "暂无阈值触发" in out
+        assert "NVDA" not in out
+
+
 class TestPortfolioCli:
     def test_add_new_holding(self, tmp_path, capsys):
         f = tmp_path / "p.json"

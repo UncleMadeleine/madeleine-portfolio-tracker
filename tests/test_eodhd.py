@@ -57,7 +57,7 @@ def test_yahoo_to_eodhd_mapping():
         "SAP.DE": "SAP.XETRA",
         "SAP.F": "SAP.F",
         "SAP.DU": "SAP.DU",
-        "SAP.HM": "SAP.HA",
+        "SAP.HM": "SAP.HM",
         "SAP.MU": "SAP.MU",
         "BP.L": "BP.LSE",
         "BP.AL": "BP.LSE",
@@ -484,6 +484,70 @@ def test_quote_primary_uses_eodhd_batch_before_yahoo(monkeypatch):
     quotes, errors, notes = orch.get_quotes(["AAPL"], refresh=True)
     assert quotes["AAPL"].source == "eodhd"
     assert called["batch"] is False
+
+
+def test_eodhd_primary_batch_defers_hk_to_akshare(monkeypatch):
+    """quotes=primary + prefer_akshare: 港股仍应由 akshare 先取.
+
+    逐代码源链已经声明 akshare → EODHD → yahoo; 批量层若让 EODHD 抢先
+    命中港股, 这道显式偏好就被静默绕过。
+    """
+    from tracker.providers.base import Quote
+
+    eod_batch_symbols: list[str] = []
+    fetched: list[tuple[str, bool]] = []
+
+    def fake_eod_batch(parsed):
+        eod_batch_symbols.extend(p.yahoo for p in parsed)
+        return (
+            {
+                p.yahoo: Quote(
+                    symbol=p.yahoo,
+                    name=p.yahoo,
+                    price=1.0,
+                    prev_close=1.0,
+                    change_pct=0.0,
+                    currency="USD",
+                    source="eodhd",
+                )
+                for p in parsed
+            },
+            [],
+        )
+
+    def fake_fetch_domain(
+        domain, plist, prefer_akshare, errors, crypto_source="auto", on_done=None
+    ):
+        fetched.extend((p.yahoo, prefer_akshare) for p in plist)
+        return {
+            p.yahoo: Quote(
+                symbol=p.yahoo,
+                name=p.yahoo,
+                price=2.0,
+                prev_close=2.0,
+                change_pct=0.0,
+                currency="HKD",
+                source="akshare",
+            )
+            for p in plist
+        }
+
+    def fake_yahoo_batch(parsed):
+        raise AssertionError("prefer_akshare 时港股不应进入 yfinance 批量")
+
+    monkeypatch.setattr(eodhd, "quote_primary", lambda cfg=None: True)
+    monkeypatch.setattr(eodhd, "quotes_batch", fake_eod_batch)
+    monkeypatch.setattr(orch, "_yahoo_batch", fake_yahoo_batch)
+    monkeypatch.setattr(orch, "_fetch_domain", fake_fetch_domain)
+
+    quotes, errors, _notes = orch.get_quotes(
+        ["0700.HK", "AAPL"], prefer_akshare=True, refresh=True
+    )
+    assert eod_batch_symbols == ["AAPL"]
+    assert fetched == [("0700.HK", True)]
+    assert quotes["0700.HK"].source == "akshare"
+    assert quotes["AAPL"].source == "eodhd"
+    assert not errors
 
 
 def test_quote_primary_yahoo_batch_falls_back_for_leftovers(monkeypatch):

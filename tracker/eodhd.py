@@ -80,7 +80,7 @@ _EXCHANGE_BY_SUFFIX = {
     "DE": "XETRA",
     "F": "F",
     "DU": "DU",
-    "HM": "HA",
+    "HM": "HM",  # 汉堡交易所 (HA 是汉诺威, 不是 Yahoo 的 .HM)
     "MU": "MU",
     "TO": "TO",
     "V": "V",
@@ -662,7 +662,8 @@ def history(
 def fundamentals(symbol: str | ParsedSymbol, path: str | Path | None = None) -> dict:
     """EODHD 基本面 (PB 用的每股净资产 + 总市值, 当地货币).
 
-    只取 Highlights/General 两个 section (filter= 减少载荷), 1 API call。
+    只取 Highlights/General 两个 section (filter= 只减少载荷, 不减少计费;
+    EODHD 基本面接口按 10 API calls/请求计费)。
     字段缺失时返回 None 而不是抛错 (与 tracker.fundamentals 的降级语义一致)。
     """
     p = symbol if isinstance(symbol, ParsedSymbol) else _parse_symbol(symbol)

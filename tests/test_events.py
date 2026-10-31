@@ -566,10 +566,20 @@ def _age_calendar_row(key: str, age_seconds: float) -> None:
 
 
 class TestBatchCacheTTL:
-    _P = "20260930"
-    _SH = f"cn:yysj:{_P}:沪深A股"
-    _BJ = f"cn:yysj:{_P}:京市A股"
-    _FHPS = f"cn:fhps:{_P}"
+    @staticmethod
+    def _keys() -> tuple[str, str, str, str]:
+        """当前窗口最后一个报表期及其缓存键.
+
+        不能写死报表期: 夹具的假 akshare 只在「当前窗口最后一个报表期」
+        返回数据, 跨月/跨季后写死的旧报表期会让回源断言失效。
+        """
+        period = cn_periods_for_window(*window_from_months(2))[-1]
+        return (
+            period,
+            f"cn:yysj:{period}:沪深A股",
+            f"cn:yysj:{period}:京市A股",
+            f"cn:fhps:{period}",
+        )
 
     def test_cn_period_cache_expires_after_ttl(
         self, monkeypatch, no_network_calendar
@@ -577,15 +587,16 @@ class TestBatchCacheTTL:
         """cn 板块缓存超过 6h 必须回源, 不能永久命中旧表."""
         from tracker import cache as cache_mod
 
+        period, sh, bj, fhps = self._keys()
         cache_mod.set_calendar_row(
-            self._SH,
+            sh,
             [{"symbol": "600519.SS", "type": "earnings", "date": "2026-10-31"}],
         )
-        cache_mod.set_calendar_row(self._BJ, [])
-        cache_mod.set_calendar_row(self._FHPS, [])
-        _age_calendar_row(self._SH, events.CAL_TTL + 1)
+        cache_mod.set_calendar_row(bj, [])
+        cache_mod.set_calendar_row(fhps, [])
+        _age_calendar_row(sh, events.CAL_TTL + 1)
         before = len(no_network_calendar["cn"])
-        data, issues = events._fetch_cn_period(self._P, refresh=False)
+        data, issues = events._fetch_cn_period(period, refresh=False)
         # 只有过期的沪深板回源, 京市/分红板仍命中缓存
         assert len(no_network_calendar["cn"]) == before + 1
         assert issues == []
@@ -595,14 +606,15 @@ class TestBatchCacheTTL:
         """TTL 内的板块缓存仍应零请求命中 (回归不把 TTL 做成永远回源)."""
         from tracker import cache as cache_mod
 
+        period, sh, bj, fhps = self._keys()
         cache_mod.set_calendar_row(
-            self._SH,
+            sh,
             [{"symbol": "600519.SS", "type": "earnings", "date": "2026-10-31"}],
         )
-        cache_mod.set_calendar_row(self._BJ, [])
-        cache_mod.set_calendar_row(self._FHPS, [])
+        cache_mod.set_calendar_row(bj, [])
+        cache_mod.set_calendar_row(fhps, [])
         before = len(no_network_calendar["cn"])
-        data, issues = events._fetch_cn_period(self._P, refresh=False)
+        data, issues = events._fetch_cn_period(period, refresh=False)
         assert len(no_network_calendar["cn"]) == before
         assert issues == []
         assert data["events"][0]["symbol"] == "600519.SS"

@@ -260,19 +260,26 @@ def get_quotes(
             from .. import eodhd as eodhd_mod
 
             if eodhd_mod.quote_primary():
-                _emit("EODHD 批量行情")
-                try:
-                    eod_batch, eod_errors = eodhd_mod.quotes_batch(plist)
-                    quotes.update(eod_batch)
-                    settled.update(eod_batch)
-                    for err in eod_errors[:3]:
-                        notes.append(f"EODHD 批量行情: {err}")
-                except Exception as e:  # noqa: BLE001 - 批量失败回落 yfinance
-                    notes.append(f"EODHD 批量行情异常: {e} (已回退默认源)")
-                _emit("EODHD 批量行情")
-                plist = [p for p in plist if p.yahoo not in quotes]
-                if not plist:
-                    continue
+                # 与 GlobalStocksProvider.quote_sources 保持一致: 显式开启
+                # prefer_akshare 时港股必须 akshare 先跑, 否则 EODHD 批量
+                # 会抢先命中港股, 逐代码源链里的 akshare 永远没有机会执行。
+                eod_plist = plist
+                if prefer_akshare:
+                    eod_plist = [p for p in plist if p.market is not Market.HK]
+                if eod_plist:
+                    _emit("EODHD 批量行情")
+                    try:
+                        eod_batch, eod_errors = eodhd_mod.quotes_batch(eod_plist)
+                        quotes.update(eod_batch)
+                        settled.update(eod_batch)
+                        for err in eod_errors[:3]:
+                            notes.append(f"EODHD 批量行情: {err}")
+                    except Exception as e:  # noqa: BLE001 - 批量失败回落 yfinance
+                        notes.append(f"EODHD 批量行情异常: {e} (已回退默认源)")
+                    _emit("EODHD 批量行情")
+                    plist = [p for p in plist if p.yahoo not in quotes]
+                    if not plist:
+                        continue
 
             # 港股 akshare 优先 (prefer_akshare) 时不能让 yfinance 批量抢先:
             # 批量的结果会直接进 quotes, 逐代码源链就不再执行, 港股永远走

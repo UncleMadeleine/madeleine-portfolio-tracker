@@ -1244,6 +1244,7 @@ class TestParser:
         for argv in (
             ["snapshot", "--base", "USD"],
             ["quote", "AAPL"],
+            ["quote", "AAPL", "--refresh"],
             ["watchlist", "list"],
             ["watchlist", "add", "AAPL", "--upper1", "200"],
             ["portfolio", "list"],

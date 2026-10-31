@@ -15,6 +15,7 @@ def cmd_quote(args) -> None:
         use_ibkr=args.ibkr,
         use_longport=getattr(args, "longport", False),
         crypto_source=getattr(args, "crypto_source", "auto"),
+        refresh=getattr(args, "refresh", False),
     )
     rows: list[dict] = []
     for s in args.symbols:

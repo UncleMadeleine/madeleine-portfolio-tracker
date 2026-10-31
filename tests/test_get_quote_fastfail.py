@@ -45,6 +45,39 @@ def test_get_quote_marks_and_fast_fails(monkeypatch):
     assert calls == ["ZZ0001"]
 
 
+def test_get_quote_refresh_bypasses_negative_cache(monkeypatch):
+    """refresh=True: 单代码强制刷新清掉负缓存, 不等 5min TTL."""
+    from tracker.providers.base import Quote
+
+    calls = []
+
+    class FakeProvider:
+        name = "global"
+
+        def fetch_quote(self, p, prefer_first=False):
+            calls.append(p.yahoo)
+            return Quote(
+                symbol=p.yahoo,
+                name=p.yahoo,
+                price=12.0,
+                prev_close=12.0,
+                change_pct=0.0,
+                currency="USD",
+            )
+
+    from tracker.providers import base as base_mod
+
+    monkeypatch.setattr(base_mod, "resolve", lambda t: FakeProvider())
+    orch.neg_mark("AAPL")
+    with pytest.raises(RuntimeError, match="负缓存"):
+        prices.get_quote("AAPL")
+    assert calls == []
+    q = prices.get_quote("AAPL", refresh=True)
+    assert q.price == 12.0
+    assert calls == ["AAPL"]
+    assert not orch.neg_cached("AAPL")
+
+
 def test_negative_cache_expires_then_quote_succeeds(monkeypatch):
     """负缓存 TTL 过期后取数成功, 并清出负缓存 (语义: 只挡 TTL 内重试)."""
     from tracker.providers.base import Quote

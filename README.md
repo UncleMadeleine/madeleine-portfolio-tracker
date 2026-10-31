@@ -105,6 +105,7 @@ python -m tracker.cli snapshot --json
 
 # 查询单个/多个代码实时行情
 python -m tracker.cli quote AAPL 600519.SS BTC-USD
+python -m tracker.cli quote AAPL --refresh   # 单支强制刷新: 跳过 5min 磁盘缓存与失败负缓存
 
 # 汇率查询
 python -m tracker.cli fx USD CNY EUR

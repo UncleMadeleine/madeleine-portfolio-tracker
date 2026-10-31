@@ -145,6 +145,7 @@ def build_parser() -> argparse.ArgumentParser:
             "示例:\n"
             "  tracker quote AAPL 600519.SS          # 查询多个代码\n"
             "  tracker quote 0700.HK --akshare       # 港股优先 akshare\n"
+            "  tracker quote AAPL --refresh          # 忽略 5min 磁盘缓存/负缓存强制刷新\n"
             "  tracker quote NVDA --json             # JSON 输出\n"
         ),
     )
@@ -153,6 +154,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_q.add_argument("--ibkr", action="store_true")
     p_q.add_argument("--longport", action="store_true")
     _add_crypto_source_arg(p_q)
+    p_q.add_argument(
+        "--refresh",
+        action="store_true",
+        help="忽略 5min 磁盘行情缓存与失败负缓存, 强制重新取数",
+    )
     p_q.add_argument("--json", action="store_true")
     p_q.set_defaults(func=cmd_quote)
 

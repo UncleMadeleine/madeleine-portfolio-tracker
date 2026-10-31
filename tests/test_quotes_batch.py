@@ -86,6 +86,38 @@ def test_progress_callback_tracks_settled(monkeypatch):
     assert any(label == "MSFT" for _, _, label in seen)
 
 
+def test_refresh_bypasses_quote_cache_and_negative(monkeypatch):
+    """--refresh: 跳过 5min 磁盘行情缓存并清负缓存, 立即回源重试."""
+    cache_mod.set_cached({"AAPL": _q("AAPL", 100.0)})
+    orch.neg_mark("AAPL")
+    calls: list[str] = []
+
+    class _Prov:
+        name = "global"
+
+        def fetch_quote(self, p, prefer_first=False):
+            calls.append(p.yahoo)
+            return _q(p.yahoo, 200.0)
+
+    monkeypatch.setattr(orch, "resolve", lambda t: _Prov())
+    _patch_batch(monkeypatch, set())
+
+    # 普通路径: 磁盘缓存命中 (100), 不发网络; 命中缓存同时清负缓存
+    q1, e1, _ = orch.get_quotes(["AAPL"], use_ibkr=False, use_longport=False)
+    assert q1["AAPL"].price == 100.0 and not e1
+    assert calls == []
+
+    # 强制刷新: 跳过磁盘缓存 + 清负缓存 → 真正回源拿到 200
+    q2, e2, _ = orch.get_quotes(
+        ["AAPL"], use_ibkr=False, use_longport=False, refresh=True
+    )
+    assert q2["AAPL"].price == 200.0 and not e2
+    assert calls == ["AAPL"]
+    # 刷新结果回写磁盘
+    hits = cache_mod.get_cached(["AAPL"])
+    assert hits["AAPL"].price == 200.0
+
+
 def test_negative_cache_skips_refetch(monkeypatch):
     """全部源失败的代码进负缓存: TTL 内第二次调用不再触达源链."""
     calls: list[str] = []

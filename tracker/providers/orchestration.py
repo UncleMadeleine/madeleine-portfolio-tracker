@@ -156,11 +156,14 @@ def get_quotes(
     use_longport: bool = False,
     crypto_source: str = "auto",
     progress=None,
+    refresh: bool = False,
 ) -> tuple[dict[str, Quote], dict[str, str], list[str]]:
     """多代码实时行情: 缓存 → 长桥/IBKR 批量 (可选, IBKR 优先) → 按域 provider 取数 → 回写缓存.
 
     progress(done, total, label) 可选: 按已结算代码数推进, 供首屏冷启动
     进度条使用 (缓存命中/批量返回/逐代码成功或失败都计入 settled)。
+    refresh=True: 跳过 5min 磁盘行情缓存, 并清掉这些代码的失败负缓存
+    (CLI `quote --refresh` / 用户显式强制刷新; 不等 TTL 过期)。
     """
     quotes: dict[str, Quote] = {}
     notes: list[str] = []
@@ -174,8 +177,12 @@ def get_quotes(
         if progress is not None:
             progress(min(len(settled), total), total, label)
 
-    # 优先读本地缓存
-    cached = cache_mod.get_cached(list(by_yahoo.keys()))
+    if refresh:
+        # 强制刷新: 负缓存只按代码记, 不清会让「上次失败」继续挡住本轮取数
+        for yahoo in by_yahoo:
+            neg_clear(yahoo)
+    # 优先读本地缓存 (refresh 时跳过, 真正回源)
+    cached = {} if refresh else cache_mod.get_cached(list(by_yahoo.keys()))
     if cached:
         quotes.update(cached)
         settled.update(cached)

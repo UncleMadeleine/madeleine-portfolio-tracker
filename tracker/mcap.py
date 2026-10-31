@@ -103,6 +103,7 @@ def to_common_currency(
     df_map: dict[str, pd.DataFrame],
     currencies: dict[str, str],
     target: str,
+    refresh: bool = False,
 ) -> tuple[dict[str, pd.DataFrame], list[str]]:
     """各代码市值序列统一折算到 target 币种; 汇率历史不可得的代码保持原币.
 
@@ -126,7 +127,11 @@ def to_common_currency(
     rate_tables: dict[str, pd.DataFrame | None] = {}
     for ccy in dict.fromkeys(currencies.values()):
         if ccy != target:
-            rate_tables[ccy] = fx_mod.get_fx_history(ccy, target, start, end)
+            rate_tables[ccy] = (
+                fx_mod.get_fx_history(ccy, target, start, end, refresh=True)
+                if refresh
+                else fx_mod.get_fx_history(ccy, target, start, end)
+            )
     for code, df in df_map.items():
         ccy = currencies.get(code)
         fx_df = rate_tables.get(ccy)
@@ -201,10 +206,10 @@ def _cache_put(key: str, df: pd.DataFrame) -> None:
     cache_mod.set_series_cached(key, df)
 
 
-def _em_history(bare: str) -> pd.DataFrame | None:
+def _em_history(bare: str, refresh: bool = False) -> pd.DataFrame | None:
     """东财估值分析 → date/close (总市值, CNY); 缓存命中率优先, 失败 None."""
     key = f"em_value:{bare}"
-    hit = _cache_get(key, MCAP_EM_TTL)
+    hit = None if refresh else _cache_get(key, MCAP_EM_TTL)
     if hit is not None:
         return hit
     import akshare as ak
@@ -228,10 +233,10 @@ def _em_history(bare: str) -> pd.DataFrame | None:
     return df
 
 
-def _shares_history(yahoo: str) -> pd.DataFrame | None:
+def _shares_history(yahoo: str, refresh: bool = False) -> pd.DataFrame | None:
     """yfinance 历史股本 (date/close=股本数); 全量历史一次性缓存 7 天."""
     key = f"shares_full:{yahoo}"
-    hit = _cache_get(key, MCAP_SHARES_TTL)
+    hit = None if refresh else _cache_get(key, MCAP_SHARES_TTL)
     if hit is not None:
         return hit
     try:
@@ -286,8 +291,14 @@ def _price_currency_for(p) -> str:
     return "GBP"
 
 
-def history_for(symbol: str, price_df: pd.DataFrame) -> McapResult:
-    """单代码历史市值序列 → McapResult (df 为 K线同构, close=当地币市值)."""
+def history_for(
+    symbol: str, price_df: pd.DataFrame, refresh: bool = False
+) -> McapResult:
+    """单代码历史市值序列 → McapResult (df 为 K线同构, close=当地币市值).
+
+    refresh=True 跳过 em/股本/series 缓存和基本面负缓存, 供页面「强制刷新」
+    在失败后立即重试 (不必等 6h/7d 缓存过期)。
+    """
     try:
         p = parse(symbol)
     except ValueError as e:
@@ -305,12 +316,20 @@ def history_for(symbol: str, price_df: pd.DataFrame) -> McapResult:
     source = None
 
     if p.type == "cn":
-        em = _em_history(p.yahoo.split(".")[0])
+        em = (
+            _em_history(p.yahoo.split(".")[0], refresh=refresh)
+            if refresh
+            else _em_history(p.yahoo.split(".")[0])
+        )
         if em is not None:
             mcap_pairs = pd.Series(em["close"].to_numpy(), index=em["date"])
             source = "em"
     else:  # global
-        sh = _shares_history(p.yahoo)
+        sh = (
+            _shares_history(p.yahoo, refresh=refresh)
+            if refresh
+            else _shares_history(p.yahoo)
+        )
         if sh is not None:
             close = pd.to_numeric(price_df["close"], errors="coerce")
             # 股本是稀疏事件序列 (增发/回购公告日): 事件间股数不变 → 前向填充,
@@ -355,7 +374,11 @@ def history_for(symbol: str, price_df: pd.DataFrame) -> McapResult:
     from . import fundamentals
 
     try:
-        snapshot = fundamentals.fetch_market_caps([p.yahoo]).get(p.yahoo)
+        snapshot = (
+            fundamentals.fetch_market_caps([p.yahoo], refresh=True).get(p.yahoo)
+            if refresh
+            else fundamentals.fetch_market_caps([p.yahoo]).get(p.yahoo)
+        )
     except Exception:
         snapshot = None
     if snapshot is None or snapshot <= 0:
@@ -369,18 +392,24 @@ def history_for(symbol: str, price_df: pd.DataFrame) -> McapResult:
 def compare_market_caps(
     frames: dict[str, pd.DataFrame],
     target_currency: str | None,
+    refresh: bool = False,
 ) -> tuple[dict[str, pd.DataFrame], list[str], dict[str, dict]]:
     """对比入口: 股价K线 frames → 历史市值 frames (统一折算 target 币种).
 
     返回 (市值 frames (K线同构, close=市值, 已折算), warnings, 元信息).
     元信息按代码给 {source, currency}; 无视 target (None) 则不换算 (原币).
+    refresh=True 跳过所有相关缓存/负缓存, 供用户显式强制刷新。
     """
     originals: dict[str, pd.DataFrame] = {}
     currencies: dict[str, str] = {}
     sources: dict[str, dict] = {}
     warnings: list[str] = []
     for code, df in frames.items():
-        res = history_for(code, df)
+        res = (
+            history_for(code, df, refresh=True)
+            if refresh
+            else history_for(code, df)
+        )
         if res.df is None:
             warnings.append(
                 f"{code}: 市值序列不可得 ({res.reason or '无数据'}), 已跳过"
@@ -395,6 +424,13 @@ def compare_market_caps(
         }
     if len(originals) < 1:
         return {}, warnings, {}
-    converted, fx_warnings = to_common_currency(originals, currencies, target_currency)
+    if refresh:
+        converted, fx_warnings = to_common_currency(
+            originals, currencies, target_currency, refresh=True
+        )
+    else:
+        converted, fx_warnings = to_common_currency(
+            originals, currencies, target_currency
+        )
     warnings.extend(fx_warnings)
     return converted, warnings, sources

@@ -572,6 +572,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_cmp.add_argument("--akshare", action="store_true")
     p_cmp.add_argument(
+        "--refresh",
+        action="store_true",
+        help="忽略 K线/市值/基本面/汇率缓存与负缓存, 强制重新取数",
+    )
+    p_cmp.add_argument(
         "--ibkr", action="store_true", help="优先使用 IBKR 行情 (需 IB Gateway)"
     )
     p_cmp.add_argument(

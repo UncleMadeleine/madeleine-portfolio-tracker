@@ -174,12 +174,13 @@ def _yahoo_pair_history(pair: str, start_date: str, end_date: str | None = None)
     return out if not out.empty else None
 
 
-def get_fx_history(src: str, dst: str, start_date, end_date=None):
+def get_fx_history(src: str, dst: str, start_date, end_date=None, refresh: bool = False):
     """历史汇率日线 (1 src → dst): DataFrame(date, close); 失败 None.
 
     供 K线对比的「比例线」做汇率调整: 跨币种两标的的价格按同一币种相除,
     得到的比值才反映相对估值而非汇率波动。先取 src+dst 直盘, 失败取反向
     再取倒数; 结果按 (src, dst, 起, 止) 进程内缓存 6 小时。
+    refresh=True 跳过进程内缓存读取 (用户显式强制刷新)。
     """
     import pandas as pd
 
@@ -197,7 +198,7 @@ def get_fx_history(src: str, dst: str, start_date, end_date=None):
     key = (src, dst, start_s, end_s)
     now = time.time()
     hit = _fx_hist_cache.get(key)
-    if hit and now - hit[0] < _FX_HIST_TTL:
+    if hit and not refresh and now - hit[0] < _FX_HIST_TTL:
         return hit[1].copy()
 
     if src == dst:

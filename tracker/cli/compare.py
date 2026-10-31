@@ -126,6 +126,7 @@ def cmd_compare(args) -> None:
                 code,
                 months=args.months,
                 prefer_akshare=args.akshare,
+                refresh=getattr(args, "refresh", False),
                 use_ibkr=getattr(args, "ibkr", False),
                 use_longport=getattr(args, "longport", False),
                 crypto_source=getattr(args, "crypto_source", "auto"),
@@ -154,7 +155,7 @@ def cmd_compare(args) -> None:
             getattr(args, "currency", None) or storage.load_portfolio()["base_currency"]
         ).upper()
         mcap_frames, mcap_warnings, mcap_meta = mcap_mod.compare_market_caps(
-            frames, target_ccy
+            frames, target_ccy, refresh=getattr(args, "refresh", False)
         )
         for w in mcap_warnings:
             print(f"⚠ {w}", file=sys.stderr)

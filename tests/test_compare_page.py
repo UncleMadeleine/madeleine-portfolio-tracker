@@ -75,6 +75,22 @@ def test_compare_renders_chart(compare_app):
     assert any("区间涨跌" in m.value for m in compare_app.markdown)
 
 
+def test_compare_force_refresh_bypasses_page_cache(compare_app, monkeypatch):
+    """走势对比「强制刷新」: 清 cached_kline 并以 refresh=True 重取."""
+    _subview(compare_app, "走势对比")
+    calls: list[bool] = []
+
+    def spy_ohlc(symbol, months=12, prefer_akshare=False, refresh=False, **kw):
+        calls.append(bool(refresh))
+        return _fake_ohlc(symbol, months, prefer_akshare, **kw)
+
+    monkeypatch.setattr(prices, "get_ohlc", spy_ohlc)
+    btn = next(b for b in compare_app.button if b.key == "compare_force")
+    btn.click().run()
+    assert calls, "强制刷新应重新取数"
+    assert all(c is True for c in calls), calls
+
+
 def test_compare_gone_from_portfolio_page():
     """组合页不再提供走势对比 tab (迁移后属 K线子功能): app.py 无该分支."""
     src = _APP_SRC.read_text(encoding="utf-8")

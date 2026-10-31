@@ -149,6 +149,32 @@ class TestHistoryFor:
         assert res.source == "approx"
         assert abs(res.df["close"].iloc[-1] - 1.44e12) < 1
 
+    def test_refresh_bypasses_fundamental_negative_cache(self, monkeypatch):
+        """强制刷新穿透 fundamentals 6h 负缓存: 不必等 TTL 过期才能重试."""
+        from tracker import cache as cache_mod
+        from tracker import fundamentals
+
+        # 上一次失败留下的负缓存 (None 值, 6h 内普通读取会直接命中)
+        cache_mod.set_fundamental_cached("600519.SS", None, market_cap=None)
+        monkeypatch.setattr(mcap, "_em_history", lambda bare, refresh=False: None)
+        calls: list[list[str]] = []
+
+        def fake_metrics(symbols):
+            calls.append(list(symbols))
+            return {
+                s: {"book_value": None, "market_cap": 1.44e12} for s in symbols
+            }
+
+        monkeypatch.setattr(fundamentals, "_fund_metrics", fake_metrics)
+        # 普通路径命中负缓存 → 无市值
+        assert mcap.history_for("600519.SS", PRICE).df is None
+        assert calls == []
+        # 强制刷新跳过负缓存 → 重新请求并走近似兜底
+        res = mcap.history_for("600519.SS", PRICE, refresh=True)
+        assert calls == [["600519.SS"]]
+        assert res.source == "approx"
+        assert abs(res.df["close"].iloc[-1] - 1.44e12) < 1
+
     def test_no_data_anywhere(self, monkeypatch):
         from tracker import fundamentals
 

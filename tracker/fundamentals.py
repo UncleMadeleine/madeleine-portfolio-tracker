@@ -49,8 +49,16 @@ def _fund_metrics(symbols: list[str]) -> dict[str, dict[str, float | None]]:
     return out
 
 
-def _load_cached(symbols: list[str]) -> tuple[dict[str, dict], list[str]]:
-    """按 symbol 顺序读缓存; 返回 (命中项, 未命中列表)."""
+def _load_cached(
+    symbols: list[str], refresh: bool = False
+) -> tuple[dict[str, dict], list[str]]:
+    """按 symbol 顺序读缓存; 返回 (命中项, 未命中列表).
+
+    refresh=True: 跳过缓存读取, 全部视为未命中 —— 供用户显式「强制刷新」
+    穿透 6h 负缓存 (失败结果同样落库, 但手动刷新不应被上一次失败锁住)。
+    """
+    if refresh:
+        return {}, list(dict.fromkeys(symbols))
     out: dict[str, dict] = {}
     missing: list[str] = []
     for s in dict.fromkeys(symbols):
@@ -83,35 +91,43 @@ def _fill_fundamentals(out: dict[str, dict], missing: list[str]) -> None:
         }
 
 
-def fetch_book_values(symbols: list[str]) -> dict[str, float | None]:
+def fetch_book_values(
+    symbols: list[str], refresh: bool = False
+) -> dict[str, float | None]:
     """批量获取每股净资产 → {symbol: book_value | None}.
 
     磁盘缓存优先 (6h TTL), 未命中的批量走 OpenBB (单次调用), 失败静默
     返回 None (调用方按「PB 缺失」降级, 不抛异常)。
+    refresh=True 跳过缓存读取 (显式强制刷新, 穿透负缓存)。
     """
-    out, missing = _load_cached(symbols)
+    out, missing = _load_cached(symbols, refresh=refresh)
     _fill_fundamentals(out, missing)
     return {s: out.get(s, {}).get("book_value") for s in dict.fromkeys(symbols)}
 
 
-def fetch_market_caps(symbols: list[str]) -> dict[str, float | None]:
+def fetch_market_caps(
+    symbols: list[str], refresh: bool = False
+) -> dict[str, float | None]:
     """批量获取总市值 (当地货币) → {symbol: market_cap | None}.
 
     与 PB 共用同一缓存行与 OpenBB 调用 (market_cap 与 book_value 一次返回);
     crypto 与无数据源标的静默返回 None (调用方按「市值缺失」降级)。
+    refresh=True 跳过缓存读取 (显式强制刷新, 穿透负缓存)。
     """
-    out, missing = _load_cached(symbols)
+    out, missing = _load_cached(symbols, refresh=refresh)
     _fill_fundamentals(out, missing)
     return {s: out.get(s, {}).get("market_cap") for s in dict.fromkeys(symbols)}
 
 
-def book_value_for(symbol: str) -> float | None:
+def book_value_for(symbol: str, refresh: bool = False) -> float | None:
     """单代码每股净资产 (并发去重: 同代码 in-flight 只发一次请求)."""
     with _lock:
         gate = _inflight.setdefault(symbol, Lock())
     acquired = gate.acquire(blocking=False)
     try:
         if acquired:
+            if refresh:
+                return fetch_book_values([symbol], refresh=True).get(symbol)
             return fetch_book_values([symbol]).get(symbol)
         gate.acquire()
         gate.release()
@@ -121,4 +137,6 @@ def book_value_for(symbol: str) -> float | None:
                 if _inflight.get(symbol) is gate:
                     _inflight.pop(symbol, None)
             gate.release()
+    if refresh:
+        return fetch_book_values([symbol], refresh=True).get(symbol)
     return fetch_book_values([symbol]).get(symbol)

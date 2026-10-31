@@ -24,6 +24,10 @@ KLINE_SYMBOLS_KEY = "kline_quick_symbols"
 # 最近查看: 会话级记录最近成功渲染 K线的代码 (最新在前, 去重, 上限 RECENT_LIMIT)
 RECENT_KEY = "kline_recent_symbols"
 RECENT_LIMIT = 10
+# 单代码强制刷新令牌: {symbol: n}. 每次「强制刷新」只递增当前代码的令牌,
+# 让该代码的 st.cache_data 键失效 —— 不清空其它代码的缓存 (单票刷新不应
+# 连累整个页面的其它查询)。
+BUST_KEY = "_kline_cache_bust"
 
 # TradingView lightweight-charts 组件 (st.components.v2, JS 不过 DOMPurify):
 # 拖动平移 / 滚轮·捏合缩放 / 触控板双指手势, 券商 App 通用交互.
@@ -65,6 +69,19 @@ def set_quick_symbols(symbols: list[str]) -> None:
     st.session_state[KLINE_SYMBOLS_KEY] = list(dict.fromkeys(symbols))
 
 
+def _bust_token(symbol: str) -> int:
+    """该代码当前的缓存失效令牌 (默认 0)."""
+    tokens = st.session_state.setdefault(BUST_KEY, {})
+    return int(tokens.get(str(symbol).strip().upper(), 0))
+
+
+def bump_kline_cache(symbols) -> None:
+    """只递增指定代码的缓存令牌 (单票强制刷新, 不影响其它代码缓存)."""
+    tokens = st.session_state.setdefault(BUST_KEY, {})
+    for s in dict.fromkeys(str(x).strip().upper() for x in symbols if x):
+        tokens[s] = int(tokens.get(s, 0)) + 1
+
+
 @st.cache_data(ttl=1800, show_spinner=False)
 def cached_kline(
     symbol: str,
@@ -74,12 +91,15 @@ def cached_kline(
     use_longport: bool = False,
     crypto_source: str = "auto",
     refresh: bool = False,
+    cache_bust: int = 0,
 ):
     """K线日线 (磁盘缓存 + 内存缓存双层, TTL 内切换参数不重复请求网络).
 
     refresh=True 跳过磁盘 OHLC 缓存 (其键只有 symbol+months, 不含数据源偏好):
     数据源偏好切换后必须重取, 否则被旧源的磁盘缓存短路, 继续展示上一个源的K线
     (与滑动模式 cached_kline_all 同口径)。
+    cache_bust: 单代码强制刷新令牌。令牌变化的代码使用全新 st.cache_data 键,
+    只失效该代码, 不连累其它代码的缓存。
     """
     return prices.get_ohlc(
         symbol,
@@ -100,12 +120,14 @@ def cached_kline_all(
     use_longport: bool = False,
     crypto_source: str = "auto",
     refresh: bool = False,
+    cache_bust: int = 0,
 ):
     """上市以来全量日K (滑动模式唯一取数路径, 缓存键独立于范围模式月份参数).
 
     refresh=True 跳过磁盘 OHLC 缓存 (其键只有 symbol+months, 不含数据源
     偏好): 设置页切换 prefer_akshare/IBKR/长桥/crypto_source 后必须重取,
     否则「重新取数」会被旧源的磁盘缓存短路, 继续展示上一个源的K线。
+    cache_bust: 单代码强制刷新令牌 (只失效当前代码的页面缓存)。
     """
     return prices.get_ohlc(
         symbol,
@@ -209,22 +231,49 @@ def cached_mcap_compare(
     use_longport: bool = False,
     crypto_source: str = "auto",
     target_currency: str | None = None,
+    refresh: bool = False,
 ):
     """历史市值对比序列 (磁盘缓存 + 内存缓存双层): 市值口径不可变属性低频.
 
     内部经 cached_kline 取同源价格K线, 市值序列按「东财历史总市值 / 历史股本
     ×收盘 / 当前市值近似」三级兜底, 最后统一折算 target_currency 币种。
     返回 (市值 frames dict, warnings 列表, 元信息 dict)。
+
+    refresh=True 穿透 K线/市值序列/基本面负缓存 (页面「强制刷新」)。
     """
     frames: dict[str, pd.DataFrame] = {}
     for s in symbols:
         d = cached_kline(
-            s, months, prefer_akshare, use_ibkr, use_longport, crypto_source
+            s,
+            months,
+            prefer_akshare,
+            use_ibkr,
+            use_longport,
+            crypto_source,
+            refresh=refresh,
         )
         if isinstance(d, pd.DataFrame) and not d.empty:
             frames[s] = d
-    cap_frames, warnings, meta = mcap.compare_market_caps(frames, target_currency)
+    if refresh:
+        cap_frames, warnings, meta = mcap.compare_market_caps(
+            frames, target_currency, refresh=True
+        )
+    else:
+        cap_frames, warnings, meta = mcap.compare_market_caps(
+            frames, target_currency
+        )
     return cap_frames, warnings, meta
+
+
+def clear_kline_caches() -> None:
+    """清 K线/市值对比的 st.cache_data 层 (强制刷新用).
+
+    磁盘层由 get_ohlc(refresh=True) 穿透; 但 st.cache_data 会把「空结果/
+    失败告警」缓存 30-60 分钟, 只靠磁盘 TTL 或负缓存过期无法手动重试。
+    """
+    cached_kline.clear()
+    cached_kline_all.clear()
+    cached_mcap_compare.clear()
 
 
 def render_compare_chart(data: dict, *, height: int = 560) -> None:
@@ -398,6 +447,14 @@ def render_compare_controls(
         "缺失时按当前市值近似; 统一折算币种, crypto/指数无市值语义)",
     )
     norm = c4.toggle("归一化 (起点=100)", value=True, key="compare_norm")
+    force_refresh = st.button(
+        ":material/refresh: 强制刷新",
+        key="compare_force",
+        help="忽略页面缓存、K线磁盘缓存与基本面/汇率负缓存, 立即重取 "
+        "(数据源偶发失败后可手动重试, 不必等缓存过期)",
+    )
+    if force_refresh:
+        clear_kline_caches()
 
     sel, bad = [], []
     for s in sel_raw:
@@ -456,24 +513,52 @@ def render_compare_controls(
 
         target_ccy = storage.load_portfolio()["base_currency"].upper()
         with st.spinner(f"拉取 {len(sel)} 只代码近 {cmp_months} 个月 历史市值..."):
-            frames, mcap_warnings, mcap_meta = cached_mcap_compare(
-                tuple(sel),
-                cmp_months,
-                prefer_akshare,
-                use_ibkr,
-                use_longport,
-                crypto_source,
-                target_ccy,
-            )
+            if force_refresh:
+                frames, mcap_warnings, mcap_meta = cached_mcap_compare(
+                    tuple(sel),
+                    cmp_months,
+                    prefer_akshare,
+                    use_ibkr,
+                    use_longport,
+                    crypto_source,
+                    target_ccy,
+                    refresh=True,
+                )
+            else:
+                frames, mcap_warnings, mcap_meta = cached_mcap_compare(
+                    tuple(sel),
+                    cmp_months,
+                    prefer_akshare,
+                    use_ibkr,
+                    use_longport,
+                    crypto_source,
+                    target_ccy,
+                )
         for w in mcap_warnings:
             st.warning(w)
     else:
         with st.spinner(f"拉取 {len(sel)} 只代码近 {cmp_months} 个月 K线..."):
             for s in sel:
                 try:
-                    d = cached_kline(
-                        s, cmp_months, prefer_akshare, use_ibkr, use_longport, crypto_source
-                    )
+                    if force_refresh:
+                        d = cached_kline(
+                            s,
+                            cmp_months,
+                            prefer_akshare,
+                            use_ibkr,
+                            use_longport,
+                            crypto_source,
+                            refresh=True,
+                        )
+                    else:
+                        d = cached_kline(
+                            s,
+                            cmp_months,
+                            prefer_akshare,
+                            use_ibkr,
+                            use_longport,
+                            crypto_source,
+                        )
                     if d.empty:
                         st.warning(f"{s}: 无有效K线数据")
                     else:
@@ -668,10 +753,12 @@ def _render_slide_mode(
     use_ibkr: bool = False,
     use_longport: bool = False,
     crypto_source: str = "auto",
+    force: bool = False,
 ) -> None:
     """滑动模式: 一次拉取上市以来全量历史, 图表内无限拖动 (纯前端, 不再取数).
 
     - 数据集存 session_state (kline_slide_df); 周期/均线/指标/成交量变化只重绘。
+    - force=True (页面「强制刷新」): 作废会话数据集并跳过磁盘/页面缓存重取。
     """
     state_key = "kline_slide_df"
     state_qid_key = "kline_slide_qid"
@@ -687,23 +774,28 @@ def _render_slide_mode(
     # 形同虚设 (qid 含 yahoo, 曾让 refresh=qid_changed 把换代码也当成换源)。
     # 跨会话的源变化由设置页 clear_ohlc 清磁盘缓存兜底, 这里只需管会话内。
     src_changed = prev_qid is not None and prev_qid[1:] != src
-    if qid_changed:
+    if qid_changed or force:
         st.session_state[state_key] = None
         st.session_state[state_qid_key] = qid
+    if force:
+        # 单票强制刷新: 只递增该代码的缓存令牌, 其它代码的页面缓存保持有效
+        bump_kline_cache([yahoo])
 
     df_all: pd.DataFrame | None = st.session_state.get(state_key)
     if df_all is None:
         try:
             with st.spinner(f"拉取 {yahoo} 上市以来K线..."):
-                # 仅数据源偏好变化时绕过磁盘缓存重取: OHLC 磁盘缓存键不含源偏好,
-                # 不 refresh 会命中旧源数据; 换代码不 refresh, 命中即用
+                # 仅数据源偏好变化/强制刷新时绕过磁盘缓存重取: OHLC 磁盘缓存
+                # 键不含源偏好, 不 refresh 会命中旧源数据; 换代码不 refresh,
+                # 命中即用
                 kdf = cached_kline_all(
                     yahoo,
                     prefer_akshare,
                     use_ibkr,
                     use_longport,
                     crypto_source,
-                    refresh=src_changed,
+                    refresh=src_changed or force,
+                    cache_bust=_bust_token(yahoo),
                 )
         except Exception as e:
             st.warning(f"{yahoo}: {e}")
@@ -751,7 +843,9 @@ def render_kline_controls(
     # ---- 搜索框: 按代码或名称模糊匹配, 选中后自动填入代码输入框 ----
     _render_symbol_search()
 
-    c1, c2, c3, c4 = st.columns([3, 1, 1, 1], vertical_alignment="bottom")
+    c1, c2, c3, c4, c5 = st.columns(
+        [3, 1, 1, 1, 1.25], vertical_alignment="bottom"
+    )
     ksym = c1.text_input(
         "代码",
         value="",
@@ -794,6 +888,13 @@ def render_kline_controls(
         st.session_state["kline_last_symbol"] = ksym
     submitted = st.session_state["kline_last_symbol"] != ksym
     if c4.button("查询", type="primary", icon=":material/search:"):
+        submitted = True
+    force_refresh = c5.button(
+        ":material/refresh: 强制刷新",
+        help="忽略页面缓存、磁盘 K线缓存与基本面负缓存, 立即重新取数 "
+        "(数据源偶发失败后可手动重试, 不必等缓存/负缓存过期)",
+    )
+    if force_refresh:
         submitted = True
     if st.session_state.pop("_kline_recent_rerun", False):
         submitted = True
@@ -907,6 +1008,7 @@ def render_kline_controls(
             use_ibkr,
             use_longport,
             crypto_source,
+            force=force_refresh,
         )
         return
     # ---- 范围模式 (旧流程兜底) ----
@@ -918,6 +1020,7 @@ def render_kline_controls(
         st.session_state.get("kline_current_symbol") != yahoo
         or st.session_state.get("kline_last_months") != kdepth
         or st.session_state.get("kline_last_src") != src
+        or force_refresh
     )
     # 仅数据源变化才需 bypass 磁盘 OHLC 缓存: 其键只有 symbol+months, 换源后
     # 同键会命中上一个源的旧K线 (settings 页 clear_quotes 只清实时行情、保留K线)。
@@ -926,6 +1029,8 @@ def render_kline_controls(
     prev_src = st.session_state.get("kline_last_src")
     src_changed = prev_src is not None and prev_src != src
     if data_changed or st.session_state.get("kline_current_df") is None:
+        if force_refresh:
+            bump_kline_cache([yahoo])
         try:
             with st.spinner(f"拉取 {yahoo} K线..."):
                 kdf = cached_kline(
@@ -935,7 +1040,8 @@ def render_kline_controls(
                     use_ibkr,
                     use_longport,
                     crypto_source,
-                    refresh=src_changed,
+                    refresh=src_changed or force_refresh,
+                    cache_bust=_bust_token(yahoo),
                 )
         except Exception as e:
             st.warning(f"{yahoo}: {e}")
@@ -1033,6 +1139,13 @@ def render_crypto_compare_controls(
         format_func=lambda v: charting.PERIOD_LABELS[v],
         key="crypto_compare_period",
     )
+    force_refresh = st.button(
+        ":material/refresh: 强制刷新",
+        key="crypto_compare_force",
+        help="忽略页面缓存与磁盘 K线缓存, 立即重新取数 (失败后可手动重试)",
+    )
+    if force_refresh:
+        clear_kline_caches()
 
     sel, bad = [], []
     for s in sel_raw:
@@ -1053,9 +1166,20 @@ def render_crypto_compare_controls(
     with st.spinner(f"拉取 {len(sel)} 个币种近 {ccmp_months} 个月 K线..."):
         for s in sel:
             try:
-                d = cached_kline(
-                    s, ccmp_months, False, False, False, crypto_source
-                )
+                if force_refresh:
+                    d = cached_kline(
+                        s,
+                        ccmp_months,
+                        False,
+                        False,
+                        False,
+                        crypto_source,
+                        refresh=True,
+                    )
+                else:
+                    d = cached_kline(
+                        s, ccmp_months, False, False, False, crypto_source
+                    )
                 if d.empty:
                     st.warning(f"{s}: 无有效K线数据")
                 else:

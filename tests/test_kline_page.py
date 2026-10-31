@@ -49,12 +49,13 @@ def _fake_ohlc(
 @pytest.fixture
 def kline_app(monkeypatch):
     """每个测试独立: 桩掉组件与网络, 清空两层缓存."""
-    calls = {"n": 0}
+    calls = {"n": 0, "refresh": []}
 
     def _fake_ohlc(
         symbol, months=12, prefer_akshare=False, start_date=None, end_date=None, **kw
     ):
         calls["n"] += 1
+        calls["refresh"].append(bool(kw.get("refresh", False)))
         idx = pd.date_range("2024-01-01", periods=360, freq="D")
         df = pd.DataFrame(
             {
@@ -112,6 +113,18 @@ def test_slide_mode_param_change_redraws_not_refetches(kline_app):
     kline_app.selectbox[0].set_value("weekly").run()  # 切周期只重绘
     assert len(kline_app.metric) == 4
     assert kline_app._calls["n"] == 1
+
+
+def test_force_refresh_button_refetches_with_refresh(kline_app):
+    """「强制刷新」: 清页面缓存 + 带 refresh=True 重取, 不等 TTL/负缓存过期."""
+    kline_app.text_input[1].set_value("AAPL").run()
+    assert kline_app._calls["n"] == 1
+    assert kline_app._calls["refresh"] == [False]
+    btn = next(b for b in kline_app.button if "强制刷新" in str(b.label))
+    btn.click().run()
+    assert kline_app._calls["n"] == 2
+    assert kline_app._calls["refresh"][-1] is True
+    assert len(kline_app.metric) == 4
 
 
 def test_slide_mode_symbol_change_refetches(kline_app):
@@ -292,6 +305,17 @@ kp.render_kline_controls(False)
     app.multiselect[0].set_value([5, 10]).run()  # 改均线: 只重绘
     assert len(app.metric) == 4
     assert calls["n"] == 1
+
+
+def test_bump_kline_cache_is_per_symbol():
+    """单票强制刷新令牌只影响该代码 (不清空其它代码的页面缓存)."""
+    script = """
+import tracker.ui.kline_page as kp
+kp.bump_kline_cache(["AAPL"])
+"""
+    app = AppTest.from_string(script, default_timeout=30).run()
+    tokens = app.session_state[kline_page.BUST_KEY]
+    assert tokens == {"AAPL": 1}
 
 
 def test_invalid_symbol_rejected(kline_app):

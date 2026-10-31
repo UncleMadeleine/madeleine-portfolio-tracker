@@ -1257,6 +1257,7 @@ class TestParser:
             ["history", "AAPL"],
             ["kline", "AAPL"],
             ["kline", "AAPL", "--period", "weekly", "--ma", "10,30", "--refresh"],
+            ["compare", "AAPL", "MSFT", "--metric", "mcap", "--refresh"],
             ["report", "-f", "md"],
             ["report", "-f", "json", "-w", "科技", "-o", "x.md"],
             ["sync", "--dry-run"],

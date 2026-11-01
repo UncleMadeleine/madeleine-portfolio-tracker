@@ -16,13 +16,12 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
 import pandas as pd
 
-from . import importer
 from .cli._common import _finish_with_error
+from .cli._import_report import run_import_report
 from .storage import PORTFOLIO_PATH as DEFAULT_PORTFOLIO
 from .symbols import type_for_symbol
 
@@ -276,62 +275,15 @@ def run_sync(args) -> None:
         # OSError, 与 cli/importer.py 同口径给可读错误而不是裸 traceback
         _finish_with_error(f"{args.file}: 读取失败 ({e.strerror or e})")
 
-    # 与统一入口 tracker import file 一致: 缺省追加合并, --overwrite 才覆盖全部。
-    # (旧版缺省为覆盖, 会让按「导入默认追加」文档走的用户静默丢掉其它持仓)
-    mode = (
-        importer.MODE_OVERWRITE
-        if getattr(args, "overwrite", False)
-        else importer.MODE_APPEND
+    run_import_report(
+        rows,
+        skipped,
+        args,
+        title="券商文件持仓",
+        source=str(args.file),
+        empty_msg="(无有效持仓或均无法映射)",
+        tip="提示: avg_cost 为券商导出的成本价(当地货币), 仅供估算。",
     )
-    result = importer.apply_import(
-        rows, args.portfolio, mode=mode, dry_run=args.dry_run
-    )
-
-    if getattr(args, "json", False):
-        print(
-            json.dumps(
-                {
-                    "source": str(args.file),
-                    "positions": rows,
-                    "skipped": skipped,
-                    "dry_run": bool(args.dry_run),
-                    "written": result["written"],
-                    "mode": mode,
-                    "added": result["added"],
-                    "updated": result["updated"],
-                },
-                ensure_ascii=False,
-                indent=2,
-            )
-        )
-        return
-
-    print(f"\n=== 券商文件持仓 ({len(rows)} 只, 来源: {Path(args.file).name}) ===")
-    if rows:
-        with pd.option_context(
-            "display.float_format", "{:,.4f}".format, "display.width", 160
-        ):
-            print(pd.DataFrame(rows).to_string(index=False))
-    else:
-        print("(无有效持仓或均无法映射)")
-    for s in skipped:
-        print(f"  ⚠ {s}")
-
-    if args.dry_run or not rows:
-        return
-
-    if result["written"]:
-        # 仅当确有备份 (目标文件原本存在) 才提示: 全新 portfolio.json 首次
-        # 导入时 backup_file 返回 None, 与 ibkr_sync 的口径一致
-        if result.get("backup"):
-            print(f"\n已备份原文件: {Path(args.portfolio).name}.bak")
-        print(
-            f"✅ 已写入 {args.portfolio} "
-            f"({'追加合并' if mode == importer.MODE_APPEND else '覆盖'}; "
-            f"新增 {len(result['added'])} · 更新 {len(result['updated'])}, "
-            f"共 {result['total']} 条持仓, 基础货币保留)"
-        )
-    print("提示: avg_cost 为券商导出的成本价(当地货币), 仅供估算。")
 
 
 def main(argv=None) -> None:

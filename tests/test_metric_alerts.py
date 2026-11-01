@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 
 from tracker.prices import Quote
-from tracker.services.rules import (
+from tracker.rules import (
     METRIC_MCAP,
     METRIC_PB,
     METRIC_PRICE,

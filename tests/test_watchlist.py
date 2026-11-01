@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 from tracker.prices import Quote
-from tracker.services.rules import (
+from tracker.rules import (
     STATUS_LOWER_1,
     STATUS_LOWER_2,
     STATUS_UPPER_1,

@@ -28,7 +28,7 @@ except ImportError:  # pragma: no cover - 平台相关
 
 from .paths import data_home
 from .symbols import parse, type_for_symbol
-from .services.rules import metric_for_entry as rules_metric_for_entry
+from .rules import metric_for_entry as rules_metric_for_entry
 
 # 数据文件锚定数据目录 (TRACKER_HOME > 源码树仓库根 > 平台用户目录, 见 paths.py:
 # pip 安装后不再写进 site-packages; 源码树跑法与旧版完全一致)

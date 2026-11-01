@@ -18,7 +18,7 @@ from .. import prices
 from ..providers.base import Quote
 from ..storage import dedupe_watch_entries, parse_lists, normalize_watch_entry
 from ..symbols import parse
-from .rules import (
+from ..rules import (
     METRIC_MCAP,
     METRIC_PB,
     STATUS_NO_DATA,

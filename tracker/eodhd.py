@@ -32,13 +32,14 @@ import math
 import os
 import re
 import tempfile
-import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pandas as pd
 
+from . import config
+from .config import load_json_object, merge_config, resolve_config_path
 from .paths import TEMPLATES_DIR, data_home
 from .symbols import Market, ParsedSymbol, parse as _parse_symbol
 
@@ -93,12 +94,6 @@ _EXCHANGE_BY_SUFFIX = {
     "SA": "SA",
 }
 
-# 进程内文件缓存: (mtime_ns, size) → 解析结果. 自选 600+ 时源链会反复读
-# 同一份配置; 有 mtime 校验, 手改文件无需重启进程即可生效。
-_file_cache: dict[Path, tuple[tuple[int, int], dict]] = {}
-_file_lock = threading.Lock()
-
-
 # ---------------------------------------------------------------------------
 # 配置读取 / 写入
 # ---------------------------------------------------------------------------
@@ -106,37 +101,9 @@ _file_lock = threading.Lock()
 
 def config_path(path: str | Path | None = None) -> Path:
     """eodhd.json 路径: 显式 path > env EODHD_CONFIG > 数据目录/eodhd.json."""
-    if path:
-        return Path(path).expanduser()
-    env = os.environ.get(CONFIG_ENV)
-    if env:
-        return Path(env).expanduser()
-    return data_home() / CONFIG_NAME
-
-
-def _load_file(p: Path) -> dict:
-    """读取 JSON 对象; 缺失/损坏/非对象返回 {} (配置错误不阻断取数)."""
-    if not p.exists():
-        return {}
-    try:
-        st = p.stat()
-        key = (st.st_mtime_ns, st.st_size)
-    except OSError:
-        return {}
-    with _file_lock:
-        hit = _file_cache.get(p)
-        if hit is not None and hit[0] == key:
-            return dict(hit[1])
-    try:
-        # utf-8-sig: 兼容编辑器存成的带 BOM 文件
-        data = json.loads(p.read_text(encoding="utf-8-sig"))
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    with _file_lock:
-        _file_cache[p] = (key, data)
-    return dict(data)
+    return resolve_config_path(
+        path, CONFIG_ENV, data_home() / CONFIG_NAME
+    )
 
 
 def _env_token() -> str | None:
@@ -186,8 +153,7 @@ def _str_map(v) -> dict[str, str]:
 def load_config(path: str | Path | None = None) -> dict:
     """读取并校验 EODHD 配置 (内置默认 → eodhd.json → env token)."""
     p = config_path(path)
-    cfg = dict(DEFAULTS)
-    cfg.update({k: v for k, v in _load_file(p).items() if not str(k).startswith("_")})
+    cfg = merge_config(DEFAULTS, load_json_object(p))
     env_token = _env_token()
     if env_token:
         cfg["token"] = env_token
@@ -222,8 +188,7 @@ def load_config(path: str | Path | None = None) -> dict:
 
 def reset() -> None:
     """清空配置缓存 (设置页写入 / 测试替换环境变量后调用)."""
-    with _file_lock:
-        _file_cache.clear()
+    config.clear_cache()
 
 
 def available(cfg: dict | None = None) -> bool:
@@ -286,11 +251,11 @@ def _write_config(patch: dict, path: str | Path | None = None) -> Path:
     """原子写 eodhd.json (0600): 只更新 patch 中的键, 保留 token/自定义键."""
     p = config_path(path)
     if p.exists():
-        data = _load_file(p)
+        data = load_json_object(p)
     else:
         # 首次经设置页创建时带上模板的字段说明, 避免只落一个裸 enabled 键
         tpl = TEMPLATES_DIR / "eodhd.example.json"
-        data = _load_file(tpl) if tpl.exists() else {}
+        data = load_json_object(tpl) if tpl.exists() else {}
     data.update(patch)
     p.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=f".{p.name}.", suffix=".tmp")

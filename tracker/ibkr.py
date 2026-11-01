@@ -13,7 +13,6 @@ env IBKR_MODE > 文件 mode > 默认 paper; 文件里显式 "port" 优先于模�
 
 from __future__ import annotations
 
-import json
 import math
 import os
 import time
@@ -23,6 +22,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from .config import load_json_object, merge_config, resolve_config_path
 from .paths import TEMPLATES_DIR, data_home
 from .prices import Quote
 from .symbols import Market, ParsedSymbol, is_pence, type_for_symbol
@@ -86,46 +86,23 @@ _IBKR_HIST_PAUSE = 0.2  # 块间退让 (s): IBKR 历史数据请求有频率限�
 _IBKR_HIST_EMPTY_GIVEUP = 2  # 连续空块: 放弃更早窗口 (标的上市晚于区间起点)
 
 
-def _resolve_config_path(path: str | Path | None = None) -> Path:
-    if path:
-        return Path(path)
-    env = os.environ.get("IBKR_CONFIG")
-    if env:
-        return Path(env)
-    if DEFAULT_CONFIG.exists():
-        return DEFAULT_CONFIG
-    return EXAMPLE_CONFIG
-
-
-def _load_file(p: Path) -> dict:
-    if not p.exists():
-        return {}
-    with open(p, encoding="utf-8") as f:
-        data = json.load(f)
-    return data if isinstance(data, dict) else {}
-
-
-def _merge(base: dict, extra: dict) -> dict:
-    out = {k: (dict(v) if isinstance(v, dict) else v) for k, v in base.items()}
-    for k, v in extra.items():
-        if k.startswith("_"):
-            continue
-        if k == "exchanges" and isinstance(v, dict):
-            out.setdefault("exchanges", {}).update(v)
-        else:
-            out[k] = v
-    return out
-
-
 def load_config(path: str | Path | None = None) -> dict:
     """读取 IBKR 配置: 真实文件(或 env/显式 path) 覆盖模板 ibkr.example.json 覆盖兜底默认.
 
     环境变量 IBKR_MODE (paper/live) 覆盖文件中的 mode; 显式 port 不受影响。
     """
-    cfg = _merge(_FALLBACK, _load_file(EXAMPLE_CONFIG))
-    target = _resolve_config_path(path)
+    target = resolve_config_path(
+        path, "IBKR_CONFIG", DEFAULT_CONFIG, EXAMPLE_CONFIG
+    )
+    cfg = merge_config(
+        _FALLBACK,
+        load_json_object(EXAMPLE_CONFIG),
+        deep_keys=("exchanges",),
+    )
     if target != EXAMPLE_CONFIG:
-        cfg = _merge(cfg, _load_file(target))
+        cfg = merge_config(
+            cfg, load_json_object(target), deep_keys=("exchanges",)
+        )
     env_mode = os.environ.get("IBKR_MODE")
     if env_mode:
         cfg["mode"] = env_mode.strip().lower()

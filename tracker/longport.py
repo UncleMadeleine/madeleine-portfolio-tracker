@@ -21,9 +21,7 @@ calc_indexes 失败静默跳过 (PB 提醒回落 fundamentals 链路)。
 
 from __future__ import annotations
 
-import json
 import math
-import os
 import threading
 import time
 from datetime import date, datetime
@@ -31,6 +29,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from .config import load_json_object, merge_config, resolve_config_path
 from .paths import TEMPLATES_DIR, data_home
 from .providers.base import Quote
 from .symbols import _is_us_preferred, parse, type_for_symbol
@@ -55,29 +54,6 @@ _unavailable: tuple[str, float] | None = None
 _lock = threading.Lock()
 
 
-def _resolve_config_path(path: str | Path | None = None) -> Path:
-    if path:
-        p = Path(path).expanduser()
-        if p.exists():
-            return p
-    env = os.environ.get("LONGPORT_CONFIG")
-    if env:
-        p = Path(env).expanduser()
-        if p.exists():
-            return p
-    if DEFAULT_CONFIG.exists():
-        return DEFAULT_CONFIG
-    return EXAMPLE_CONFIG
-
-
-def _load_file(p: Path) -> dict:
-    if not p.exists():
-        return {}
-    with open(p, encoding="utf-8") as f:
-        data = json.load(f)
-    return data if isinstance(data, dict) else {}
-
-
 def load_config(path: str | Path | None = None) -> dict:
     """读取长桥配置: 真实文件(或 env/显式 path) 覆盖模板 longport.example.json 覆盖兜底.
 
@@ -85,12 +61,19 @@ def load_config(path: str | Path | None = None) -> dict:
     app_key/app_secret/access_token (apikey), language (en|zh-CN|zh-HK)。
     _comment 开头字段被忽略。真实配置含敏感信息, 已 gitignore。
     """
-    cfg = dict(_FALLBACK)
-    example = _load_file(EXAMPLE_CONFIG)
-    cfg.update({k: v for k, v in example.items() if not k.startswith("_comment")})
-    real = _load_file(_resolve_config_path(path))
-    cfg.update({k: v for k, v in real.items() if not k.startswith("_comment")})
-    return cfg
+    target = resolve_config_path(
+        path,
+        "LONGPORT_CONFIG",
+        DEFAULT_CONFIG,
+        EXAMPLE_CONFIG,
+        require_exists=True,
+    )
+    return merge_config(
+        _FALLBACK,
+        load_json_object(EXAMPLE_CONFIG),
+        load_json_object(target),
+        ignore_prefix="_comment",
+    )
 
 
 def reset() -> None:

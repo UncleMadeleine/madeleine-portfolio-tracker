@@ -744,3 +744,75 @@ def test_settings_default_use_longport(tmp_path):
     storage.save_settings({"use_longport": True}, tmp_path / "s.json")
     data = storage.load_settings(tmp_path / "s.json")
     assert data["use_longport"] is True
+
+
+def test_static_names_continues_after_chunk_failure(monkeypatch):
+    from tracker import longport as lp
+
+    monkeypatch.setattr(lp, "_BATCH", 2)
+    calls = {"n": 0}
+
+    class Info:
+        def __init__(self, symbol, currency):
+            self.symbol = symbol
+            self.currency = currency
+            self.name_cn = ""
+            self.name_en = ""
+            self.name_hk = ""
+
+    def fake_ctx(fn, *args, cfg=None, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("rate limited")
+        return [Info("700.HK", "HKD"), Info("9070.HK", "USD")]
+
+    monkeypatch.setattr(lp, "_ctx_call", fake_ctx)
+    _names, currencies = lp.static_names_longport(
+        ["700.HK", "9070.HK", "AAPL.US", "MSFT.US"]
+    )
+    assert calls["n"] == 2, "首块失败后必须继续处理后续块"
+    assert currencies == {"700.HK": "HKD", "9070.HK": "USD"}
+
+
+class TestLongportFixes:
+    def test_crypto_index_filtered_from_batch(self, monkeypatch):
+        """crypto/index 不映射成长桥伪代码 (整批报错会拖丢所有股票行情)."""
+        captured = []
+
+        class _Ctx:
+            def quote(self, syms):
+                captured.extend(syms)
+                return []
+
+        monkeypatch.setattr(
+            "tracker.longport._ctx_call",
+            lambda fn, *a, **kw: fn(_Ctx(), *a) if a else fn(_Ctx()),
+        )
+        from tracker import longport as lp
+
+        lp.get_quotes_longport(
+            [parse("AAPL"), parse("BTC-USD"), parse("IX.DXY")]
+        )
+        assert captured == ["AAPL.US"]
+
+    def test_positions_to_rows_keeps_short_and_zero_cost(self):
+        from tracker import longport as lp
+
+        class Pos:
+            def __init__(self, symbol, quantity, cost_price):
+                self.symbol = symbol
+                self.quantity = quantity
+                self.cost_price = cost_price
+                self.currency = "USD"
+
+        rows, skipped = lp.positions_to_rows(
+            [
+                Pos("AAPL.US", -10, 100.0),  # 空头保留负数量
+                Pos("MSFT.US", 5, 0),  # 0 成本是合法值, 不当缺失
+                Pos("TSLA.US", 0, 50.0),  # 零数量跳过
+            ]
+        )
+        by_sym = {r["symbol"]: r for r in rows}
+        assert by_sym["AAPL"]["quantity"] == -10.0
+        assert by_sym["MSFT"]["avg_cost"] == 0.0
+        assert "TSLA" not in by_sym

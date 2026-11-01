@@ -259,3 +259,62 @@ class TestCompareMarketCaps:
         assert set(caps) == {"600519.SS"}
         assert any("BTC-USD" in w for w in warns)
         assert meta["600519.SS"]["source"] == "em"
+
+
+def _price_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2026-01-02", "2026-01-05"]),
+            "open": [10.0, 11.0],
+            "high": [10.0, 11.0],
+            "low": [10.0, 11.0],
+            "close": [10.0, 11.0],
+            "volume": [0.0, 0.0],
+        }
+    )
+
+
+def test_mcap_currency_follows_usd_quoted_lse(monkeypatch):
+    """CSPX.L (LSE 美元计价) 的市值币种必须是 USD, 不能按 parse 的 GBP 折算."""
+    monkeypatch.setattr(
+        mcap,
+        "_shares_history",
+        lambda y: pd.DataFrame(
+            {"date": pd.to_datetime(["2025-01-01"]), "close": [100.0]}
+        ),
+    )
+    monkeypatch.setattr(mcap, "_price_currency_for", lambda p: "USD")
+    res = mcap.history_for("CSPX.L", _price_frame())
+    assert res.df is not None
+    assert res.currency == "USD"
+
+
+def test_price_currency_pence_and_usd_lines(monkeypatch):
+    """GBp 便士折成 GBP; 美元计价的 .IL (KAP.IL) 保留 USD."""
+    import tracker.providers.global_stocks as gs
+
+    monkeypatch.setattr(gs, "_yahoo_quote_currency", lambda y: "GBp")
+    assert mcap._price_currency_for(parse("VOD.L")) == "GBP"
+    monkeypatch.setattr(gs, "_yahoo_quote_currency", lambda y: "USD")
+    assert mcap._price_currency_for(parse("KAP.IL")) == "USD"
+
+
+def test_price_currency_hk_usd_counter(monkeypatch):
+    """港股美元柜台 (9188.HK) 的市值币种必须跟随报价币种 USD, 不是 HKD."""
+    import tracker.providers.global_stocks as gs
+
+    monkeypatch.setattr(gs, "_yahoo_quote_currency", lambda y: "USD")
+    assert mcap._price_currency_for(parse("9188.HK")) == "USD"
+    # 人民币柜台 parse 已按 8 开头 5 位推导为 CNY, 直接返回, 不发网络
+    monkeypatch.setattr(
+        gs,
+        "_yahoo_quote_currency",
+        lambda y: (_ for _ in ()).throw(AssertionError("不应查询人民币柜台")),
+    )
+    assert mcap._price_currency_for(parse("82318.HK")) == "CNY"
+
+
+def parse(symbol: str):
+    from tracker.symbols import parse
+
+    return parse(symbol)

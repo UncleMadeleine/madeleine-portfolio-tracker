@@ -879,3 +879,79 @@ class TestSolanaWallet:
         hosts = wallet_mod._solana_rpc_hosts(wallet_mod._CHAIN_CONFIG["solana"])
         assert hosts[:2] == ["https://a.example", "https://b.example"]
         assert hosts[2:] == wallet_mod._CHAIN_CONFIG["solana"]["rpc"]
+
+
+class TestWalletFixes:
+    ADDR = "TJNtFduS4oebw3jgGKCYmgSpTdyPieb6Ha"
+
+    def test_tron_unfrozen_v2_and_frozen_energy_object(self, monkeypatch):
+        """unfrozenV2 (非 unfrozen) + frozen_balance_for_energy 是 Frozen 对象."""
+        from tracker import wallet as wallet_mod
+
+        body = {
+            "data": [
+                {
+                    "balance": 1_000_000,
+                    "frozenV2": [{"amount": 124_000_000, "type": "ENERGY"}],
+                    "unfrozenV2": [{"unfreeze_amount": 10_000_000}],
+                    "account_resource": {
+                        "frozen_balance_for_energy": {
+                            "frozen_balance": 150_000_000,
+                            "expire_time": 123,
+                        }
+                    },
+                    "delegated_frozenV2_balance_for_bandwidth": 5_000_000,
+                }
+            ]
+        }
+        monkeypatch.setattr(
+            wallet_mod, "_tron_get", lambda hosts, path, timeout: body
+        )
+        res = wallet_mod.import_wallet("tron", self.ADDR)
+        trx = next(h for h in res["holdings"] if h["symbol"] == "TRX-USD")
+        assert trx["quantity"] == pytest.approx(290.0)  # 1+124+10+150+5
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"eth": {"0xabc": {"symbol": "USDT"}}},  # 缺 decimals
+            {"eth": {"0xabc": "USDT"}},  # 条目非对象
+            {"eth": ["x"]},  # 链值非对象
+            ["x"],  # 顶层非对象
+            {"eth": {"0xabc": {"symbol": "USDT", "decimals": None}}},
+            {"eth": {"0xabc": {"symbol": "USDT", "decimals": -1}}},
+        ],
+    )
+    def test_malformed_tokenlist_raises_value_error(self, payload, tmp_path):
+        from tracker import wallet as wallet_mod
+
+        p = tmp_path / "tl.json"
+        p.write_text(json.dumps(payload), encoding="utf-8")
+        with pytest.raises(ValueError):
+            wallet_mod._load_tokenlist(str(p))
+
+    def test_tokenlist_decimals_string_coerced(self, tmp_path):
+        from tracker import wallet as wallet_mod
+
+        p = tmp_path / "tl.json"
+        p.write_text(
+            json.dumps({"ETH": {"0xAbC": {"symbol": "USDT", "decimals": "6"}}}),
+            encoding="utf-8",
+        )
+        loaded = wallet_mod._load_tokenlist(str(p))
+        assert loaded["eth"]["0xabc"] == {"symbol": "USDT", "decimals": 6}
+
+
+def test_load_tokenlist_tolerates_bom(tmp_path):
+    """外部 tokenlist 带 BOM (Windows 记事本保存) 应容忍, 与 storage 同口径."""
+    import json as _json
+
+    from tracker import wallet as wallet_mod
+
+    p = tmp_path / "tokens.json"
+    p.write_text(
+        _json.dumps({"eth": {"0xABC": {"symbol": "TKN", "decimals": 18}}}),
+        encoding="utf-8-sig",
+    )
+    loaded = wallet_mod._load_tokenlist(str(p))
+    assert loaded == {"eth": {"0xabc": {"symbol": "TKN", "decimals": 18}}}

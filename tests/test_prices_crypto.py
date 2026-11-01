@@ -419,3 +419,180 @@ def test_crypto_yf_history_fallback_does_not_nameerror(monkeypatch):
     df = crypto_mod._yf_history(parse("BTC-USD"), "2026-01-01", None)
     assert list(df.columns) == ["date", "open", "high", "low", "close", "volume"]
     assert len(df) == 2
+
+
+class TestProviderDomainIsolation:
+    def test_batch_obb_failure_does_not_kill_other_domains(self, monkeypatch):
+        """openbb 故障时批量路径返回空表 (逐代码源链兜底), 不向上抛连坐 cn/crypto 域."""
+        from tracker.providers import global_stocks
+
+        def _boom():
+            raise RuntimeError("cannot import name 'obb' from 'openbb'")
+
+        monkeypatch.setattr(global_stocks, "_obb", _boom)
+        out = global_stocks._yahoo_batch([parse("AAPL")])
+        assert out == {}
+
+    def test_akshare_history_empty_raises_readable(self, monkeypatch):
+        """akshare 无数据返回无列空表: 可读 RuntimeError, 不是裸 KeyError 'date'."""
+        from tracker.providers import global_stocks
+
+        class FakeAk:
+            def stock_zh_a_hist(self, **kw):
+                return pd.DataFrame()
+
+        monkeypatch.setattr(global_stocks, "_ak", lambda: FakeAk())
+        with pytest.raises(RuntimeError, match="无历史数据"):
+            global_stocks._akshare_history(parse("600519.SS"), "2026-01-01")
+
+
+def _fake_obb(df: pd.DataFrame):
+    class _Res:
+        def to_dataframe(self):
+            return df.set_index("date")
+
+    class _Price:
+        def historical(self, **kwargs):
+            return _Res()
+
+    class _Equity:
+        price = _Price()
+
+    class _Obb:
+        equity = _Equity()
+
+    return lambda: _Obb()
+
+
+def _lse_df() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2026-10-23", "2026-10-24"]),
+            "open": [108.0, 109.0],
+            "high": [109.0, 110.0],
+            "low": [107.0, 108.0],
+            "close": [109.01, 109.5],
+            "volume": [1.0, 1.0],
+        }
+    )
+
+
+def test_lse_gbp_quoted_history_not_divided(monkeypatch):
+    """Yahoo 报 GBP 的是真英镑报价 (VUSA.L), 历史价不能再 ÷100."""
+    from tracker.providers import global_stocks as gs
+
+    monkeypatch.setattr(gs, "_obb", _fake_obb(_lse_df()))
+    monkeypatch.setattr(gs, "_yahoo_quote_currency", lambda y: "GBP")
+    out = gs._yahoo_history(parse("VUSA.L"), "2026-01-01")
+    assert out["close"].iloc[-1] == pytest.approx(109.5)
+
+
+def test_lse_gbp_pence_history_still_divided(monkeypatch):
+    """Yahoo 报 GBp 的仍是便士报价 (VOD.L), 历史价 ÷100 折成英镑."""
+    from tracker.providers import global_stocks as gs
+
+    monkeypatch.setattr(gs, "_obb", _fake_obb(_lse_df()))
+    monkeypatch.setattr(gs, "_yahoo_quote_currency", lambda y: "GBp")
+    out = gs._yahoo_history(parse("VOD.L"), "2026-01-01")
+    assert out["close"].iloc[-1] == pytest.approx(1.095)
+
+
+def test_prefer_akshare_skips_yahoo_batch_for_hk(monkeypatch):
+    from tracker.providers import orchestration as orch
+    from tracker.providers.base import Quote
+
+    batch_syms: list[str] = []
+    fetched: list[tuple[str, bool]] = []
+
+    def fake_batch(plist):
+        batch_syms.extend(p.yahoo for p in plist)
+        return {}
+
+    def fake_fetch(domain, plist, prefer, errors, crypto_source="auto"):
+        fetched.extend((p.yahoo, prefer) for p in plist)
+        return {
+            p.yahoo: Quote(
+                symbol=p.yahoo,
+                name=p.yahoo,
+                price=1.0,
+                prev_close=1.0,
+                change_pct=0.0,
+                currency="HKD",
+            )
+            for p in plist
+        }
+
+    monkeypatch.setattr(orch, "_yahoo_batch", fake_batch)
+    monkeypatch.setattr(orch, "_fetch_domain", fake_fetch)
+    orch.get_quotes(["0700.HK", "AAPL"], prefer_akshare=True)
+    assert "0700.HK" not in batch_syms
+    assert "AAPL" in batch_syms
+    assert ("0700.HK", True) in fetched
+
+
+def test_gate_history_continues_after_short_first_window(monkeypatch):
+    listing = int(pd.Timestamp("2023-05-01", tz="UTC").timestamp())
+    calls = {"n": 0}
+
+    def fake_gate_get(path, params):
+        calls["n"] += 1
+        frm, to = int(params["from"]), int(params["to"])
+        ts = max(frm, listing)
+        ts -= ts % 86_400
+        rows = []
+        while ts <= to and len(rows) < 1000:
+            rows.append([str(ts), "0", "1.0", "1.1", "0.9", "1.0", "100", "1"])
+            ts += 86_400
+        return rows
+
+    monkeypatch.setattr(crypto_mod, "_gate_get", fake_gate_get)
+    df = crypto_mod._gate_history(parse("SUI-USD"), "2021-09-23", "2026-10-27")
+    assert calls["n"] > 1, "首窗不满 1000 根时不能直接结束"
+    assert df["date"].max() >= pd.Timestamp("2026-10-20")
+    assert len(df) > 1000
+
+
+class TestCryptoFixes:
+    def test_gate_history_paginates_within_point_limit(self, monkeypatch):
+        """单请求窗口截到 1000 点以内: 长区间翻页拼全 (修复前全区间 400)."""
+        spans = []
+
+        def fake_get(path, params):
+            spans.append((params["to"] - params["from"]) / 86400 + 1)
+            if spans[-1] > 1000:
+                raise RuntimeError("Gate.io 400: range too broad")
+            ts = params["from"]
+            return [
+                [ts + i * 86400, 100, 50, 51, 49, 50, 10, True]
+                for i in range(int(spans[-1]))
+            ]
+
+        monkeypatch.setattr(crypto_mod, "_gate_get", fake_get)
+        df = crypto_mod._gate_history(parse("BTC-USD"), "2023-01-01", "2025-12-15")
+        assert len(spans) >= 2
+        assert all(s <= 1000 for s in spans)
+        assert len(df) == (pd.Timestamp("2025-12-15") - pd.Timestamp("2023-01-01")).days + 1
+
+    def test_bad_spot_response_not_cached(self, monkeypatch):
+        """lastPrice<=0 的坏响应不写缓存 (不会把错误连播 5 秒)."""
+        crypto_mod._spot_cache.clear()
+        monkeypatch.setattr(crypto_mod, "_get", lambda path, params: {"lastPrice": "0"})
+        # 坏响应照常返回 (由 _binance_quote 抛错降级), 但不占缓存
+        assert crypto_mod._binance_spot_raw("BADUSDT") == {"lastPrice": "0"}
+        assert "BADUSDT" not in crypto_mod._spot_cache
+        monkeypatch.setattr(crypto_mod, "_get", lambda path, params: {"lastPrice": "5"})
+        assert crypto_mod._binance_spot_raw("GOODUSDT") == {"lastPrice": "5"}
+        assert "GOODUSDT" in crypto_mod._spot_cache
+
+    def test_source_index_derived_from_prefers(self):
+        from tracker.providers.crypto import (
+            CRYPTO_SOURCE_PREFERS,
+            _CRYPTO_SOURCE_INDEX,
+        )
+
+        expected = {
+            s: i for i, s in enumerate(s for s in CRYPTO_SOURCE_PREFERS if s != "auto")
+        }
+        for k, v in expected.items():
+            assert _CRYPTO_SOURCE_INDEX[k] == v
+        assert _CRYPTO_SOURCE_INDEX["gate.io"] == _CRYPTO_SOURCE_INDEX["gate"]

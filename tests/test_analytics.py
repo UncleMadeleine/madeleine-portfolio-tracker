@@ -1,8 +1,12 @@
+import math
+
 import pandas as pd
 import pytest
 
+from tracker import analytics
 from tracker.analytics import build_view, by_symbol, summarize
 from tracker.prices import Quote
+from tracker.symbols import parse
 
 
 def make_quote(sym, price, ccy="USD", chg=1.0):
@@ -373,3 +377,129 @@ def test_build_view_coin_quote_reports_reason():
     view, issues = build_view(holdings, quotes, {"USD": 7.1})
     assert view.empty
     assert any("币本位计价 (BTC)" in i for i in issues)
+
+
+def test_build_view_includes_quantity():
+    holdings = [{"symbol": "AAPL", "quantity": 10, "avg_cost": 100.0}]
+    quotes = {"AAPL": make_quote("AAPL", 150.0)}
+    view, issues = build_view(holdings, quotes, {"USD": 7.0})
+    assert issues == []
+    assert "quantity" in view.columns
+    assert float(view.iloc[0]["quantity"]) == 10.0
+
+
+# C4: 手改 JSON 数量/成本为非数字字符串 → 记 issue 跳过/按缺失, 不崩
+def test_build_view_non_numeric_quantity_skips_not_crash():
+    holdings = [{"symbol": "AAPL", "quantity": "abc", "avg_cost": 150.0}]
+    view, issues = build_view(holdings, {}, {"USD": 7.0})
+    assert view.empty
+    assert any("数量无法解析" in i for i in issues)
+
+
+def test_build_view_non_numeric_cost_becomes_none():
+    holdings = [{"symbol": "AAPL", "quantity": 10, "avg_cost": "N/A"}]
+    quotes = {"AAPL": make_quote("AAPL", 150.0)}
+    view, issues = build_view(holdings, quotes, {"USD": 7.0})
+    assert not view.empty
+    assert pd.isna(view.iloc[0]["cost"])
+    assert any("成本无法解析" in i for i in issues)
+
+
+class TestAnalyticsNumericParsing:
+    def test_string_nan_quantity_not_nan(self):
+        """手改 JSON / CSV 粘贴的 "nan" 字面量不能渗成 NaN (汇总与明细口径一致)."""
+        holdings = [{"symbol": "AAPL", "quantity": "nan", "avg_cost": 100.0}]
+        quotes = {"AAPL": Quote("AAPL", "Apple", 150.0, None, None, "USD")}
+        view, issues = analytics.build_view(holdings, quotes, {"USD": 7.0})
+        assert issues == []
+        assert len(view) == 1
+        assert view.iloc[0]["quantity"] == 0.0
+        assert not math.isnan(view.iloc[0]["market_value"])
+
+    def test_string_inf_cost_treated_as_missing(self):
+        holdings = [{"symbol": "AAPL", "quantity": 1, "avg_cost": "inf"}]
+        quotes = {"AAPL": Quote("AAPL", "Apple", 150.0, None, None, "USD")}
+        view, issues = analytics.build_view(holdings, quotes, {"USD": 7.0})
+        assert issues == []
+        assert view.iloc[0]["cost"] is None or pd.isna(view.iloc[0]["cost"])
+
+    def test_non_numeric_quantity_reports_issue(self):
+        holdings = [{"symbol": "AAPL", "quantity": "N/A"}]
+        quotes = {"AAPL": Quote("AAPL", "Apple", 150.0, None, None, "USD")}
+        view, issues = analytics.build_view(holdings, quotes, {"USD": 7.0})
+        assert view.empty
+        assert any("数量无法解析" in i for i in issues)
+
+
+class TestSummarizeGrossCost:
+    def test_long_short_uses_gross_cost(self):
+        """多空混合: 组合收益率分母用毛成本 (绝对值求和), 不是带符号净额.
+
+        修复前 total_cost = 1000 - 1500 = -500 → abs 后 500, 收益率 +10%;
+        真实口径 (毛成本 2500) 是 +2%。
+        """
+        quotes = {
+            "AAPL": Quote("AAPL", "Apple", 110.0, None, None, "USD"),
+            "MSFT": Quote("MSFT", "Microsoft", 90.0, None, None, "USD"),
+        }
+        holdings = [
+            {"symbol": "AAPL", "quantity": 10, "avg_cost": 100.0},
+            {"symbol": "MSFT", "quantity": -5, "avg_cost": 100.0},
+        ]
+        view, _ = analytics.build_view(holdings, quotes, {"USD": 1.0})
+        summary = analytics.summarize(view)
+        # 毛成本 = 1000 + 500 = 1500; 总盈亏 = (1100-1000) + (-450 - -500) = 150
+        assert summary["total_cost"] == pytest.approx(1500.0)
+        assert summary["total_pnl"] == pytest.approx(150.0)
+        assert summary["total_pnl_pct"] == pytest.approx(0.1)
+
+    def test_all_long_unchanged(self):
+        """纯多头: 毛成本 == 净额, 显示值与修复前一致。"""
+        quotes = {"AAPL": Quote("AAPL", "Apple", 150.0, None, None, "USD")}
+        view, _ = analytics.build_view(
+            [{"symbol": "AAPL", "quantity": 10, "avg_cost": 100.0}],
+            quotes,
+            {"USD": 7.0},
+        )
+        summary = analytics.summarize(view)
+        assert summary["total_cost"] == pytest.approx(1000.0 * 7.0)
+        assert summary["total_pnl"] == pytest.approx(500.0 * 7.0)
+
+
+def test_snapshot_issues_deduped(monkeypatch):
+    import tracker.cli  # noqa: F401 - 先初始化 cli 包, 避开 services.snapshot↔cli 的循环导入
+    from tracker.services import snapshot as snap
+
+    try:
+        parse("BAD.ZZ")
+    except ValueError as e:
+        reason = str(e)
+
+    def fake_get_quotes(symbols, **kw):
+        return {}, {"BAD.ZZ": reason}, []
+
+    monkeypatch.setattr(snap.prices, "get_quotes", fake_get_quotes)
+    portfolio = {"base_currency": "CNY", "holdings": [{"symbol": "BAD.ZZ", "quantity": 1}]}
+    _base, _view, _summary, _wview, issues = snap.take_snapshot(portfolio, {})
+    hits = [i for i in issues if "BAD.ZZ" in i]
+    assert len(hits) == 1  # build_view 与 get_quotes 各记一条, 去重后仅一条
+
+
+class TestAnalyticsFixes:
+    def test_short_position_pnl_pct_sign(self):
+        """空头盈亏比例按成本绝对值: 空头盈利显示为正 (修复前符号翻转)."""
+        quotes = {
+            "XYZ": Quote(
+                symbol="XYZ", name="X", price=80.0, prev_close=90.0,
+                change_pct=-11.1, currency="USD",
+            )
+        }
+        view, _ = build_view(
+            [{"symbol": "XYZ", "quantity": -10, "avg_cost": 100}],
+            quotes,
+            {"USD": 7.2},
+        )
+        row = view.iloc[0]
+        assert row["pnl"] == pytest.approx(1440.0)
+        assert row["pnl_pct"] == pytest.approx(0.2)
+        assert summarize(view)["total_pnl_pct"] == pytest.approx(0.2)

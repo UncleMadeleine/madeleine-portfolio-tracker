@@ -395,3 +395,63 @@ def test_recent_excluded_when_already_in_quick_shown(kline_app):
     recent_pills = [p for p in kline_app.pills if p.label.startswith("最近查看")]
     assert len(recent_pills) == 1
     assert recent_pills[0].options == ["ZZZ.HK"]
+
+
+# ---------------------------------------------------------------------------
+# UI: 搜索下拉闭包绑定 / 持仓列格式
+# ---------------------------------------------------------------------------
+
+_PICK_DOMAIN_SCRIPT = """
+import tracker.ui.kline_page as kp
+kp.set_quick_symbols(["AAPL"])
+kp.render_kline_page(False)
+"""
+
+
+def _pick_domain_ohlc(symbol, months=12, prefer_akshare=False, **kw):
+    idx = pd.date_range("2024-01-01", periods=30, freq="D")
+    return pd.DataFrame(
+        {
+            "date": idx,
+            "open": 1.0,
+            "high": 1.2,
+            "low": 0.9,
+            "close": [1.0 + i * 0.01 for i in range(30)],
+            "volume": 100.0,
+        }
+    )
+
+
+def _pick_domain_grouped(query, limit_per_domain=8):
+    # cn 与 global 均非空: 从 cn (第一个非空域) 选中曾因闭包延迟绑定失效
+    return {
+        "cn": [{"code": "600519.SS", "name": "贵州茅台", "market": "A", "type": "cn"}],
+        "global": [
+            {"code": "NVDA", "name": "NVIDIA", "market": "US", "type": "global"}
+        ],
+        "crypto": [],
+    }
+
+
+@pytest.fixture
+def kline_page_app(monkeypatch):
+    import tracker.prices as prices
+    import tracker.search as search_mod
+    import tracker.ui.kline_page as kline_page
+
+    monkeypatch.setattr(prices, "get_ohlc", _pick_domain_ohlc)
+    monkeypatch.setattr(search_mod, "search_grouped", _pick_domain_grouped)
+    monkeypatch.setattr(kline_page, "_KLINE_CHART", lambda **kw: None)
+    kline_page.cached_kline.clear()
+    return AppTest.from_string(_PICK_DOMAIN_SCRIPT, default_timeout=30).run()
+
+
+class TestUiFixes:
+    def test_pick_from_non_last_domain_works(self, kline_page_app):
+        """从第一个非空域 (cn) 的下拉选中: 回填代码 (修复前 key 漂移到最后域)."""
+        app = kline_page_app
+        app.text_input("kline_search_query").set_value("茅台").run()
+        cn = next(s for s in app.selectbox if any("600519" in o for o in s.options))
+        cn.set_value(next(o for o in cn.options if "600519" in o)).run()
+        ti = [t for t in app.text_input if t.key == "kline_symbol"][0]
+        assert ti.value == "600519.SS"

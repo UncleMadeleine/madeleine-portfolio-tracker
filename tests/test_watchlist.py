@@ -1,6 +1,7 @@
 import json
 
 import pandas as pd
+import pytest
 
 from tracker.prices import Quote
 from tracker.services.rules import (
@@ -13,6 +14,7 @@ from tracker.services.rules import (
 from tracker.services.watchlist import (
     build_watchlist_view,
     entries_for,
+    fetch_watchlist_view,
     list_names,
     merge_entries,
     sort_watchlist,
@@ -340,3 +342,120 @@ def test_normalize_watch_entry_no_alias_split(tmp_path):
     assert d05[0]["symbol"] == "D05.SI"
     assert set(d05[0]["lists"]) == {"A", "B"}
     assert d05[0]["upper_1"] == 80
+
+
+class TestWatchlistViewFixes:
+    def test_merge_entries_dedupes_same_symbol(self):
+        """同代码多条 (外部编辑/旧文件) 读路径去重, lists 并集."""
+        data = {
+            "watchlist": [
+                {"symbol": "AAPL", "lists": ["科技"], "upper_1": 150.0},
+                {"symbol": "AAPL", "lists": ["美股"], "upper_1": 150.0},
+            ]
+        }
+        merged = merge_entries(data)
+        assert len(merged) == 1
+        assert set(merged[0]["lists"]) == {"科技", "美股"}
+        # entries_for 同样去重 (report/snapshot 的入口)
+        assert len(entries_for(data, "科技")) == 1
+
+    def test_load_watchlist_dedupes(self, tmp_path):
+        from tracker.storage import load_watchlist
+
+        p = tmp_path / "wl.json"
+        p.write_text(
+            json.dumps(
+                {
+                    "watchlist": [
+                        {"symbol": "AAPL", "lists": ["A"]},
+                        {"symbol": "AAPL", "lists": ["B"]},
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        loaded = load_watchlist(p)
+        assert len(loaded["watchlist"]) == 1
+        assert set(loaded["watchlist"][0]["lists"]) == {"A", "B"}
+
+    def test_metric_only_entries_honor_handwritten_and_columns(self):
+        """无阈值的 pb/mcap 条目: 手写值优先, book_value/market_cap 列回落.
+
+        修复前 else 分支直接取行情现值, 手写 pb/mcap 被忽略且两列恒空,
+        与带阈值条目的口径不一致。
+        """
+        entries = [
+            {"symbol": "AAPL", "metric": "mcap"},  # 无阈值, 有行情市值
+            {"symbol": "NVDA", "metric": "pb", "pb": 20.0},  # 无阈值, 手写 BVPS
+        ]
+        quotes = {
+            "AAPL": Quote(
+                symbol="AAPL", name="Apple", price=200.0, prev_close=190.0,
+                change_pct=5.0, currency="USD", market_cap=3e12,
+            ),
+            "NVDA": Quote(
+                symbol="NVDA", name="NV", price=100.0, prev_close=99.0,
+                change_pct=1.0, currency="USD",
+            ),
+        }
+        view, issues = build_watchlist_view(entries, quotes)
+        row = view.set_index("symbol")
+        assert row.loc["AAPL", "market_cap"] == 3e12
+        assert row.loc["AAPL", "base_value"] == 3e12
+        # 手写 BVPS=20 优先 (行情无 book_value), 列同样回落
+        assert row.loc["NVDA", "book_value"] == 20.0
+        assert row.loc["NVDA", "base_value"] == pytest.approx(5.0)
+        assert issues == []
+
+    def test_fundamentals_not_fetched_for_tracking_only(self, monkeypatch):
+        """无阈值仅跟踪的 pb/mcap 条目不发基本面请求."""
+        calls = []
+
+        def boom(symbols):
+            calls.append(list(symbols))
+            return {s: None for s in symbols}
+
+        monkeypatch.setattr("tracker.fundamentals.fetch_book_values", boom)
+        monkeypatch.setattr("tracker.fundamentals.fetch_market_caps", boom)
+        entries = [{"symbol": "AAPL", "metric": "pb"}]  # 无阈值
+        quotes = {
+            "AAPL": Quote(
+                symbol="AAPL", name="Apple", price=200.0, prev_close=190.0,
+                change_pct=5.0, currency="USD",
+            )
+        }
+        view, _ = build_watchlist_view(entries, quotes)
+        assert calls == []
+        assert view.iloc[0]["base_value"] is None or pd.isna(
+            view.iloc[0]["base_value"]
+        )
+
+    def test_fund_syms_uses_normalized_symbol(self, monkeypatch):
+        """别名条目 (600519.SH) 也能按归一代码取到基本面 (键不漂移)."""
+        fetched = {}
+
+        def fake_bv(symbols):
+            fetched.update({s: 12.5 for s in symbols})
+            return dict(fetched)
+
+        monkeypatch.setattr("tracker.fundamentals.fetch_book_values", fake_bv)
+        entries = [{"symbol": "600519.SH", "metric": "pb", "upper_1": 5.0}]
+        quotes = {
+            "600519.SS": Quote(
+                symbol="600519.SS", name="Kweichow", price=1500.0,
+                prev_close=1480.0, change_pct=1.3, currency="CNY",
+            )
+        }
+        view, issues = build_watchlist_view(entries, quotes)
+        assert "600519.SS" in fetched
+        assert view.iloc[0]["base_value"] == pytest.approx(1500.0 / 12.5)
+        assert issues == []
+
+    def test_parse_error_issue_not_duplicated(self, monkeypatch):
+        """无法解析的代码在取数层/视图层只记一条 issue."""
+        monkeypatch.setattr(
+            "tracker.prices.get_quotes",
+            lambda syms, **kw: ({}, {str(s): f"无法识别的交易所后缀: {s}" for s in syms}, []),
+        )
+        _, issues = fetch_watchlist_view([{"symbol": "BAD.ZZ"}])
+        assert issues == ["BAD.ZZ: 无法识别的交易所后缀: BAD.ZZ"]

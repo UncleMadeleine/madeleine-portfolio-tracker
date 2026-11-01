@@ -908,3 +908,109 @@ class TestIbkrBatchChunking:
         assert len(q1) == 100
         q2, r2 = ibkr_mod.get_quotes_ibkr([parse(s) for s in self._syms(100)])
         assert len(q2) == 100 and r2 is None
+
+
+class TestIbkrSyncDefaultAppend:
+    """tracker sync 缺省改为追加合并 (旧缺省覆盖会静默丢掉其它来源持仓)。"""
+
+    def _args(self, **kw):
+        import types
+
+        base = dict(
+            portfolio=None, dry_run=False, json=True, mode=None,
+            append=False, overwrite=False,
+        )
+        base.update(kw)
+        return types.SimpleNamespace(**base)
+
+    def test_default_appends(self, tmp_path, monkeypatch, capsys):
+        import json
+
+        from tracker import ibkr, ibkr_sync
+
+        class C:
+            symbol, exchange, primaryExchange, currency = "MSFT", "NYSE", "", "USD"
+
+        class P:
+            contract, position, avgCost = C(), 5, 100.0
+
+        monkeypatch.setattr(ibkr, "fetch_positions", lambda cfg: [P()])
+        monkeypatch.setattr(ibkr, "load_config", lambda: {})
+        p = tmp_path / "p.json"
+        p.write_text(
+            json.dumps(
+                {
+                    "base_currency": "CNY",
+                    "holdings": [
+                        {"symbol": "BTC-USD", "quantity": 1},
+                        {"symbol": "600519.SS", "quantity": 10},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        ibkr_sync.run_sync(self._args(portfolio=str(p)))
+        out = json.loads(capsys.readouterr().out)
+        assert out["mode"] == "append"
+        syms = sorted(h["symbol"] for h in json.loads(p.read_text())["holdings"])
+        assert syms == ["600519.SS", "BTC-USD", "MSFT"]
+
+    def test_overwrite_still_supported_with_backup(self, tmp_path, monkeypatch, capsys):
+        import json
+        from pathlib import Path
+
+        from tracker import ibkr, ibkr_sync
+
+        class C:
+            symbol, exchange, primaryExchange, currency = "MSFT", "NYSE", "", "USD"
+
+        class P:
+            contract, position, avgCost = C(), 5, 100.0
+
+        monkeypatch.setattr(ibkr, "fetch_positions", lambda cfg: [P()])
+        monkeypatch.setattr(ibkr, "load_config", lambda: {})
+        p = tmp_path / "p.json"
+        p.write_text(
+            json.dumps({"base_currency": "CNY", "holdings": [{"symbol": "AAPL", "quantity": 1}]}),
+            encoding="utf-8",
+        )
+        ibkr_sync.run_sync(self._args(portfolio=str(p), overwrite=True))
+        out = json.loads(capsys.readouterr().out)
+        assert out["mode"] == "overwrite"
+        syms = [h["symbol"] for h in json.loads(p.read_text())["holdings"]]
+        assert syms == ["MSFT"]
+        assert Path(str(p) + ".bak").exists()
+
+    def test_append_flag_is_compat_noop(self, tmp_path, monkeypatch, capsys):
+        """旧调用方传的 --append 仍是缺省行为, 不会因此变成覆盖。"""
+        import json
+
+        from tracker import ibkr, ibkr_sync
+
+        class C:
+            symbol, exchange, primaryExchange, currency = "MSFT", "NYSE", "", "USD"
+
+        class P:
+            contract, position, avgCost = C(), 5, 100.0
+
+        monkeypatch.setattr(ibkr, "fetch_positions", lambda cfg: [P()])
+        monkeypatch.setattr(ibkr, "load_config", lambda: {})
+        p = tmp_path / "p.json"
+        p.write_text(
+            json.dumps({"base_currency": "CNY", "holdings": [{"symbol": "AAPL", "quantity": 1}]}),
+            encoding="utf-8",
+        )
+        ibkr_sync.run_sync(self._args(portfolio=str(p), append=True))
+        out = json.loads(capsys.readouterr().out)
+        assert out["mode"] == "append"
+        syms = sorted(h["symbol"] for h in json.loads(p.read_text())["holdings"])
+        assert syms == ["AAPL", "MSFT"]
+
+
+class TestIbkrFixes:
+    def test_lse_trailing_dot_stripped(self):
+        """LSE 合约 symbol 带尾点 (BP.): 不剥会拼出 BP..L 且 parse 不报错."""
+        assert ibkr_to_yahoo("BP.", "LSE", "", "GBP") == "BP.L"
+        assert ibkr_to_yahoo("CSPX.", "LSE", "", "GBX") == "CSPX.L"
+        # 空格类别股不受影响
+        assert ibkr_to_yahoo("BRK B", "SMART", "NYSE", "USD") == "BRK-B"

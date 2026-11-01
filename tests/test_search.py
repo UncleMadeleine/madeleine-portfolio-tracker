@@ -449,3 +449,24 @@ def test_fallback_match_rejects_invalid():
 
 def test_search_empty_query():
     assert search_symbols("", limit=5) == []
+
+
+def test_resolve_symbol_prefers_literal_six_digit_code(monkeypatch):
+    from tracker import search
+
+    hits = [
+        {"code": "0700.HK", "name": "腾讯控股", "market": "港股", "type": "global"},
+        {"code": "000700.SZ", "name": "模塑科技", "market": "A股", "type": "cn"},
+    ]
+    monkeypatch.setattr(search, "search_symbols", lambda q, limit=None: list(hits))
+    out = search.resolve_symbol("000700")
+    assert out[0]["code"] == "000700.SZ"
+
+
+def test_cn_search_local_fallback_when_eastmoney_down(monkeypatch):
+    from tracker.providers import cn_stocks
+
+    monkeypatch.setattr(cn_stocks, "suggest_merged", lambda q: None)
+    provider = cn_stocks.CNStocksProvider()
+    out = provider.search("600519.SS")
+    assert [e.code for e in out] == ["600519.SS"]

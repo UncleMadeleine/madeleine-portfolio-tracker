@@ -2,6 +2,7 @@
 
 import pytest
 
+from tracker import ashare_sync
 from tracker.ashare_sync import code_to_yahoo, parse_positions_file
 
 
@@ -162,3 +163,27 @@ def test_backup_notice_only_when_backup_exists(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "已备份原文件" in out
     assert (tmp_path / "portfolio.json.bak").exists()
+
+
+def test_ashare_prefers_total_over_available(tmp_path):
+    """总持仓 1000、可用 0 (T+1 当日买入) 时不能整只丢掉."""
+    p = tmp_path / "positions.csv"
+    p.write_text(
+        "证券代码,证券名称,总持仓,可用余额,成本价\n"
+        "600519,贵州茅台,1000,0,1500\n",
+        encoding="gbk",
+    )
+    rows, skipped = ashare_sync.parse_positions_file(p)
+    assert skipped == []
+    assert rows[0]["symbol"] == "600519.SS"
+    assert rows[0]["quantity"] == 1000.0
+
+
+def test_ashare_code_pads_numeric_excel_code():
+    """Excel 数值单元格 1 → 000001.SZ (深市平安银行), 不是「非6位代码」."""
+    assert ashare_sync.code_to_yahoo("1") == "000001.SZ"
+    assert ashare_sync.code_to_yahoo("1.0") == "000001.SZ"
+    assert ashare_sync.code_to_yahoo("2594") == "002594.SZ"
+    assert ashare_sync.code_to_yahoo("600519") == "600519.SS"
+    # 5 位数字不是 A股丢前导零的形态, 仍拒绝
+    assert ashare_sync.code_to_yahoo("60051") is None

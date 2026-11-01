@@ -3,6 +3,7 @@
 import json
 import sqlite3
 
+import numpy as np
 import pandas as pd
 from pandas.tseries.frequencies import to_offset
 import plotly.graph_objects as go
@@ -777,3 +778,206 @@ class TestRatioSeries:
         # 时间轴并集包含比例线日期
         assert set(p["ratio"]["data"][0]) == {"time", "value"}
         assert p["axis"] == sorted(set(p["axis"]))
+
+
+def _wilder_rsi(close: pd.Series, period: int = 14) -> pd.Series:
+    d = close.diff()
+    g = d.clip(lower=0)
+    lo = -d.clip(upper=0)
+    n = len(close)
+    ag = np.full(n, np.nan)
+    al = np.full(n, np.nan)
+    if n <= period:
+        return pd.Series(ag, index=close.index)
+    ag[period] = g.iloc[1 : period + 1].mean()
+    al[period] = lo.iloc[1 : period + 1].mean()
+    for i in range(period + 1, n):
+        ag[i] = (ag[i - 1] * (period - 1) + g.iloc[i]) / period
+        al[i] = (al[i - 1] * (period - 1) + lo.iloc[i]) / period
+    with np.errstate(all="ignore"):
+        rs = ag / al
+        r = 100 - 100 / (1 + rs)
+    r[al == 0] = 100.0
+    r[(ag == 0) & (al == 0)] = 50.0
+    return pd.Series(r, index=close.index)
+
+
+def test_rsi_warmup_is_nan():
+    rng = np.random.default_rng(7)
+    close = pd.Series(100 + np.cumsum(rng.standard_normal(40)))
+    rsi = charting.calc_rsi(pd.DataFrame({"close": close}), 14)
+    # 前 period 根为预热段, 应全 NaN (旧实现在这里产出伪造值)
+    assert rsi.iloc[:14].isna().all()
+    assert rsi.iloc[14:].notna().all()
+
+
+def test_rsi_matches_wilder_steady_state():
+    rng = np.random.default_rng(11)
+    close = pd.Series(100 + np.cumsum(rng.standard_normal(60)))
+    rsi = charting.calc_rsi(pd.DataFrame({"close": close}), 14)
+    ref = _wilder_rsi(close, 14)
+    assert float((rsi.iloc[14:] - ref.iloc[14:]).abs().max()) < 1e-9
+
+
+def _shib_df():
+    idx = pd.date_range("2024-01-01", periods=5, freq="D")
+    return pd.DataFrame(
+        {
+            "date": idx,
+            "open": [1.2e-5] * 5,
+            "high": [1.6e-5] * 5,
+            "low": [1.1e-5] * 5,
+            "close": [1.234e-5, 1.301e-5, 1.255e-5, 1.402e-5, 1.5e-5],
+            "volume": [1, 2, 3, 4, 5],
+        }
+    )
+
+
+def test_kline_payload_preserves_low_price_precision():
+    p = charting.kline_payload(_shib_df(), "SHIB-USD")
+    close0 = p["candles"][0]["close"]
+    assert abs(close0 - 1.234e-5) < 1e-12  # 未被 round(,6) 截成 1.2e-5
+    assert p["precision"] >= 8
+
+
+def test_compare_payload_raw_mode_not_zeroed():
+    cp = charting.compare_payload({"SHIB-USD": _shib_df()}, normalize=False)
+    v0 = cp["lines"][0]["data"][0]["value"]
+    assert abs(v0 - 1.234e-5) < 1e-12  # 未被 round(,4) 归零
+    assert cp["precision"] >= 8
+
+
+# D4: clean_ohlc 过滤 volume 的 inf/负值
+def test_clean_ohlc_filters_inf_and_negative_volume():
+    df = pd.DataFrame(
+        {
+            "date": ["2025-01-06", "2025-01-07"],
+            "open": [10.0, 11.0],
+            "high": [12.0, 13.0],
+            "low": [9.0, 10.0],
+            "close": [11.0, 12.0],
+            "volume": [np.inf, -5.0],
+        }
+    )
+    out = charting.clean_ohlc(df)
+    assert list(out["volume"]) == [0.0, 0.0]
+    assert np.isfinite(out["volume"]).all()
+
+
+def _low_price_df(n: int = 40) -> pd.DataFrame:
+    import math as _math
+
+    close = [1.2e-5 + _math.sin(i / 3) * 2e-6 for i in range(n)]
+    return pd.DataFrame(
+        {
+            "date": pd.date_range("2026-01-01", periods=n, freq="D"),
+            "open": close,
+            "high": [c * 1.01 for c in close],
+            "low": [c * 0.99 for c in close],
+            "close": close,
+            "volume": [0.0] * n,
+        }
+    )
+
+
+def test_summarize_low_price_not_rounded_to_zero():
+    from tracker import charting
+
+    s = charting.summarize_ohlc(_low_price_df())
+    assert s["last_close"] > 0
+    assert s["period_high"] > 0
+    assert s["period_low"] > 0
+    assert s["ma"]["ma5"] > 0
+
+
+def test_kline_payload_low_price_indicators_not_zero():
+    from tracker import charting
+
+    payload = charting.kline_payload(
+        _low_price_df(), "SHIB-USD", indicators={"macd": {}, "boll": {}}
+    )
+    assert payload["precision"] >= 8
+    assert any(p["value"] != 0 for p in payload["macd"]["dif"])
+    assert any(p["value"] != 0 for p in payload["macd"]["hist"])
+    assert any(
+        p["value"] != 0 for series in payload["boll"] for p in series["data"]
+    )
+
+
+class TestChartingFixes:
+    def test_low_price_precision(self):
+        """SHIB/PEPE (~1e-5) 单只K线精度自适应, 不显示成 0.0000."""
+        idx = pd.date_range("2024-01-01", periods=5, freq="D")
+        df = pd.DataFrame(
+            {
+                "date": idx,
+                "open": 1e-5,
+                "high": 1.1e-5,
+                "low": 0.9e-5,
+                "close": 1e-5,
+                "volume": 1.0,
+            }
+        )
+        payload = charting.kline_payload(df, "SHIB-USD", currency="USD")
+        assert payload["precision"] >= 6
+        # 高价股仍是 2 位
+        df2 = df.assign(open=100.0, high=101.0, low=99.0, close=100.0)
+        assert charting.kline_payload(df2, "AAPL")["precision"] == 2
+
+    def test_crypto_compare_low_price_precision(self):
+        """加密货币对比: 蜡烛取整位数不得低于声明的 precision.
+
+        回归背景: 蜡烛硬编码 round(,8) 而 precision 可达 9~10 (中位价 ~1e-6),
+        声明的 minMove=1e-10 却没有数据位可显示, 与 kline_payload 的
+        nd=max(6, precision) 约定不一致。
+        """
+        idx = pd.date_range("2024-01-01", periods=5, freq="D")
+        # 中位价 5.432189e-6 → _price_precision = 9 (> 旧实现的硬编码 8)
+        df = pd.DataFrame(
+            {
+                "date": idx,
+                "open": 5.432189e-6,
+                "high": 5.442189e-6,
+                "low": 5.422189e-6,
+                "close": 5.432189e-6,
+                "volume": 1.0,
+            }
+        )
+        payload = charting.crypto_compare_payload({"PEPE": df})
+        coin = payload["coins"][0]
+        assert coin["precision"] == 9
+        # 9 位小数: 第 9 位 (…432) 保留; 旧代码 round(,8) 会截成 0.00000543
+        assert coin["candles"][0]["close"] == round(5.432189e-6, 9)
+        assert coin["candles"][0]["close"] != round(5.432189e-6, 8)
+
+    def test_compare_payloads_carry_axis(self):
+        """对比/加密货币对比 payload 带 axis 时间轴 (视口锚点索引空间)."""
+        f1 = pd.DataFrame(
+            {
+                "date": pd.date_range("2024-01-01", periods=3),
+                "open": 1.0,
+                "high": 5.0,
+                "low": 0.5,
+                "close": [1.0, 2.0, 3.0],
+                "volume": 0.0,
+            }
+        )
+        f2 = pd.DataFrame(
+            {
+                "date": pd.date_range("2024-01-02", periods=3),
+                "open": 2.0,
+                "high": 6.0,
+                "low": 1.5,
+                "close": [2.0, 3.0, 4.0],
+                "volume": 0.0,
+            }
+        )
+        cp = charting.compare_payload({"AAA": f1, "BBB": f2})
+        cc = charting.crypto_compare_payload({"AAA": f1, "BBB": f2})
+        assert cp["axis"] == [
+            "2024-01-01",
+            "2024-01-02",
+            "2024-01-03",
+            "2024-01-04",
+        ]
+        assert cc["axis"] == cp["axis"]

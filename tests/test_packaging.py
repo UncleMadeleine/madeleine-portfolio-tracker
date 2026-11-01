@@ -11,6 +11,8 @@ import json
 import subprocess
 import sys
 
+from pathlib import Path
+
 import pytest
 
 from tracker import paths
@@ -200,3 +202,20 @@ class TestChartingWithoutPlotly:
         from tracker.ui.app import cli_main, main
 
         assert callable(main) and callable(cli_main)
+
+
+def test_services_snapshot_importable_without_cli():
+    """独立导入 use-case 层不能触发 services.snapshot ↔ cli 的循环导入."""
+    root = Path(__file__).resolve().parents[1]
+    r = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from tracker.services.snapshot import take_snapshot; print('ok')",
+        ],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert r.returncode == 0, r.stderr

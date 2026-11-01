@@ -223,3 +223,11 @@ def test_negative_cache_isolated_between_processes(monkeypatch):
     assert set(quotes) == {"GOOD1", "GOOD2"}
     assert set(errors) == {"BAD"}
     assert orch._neg_cache.keys() == {"BAD"}
+
+
+def test_get_quotes_non_string_symbol_reports_readable_error():
+    """手改 JSON 把 symbol 写成数字: 记可读错误, 不抛 AttributeError."""
+    quotes, errors, notes = orch.get_quotes([700])
+    assert quotes == {} and notes == []
+    assert "700" in errors
+    assert "字符串" in errors["700"]

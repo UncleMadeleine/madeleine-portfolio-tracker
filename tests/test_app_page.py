@@ -212,3 +212,28 @@ def test_symbol_pie_zero_market_value_no_crash():
     view = pd.DataFrame({"symbol": ["AAPL"], "market_value": [0.0]})
     fig = portfolio_page._symbol_pie(view)
     assert list(fig.data[0].labels) == ["AAPL"]
+
+
+def test_quantity_format_is_valid_printf():
+    """数量列格式必须是合法 printf (%,!.6f 会让前端抛 SyntaxError)."""
+    import re
+
+    src = open("tracker/ui/portfolio_page.py", encoding="utf-8").read()
+    assert "%,!.6f" not in src
+    # 所有 format 串只含合法 flag: % 后跟 符号/千分位/宽度/精度/类型,
+    # 尾部 %% 是字面百分号 (合法); ! 不是合法 flag
+    bad = [
+        f
+        for f in re.findall(r'format="([^"]+)"', src)
+        if f.startswith("%")
+        and not re.fullmatch(
+            r"%[+0\-,'\s#]*\d*(\.\d+)?[bcdeEfFgGiosxX](%%)?", f
+        )
+    ]
+    assert not bad, f"非法 printf 格式: {bad}"
+
+def test_pnl_pct_uses_percent_format():
+    """pnl_pct 是小数比值: 用 percent 预定义格式 (自动乘 100)."""
+    src = open("tracker/ui/portfolio_page.py", encoding="utf-8").read()
+    assert '"盈亏%", format="percent"' in src
+    assert '"盈亏%", format="%+.2f%%"' not in src

@@ -717,3 +717,17 @@ def _fake_index_history_df(freq: str, n: int) -> pd.DataFrame:
             "volume": 0.0,
         }
     )
+
+
+def test_us3m_in_catalog_and_us02y_removed():
+    assert "US3M" in INDEX_CATALOG
+    assert "US02Y" not in INDEX_CATALOG
+    assert INDEX_CATALOG["US3M"]["yf"] == "^IRX"
+
+
+def test_cn_indices_have_yf_fallback_code():
+    from tracker.symbols import INDEX_CATALOG
+
+    for key, entry in INDEX_CATALOG.items():
+        if "ak" in entry:
+            assert entry.get("yf"), f"IX.{key} 声明 akshare 优先但没有 yfinance 兜底代码"

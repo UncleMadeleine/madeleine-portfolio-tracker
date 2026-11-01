@@ -334,3 +334,39 @@ class TestWalletRows:
     def test_empty(self):
         assert importer.wallet_rows({"holdings": []}) == []
         assert importer.wallet_rows({}) == []
+
+
+def test_merge_holdings_preserves_cost_when_new_is_none():
+    existing = [{"symbol": "AAPL", "quantity": 10, "avg_cost": 150.0}]
+    rows = [{"symbol": "AAPL", "quantity": 20, "avg_cost": None}]
+    merged, _stats = importer.merge_holdings(
+        existing, rows, mode=importer.MODE_APPEND
+    )
+    assert float(merged[0]["quantity"]) == 20.0  # 数量更新
+    assert merged[0].get("avg_cost") == 150.0  # 成本不被 None 抹掉
+
+
+def test_merge_holdings_sums_duplicate_rows_in_one_batch():
+    merged, stats = importer.merge_holdings(
+        [],
+        [
+            {"symbol": "600519.SS", "quantity": 100},
+            {"symbol": "600519.SS", "quantity": 50},
+        ],
+    )
+    assert len(merged) == 1
+    assert merged[0]["quantity"] == 150.0
+    assert stats["added"] == ["600519.SS"]
+
+
+def test_merge_holdings_batch_sum_is_idempotent_against_existing():
+    """重复同步同一账户: 批量内先相加, 再用总和替换旧值 (不翻倍)."""
+    merged, _ = importer.merge_holdings(
+        [{"symbol": "600519.SS", "quantity": 100}],
+        [
+            {"symbol": "600519.SS", "quantity": 30},
+            {"symbol": "600519.SS", "quantity": 20},
+        ],
+    )
+    assert len(merged) == 1
+    assert merged[0]["quantity"] == 50.0

@@ -20,6 +20,7 @@ from tracker.services.rules import (
     STATUS_UPPER_1,
     STATUS_WITHIN,
     entry_market_cap,
+    evaluate_thresholds,
     metric_for_entry,
     metric_value_for_quote,
 )
@@ -693,3 +694,27 @@ class TestMetricCli:
             ["watchlist", "add", "AAPL", "--metric", "mcap"]
         )
         assert args.metric == "mcap"
+
+
+class TestThresholdDistances:
+    def test_dist_lower_2_computed(self):
+        """lower_2 的距离键必须计算 (report/snapshot/UI 都声明了该列)."""
+        _, dist = evaluate_thresholds({"lower_1": 190.0, "lower_2": 150.0}, 180.0)
+        assert "dist_lower_2_pct" in dist
+        assert abs(dist["dist_lower_2_pct"] - (150 / 180 - 1) * 100) < 1e-9
+
+    def test_lower_distance_uses_unified_basis(self):
+        """距离口径统一为「触发还需变动百分之几」: 上下限同基准 (阈值/现价).
+
+        修复前下限用 (现价/阈值-1): 现价 150/下限 100 显示 +50%, 而实际
+        只需下跌 33.33% 即触发, 与上限口径不可比。
+        """
+        _, dist = evaluate_thresholds({"lower_1": 100.0}, 150.0)
+        assert abs(dist["dist_lower_1_pct"] - (100 / 150 - 1) * 100) < 1e-9
+        _, dist_u = evaluate_thresholds({"upper_1": 200.0}, 150.0)
+        assert abs(dist_u["dist_upper_1_pct"] - (200 / 150 - 1) * 100) < 1e-9
+
+    def test_zero_price_no_distance(self):
+        """现价 <=0 时不算距离 (除零保护)."""
+        _, dist = evaluate_thresholds({"upper_1": 10.0, "lower_1": 5.0}, 0.0)
+        assert dist == {}

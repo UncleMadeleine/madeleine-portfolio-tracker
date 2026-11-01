@@ -1393,3 +1393,63 @@ class TestParser:
         ):
             args = cli.build_parser().parse_args(argv)
             assert callable(args.func)
+
+
+def test_export_md_pnl_pct_as_percent():
+    from tracker.cli.export import _export_md
+
+    view = pd.DataFrame(
+        [
+            {
+                "symbol": "AAPL",
+                "name": "Apple",
+                "market": "美股",
+                "price": 150.0,
+                "change_pct": 2.56,
+                "quantity": 10,
+                "avg_cost": 100.0,
+                "market_value": 1500.0,
+                "cost": 1000.0,
+                "pnl": 500.0,
+                "pnl_pct": 0.5,
+                "today_pnl": 10.0,
+            }
+        ]
+    )
+    summary = {
+        "total_value": 1500.0,
+        "total_pnl": 500.0,
+        "total_pnl_pct": 0.5,
+        "today_pnl": 10.0,
+    }
+    md = _export_md("USD", view, summary, [])
+    assert "+50.00%" in md  # 比值按百分数显示
+
+
+class TestCliJsonFixes:
+    def test_records_nan_to_none(self):
+        from tracker.cli._common import _records
+
+        df = pd.DataFrame(
+            {
+                "date": ["2024-01-01"],
+                "open": [float("nan")],
+                "close": [1.5],
+                "volume": [float("nan")],
+            }
+        )
+        text = json.dumps(_records(df))
+        assert "NaN" not in text
+        assert json.loads(text)[0]["open"] is None
+
+
+def test_cli_watchlist_add_nan_threshold_does_not_crash(tmp_path, capsys):
+    """CLI float("nan") 合法入参: 写盘前清洗, 不抛 ValueError traceback."""
+    from tracker import cli
+
+    p = tmp_path / "w.json"
+    p.write_text(json.dumps({"watchlist": []}), encoding="utf-8")
+    cli.main(["watchlist", "add", "AAPL", "--file", str(p), "--upper1", "nan"])
+    e = json.loads(p.read_text(encoding="utf-8"))["watchlist"][0]
+    assert e["symbol"] == "AAPL"
+    assert "upper_1" not in e

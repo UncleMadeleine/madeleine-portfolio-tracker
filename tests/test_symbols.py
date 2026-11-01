@@ -438,3 +438,23 @@ def test_parse_crypto_usd_pair_and_stablecoin_same_valuation():
     usdt = parse("BTC-USDT")
     assert usd.yahoo == "BTC-USD" and usdt.yahoo == "BTC-USDT"
     assert usd.currency == usdt.currency == "USD"
+
+
+class TestKoreanLeadingZeros:
+    def test_ks_kq_padded_to_six(self):
+        """韩股 Yahoo 代码 6 位带前导零: 5930.KS → 005930.KS (与港股补零同口径)."""
+        assert normalize("5930.KS") == "005930.KS"
+        assert normalize("35720.KQ") == "035720.KQ"
+        assert normalize("005930.KS") == "005930.KS"  # 幂等
+        assert parse("5930.KS").yahoo == "005930.KS"
+
+    def test_non_numeric_head_untouched(self):
+        assert normalize("ABC.KS") == "ABC.KS"
+
+
+def test_resolve_market_jp_kr_to_global():
+    from tracker.providers.base import resolve
+    from tracker.symbols import Market
+
+    assert resolve(Market.JP).name == "global"
+    assert resolve(Market.KR).name == "global"

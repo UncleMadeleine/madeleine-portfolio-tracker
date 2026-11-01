@@ -6,7 +6,7 @@ import math
 
 import pandas as pd
 
-from .prices import Quote
+from .providers.base import Quote
 from .symbols import COIN_QUOTES, parse
 
 

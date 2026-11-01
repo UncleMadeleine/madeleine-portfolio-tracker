@@ -15,14 +15,7 @@ import pandas as pd
 from .providers.base import Quote  # noqa: F401 - 再导出, 既有导入路径保持不变
 from .providers.crypto import CryptoProvider  # noqa: F401
 from .providers.cn_stocks import CNStocksProvider  # noqa: F401
-from .providers.global_stocks import (  # noqa: F401 - 供测试 monkeypatch
-    GlobalStocksProvider,
-    _akshare_history,
-    _akshare_quote,
-    _yahoo_batch,
-    _yahoo_history,
-    _yahoo_quote,
-)
+from .providers.global_stocks import GlobalStocksProvider  # noqa: F401 - 再导出
 from .providers.orchestration import get_history, get_quotes
 from .symbols import parse
 from . import cache as cache_mod

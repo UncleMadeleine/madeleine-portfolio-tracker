@@ -518,8 +518,10 @@ def test_get_history_ibkr(monkeypatch):
         return {p.yahoo: ibkr_df for p in parsed}, None
 
     monkeypatch.setattr(ibkr_mod, "get_history_ibkr", fake_ibkr)
+    import tracker.providers.global_stocks as global_stocks
+
     monkeypatch.setattr(
-        prices_mod,
+        global_stocks,
         "_yahoo_history",
         lambda p, start_date=None, end_date=None: (_ for _ in ()).throw(
             AssertionError("不应调用 yahoo")

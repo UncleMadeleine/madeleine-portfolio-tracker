@@ -24,7 +24,7 @@ import pandas as pd
 
 from .config import load_json_object, merge_config, resolve_config_path
 from .paths import TEMPLATES_DIR, data_home
-from .prices import Quote
+from .providers.base import Quote
 from .symbols import Market, ParsedSymbol, is_pence, type_for_symbol
 from .symbol_migrations import migrate_symbol
 

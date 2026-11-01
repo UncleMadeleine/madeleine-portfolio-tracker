@@ -16,7 +16,7 @@ import pandas as pd
 from .paths import var_dir
 
 if TYPE_CHECKING:
-    from .prices import Quote
+    from .providers.base import Quote
 
 
 # 行情缓存落在数据目录 var/ (安装位置无关); TRACKER_CACHE_DB 可显式指定
@@ -352,7 +352,7 @@ def get_cached_with_age(
     age ≤ CACHE_TTL 视为新鲜 (渲染即最终结果), 超过则视为陈旧 (先渲染,
     同时后台重取)。ttl 控制最长可接受年龄 (默认陈旧期)。
     """
-    from .prices import Quote
+    from .providers.base import Quote
 
     if not symbols:
         return {}, {}

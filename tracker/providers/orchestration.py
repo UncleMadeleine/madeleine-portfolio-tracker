@@ -149,6 +149,28 @@ def _route_provider(p: ParsedSymbol):
     return resolve(p.type)
 
 
+def _cached_source_ok(
+    quote: Quote,
+    parsed: ParsedSymbol,
+    prefer_akshare: bool,
+    use_ibkr: bool,
+    use_longport: bool,
+    crypto_source: str,
+) -> bool:
+    """缓存行情是否满足本次显式数据源偏好 (未指定偏好时任何源都接受)."""
+    required: set[str] = set()
+    if use_ibkr and parsed.type == "global":
+        required.add("ibkr")
+    if use_longport and parsed.type in ("global", "cn") and not parsed.is_b_share:
+        required.add("longport")
+    if prefer_akshare and parsed.market is Market.HK:
+        required.add("akshare")
+    if parsed.type == "crypto" and crypto_source != "auto":
+        # settings/CLI 用 gate 指 Gate.io, Quote.source 是 "gate.io"
+        required.add("gate.io" if crypto_source == "gate" else crypto_source)
+    return not required or (getattr(quote, "source", None) in required)
+
+
 def get_quotes(
     symbols,
     prefer_akshare: bool = False,
@@ -157,6 +179,7 @@ def get_quotes(
     crypto_source: str = "auto",
     progress=None,
     refresh: bool = False,
+    source_strict: bool = False,
 ) -> tuple[dict[str, Quote], dict[str, str], list[str]]:
     """多代码实时行情: 缓存 → 长桥/IBKR 批量 (可选, IBKR 优先) → 按域 provider 取数 → 回写缓存.
 
@@ -183,6 +206,20 @@ def get_quotes(
             neg_clear(yahoo)
     # 优先读本地缓存 (refresh 时跳过, 真正回源)
     cached = {} if refresh else cache_mod.get_cached(list(by_yahoo.keys()))
+    if cached and source_strict:
+        # 显式数据源偏好不能被缓存里的其它源结果短路: `quote AAPL --ibkr`
+        # 在 TTL 内会直接命中上次 yfinance 的缓存, IBKR 根本没执行。只保留
+        # 与本次偏好一致的缓存项, 其余交给下面的批量/源链重新取数。
+        # source_strict 只由 CLI 显式 flag 打开; UI/设置页仍走缓存优先
+        # (否则开启 IBKR 后每次首屏都会绕过磁盘缓存, 首屏秒开失效)。
+        cached = {
+            sym: q
+            for sym, q in cached.items()
+            if _cached_source_ok(
+                q, by_yahoo[sym], prefer_akshare, use_ibkr, use_longport,
+                crypto_source,
+            )
+        }
     if cached:
         quotes.update(cached)
         settled.update(cached)

@@ -80,9 +80,15 @@ def _build_ratio(
         if cur_num != cur_den:
             import pandas as pd
 
+            def _naive_min(df):
+                s = pd.to_datetime(df["date"], errors="coerce")
+                if getattr(s.dt, "tz", None) is not None:
+                    s = s.dt.tz_localize(None)
+                return s.min()
+
             fx_pair = f"{cur_den}{cur_num}"
             start_ts = min(
-                frames[numerator]["date"].min(), frames[denominator]["date"].min()
+                _naive_min(frames[numerator]), _naive_min(frames[denominator])
             ) - pd.Timedelta(days=10)
             # 仅 --refresh 时追加 refresh, 兼容既有
             # get_fx_history(src, dst, start, end) monkeypatch 签名。

@@ -328,6 +328,9 @@ def _preview_and_confirm(state_key: str, mode: str, on_saved, note: str = "") ->
             st.error(f"导入失败: {e}")
             return
         st.session_state.pop(state_key, None)
+        # 同时清掉上传文件指纹: 否则同一个文件在 rerun 后仍被判定为"已解析",
+        # 但 payload 已被 pop, 预览/确认按钮消失, 用户必须重新上传才能再导入。
+        st.session_state.pop(f"{state_key}_sig", None)
         if callable(on_saved):
             on_saved()
         st.toast(

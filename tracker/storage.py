@@ -235,10 +235,18 @@ def _write_json(data: dict, path: str | Path) -> None:
     # 保存前把当前内容刷新成 .bak: _read_json_or_recover 在主文件损坏时直接
     # 读 .bak 当恢复结果, 若 .bak 还是数月前导入时的快照, 恢复会把期间的
     # 全部编辑静默丢掉。备份失败 (只读目录等) 不阻断保存本身。
+    # 只在主文件本身可解析时备份: 主文件损坏、本次内容是从 .bak 恢复来的
+    # 情况下, 若仍把损坏主文件复制到 .bak, 唯一的好副本会被覆盖; 后续写入
+    # 失败 (磁盘满/掉电) 就彻底无法恢复。
     try:
-        backup_file(p)
-    except OSError:
+        _read_json(p)
+    except (json.JSONDecodeError, CorruptDataError, OSError, UnicodeDecodeError):
         pass
+    else:
+        try:
+            backup_file(p)
+        except OSError:
+            pass
     fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=f".{p.name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -303,7 +311,7 @@ def _stamp_type(row: dict) -> dict:
     symbol 先经 parse().yahoo 归一 (别名后缀 .SG→.SI, .SH→.SS, 港股补零等):
     手写/导入的别名与规范形态不会在文件里裂成两条; parse 失败保留原串。
     """
-    sym = str(row.get("symbol", "")).strip()
+    sym = str(row.get("symbol") or "").strip()
     if sym:
         try:
             row["symbol"] = parse(sym).yahoo
@@ -389,12 +397,20 @@ def save_portfolio(data: dict, path: str | Path = PORTFOLIO_PATH) -> None:
         else:
             merged = {}
         merged.update(data)
+        # data 未提供 holdings 时保留磁盘旧值; 显式 null 按空组合处理 (与读侧
+        # _require_entry_list 同口径); 字符串/对象等畸形值不能静默迭代成空列表
+        # 把原有持仓整体删掉。
+        raw_rows = merged.get("holdings")
+        if raw_rows is None:
+            raw_rows = []
+        if not isinstance(raw_rows, list):
+            raise CorruptDataError(
+                f"holdings 必须是对象数组 (实际类型: {type(raw_rows).__name__})"
+            )
         merged["base_currency"] = _normalize_base_currency(
             merged.get("base_currency")
         )
-        merged["holdings"] = [
-            _stamp_type(r) for r in _clean_rows(merged.get("holdings", []))
-        ]
+        merged["holdings"] = [_stamp_type(r) for r in _clean_rows(raw_rows)]
         _write_json(merged, p)
 
 
@@ -457,7 +473,7 @@ def normalize_watch_entry(e: dict) -> dict:
         out["metric"] = metric
     else:
         out.pop("metric", None)  # 缺省基准不落盘, 文件保持干净
-    sym = str(out.get("symbol", "")).strip()
+    sym = str(out.get("symbol") or "").strip()
     if sym:
         try:
             out["symbol"] = parse(sym).yahoo
@@ -476,7 +492,7 @@ def dedupe_watch_entries(entries: list[dict]) -> list[dict]:
     by_symbol: dict[str, dict] = {}
     for raw in entries:
         e = dict(raw)
-        sym = str(e.get("symbol", "")).strip()
+        sym = str(e.get("symbol") or "").strip()
         if not sym:
             continue
         try:
@@ -541,7 +557,7 @@ def load_watchlist(path: str | Path = WATCHLIST_PATH) -> dict:
         merged: dict[str, dict] = {}
         for name, lst in raw["watchlists"].items():
             for e in lst:
-                sym = str(e.get("symbol", "")).strip()
+                sym = str(e.get("symbol") or "").strip()
                 if not sym:
                     continue
                 # 去重键用归一后的规范代码: 别名 (D05.SG/D05.SI) 与规范形态
@@ -552,7 +568,11 @@ def load_watchlist(path: str | Path = WATCHLIST_PATH) -> dict:
                     key = sym
                 if key not in merged:
                     merged[key] = dict(e)
-                    merged[key].setdefault("lists", [])
+                    # lists 可能是手写/第三方写入的逗号字符串或 null; 先归一
+                    # 成列表再 append 组名, 否则 string 会被按字符迭代、null
+                    # 会在 `name not in None` / append 处直接崩。
+                    raw_lists = merged[key].get("lists")
+                    merged[key]["lists"] = parse_lists(raw_lists) if raw_lists else []
                 else:
                     # 同名代码在多个列表中各有一份阈值/备注: 保留先出现的,
                     # 缺失字段 (如只在旧列表设过 upper) 从后出现的补齐
@@ -570,6 +590,18 @@ def load_watchlist(path: str | Path = WATCHLIST_PATH) -> dict:
             entries.append(normalize_watch_entry(e))
         return {"watchlist": entries}
     return {"watchlist": []}
+
+
+def _watchlist_rows(data: dict) -> list:
+    """校验 save_watchlist 的 watchlist 参数; 畸形结构抛可读错误而非静默清空."""
+    rows = data.get("watchlist")
+    if rows is None:
+        return []
+    if not isinstance(rows, list):
+        raise CorruptDataError(
+            f"watchlist 必须是对象数组 (实际类型: {type(rows).__name__})"
+        )
+    return rows
 
 
 def save_watchlist(data: dict, path: str | Path = WATCHLIST_PATH) -> None:
@@ -595,7 +627,7 @@ def save_watchlist(data: dict, path: str | Path = WATCHLIST_PATH) -> None:
             _clean_rows(
                 [
                     normalize_watch_entry(dict(raw))
-                    for raw in data.get("watchlist", [])
+                    for raw in _watchlist_rows(data)
                     if isinstance(raw, dict)
                 ]
             )
@@ -622,6 +654,21 @@ DEFAULT_SETTINGS = {
 }
 
 
+def _as_bool(value, default: bool = False) -> bool:
+    """手改 settings.json 的布尔值宽松归一: "false"/0 不能被 bool() 当 True."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        s = value.strip().lower()
+        if s in ("true", "1", "yes", "on"):
+            return True
+        if s in ("false", "0", "no", "off", ""):
+            return False
+    return default
+
+
 def load_settings(path: str | Path = SETTINGS_PATH) -> dict:
     """读取设置; 文件缺失/损坏时回退默认值, 未知键与非法值忽略。"""
     data = dict(DEFAULT_SETTINGS)
@@ -637,9 +684,13 @@ def load_settings(path: str | Path = SETTINGS_PATH) -> dict:
             data.update({k: v for k, v in raw.items() if k in DEFAULT_SETTINGS})
     if data["color_scheme"] not in (SCHEME_CN, SCHEME_INTL):
         data["color_scheme"] = SCHEME_CN
-    data["prefer_akshare"] = bool(data["prefer_akshare"])
-    data["use_ibkr"] = bool(data["use_ibkr"])
-    data["use_longport"] = bool(data.get("use_longport"))
+    data["prefer_akshare"] = _as_bool(
+        data["prefer_akshare"], DEFAULT_SETTINGS["prefer_akshare"]
+    )
+    data["use_ibkr"] = _as_bool(data["use_ibkr"], DEFAULT_SETTINGS["use_ibkr"])
+    data["use_longport"] = _as_bool(
+        data.get("use_longport"), DEFAULT_SETTINGS["use_longport"]
+    )
     crypto_source = str(data.get("crypto_source") or "auto").strip().lower()
     if crypto_source not in CRYPTO_SOURCES:
         crypto_source = "auto"
@@ -659,7 +710,9 @@ def save_settings(data: dict, path: str | Path = SETTINGS_PATH) -> None:
             merged = _read_json_or_recover(p) if p.exists() else {}
         except CorruptDataError:
             merged = {}
-        merged.update({**DEFAULT_SETTINGS, **data})
+        # 优先级: 默认值 < 磁盘已有值 < 本次写入。反过来会把 data 未包含的
+        # 设置项重置成默认值 (局部保存静默清掉其它开关)。
+        merged = {**DEFAULT_SETTINGS, **merged, **data}
         _write_json(merged, p)
 
 

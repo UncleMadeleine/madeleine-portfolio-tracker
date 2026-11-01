@@ -249,11 +249,15 @@ def _shares_history(yahoo: str, refresh: bool = False) -> pd.DataFrame | None:
         return None
     df = pd.DataFrame(
         {
-            "date": pd.to_datetime(srs.index, errors="coerce", utc=True),
+            "date": pd.to_datetime(srs.index, errors="coerce"),
             "close": pd.to_numeric(list(srs.values), errors="coerce"),
         }
     ).dropna()
-    df["date"] = df["date"].dt.tz_convert(None)  # 剥时区 (与 price date 对齐)
+    # 保留交易所本地日历日: get_shares_full 的索引带交易所时区, 先 utc=True
+    # 再 tz_convert(None) 会把港/日/韩本地 00:00 变成前一天的 UTC 16:00,
+    # 股本变更被提前一天应用。tz_localize(None) 只剥时区, 不改墙上时间。
+    if getattr(df["date"].dt, "tz", None) is not None:
+        df["date"] = df["date"].dt.tz_localize(None)
     df = (
         df[df["close"] > 0]
         .groupby("date", as_index=False)["close"]

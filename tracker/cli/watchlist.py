@@ -330,6 +330,27 @@ def watchlist_import_longport(args) -> None:
         )
         return
 
+    # 空导入不写盘: --overwrite 下 rows 为空 (长桥账户无自选/全部被跳过) 时
+    # 旧逻辑会把 data["watchlist"] 清空并保存, 相当于静默删掉本地全部自选。
+    if not rows:
+        if args.json:
+            _print_json(
+                {
+                    "written": args.file,
+                    "mode": "覆盖写入" if args.overwrite else "追加合并",
+                    "added": [],
+                    "updated": [],
+                    "total": None,
+                    "skipped": skipped,
+                    "note": "无可导入的自选, 未修改文件",
+                }
+            )
+            return
+        print("(无可导入的自选, 未修改文件)")
+        for s in skipped:
+            print(f"  ⚠ {s}")
+        return
+
     # 锁内读-改-写: append 模式下读盘也在临界区内, 与并发编辑互不丢失
     # (覆盖模式本就是全量替换, 锁保证不会与别人的写交出错半截)
     with edit_watchlist(args.file) as data:

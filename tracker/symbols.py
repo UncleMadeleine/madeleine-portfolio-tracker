@@ -484,7 +484,8 @@ def normalize(symbol: str) -> str:
     if suffix == "SH":
         suffix = "SS"
     elif suffix == "HK":
-        head = head.lstrip("0").zfill(4)
+        if head.isdigit():
+            head = head.lstrip("0").zfill(4)
     elif suffix == "SG":
         suffix = "SI"  # SGX: Yahoo 规范后缀 .SI; .SG 别名归一 (yfinance 无 .SG 数据)
     elif suffix == "JP":

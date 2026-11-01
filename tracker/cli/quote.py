@@ -16,6 +16,8 @@ def cmd_quote(args) -> None:
         use_longport=getattr(args, "longport", False),
         crypto_source=getattr(args, "crypto_source", "auto"),
         refresh=getattr(args, "refresh", False),
+        # 显式源 flag 必须真正执行, 不能命中 TTL 内其它源的磁盘缓存
+        source_strict=True,
     )
     rows: list[dict] = []
     for s in args.symbols:

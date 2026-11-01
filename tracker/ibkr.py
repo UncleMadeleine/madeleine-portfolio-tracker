@@ -442,14 +442,25 @@ def _ibkr_chunk_quotes(ib, m, chunk: list[ParsedSymbol], cfg: dict) -> dict[str,
         if spec.trading_class:
             c.tradingClass = spec.trading_class
         pairs.append((p.yahoo, c))
-    # qualifyContracts 对查无定义的合约会在返回列表塞 None (ib_async 行为):
-    # 一只坏合约若混入 reqTickers 会炸整批 ('NoneType' has no attribute 'secType'),
-    # 因此按位过滤, 只保留 qualify 成功的合约
+    # qualifyContracts 会原地填充成功合约的 conId; 失败项在返回值中可能是
+    # None (当前 ib_async) 或被直接过滤掉 (旧版本)。前者按位置取即可; 后者
+    # 若仍按位置 zip 会整体错位, 把 A 的价格写到 B 的代码上。长度不一致时
+    # 按返回对象身份过滤输入合约, 保证配对不漂移。
     try:
         qualified = ib.qualifyContracts(*[c for _, c in pairs])
     except Exception:
         return {}
-    good = [(c, y) for c, y in zip(qualified, [yy for yy, _ in pairs]) if c is not None]
+    if len(qualified) == len(pairs):
+        good = [
+            (c, y) for c, (y, _) in zip(qualified, pairs) if c is not None
+        ]
+    else:
+        ok_ids = {id(c) for c in qualified if c is not None}
+        good = [
+            (c, y)
+            for y, c in pairs
+            if id(c) in ok_ids or getattr(c, "conId", 0)
+        ]
     if not good:
         return {}
     try:
@@ -717,6 +728,13 @@ def get_history_ibkr(
             rows = _ibkr_daily_bars(ib, qualified[0], start_d, end_d)
             if not rows:
                 continue
+            # 与实时行情/持仓成本同口径: LSE 英镑柜台 (IBKR 报 GBP) 的日K
+            # 也是便士价, 不 ÷100 会让 kline 与 quote 相差 100 倍。
+            if _is_pence_quote(p.yahoo, getattr(qualified[0], "currency", "")):
+                for r in rows:
+                    for key in ("open", "high", "low", "close"):
+                        if r.get(key) is not None:
+                            r[key] = r[key] / 100
             df = pd.DataFrame(rows)
             if not df.empty:
                 results[p.yahoo] = df

@@ -167,8 +167,27 @@ def _read_all(sql: str, params) -> list:
     try:
         with sqlite3.connect(CACHE_DB) as con:
             return con.execute(sql, params).fetchall()
-    except sqlite3.OperationalError:
+    except (sqlite3.Error, OSError):
         return []
+
+
+def _execute_write(sql: str, params, *, many: bool = False) -> bool:
+    """执行写语句; 缓存属可再生的派生数据, 任何 I/O/SQLite 失败都按「未写入」处理.
+
+    缓存目录只读 / 磁盘满 / 库被其它进程锁住时, 不能让一次成功的网络取数
+    因为回写缓存失败而整体抛错 (调用方拿到的是行情, 不是缓存状态)。
+    """
+    try:
+        _ensure_db()
+        with _lock, sqlite3.connect(CACHE_DB) as con:
+            if many:
+                con.executemany(sql, params)
+            else:
+                con.execute(sql, params)
+            con.commit()
+        return True
+    except (sqlite3.Error, OSError):
+        return False
 
 
 def _read_one(sql: str, params):
@@ -178,7 +197,12 @@ def _read_one(sql: str, params):
 
 
 def _ensure_db() -> None:
-    CACHE_DB.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        CACHE_DB.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        # 只读挂载/无权限目录: 后续 connect 会失败, 读路径按无缓存处理,
+        # 写路径由 _execute_write 吞掉, 不影响取数主流程。
+        return
     try:
         with sqlite3.connect(CACHE_DB) as con:
             _create_schema(con)
@@ -257,17 +281,15 @@ def set_ohlc_cached(symbol: str, months: int, df: pd.DataFrame) -> None:
         if c in recs.columns
     ]
     payload = json.dumps(recs[cols].to_dict(orient="records"))
-    with _lock, sqlite3.connect(CACHE_DB) as con:
-        con.execute(
-            """
-            INSERT INTO ohlc_cache (symbol, months, payload, fetched_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(symbol, months) DO UPDATE SET
-                payload=excluded.payload, fetched_at=excluded.fetched_at
-            """,
-            (symbol, int(months), payload, time.time()),
-        )
-        con.commit()
+    _execute_write(
+        """
+        INSERT INTO ohlc_cache (symbol, months, payload, fetched_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(symbol, months) DO UPDATE SET
+            payload=excluded.payload, fetched_at=excluded.fetched_at
+        """,
+        (symbol, int(months), payload, time.time()),
+    )
 
 
 # ---------- 基本面 (每股净资产) 缓存 ----------
@@ -328,19 +350,17 @@ def set_fundamental_cached(
 
     bv = _valid(book_value)
     mc = _valid(market_cap)
-    with _lock, sqlite3.connect(CACHE_DB) as con:
-        con.execute(
-            """
-            INSERT INTO fundamentals (symbol, book_value, market_cap, fetched_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(symbol) DO UPDATE SET
-                book_value=COALESCE(excluded.book_value, fundamentals.book_value),
-                market_cap=COALESCE(excluded.market_cap, fundamentals.market_cap),
-                fetched_at=excluded.fetched_at
-            """,
-            (symbol, bv, mc, now),
-        )
-        con.commit()
+    _execute_write(
+        """
+        INSERT INTO fundamentals (symbol, book_value, market_cap, fetched_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(symbol) DO UPDATE SET
+            book_value=COALESCE(excluded.book_value, fundamentals.book_value),
+            market_cap=COALESCE(excluded.market_cap, fundamentals.market_cap),
+            fetched_at=excluded.fetched_at
+        """,
+        (symbol, bv, mc, now),
+    )
 
 
 def get_cached_with_age(
@@ -421,21 +441,20 @@ def set_cached(quotes: dict[str, "Quote"]) -> None:
                 now,
             )
         )
-    with _lock, sqlite3.connect(CACHE_DB) as con:
-        con.executemany(
-            """
-            INSERT INTO quotes (symbol, name, price, prev_close, change_pct, currency, book_value, market_cap, source, fetched_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(symbol) DO UPDATE SET
-                name=excluded.name, price=excluded.price,
-                prev_close=excluded.prev_close, change_pct=excluded.change_pct,
-                currency=excluded.currency, book_value=COALESCE(excluded.book_value, quotes.book_value),
-                market_cap=COALESCE(excluded.market_cap, quotes.market_cap),
-                source=excluded.source, fetched_at=excluded.fetched_at
-            """,
-            rows,
-        )
-        con.commit()
+    _execute_write(
+        """
+        INSERT INTO quotes (symbol, name, price, prev_close, change_pct, currency, book_value, market_cap, source, fetched_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(symbol) DO UPDATE SET
+            name=excluded.name, price=excluded.price,
+            prev_close=excluded.prev_close, change_pct=excluded.change_pct,
+            currency=excluded.currency, book_value=COALESCE(excluded.book_value, quotes.book_value),
+            market_cap=COALESCE(excluded.market_cap, quotes.market_cap),
+            source=excluded.source, fetched_at=excluded.fetched_at
+        """,
+        rows,
+        many=True,
+    )
 
 
 # ---------- 汇率 (即期) 缓存 ----------
@@ -481,18 +500,16 @@ def set_fx_cached(base: str, rates: dict[str, float]) -> None:
     ]
     if not rows:
         return
-    _ensure_db()
-    with _lock, sqlite3.connect(CACHE_DB) as con:
-        con.executemany(
-            """
-            INSERT INTO fx_rates (base, currency, rate, fetched_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(base, currency) DO UPDATE SET
-                rate=excluded.rate, fetched_at=excluded.fetched_at
-            """,
-            rows,
-        )
-        con.commit()
+    _execute_write(
+        """
+        INSERT INTO fx_rates (base, currency, rate, fetched_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(base, currency) DO UPDATE SET
+            rate=excluded.rate, fetched_at=excluded.fetched_at
+        """,
+        rows,
+        many=True,
+    )
 
 
 def clear_fx() -> int:
@@ -578,17 +595,15 @@ def set_calendar_row(key: str, events: list) -> None:
     """写入日历缓存行; 空事件列表同样落库 (单票负缓存依赖空载荷)."""
     _ensure_db()
     payload = json.dumps({"events": events}, ensure_ascii=False, default=str)
-    with _lock, sqlite3.connect(CACHE_DB) as con:
-        con.execute(
-            """
-            INSERT INTO calendar_cache (key, payload, fetched_at)
-            VALUES (?, ?, ?)
-            ON CONFLICT(key) DO UPDATE SET
-                payload=excluded.payload, fetched_at=excluded.fetched_at
-            """,
-            (key, payload, time.time()),
-        )
-        con.commit()
+    _execute_write(
+        """
+        INSERT INTO calendar_cache (key, payload, fetched_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+            payload=excluded.payload, fetched_at=excluded.fetched_at
+        """,
+        (key, payload, time.time()),
+    )
 
 
 # ---------- 通用序列缓存 (历史市值 em / 历史股本 shares 用) ----------
@@ -625,17 +640,15 @@ def set_series_cached(key: str, df: pd.DataFrame) -> None:
     recs = df[["date", "close"]].copy()
     recs["date"] = pd.to_datetime(recs["date"]).dt.strftime("%Y-%m-%d")
     payload = json.dumps(recs.to_dict(orient="records"))
-    with _lock, sqlite3.connect(CACHE_DB) as con:
-        con.execute(
-            """
-            INSERT INTO series_cache (key, payload, fetched_at)
-            VALUES (?, ?, ?)
-            ON CONFLICT(key) DO UPDATE SET
-                payload=excluded.payload, fetched_at=excluded.fetched_at
-            """,
-            (key, payload, time.time()),
-        )
-        con.commit()
+    _execute_write(
+        """
+        INSERT INTO series_cache (key, payload, fetched_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+            payload=excluded.payload, fetched_at=excluded.fetched_at
+        """,
+        (key, payload, time.time()),
+    )
 
 
 def info() -> dict:

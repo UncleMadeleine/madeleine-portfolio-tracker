@@ -9,7 +9,7 @@ from pathlib import Path
 from .. import prices
 from ..paths import var_dir
 from ..symbols import INDEX_CATALOG, index_groups, index_label, parse
-from ._common import _finish_with_error, _print_json, _records
+from ._common import _finish_with_error, _print_json, _records, atomic_write_text
 
 # 指数K线 HTML 默认输出目录 (数据目录 var/, 安装位置无关)
 VAR_DIR = var_dir()
@@ -110,10 +110,13 @@ def cmd_index_kline(args) -> None:
         if args.output
         else VAR_DIR / f"index_kline_{p.yahoo.replace('.', '_')}.html"
     )
-    out.parent.mkdir(parents=True, exist_ok=True)
-    if out.is_dir():
-        _finish_with_error(f"输出路径是一个目录, 请指定文件: {out}")
-    out.write_text(charting.fig_to_html(fig), encoding="utf-8")
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        if out.is_dir():
+            _finish_with_error(f"输出路径是一个目录, 请指定文件: {out}")
+        atomic_write_text(out, charting.fig_to_html(fig))
+    except OSError as e:
+        _finish_with_error(f"指数K线图写入失败: {out} ({e})")
     print(f"\n✅ 指数K线图已生成: {out}")
     if args.open_browser:
         webbrowser.open(out.resolve().as_uri())

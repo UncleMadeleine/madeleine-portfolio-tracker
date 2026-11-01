@@ -49,7 +49,7 @@ _MD_COLS = [
 
 def _export_csv(view: pd.DataFrame) -> str:
     """持仓视图 → CSV 字符串 (带 BOM 便于 Excel 打开)."""
-    cols = [c for c in _CSV_COLS if c in view.columns]
+    cols = [c for c in _CSV_COLS if c in view.columns] or list(_CSV_COLS)
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=cols, extrasaction="ignore")
     writer.writeheader()

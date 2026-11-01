@@ -399,13 +399,18 @@ def get_quotes_longport(
                 continue
             chg = (price - prev) / prev * 100.0 if prev else None
             pb = pb_ratios.get(lp)
+            # 长桥对人民币柜台/沪深港通报 CNH (离岸人民币), 与项目 CNY 口径
+            # 统一 (同 IBKR quote_from_ticker); 否则汇率层只认 CNY, 整行缺失。
+            ccy = str(ccy_by_lp.get(lp) or _currency_for(p.yahoo) or "").upper()
+            if ccy == "CNH":
+                ccy = "CNY"
             quotes[p.yahoo] = Quote(
                 symbol=p.yahoo,
                 name=names_by_lp.get(lp),
                 price=price,
                 prev_close=prev,
                 change_pct=chg,
-                currency=ccy_by_lp.get(lp) or _currency_for(p.yahoo),
+                currency=ccy,
                 # 长桥实时撮合口径 PB → 反推 BVPS (实测与 yfinance 口径一致)
                 book_value=price / pb if pb is not None and pb > 0 else None,
                 market_cap=mcap_by_lp.get(lp),

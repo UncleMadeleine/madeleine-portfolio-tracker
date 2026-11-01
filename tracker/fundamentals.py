@@ -150,9 +150,13 @@ def _fill_fundamentals(out: dict[str, dict], missing: list[str]) -> None:
         try:
             ob = _fund_metrics(pending)
         except Exception:  # noqa: BLE001 - 基本面失败不阻断快照/提醒主流程
-            ob = {s: _empty_metrics() for s in pending}
+            # 整批失败 (网络/某个不支持的代码让 OpenBB 整批抛错) 时不能给
+            # 每个 pending 都写负缓存: 一只坏代码会让同批其它标的 6 小时内
+            # 都不再重试。留空 (fresh 无该键) 即「未确认」, 下轮仍会取。
+            ob = {}
         for s in pending:
-            fresh[s] = _merge_fill(fresh.get(s), ob.get(s))
+            if s in ob:
+                fresh[s] = _merge_fill(fresh.get(s), ob.get(s))
 
     if mode == "fallback":
         need = [s for s in missing if not _complete(fresh.get(s))]
@@ -161,15 +165,20 @@ def _fill_fundamentals(out: dict[str, dict], missing: list[str]) -> None:
                 fresh[s] = _merge_fill(fresh.get(s), vals)
 
     for s in missing:
-        vals = fresh.get(s) or _empty_metrics()
-        cache_mod.set_fundamental_cached(
-            s,
-            vals.get("book_value"),
-            market_cap=vals.get("market_cap"),
-        )
-        out[s] = (
-            cache_mod.get_fundamental_cached(s, ttl=_METRICS_TTL) or _empty_metrics()
-        )
+        vals = fresh.get(s)
+        if vals is not None:
+            cache_mod.set_fundamental_cached(
+                s,
+                vals.get("book_value"),
+                market_cap=vals.get("market_cap"),
+            )
+            out[s] = (
+                cache_mod.get_fundamental_cached(s, ttl=_METRICS_TTL)
+                or _empty_metrics()
+            )
+        else:
+            # 未拿到结果 ≠ 确认无数据: 不落负缓存, 只给本次调用返回空指标
+            out[s] = _empty_metrics()
 
 
 def fetch_book_values(

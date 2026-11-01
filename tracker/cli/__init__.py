@@ -26,34 +26,34 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import os
 import sys
 
-# 暴露 prices 供测试 monkeypatch (cli.prices.get_quotes)
-from .. import prices  # noqa: F401
+# 暴露 prices 供测试 monkeypatch (cli.prices.get_quotes): 惰性代理, 不拖慢 --help
 from ..storage import PORTFOLIO_PATH as DEFAULT_PORTFOLIO, CorruptDataError, DataFileLocked
 from ..watchlist import DEFAULT_WATCHLIST  # storage 门面 (watchlist.json 常量)
-from ._common import VERSION, _finish_with_error
-from .cache import cmd_cache
-from .calendar import cmd_calendar, months_arg
-from .eodhd import cmd_eodhd
-from .export import cmd_export
-from .compare import cmd_compare
-from .init import cmd_init
-from .search import cmd_search
-from .fx import cmd_fx
-from .history import cmd_history
-from .kline import cmd_kline
-from .index_kline import cmd_index_kline
-from .portfolio import cmd_portfolio
-from .quote import cmd_quote
-from .report import cmd_report
-from .snapshot import cmd_snapshot
-from .sync import cmd_sync
-from .importer import cmd_import
-from .wallet import cmd_import_wallet
-from .watchlist import cmd_watchlist
-from .longport_login import cmd_longport_login
+from ._common import VERSION, _finish_with_error, months_arg
+
+
+def _cmd(module: str, name: str):
+    """惰性命令代理: argparse 注册阶段不导入子命令模块 (--help 保持轻量)."""
+
+    def _run(args):
+        return getattr(importlib.import_module(module, __package__), name)(args)
+
+    _run.__name__ = name
+    return _run
+
+
+def __getattr__(name: str):
+    """兼容 `cli.prices` 等既有属性访问 (测试 monkeypatch / 旧调用方)."""
+    if name == "prices":
+        value = importlib.import_module(".prices", __name__.rsplit(".", 1)[0])
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 # 加密货币域数据源偏好 (与 tracker.storage.CRYPTO_SOURCES 同一组取值):
 # auto = 默认链, 其余指定源前置, 链内其余源按默认相对顺序兜底
@@ -136,7 +136,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_crypto_source_arg(p_snap)
     p_snap.add_argument("--json", action="store_true", help="输出 JSON")
-    p_snap.set_defaults(func=cmd_snapshot)
+    p_snap.set_defaults(func=_cmd(".snapshot", "cmd_snapshot"))
 
     # ---- quote ----
     p_q = sub.add_parser(
@@ -162,7 +162,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="忽略 5min 磁盘行情缓存与失败负缓存, 强制重新取数",
     )
     p_q.add_argument("--json", action="store_true")
-    p_q.set_defaults(func=cmd_quote)
+    p_q.set_defaults(func=_cmd(".quote", "cmd_quote"))
 
     # ---- watchlist ----
     p_w = sub.add_parser(
@@ -230,7 +230,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_w.add_argument(
         "--no-quotes", action="store_true", help="list 时不拉行情, 仅展示配置"
     )
-    p_w.set_defaults(func=cmd_watchlist)
+    p_w.set_defaults(func=_cmd(".watchlist", "cmd_watchlist"))
 
     # ---- portfolio ----
     p_p = sub.add_parser(
@@ -263,7 +263,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="基础货币 (set-base 时指定, 如 CNY/USD); 也可作为位置参数: set-base USD",
     )
     p_p.add_argument("--json", action="store_true", help="输出 JSON")
-    p_p.set_defaults(func=cmd_portfolio)
+    p_p.set_defaults(func=_cmd(".portfolio", "cmd_portfolio"))
 
     # ---- report ----
     p_r = sub.add_parser(
@@ -304,7 +304,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_r.add_argument(
         "--output", "-o", default=None, help="输出文件路径 (缺省打印到终端)"
     )
-    p_r.set_defaults(func=cmd_report)
+    p_r.set_defaults(func=_cmd(".report", "cmd_report"))
 
     # ---- export ----
     p_e = sub.add_parser(
@@ -347,7 +347,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_e.add_argument(
         "--output", "-o", default=None, help="输出文件路径 (缺省打印到终端)"
     )
-    p_e.set_defaults(func=cmd_export)
+    p_e.set_defaults(func=_cmd(".export", "cmd_export"))
 
     # ---- fx ----
     p_fx = sub.add_parser(
@@ -366,7 +366,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_fx.add_argument("--ibkr", action="store_true", help="优先使用 IBKR 汇率")
     p_fx.add_argument("--longport", action="store_true", help="预留: 长桥暂不支持汇率")
     p_fx.add_argument("--json", action="store_true")
-    p_fx.set_defaults(func=cmd_fx)
+    p_fx.set_defaults(func=_cmd(".fx", "cmd_fx"))
 
     # ---- history ----
     p_h = sub.add_parser(
@@ -394,7 +394,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_crypto_source_arg(p_h)
     p_h.add_argument("--json", action="store_true")
-    p_h.set_defaults(func=cmd_history)
+    p_h.set_defaults(func=_cmd(".history", "cmd_history"))
 
     # ---- kline ----
     p_k = sub.add_parser(
@@ -448,7 +448,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="生成后自动在浏览器打开",
     )
     p_k.add_argument("--json", action="store_true", help="输出 JSON 数据 (不生成图表)")
-    p_k.set_defaults(func=cmd_kline)
+    p_k.set_defaults(func=_cmd(".kline", "cmd_kline"))
 
     # ---- calendar ----
     p_cal = sub.add_parser(
@@ -492,7 +492,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="开启长桥日历兜底 (yfinance/akshare 拿不到时补; 需已 longport-login)"
     )
     p_cal.add_argument("--json", action="store_true", help="输出 JSON")
-    p_cal.set_defaults(func=cmd_calendar)
+    p_cal.set_defaults(func=_cmd(".calendar", "cmd_calendar"))
 
     # ---- search ----
     p_s = sub.add_parser(
@@ -521,7 +521,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="输出 JSON (results[].code 可直接喂取数命令)",
     )
-    p_s.set_defaults(func=cmd_search)
+    p_s.set_defaults(func=_cmd(".search", "cmd_search"))
 
     # ---- compare ----
     p_cmp = sub.add_parser(
@@ -608,7 +608,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_cmp.add_argument(
         "--json", action="store_true", help="输出 JSON (每代码归一化序列 + 区间涨跌)"
     )
-    p_cmp.set_defaults(func=cmd_compare)
+    p_cmp.set_defaults(func=_cmd(".compare", "cmd_compare"))
 
     # ---- index-kline ----
     p_ik = sub.add_parser(
@@ -659,7 +659,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="生成后自动在浏览器打开",
     )
     p_ik.add_argument("--json", action="store_true", help="输出 JSON 数据 (不生成图表)")
-    p_ik.set_defaults(func=cmd_index_kline)
+    p_ik.set_defaults(func=_cmd(".index_kline", "cmd_index_kline"))
 
     # ---- import ----
     p_imp = sub.add_parser(
@@ -708,7 +708,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_i_ibkr.add_argument("--dry-run", action="store_true", help="仅预览, 不写入")
     p_i_ibkr.add_argument("--json", action="store_true", help="输出 JSON")
-    p_i_ibkr.set_defaults(func=cmd_import)
+    p_i_ibkr.set_defaults(func=_cmd(".importer", "cmd_import"))
 
     p_i_lp = imp_sub.add_parser(
         "longport",
@@ -730,7 +730,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_i_lp.add_argument("--dry-run", action="store_true", help="仅预览, 不写入")
     p_i_lp.add_argument("--json", action="store_true", help="输出 JSON")
-    p_i_lp.set_defaults(func=cmd_import)
+    p_i_lp.set_defaults(func=_cmd(".importer", "cmd_import"))
 
     p_i_wallet = imp_sub.add_parser(
         "wallet",
@@ -765,7 +765,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_i_wallet.add_argument("--dry-run", action="store_true", help="仅查询预览, 不写入")
     p_i_wallet.add_argument("--json", action="store_true", help="输出 JSON")
-    p_i_wallet.set_defaults(func=cmd_import)
+    p_i_wallet.set_defaults(func=_cmd(".importer", "cmd_import"))
 
     p_i_file = imp_sub.add_parser(
         "file",
@@ -787,7 +787,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_i_file.add_argument("--dry-run", action="store_true", help="仅预览, 不写入")
     p_i_file.add_argument("--json", action="store_true", help="输出 JSON")
-    p_i_file.set_defaults(func=cmd_import)
+    p_i_file.set_defaults(func=_cmd(".importer", "cmd_import"))
 
     # ---- sync (兼容入口, 已并入 import ibkr) ----
     p_sync = sub.add_parser(
@@ -821,7 +821,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="覆盖全部持仓 (清空后重写, 写前自动备份 portfolio.json.bak)",
     )
     p_sync.add_argument("--json", action="store_true")
-    p_sync.set_defaults(func=cmd_sync)
+    p_sync.set_defaults(func=_cmd(".sync", "cmd_sync"))
 
     # ---- longport-login (长桥 OAuth 登录引导) ----
     p_lp = sub.add_parser(
@@ -845,7 +845,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="--json 时把授权 URL 写入指定文件 (供脚本消费)",
     )
-    p_lp.set_defaults(func=cmd_longport_login)
+    p_lp.set_defaults(func=_cmd(".longport_login", "cmd_longport_login"))
 
     # ---- eodhd (BYOK 付费源: 配置状态 + 连通性自检) ----
     p_eod = sub.add_parser(
@@ -870,7 +870,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--config", default=None, help="eodhd.json 路径 (默认数据目录/eodhd.json)"
     )
     p_eod.add_argument("--json", action="store_true", help="输出 JSON")
-    p_eod.set_defaults(func=cmd_eodhd)
+    p_eod.set_defaults(func=_cmd(".eodhd", "cmd_eodhd"))
 
     # ---- import-wallet (兼容入口, 已并入 import wallet) ----
     p_wallet = sub.add_parser(
@@ -912,7 +912,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="覆盖全部持仓 (与 --add 互斥, 指定即写入)",
     )
     p_wallet.add_argument("--json", action="store_true", help="输出 JSON")
-    p_wallet.set_defaults(func=cmd_import_wallet)
+    p_wallet.set_defaults(func=_cmd(".wallet", "cmd_import_wallet"))
 
     # ---- cache ----
     p_c = sub.add_parser(
@@ -928,7 +928,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_c.add_argument("action", nargs="?", choices=["info", "clear"], default="info")
     p_c.add_argument("--json", action="store_true")
-    p_c.set_defaults(func=cmd_cache)
+    p_c.set_defaults(func=_cmd(".cache", "cmd_cache"))
 
     # ---- init (首次使用: 模板落地到数据目录) ----
     p_init = sub.add_parser(
@@ -946,7 +946,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--force", action="store_true", help="用模板覆盖已存在的配置文件"
     )
     p_init.add_argument("--json", action="store_true", help="输出 JSON")
-    p_init.set_defaults(func=cmd_init)
+    p_init.set_defaults(func=_cmd(".init", "cmd_init"))
 
     return ap
 

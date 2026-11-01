@@ -2,19 +2,34 @@
 
 from __future__ import annotations
 
+import argparse
 import json
+import math
 import os
 import sys
 from pathlib import Path
-
-import pandas as pd
 
 from .. import __version__ as VERSION  # noqa: F401  (单一版本来源, 经 cli 再导出)
 from ..symbols import parse
 from ..util import records as _util_records
 
 
-def _records(df: pd.DataFrame) -> list[dict]:
+def months_arg(value: str) -> int:
+    """--months 校验: 1..12 个自然月, 防止误传超大值拉几十个报表期.
+
+    放在 _common 而非 cli.calendar: build_parser 需要它, 但不应因此导入
+    calendar → events → pandas (--help 轻量路径)。
+    """
+    try:
+        n = int(value)
+    except (TypeError, ValueError) as e:
+        raise argparse.ArgumentTypeError(f"--months 需为整数: {value!r}") from e
+    if not 1 <= n <= 12:
+        raise argparse.ArgumentTypeError("--months 需在 1..12 之间")
+    return n
+
+
+def _records(df) -> list[dict]:
     """DataFrame -> records, NaN/NaT 转 None 便于 JSON 序列化 (实现见 util).
 
     兼容既有 `from ._common import _records` 导入路径; 实现放 util 是为了
@@ -86,21 +101,34 @@ def _current_umask() -> int:
     return cur
 
 
+def _is_na(v) -> bool:
+    """标量缺失值判断 (NaN/NaT/pd.NA/None); 按需导入 pandas 保持 CLI 冷启动轻量."""
+    if v is None:
+        return True
+    if isinstance(v, float):
+        return math.isnan(v)
+    if isinstance(v, str):
+        return False
+    try:
+        import pandas as pd
+
+        return bool(pd.isna(v))
+    except (ImportError, TypeError, ValueError):
+        return False
+
+
 def _sanitize(d: dict) -> dict:
     """dict 中 NaN/None 统一为 None, 便于 CSV/MD 导出."""
-    return {
-        k: (None if (v is None or (isinstance(v, float) and pd.isna(v))) else v)
-        for k, v in d.items()
-    }
+    return {k: (None if _is_na(v) else v) for k, v in d.items()}
 
 
 def _fmt_num(v, digits: int = 2) -> str:
-    if v is None or (isinstance(v, float) and pd.isna(v)):
+    if _is_na(v):
         return "—"
     return f"{v:,.{digits}f}"
 
 
 def _fmt_pct(v) -> str:
-    if v is None or (isinstance(v, float) and pd.isna(v)):
+    if _is_na(v):
         return "—"
     return f"{v:+.1f}%"

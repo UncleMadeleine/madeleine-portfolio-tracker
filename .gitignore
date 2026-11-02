@@ -28,6 +28,10 @@ portfolio.json.bak
 watchlist.json
 watchlist.json.bak
 settings.json
+# save_*/edit_* 的跨进程写锁空文件 (见 storage._file_lock: 故意永不删除)
+portfolio.json.lock
+watchlist.json.lock
+settings.json.lock
 
 # IBKR 真实配置 (含敏感连接信息), 模板见 tracker/templates/ibkr.example.json
 ibkr.json

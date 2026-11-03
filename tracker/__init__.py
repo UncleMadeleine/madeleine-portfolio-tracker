@@ -6,7 +6,7 @@ import importlib
 from typing import Any
 
 #: 单一版本来源 (pyproject.toml 动态读取; CLI --version 与此一致)
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 # 惰性再导出: 包导入本身不拉 pandas / providers / OpenBB。
 # CLI 的 --help / -v / init 等轻量路径因此无需付出 ~0.6s 的 pandas 冷启动;

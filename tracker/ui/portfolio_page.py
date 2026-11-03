@@ -23,9 +23,10 @@ from datetime import datetime
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
-from tracker import cache as cache_mod, prices, storage
+from tracker import cache as cache_mod, nav, prices, storage
 from tracker.analytics import build_view, by_symbol, summarize
 from tracker.fx import get_fx_rates
 from tracker.storage import CorruptDataError, DataFileLocked
@@ -631,6 +632,93 @@ def _symbol_pie(view: pd.DataFrame):
     return fig
 
 
+# 净值走势可选区间: label → 回看自然日数 (None = 全部)
+NAV_RANGES = {
+    "30 天": 30,
+    "90 天": 90,
+    "180 天": 180,
+    "365 天": 365,
+    "全部": None,
+}
+
+
+def _render_nav_section(base: str) -> None:
+    """组合页「净值走势」: 读取历史净值, 画总市值 + 成本两条线.
+
+    历史由 snapshot --save / 组合页每次成功渲染时自动 upsert; 没有历史时
+    给出保存/回填命令提示, 而不是画一张空图。
+    """
+    with st.container(border=True):
+        head_l, head_r = st.columns([3, 2], vertical_alignment="center")
+        head_l.markdown("**:material/show_chart: 净值走势**")
+        range_label = head_r.radio(
+            "净值区间",
+            list(NAV_RANGES),
+            index=2,
+            horizontal=True,
+            key="nav_range",
+            label_visibility="collapsed",
+        )
+        rows = nav.load_history(base, days=NAV_RANGES[range_label])
+        if not rows:
+            st.caption(
+                "尚无历史净值。执行 `tracker nav --save` 保存今天，或 "
+                "`tracker nav --backfill --days 365` 按当前持仓回填近似历史。"
+            )
+            return
+
+        df = pd.DataFrame(rows)
+        df["day"] = pd.to_datetime(df["day"])
+        first, last = rows[0], rows[-1]
+        change = (last["total_value"] or 0) - (first["total_value"] or 0)
+        pct = (
+            change / abs(first["total_value"])
+            if first["total_value"] not in (None, 0)
+            else None
+        )
+        delta = f"{change:+,.0f} {base}" + (f" ({pct:+.2%})" if pct is not None else "")
+        head_l.caption(
+            f"{first['day']} → {last['day']} · 区间 **{delta}** · "
+            f"最新 {last['total_value']:,.0f} {base}"
+        )
+
+        fig = go.Figure()
+        fig.add_trace(
+            go.Scatter(
+                x=df["day"],
+                y=df["total_value"],
+                mode="lines",
+                name=f"总市值 ({base})",
+                line=dict(width=2),
+            )
+        )
+        if df["total_cost"].notna().any():
+            fig.add_trace(
+                go.Scatter(
+                    x=df["day"],
+                    y=df["total_cost"],
+                    mode="lines",
+                    name="成本",
+                    line=dict(width=1.5, dash="dash"),
+                )
+            )
+        fig.update_layout(
+            height=280,
+            margin=dict(l=0, r=0, t=10, b=0),
+            hovermode="x unified",
+            legend=dict(
+                orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1
+            ),
+            yaxis=dict(tickformat=",.0f", hoverformat=",.2f"),
+        )
+        st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
+        if any(r.get("source") == "backfill" for r in rows):
+            st.caption(
+                "回填口径: 当前持仓 × 历史收盘价 (含历史汇率折算), 不含历史调仓; "
+                "只覆盖能取到历史行情的持仓, 缺数据标的见 CLI `nav --backfill` 的问题列表。"
+            )
+
+
 def render_portfolio_page() -> None:
     """组合页入口: 侧边栏编辑器 + 主区渲染 (行情一次批量拉取, 持仓/自选共用).
 
@@ -1039,6 +1127,21 @@ def render_portfolio_page() -> None:
     # 都判定完之后 —— 一个后台任务同时刷两者, 避免分两轮刷新
     _first_screen_watchdog()
 
+    # 每次成功渲染都 upsert 当天快照 (主键 日期+币种, 同日覆盖): 比只在
+    # 「当天首次」写一次更稳 —— 冷启动行情不全时先写的偏低值, 会在后台
+    # 刷新完成后的 rerun 被修正。写失败只记日志, 不能拖垮组合页。
+    if not view.empty:
+        try:
+            nav.save_rows(
+                [
+                    nav.record_from_summary(
+                        datetime.now().date().isoformat(), base, summary, view
+                    )
+                ]
+            )
+        except Exception as e:  # noqa: BLE001 - 历史净值是附加能力
+            logging.getLogger(__name__).warning("历史净值保存失败: %s", e)
+
     wview, wissues = build_watchlist_view(watch_entries, quotes)
     issues += wissues
     trig_all = triggered_entries(wview)
@@ -1095,6 +1198,9 @@ def render_portfolio_page() -> None:
                 f"{len(view)} / {len(wview)}",
                 border=True,
             )
+
+    # ---- 净值走势 (历史快照; 无历史时给保存/回填提示) ----
+    _render_nav_section(base)
 
     # ---- 阈值告警前置 (最关键信息, 类似券商推送条) ----
     if not trig_all.empty:

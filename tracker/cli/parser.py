@@ -86,7 +86,52 @@ def _add_snapshot_parser(sub: argparse.ArgumentParser) -> None:
     )
     _add_crypto_source_arg(p_snap)
     p_snap.add_argument("--json", action="store_true", help="输出 JSON")
+    p_snap.add_argument(
+        "--save",
+        action="store_true",
+        help="同时把本次快照写入历史净值 (同一天重复保存覆盖)",
+    )
     p_snap.set_defaults(func=_cmd(".snapshot", "cmd_snapshot"))
+
+
+def _add_nav_parser(sub: argparse.ArgumentParser) -> None:
+    # ---- nav ----
+    p_nav = sub.add_parser(
+        "nav",
+        help="历史净值 (读取 / 保存今日快照 / 回填)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "示例:\n"
+            "  tracker nav                          # 最近 180 天净值\n"
+            "  tracker nav --days 30 --json         # 近 30 天, 机器可读\n"
+            "  tracker nav --save                   # 保存今日快照\n"
+            "  tracker nav --backfill --days 365    # 按当前持仓回填一年\n"
+            "  tracker nav --backfill --dry-run     # 只预览, 不写库\n"
+            "净值库: <数据目录>/nav_history.db (TRACKER_NAV_DB 可覆盖);\n"
+            "回填口径: 当前持仓 × 历史收盘价, 不含历史调仓, 仅供近似参考\n"
+            "(A股/港股历史K线为前复权, 历史段市值/盈亏与当时实际值可能有差异)。\n"
+        ),
+    )
+    p_nav.add_argument("--portfolio", default=str(DEFAULT_PORTFOLIO))
+    p_nav.add_argument("--base", default=None, help="基础货币, 如 USD (默认取持仓文件)")
+    p_nav.add_argument(
+        "--days",
+        type=positive_int,
+        default=180,
+        help="回看自然日数 / 回填窗口 (默认 180)",
+    )
+    p_nav.add_argument("--all", action="store_true", help="显示全部历史 (忽略 --days)")
+    mode = p_nav.add_mutually_exclusive_group()
+    mode.add_argument("--save", action="store_true", help="保存今日快照")
+    mode.add_argument("--backfill", action="store_true", help="按当前持仓回填历史")
+    p_nav.add_argument("--dry-run", action="store_true", help="回填只预览不写库")
+    p_nav.add_argument("--akshare", action="store_true", help="A股/港股优先走 akshare")
+    p_nav.add_argument("--ibkr", action="store_true", help="优先使用 IBKR 行情")
+    p_nav.add_argument("--longport", action="store_true", help="优先使用长桥行情")
+    _add_crypto_source_arg(p_nav)
+    p_nav.add_argument("--json", action="store_true", help="输出 JSON")
+    p_nav.set_defaults(func=_cmd(".nav", "cmd_nav"))
+
 
 def _add_quote_parser(sub: argparse.ArgumentParser) -> None:
     # ---- quote ----
@@ -920,6 +965,7 @@ def _add_init_parser(sub: argparse.ArgumentParser) -> None:
 
 _SUBCOMMAND_REGISTRARS = (
     _add_snapshot_parser,
+    _add_nav_parser,
     _add_quote_parser,
     _add_watchlist_parser,
     _add_portfolio_parser,

@@ -1,6 +1,6 @@
 ---
 name: portfolio-tracker
-description: Use when the user asks to check or manage their investment portfolio, holdings, watchlist, stock prices, price-threshold alerts, exchange rates, IBKR sync, Longport (长桥) quotes/positions/login, EODHD (BYOK) status/config, or quote cache in this repo (madeleine-portfolio-tracker). Trigger keywords: 持仓, 组合, 自选, watchlist, 股票, 行情, 报价, quote, 汇率, fx, IBKR, 长桥, longport, EODHD, BYOK, 快照, snapshot, 缓存, K线, kline, 指数, index, 导入, import, 搜索, search, 对比, compare. Operate it through the CLI `python -m tracker.cli <子命令>` (alias `python -m tracker`). Also covers editing portfolio.json / watchlist.json / ibkr.json / longport.json / eodhd.json and the Yahoo symbol conventions.
+description: Use when the user asks to check or manage their investment portfolio, holdings, watchlist, stock prices, price-threshold alerts, exchange rates, historical NAV, IBKR sync, Longport (长桥) quotes/positions/login, EODHD (BYOK) status/config, or quote cache in this repo (madeleine-portfolio-tracker). Trigger keywords: 持仓, 组合, 自选, watchlist, 股票, 行情, 报价, quote, 汇率, fx, IBKR, 长桥, longport, EODHD, BYOK, 快照, snapshot, 净值, nav, 历史净值, 缓存, K线, kline, 指数, index, 导入, import, 搜索, search, 对比, compare. Operate it through the CLI `python -m tracker.cli <子命令>` (alias `python -m tracker`). Also covers editing portfolio.json / watchlist.json / ibkr.json / longport.json / eodhd.json and the Yahoo symbol conventions.
 ---
 
 # Madeleine Portfolio Tracker CLI
@@ -36,7 +36,8 @@ tracker-ui          # pip 安装后起 Streamlit 页面 (等价 streamlit run tr
 
 | 子命令 | 作用 | 常用示例 |
 |---|---|---|
-| `snapshot` | 持仓+自选快照(含阈值提醒) | `snapshot --json`, `snapshot --base USD`, `snapshot --watchlist 科技` |
+| `snapshot` | 持仓+自选快照(含阈值提醒) | `snapshot --json`, `snapshot --base USD`, `snapshot --watchlist 科技`, `snapshot --save` (同时落历史净值) |
+| `nav` | 历史净值 (读取/保存/回填) | `nav`, `nav --days 30 --json`, `nav --save`, `nav --backfill --days 365`, `nav --backfill --dry-run` |
 | `quote` | 实时行情 | `quote AAPL 600519.SS`, `quote AAPL --refresh` (跳过 5min 磁盘/负缓存) |
 | `watchlist` | 自选管理 list/add/remove/triggered/import-longport | `watchlist list`, `watchlist triggered` (只输出到达阈值的自选), `watchlist triggered --json`, `watchlist add TSLA --list 科技 --upper1 420`, `watchlist import-longport --dry-run` (长桥自选导入, 分组→列表, 代码归一) |
 | `portfolio` | 持仓管理 list/add/remove/set-base | `portfolio list`, `portfolio add AAPL --quantity 10 --avg-cost 180`, `portfolio set-base USD` |
@@ -60,7 +61,7 @@ tracker-ui          # pip 安装后起 Streamlit 页面 (等价 streamlit run tr
 `--help` 查看每个子命令的完整参数: `python -m tracker.cli snapshot --help`; `-v/--version` 看版本。
 `kline` / `compare` 接受宽松输入 (中文名/裸数字/非规范代码), 自动搜索回退到规范代码。
 `-w`/`--list` (report/export/watchlist) 支持逗号分隔多列表 (取并集)。
-取数子命令 (snapshot/quote/history/kline/compare/watchlist/report/export) 均有数据源开关
+取数子命令 (snapshot/nav/quote/history/kline/compare/watchlist/report/export) 均有数据源开关
 `--akshare` / `--ibkr` / `--longport` / `--crypto-source`, 语义一致 (指定源前置, 失败回落默认链)。
 
 ## 代码规范 (自有后缀规范 + 内部 type 字段)
@@ -135,7 +136,8 @@ PB/市值阈值提醒因此有了东财实时口径。单代码行情带 5s 进�
 Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致); pip 安装
 (`pip install madeleine-tracker`) 后数据落平台目录, 不写进 site-packages。
 运行产物 (行情缓存 quotes_cache.db / K线 HTML / 长桥登录状态) 在数据目录的
-`var/` 子目录。首次使用 `tracker init` 把包内模板 `tracker/templates/*.example.json`
+`var/` 子目录。历史净值单独存 `<数据目录>/nav_history.db` (`TRACKER_NAV_DB` 可覆盖),
+与行情缓存分离: `cache clear` 不会清掉净值历史。首次使用 `tracker init` 把包内模板 `tracker/templates/*.example.json`
 复制成数据目录下的真实配置 (已存在则跳过, `--force` 覆盖)。
 
 - `portfolio.json`: `{"base_currency": "CNY", "holdings": [{"symbol", "type", "quantity", "avg_cost"}]}`
@@ -216,6 +218,18 @@ Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致);
    .venv/bin/python -m tracker.cli snapshot --json
    ```
    解读 `summary.total_value`(按 base_currency)、`triggered[]`(阈值触发) 等。
+
+1b. **看历史净值 / 存档 / 回填**:
+   ```
+   .venv/bin/python -m tracker.cli snapshot --save            # 快照并落一条净值
+   .venv/bin/python -m tracker.cli nav --days 90 --json       # 最近 90 天 (base/count/rows)
+   .venv/bin/python -m tracker.cli nav --backfill --days 365  # 当前持仓 × 历史收盘价回填
+   .venv/bin/python -m tracker.cli nav --backfill --dry-run   # 只预览, 不写库
+   ```
+   净值库 `<数据目录>/nav_history.db`, 主键 (日期, 基础货币); 同一天重复保存覆盖。
+   回填只覆盖没有真实快照的日期 (真实快照优先; 重新回填会更新旧回填行),
+   口径为当前持仓数量 × 历史收盘价
+   (跨币种按历史汇率折算), **不含历史调仓**, 不能当作真实历史业绩。
 
 2. **查某只股票行情**:
    ```

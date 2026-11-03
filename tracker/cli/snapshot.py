@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
+from datetime import date
 
 import pandas as pd
 
+from .. import nav
 from ..services.snapshot import snapshot_json, take_snapshot
 from ..services.watchlist import triggered_entries
 from ..storage import (
@@ -62,6 +65,20 @@ def run_snapshot(args) -> None:
         use_longport=getattr(args, "longport", False),
         crypto_source=getattr(args, "crypto_source", "auto"),
     )
+
+    saved_nav = None
+    if getattr(args, "save", False):
+        if view.empty:
+            print("⚠ 无可用持仓数据, 未写入历史净值", file=sys.stderr)
+        else:
+            try:
+                saved_nav = nav.record_from_summary(
+                    date.today().isoformat(), base, summary, view, source="snapshot"
+                )
+                nav.save_rows([saved_nav])
+            except Exception as e:  # noqa: BLE001 - 保存历史失败不应拖垮本次快照
+                saved_nav = None
+                print(f"⚠ 历史净值保存失败: {e}", file=sys.stderr)
 
     if getattr(args, "json", False):
         print(
@@ -143,6 +160,12 @@ def run_snapshot(args) -> None:
         for i in issues:
             print(f"  - {i}")
 
+    if saved_nav is not None:
+        print(
+            f"\n📈 历史净值已保存: {saved_nav['day']} "
+            f"({saved_nav['total_value']:,.2f} {base})"
+        )
+
 
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description="投资组合命令行快照 (持仓 + 自选)")
@@ -157,6 +180,7 @@ def main(argv=None) -> None:
         "--ibkr", action="store_true", help="优先使用 IBKR 行情 (需 IB Gateway)"
     )
     ap.add_argument("--json", action="store_true", help="输出 JSON 而非表格")
+    ap.add_argument("--save", action="store_true", help="同时把本次快照写入历史净值")
     args = ap.parse_args(argv)
     try:
         run_snapshot(args)

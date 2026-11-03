@@ -30,8 +30,9 @@ Madeleine Portfolio Tracker 是一款**本地优先**的投资组合追踪工具
 - **多股对比** — 任意代码同坐标系折线对比，归一化（起点=100）跨币种跨量级比较
 - **财经日历** — 持仓/自选的本月与下月财报、预约披露、除权除息/派息事件（yfinance 单票 + akshare 整批，长桥可选兜底），独立页面与 `calendar` 子命令；首屏先展示磁盘缓存并后台刷新，冷启动带 A股整批/海外单票进度条
 - **首屏性能** — 组合与日历均采用 stale-while-revalidate：先渲染 30 分钟 / 7 天内的旧缓存秒开，后台静默重取；仅在完全无缓存时阻塞取数（组合/日历均显示实时进度条）
+- **历史净值曲线** — 每日组合快照落独立 SQLite（`nav_history.db`，与行情缓存分离），组合页画总市值 + 成本走势；支持 `nav --save` 手动存档、组合页每次渲染自动 upsert、`nav --backfill` 按当前持仓 × 历史收盘价回填近似历史（含历史汇率折算）
 - **Streamlit 可视化页面** — 组合明细 / 资产配置 / 自选提醒 / K线查询（含多股走势对比）/ 指数K线 / 日历 / 设置
-- **统一 CLI** — 20 个子命令（快照、报价、持仓、自选、监控报告、导出、汇率、历史、K线、日历、搜索、对比、指数K线、导入、长桥登录、EODHD 自检、同步、钱包导入、缓存、初始化），全部支持机器可读输出（`--json`，`report`/`export` 为 `-f json`）
+- **统一 CLI** — 21 个子命令（快照、净值、报价、持仓、自选、监控报告、导出、汇率、历史、K线、日历、搜索、对比、指数K线、导入、长桥登录、EODHD 自检、同步、钱包导入、缓存、初始化），全部支持机器可读输出（`--json`，`report`/`export` 为 `-f json`）
 - **链上钱包导入** — EVM 五链 + TRON + Solana 共七条链地址余额只读查询，一键写入持仓
 - **A股券商持仓导入** — 解析券商客户端导出的 CSV/Excel 持仓文件
 
@@ -82,7 +83,7 @@ tracker-ui                        # pip 安装后 (等价, 参数透传给 strea
 
 页面默认运行在 `http://localhost:8501`，六个页面各有独立 URL（刷新 / 书签 / 前进后退不丢页）：
 
-- **组合** (`/`) — 持仓编辑、明细表、资产配置（按市场 / 按币种 / 按代码三张饼图，按代码为市值 Top 20 + 其他 + 持仓市值 Top 15 柱图）、自选提醒
+- **组合** (`/`) — 持仓编辑、明细表、资产配置（按市场 / 按币种 / 按代码三张饼图，按代码为市值 Top 20 + 其他 + 持仓市值 Top 15 柱图）、净值走势、自选提醒
 - **K线** (`/kline`) — 任意代码 K 线查询（支持按代码或名称模糊搜索）+ 多股走势对比 + 加密货币对比（K线页子功能）
 - **指数K线** (`/index`) — 宏观/风险指数查询（IX.<KEY> 分组下拉，分组随目录维护；CLI `index-kline --list` 可查全部已收录指数）
 - **日历** (`/calendar`) — 持仓/自选的财报、预约披露、除权除息/派息事件月历（窗口与范围可切）
@@ -103,6 +104,13 @@ python -m tracker.cli snapshot --watchlist 科技
 
 # JSON 输出（机器可读，适合脚本/Agent）
 python -m tracker.cli snapshot --json
+
+# 历史净值: 保存今日快照 / 查看走势 / 按当前持仓回填
+python -m tracker.cli snapshot --save            # 快照并落一条净值
+python -m tracker.cli nav                        # 最近 180 天净值表
+python -m tracker.cli nav --days 30 --json       # 机器可读
+python -m tracker.cli nav --backfill --days 365  # 回填一年 (当前持仓 × 历史价)
+python -m tracker.cli nav --backfill --dry-run   # 只预览, 不写库
 
 # 查询单个/多个代码实时行情
 python -m tracker.cli quote AAPL 600519.SS BTC-USD
@@ -310,6 +318,25 @@ python -m tracker.cli kline 0700.HK --period weekly --open  # 周K + 自动打�
 
 ---
 
+## 历史净值
+
+组合页 KPI 卡片下方的「净值走势」读取每日净值历史，画**总市值**与**成本**两条线，
+可切 30 / 90 / 180 / 365 天或全部；没有历史时给出保存/回填提示。
+
+- **存储**：独立 SQLite `<数据目录>/nav_history.db`（`TRACKER_NAV_DB` 可覆盖），
+  与行情缓存库分离 —— `tracker cache clear` 或缓存库损坏隔离不会删掉历史。
+  主键 `(日期, 基础货币)`，同一天重复保存覆盖。
+- **自动存档**：组合页每次成功渲染都会 upsert 当天记录（同日覆盖、随后台刷新更新，
+  冷启动行情不全时的偏低值会被后续渲染修正）；CLI 用 `snapshot --save` 或 `nav --save` 显式存档。
+- **历史回填**：`nav --backfill --days 365` 用**当前持仓数量 × 历史收盘价**
+  （跨币种按历史汇率折算）生成近似曲线，只覆盖没有真实快照的日期
+  （真实快照优先）；重新回填会更新旧的回填行。该口径不含历史调仓，
+  不能当作真实历史业绩；`--dry-run` 可先预览。
+- **JSON**：`nav --json` 输出 `{base, count, rows[]}`；回填输出
+  `{base, action, days, generated, inserted, dry_run, issues[]}`。
+
+---
+
 ## 自选股与阈值提醒 (价格 / 市净率 / 市值)
 
 `watchlist.json` 为扁平条目列表，**一个代码可属于多个列表**（`lists` 数组，逗号分隔多归属），支持**两级阈值**（`upper_1`/`upper_2`、`lower_1`/`lower_2`）、**指标基准**（`metric`：`price`=现价，默认；`pb`=市净率；`mcap`=总市值）与备注。旧格式（扁平 `upper`/`lower`、嵌套 `{"watchlists": {...}}`）自动迁移：
@@ -345,7 +372,7 @@ python -m tracker.cli kline 0700.HK --period weekly --open  # 周K + 自动打�
 tracker/ui/           Streamlit 页面包（streamlit run tracker/ui/app.py / 安装后 tracker-ui）
 ├── app.py              路由入口（st.navigation 多页面, 每页独立 URL, 刷新不丢页）
 │                          + cli_main(): tracker-ui 控制台入口（定位包内 app.py 转交 streamlit）
-├── portfolio_page.py   「组合」页面（持仓编辑/明细/配置/自选提醒 + 行情/汇率缓存）
+├── portfolio_page.py   「组合」页面（持仓编辑/明细/配置/自选提醒/净值走势 + 行情/汇率缓存）
 ├── kline_page.py       「K线」页面（搜索框 + lightweight-charts 组件 + 上市以来全量滑动 + 多股走势对比 + 加密货币对比）
 ├── index_page.py       「指数K线」页面（IX.<KEY> 分组下拉, 独立于股票 K线页）
 ├── import_page.py      「导入」页面（IBKR 账户 / 长桥账户 / 链上钱包 / 券商文件, 追加合并或覆盖）
@@ -355,13 +382,14 @@ tracker/ui/           Streamlit 页面包（streamlit run tracker/ui/app.py / �
 tracker/
 ├── __main__.py         python -m tracker 入口（转发到 cli）
 ├── paths.py            数据目录解析（TRACKER_HOME > 仓库根 > 平台用户目录）+ 包内资源定位
-├── cli/                CLI 包（python -m tracker.cli，20 个子命令各一个模块）
+├── cli/                CLI 包（python -m tracker.cli，21 个子命令各一个模块）
 │   ├── __init__.py       argparse 注册与分发
 │   ├── _common.py        JSON 序列化 / 代码归一化 / 原子写 / 错误退出
 │   ├── __main__.py       python -m tracker.cli 入口
 │   ├── init.py           首次使用: 包内模板 → 数据目录（pip 安装后必走一步）
 │   ├── eodhd.py          EODHD BYOK 状态 / 连通性自检
-│   ├── snapshot.py       快照（持仓 + 自选 + 阈值触发）
+│   ├── snapshot.py       快照（持仓 + 自选 + 阈值触发; --save 落历史净值）
+│   ├── nav.py            历史净值（读取 / 保存今日快照 / 按当前持仓回填）
 │   ├── quote.py          实时行情
 │   ├── watchlist.py      自选管理（list/add/remove/triggered/import-longport）与阈值提醒
 │   ├── portfolio.py      持仓管理（list/add/remove/set-base）
@@ -379,6 +407,7 @@ tracker/
 │   ├── longport_login.py 长桥 OAuth 登录（浏览器授权, token 自动缓存与刷新）
 │   └── cache.py          磁盘缓存管理
 ├── storage.py          所有 JSON 配置唯一读写口（portfolio/watchlist/settings, 原子写 + 损坏 .bak 恢复）
+├── nav.py              历史净值存储（独立 SQLite nav_history.db）+ 按当前持仓回填
 ├── symbols.py          自有代码规范、市场域识别、type_for_symbol() 权威域推导（唯一入口）
 ├── symbol_migrations.py 退市/改码 → 接替代码迁移表（长桥导入时自动迁移）
 ├── util.py             with_timeout 硬超时等工具
@@ -664,6 +693,8 @@ python -m tracker.cli import wallet polygon 0x... --tokenlist my_tokens.json
 - 搜索全部为在线接口（美股/港股：IBKR→东财 suggest→yfinance Search；A股/北交所：东财 suggest；crypto：yfinance Search）；中文查询仅东财 suggest 支持（A股/北交所全量；美股/港股域只认领港股行，故「腾讯」可命中 0700.HK，美股/crypto 直接搜中文名基本无结果）；接口失败即该域空结果 + 合法代码直查
 - CFETS 汇率为中间价，与离岸 CNH 有细微差异，组合展示场景可忽略
 - `今日估算` 按各持仓 `涨跌幅 × 当前市值` 近似，非精确日内盯市
+- 历史净值回填使用**当前持仓数量 × 历史收盘价**，不还原历史调仓；曲线只适合看「一直持有现在的仓位」的近似走势，不能当作真实历史业绩；取不到历史行情的标的（如部分可转债）会被跳过并在 CLI `issues` 中列出，曲线只覆盖有数据的持仓
+- A股/港股历史 K 线为前复权（qfq）口径，回填曲线在历史日期的市值/盈亏与当时实际值可能有差异（最新一天一致）；分红/拆股较多的标的历史段仅供看趋势
 - IBKR 行情需本机运行 IB Gateway 且 API 已启用；A股/港股/B股数据若无市场数据订阅，`reqTickers` 可能返回空值，自动回退 Yahoo/akshare
 - IBKR A股经沪深港通通道：沪 `SEHKNTL` / 科创 `SEHKSTAR` / 深 `SEHKSZSE`，计价 CNH；若你的账户显示不同交易所代码，在 `ibkr.json` 的 `exchanges` 中修改对应键（`CN_SH` / `CN_STAR` / `CN_SZ`）；B股合约根据 IBKR 返回的 `SHSE/USD` 或 `SZSE/HKD` 自动识别
 - 长桥行情/持仓需 `pip install longport` 并完成登录；未安装/未配置时 `--longport` 与 `import longport` 报可读错误并回退默认数据源
@@ -684,7 +715,7 @@ python -m tracker.cli import wallet polygon 0x... --tokenlist my_tokens.json
 - [ ] Hyperliquid / A股券商实时**持仓**对接（当前 HL 仅为行情源）
 - [ ] 交易流水记录与分批成本（FIFO）
 - [ ] 分红/拆分事件跟踪
-- [ ] 历史净值曲线（按日聚合组合市值）
+- [x] 历史净值曲线（按日聚合组合市值；每日快照 + `nav` 子命令 + 组合页走势，回填为当前持仓 × 历史价近似口径）
 - [x] EODHD 付费 provider 接入（BYOK token 自备；历史K线 primary、行情 fallback，LSE 便士/复权口径可配）
 
 ---
@@ -751,8 +782,9 @@ A **local-first** portfolio tracker supporting **A-shares / B-shares / Beijing S
 - **Macro/risk index K-lines** — dedicated `IX.<KEY>` symbol space (USD index, VIX, CSI 300, commodity main-continuous futures — gold, silver, eggs, soybean meal, soybeans, hogs, lithium carbonate — uranium spot/long-term (Cameco monthly), cement indices, ...), separate page & `index-kline` subcommand, dedicated provider source chain
 - **Multi-symbol comparison** — same-coordinate overlay normalized to 100, optional ratio line with history-FX adjustment; plus a crypto-only sub-tab on the K-line page (independent per-coin candle panes, raw prices, shared time axis)
 - **Financial calendar** — earnings, scheduled disclosures, ex-dividend/record dates for holdings & watchlist over the current and next months (yfinance per-symbol + akshare bulk, optional LongPort fallback), dedicated page & `calendar` subcommand
+- **Historical NAV** — daily portfolio snapshots in an isolated SQLite DB (`nav_history.db`, separate from the quote cache), NAV + cost chart on the portfolio page, `nav --save` / auto-upsert on every successful portfolio render (same-day overwrite, corrected by background refreshes), and `nav --backfill` (current holdings × historical closes, historical FX converted; approximate, no historical position changes)
 - **Unified import pipeline** — IBKR account / LongPort account / on-chain wallet (5 EVM chains + TRON + Solana) / A-share broker CSV-Excel file, each with append-merge or overwrite mode (auto .bak backup); same logic drives the Streamlit「导入」page
-- **Unified CLI** — 20 subcommands (snapshot, quote, watchlist, portfolio, report, export, fx, history, kline, calendar, search, compare, index-kline, import, longport-login, eodhd, cache, init; `sync` / `import-wallet` kept as compat aliases); all support machine-readable output (`--json`, or `-f json` for report/export)
+- **Unified CLI** — 21 subcommands (snapshot, nav, quote, watchlist, portfolio, report, export, fx, history, kline, calendar, search, compare, index-kline, import, longport-login, eodhd, cache, init; `sync` / `import-wallet` kept as compat aliases); all support machine-readable output (`--json`, or `-f json` for report/export)
 
 ### Quick Start
 
@@ -771,6 +803,9 @@ tracker-ui                              # installed; or: streamlit run tracker/u
 
 # CLI examples (installed: `tracker ...`; source tree: `python -m tracker.cli ...`)
 tracker snapshot --json
+tracker snapshot --save                 # also persist today's NAV snapshot
+tracker nav --days 90                   # historical NAV table
+tracker nav --backfill --days 365       # approximate backfill from current holdings
 tracker quote AAPL 600519.SS BTC-USD
 tracker kline AAPL --months 12
 tracker import ibkr --dry-run

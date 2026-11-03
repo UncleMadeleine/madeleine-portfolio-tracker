@@ -31,7 +31,8 @@ Madeleine Portfolio Tracker 是一款**本地优先**的投资组合追踪工具
 - **财经日历** — 持仓/自选的本月与下月财报、预约披露、除权除息/派息事件（yfinance 单票 + akshare 整批，长桥可选兜底），独立页面与 `calendar` 子命令；首屏先展示磁盘缓存并后台刷新，冷启动带 A股整批/海外单票进度条
 - **首屏性能** — 组合与日历均采用 stale-while-revalidate：先渲染 30 分钟 / 7 天内的旧缓存秒开，后台静默重取；仅在完全无缓存时阻塞取数（组合/日历均显示实时进度条）
 - **历史净值曲线** — 每日组合快照落独立 SQLite（`nav_history.db`，与行情缓存分离），组合页画总市值 + 成本走势；支持 `nav --save` 手动存档、组合页每次渲染自动 upsert、`nav --backfill` 按当前持仓 × 历史收盘价回填近似历史（含历史汇率折算）
-- **Streamlit 可视化页面** — 组合明细 / 资产配置 / 自选提醒 / K线查询（含多股走势对比）/ 指数K线 / 日历 / 设置
+- **基本面分析 (第一期)** — 单只 A+H 股票的 AH 溢价率曲线：A 股收盘 ÷ (H 股收盘 × 历史汇率) − 1，支持任意 A+H 股票对 / 范围切换，0% 同价参考线 + 区间高低点/均值/分位摘要（独立页面 `/fundamentals`）
+- **Streamlit 可视化页面** — 组合明细 / 资产配置 / 自选提醒 / K线查询（含多股走势对比）/ 指数K线 / 基本面分析 / 日历 / 设置
 - **统一 CLI** — 21 个子命令（快照、净值、报价、持仓、自选、监控报告、导出、汇率、历史、K线、日历、搜索、对比、指数K线、导入、长桥登录、EODHD 自检、同步、钱包导入、缓存、初始化），全部支持机器可读输出（`--json`，`report`/`export` 为 `-f json`）
 - **链上钱包导入** — EVM 五链 + TRON + Solana 共七条链地址余额只读查询，一键写入持仓
 - **A股券商持仓导入** — 解析券商客户端导出的 CSV/Excel 持仓文件
@@ -81,11 +82,12 @@ streamlit run tracker/ui/app.py   # 源码树
 tracker-ui                        # pip 安装后 (等价, 参数透传给 streamlit)
 ```
 
-页面默认运行在 `http://localhost:8501`，六个页面各有独立 URL（刷新 / 书签 / 前进后退不丢页）：
+页面默认运行在 `http://localhost:8501`，七个页面各有独立 URL（刷新 / 书签 / 前进后退不丢页）：
 
 - **组合** (`/`) — 持仓编辑、明细表、资产配置（按市场 / 按币种 / 按代码三张饼图，按代码为市值 Top 20 + 其他 + 持仓市值 Top 15 柱图）、净值走势、自选提醒
 - **K线** (`/kline`) — 任意代码 K 线查询（支持按代码或名称模糊搜索）+ 多股走势对比 + 加密货币对比（K线页子功能）
 - **指数K线** (`/index`) — 宏观/风险指数查询（IX.<KEY> 分组下拉，分组随目录维护；CLI `index-kline --list` 可查全部已收录指数）
+- **基本面** (`/fundamentals`) — 第一期 AH 溢价率曲线：可选 A+H 股票对（东财目录，失败退回内置常见股票对，也可手动输入代码），按近 3/6/12/24/36/60 个月展示 A 股收盘 ÷ (H 股收盘 × 历史汇率) − 1，0% 为两地同价
 - **日历** (`/calendar`) — 持仓/自选的财报、预约披露、除权除息/派息事件月历（窗口与范围可切）
 - **导入** (`/import`) — IBKR 账户 / 长桥账户 / 链上钱包 / A股券商文件导入
 - **设置** (`/settings`) — 涨跌配色（红涨绿跌/绿涨红跌）、数据源偏好（akshare / IBKR / 长桥）、基础货币
@@ -375,6 +377,7 @@ tracker/ui/           Streamlit 页面包（streamlit run tracker/ui/app.py / �
 ├── portfolio_page.py   「组合」页面（持仓编辑/明细/配置/自选提醒/净值走势 + 行情/汇率缓存）
 ├── kline_page.py       「K线」页面（搜索框 + lightweight-charts 组件 + 上市以来全量滑动 + 多股走势对比 + 加密货币对比）
 ├── index_page.py       「指数K线」页面（IX.<KEY> 分组下拉, 独立于股票 K线页）
+├── fundamentals_page.py 「基本面」页面（第一期 AH 溢价率曲线: A+H 股票对 / 范围切换, 明细表）
 ├── import_page.py      「导入」页面（IBKR 账户 / 长桥账户 / 链上钱包 / 券商文件, 追加合并或覆盖）
 ├── settings_page.py    「设置」页面（配色 / 数据源 / EODHD BYOK / 基础货币）
 ├── longport_login.py   长桥 OAuth 登录引导（独立子进程, 状态文件 <数据目录>/var/longport_oauth_state.json）
@@ -423,7 +426,8 @@ tracker/
 ├── search.py           搜索聚合层：search_grouped() 按域调 provider.search() 保持分组；纯在线接口，失败即该域空结果 + 合法代码直查兜底
 ├── fx.py               汇率：CFETS（akshare）优先，yfinance 货币对兜底（直对/逆对/USD 桥）
 ├── cache.py            行情/基本面 SQLite 磁盘缓存（实时 5 分钟 / K线 30 分钟 / 基本面 6 小时）
-├── charting.py         K线渲染（plotly CLI HTML + lightweight-charts 页面组件：蜡烛/均线/指标/对比）
+├── charting.py         K线渲染（plotly CLI HTML + lightweight-charts 页面组件：蜡烛/均线/指标/对比/单序列参考线）
+├── ah_premium.py       AH 溢价率（A+H 股票对目录 / A/H+历史汇率对齐 / 溢价曲线与摘要, 第一期基本面页）
 ├── analytics.py        组合视图与指标（纯函数）
 ├── watchlist.py        自选配置存储门面（读写委托 storage，仅 I/O 归一）
 ├── services/           **独立用例层**（用例 = 取数 providers/fx + 纯函数计算 + 组装视图）
@@ -781,6 +785,7 @@ A **local-first** portfolio tracker supporting **A-shares / B-shares / Beijing S
 - **K-line charts** — daily/weekly/monthly, MA overlays, volume, MACD/RSI/KDJ/Bollinger; slide mode loads full listing history by default
 - **Macro/risk index K-lines** — dedicated `IX.<KEY>` symbol space (USD index, VIX, CSI 300, commodity main-continuous futures — gold, silver, eggs, soybean meal, soybeans, hogs, lithium carbonate — uranium spot/long-term (Cameco monthly), cement indices, ...), separate page & `index-kline` subcommand, dedicated provider source chain
 - **Multi-symbol comparison** — same-coordinate overlay normalized to 100, optional ratio line with history-FX adjustment; plus a crypto-only sub-tab on the K-line page (independent per-coin candle panes, raw prices, shared time axis)
+- **Fundamentals (phase 1)** — single A+H stock AH-premium curve: A-share close ÷ (H-share close × historical HKD/CNY FX) − 1, selectable pair/range, 0% parity reference line, range high/low/mean/percentile summary (dedicated `/fundamentals` page)
 - **Financial calendar** — earnings, scheduled disclosures, ex-dividend/record dates for holdings & watchlist over the current and next months (yfinance per-symbol + akshare bulk, optional LongPort fallback), dedicated page & `calendar` subcommand
 - **Historical NAV** — daily portfolio snapshots in an isolated SQLite DB (`nav_history.db`, separate from the quote cache), NAV + cost chart on the portfolio page, `nav --save` / auto-upsert on every successful portfolio render (same-day overwrite, corrected by background refreshes), and `nav --backfill` (current holdings × historical closes, historical FX converted; approximate, no historical position changes)
 - **Unified import pipeline** — IBKR account / LongPort account / on-chain wallet (5 EVM chains + TRON + Solana) / A-share broker CSV-Excel file, each with append-merge or overwrite mode (auto .bak backup); same logic drives the Streamlit「导入」page
@@ -836,7 +841,7 @@ IBKR/LongPort disconnects silently fall back to the next source; the page contin
 ### Project Structure
 
 ```
-tracker/ui/        Streamlit dashboard (app.py + cli_main() console entry + kline/index/calendar/import/settings pages + longport login + settings)
+tracker/ui/        Streamlit dashboard (app.py + cli_main() console entry + kline/index/fundamentals/calendar/import/settings pages + longport login + settings)
 tracker/           Core package: paths.py (data-dir resolution), cli/ subcommands (incl. init),
                    providers/, symbols, symbol_migrations, storage, prices, fx, search,
                    cache, charting, analytics, watchlist, services/, importer, ibkr,

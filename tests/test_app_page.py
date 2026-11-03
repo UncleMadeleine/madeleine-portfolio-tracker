@@ -5,8 +5,9 @@
    自选行情, 一处 import 就把整套测试拖死 (沙箱无网时无限挂起)。
 2. AppTest.from_file 走与 `streamlit run` 相同的 __main__ 执行模型, 默认页
    (组合) 完整渲染 —— 保证路由入口没有把页面"锁死"在 import 里。
-3. st.navigation 多页面路由: 五页各有独立 url_path (组合 / · K线 /kline ·
-   指数 /index · 导入 /import · 设置 /settings), 刷新/直链不丢页。
+3. st.navigation 多页面路由: 七页各有独立 url_path (组合 / · K线 /kline ·
+   指数 /index · 基本面 /fundamentals · 日历 /calendar · 导入 /import ·
+   设置 /settings), 刷新/直链不丢页。
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ _URL_PATHS = {
     "": "组合",
     "kline": "K线",
     "index": "指数K线",
+    "fundamentals": "基本面",
     "calendar": "日历",
     "import": "导入",
     "settings": "设置",
@@ -128,7 +130,7 @@ def test_portfolio_page_renders(app_boot):
 
 
 def test_navigation_registers_independent_urls(app_boot):
-    """五页各有独立 url_path: 当前页由 URL 决定, 刷新不回落组合页.
+    """七页各有独立 url_path: 当前页由 URL 决定, 刷新不回落组合页.
 
     st.navigation 的注册表是唯一权威: 断言 url_path 全部注册且互不重复,
     组合页为默认页 (空路径 = 根 URL /)。

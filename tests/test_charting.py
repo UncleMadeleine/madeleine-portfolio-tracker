@@ -950,6 +950,45 @@ class TestChartingFixes:
         assert coin["candles"][0]["close"] == round(5.432189e-6, 9)
         assert coin["candles"][0]["close"] != round(5.432189e-6, 8)
 
+    def test_line_payload_reference_and_unit(self):
+        """单序列折线: 保留原始值, 带 0% 参考线与单位后缀 (AH 溢价页用)."""
+        df = pd.DataFrame(
+            {
+                "date": pd.date_range("2024-01-01", periods=3),
+                "premium_pct": [1.0, -2.5, 3.25],
+            }
+        )
+        p = charting.line_payload(
+            df,
+            value_col="premium_pct",
+            title="AH 溢价率",
+            series_name="AH 溢价率",
+            reference=0.0,
+            reference_label="0% 同价",
+            unit="%",
+        )
+        assert p["mode"] == "compare"
+        assert p["reference"] == 0.0
+        assert p["referenceLabel"] == "0% 同价"
+        assert p["unit"] == "%"
+        assert p["showChange"] is False
+        assert p["lines"][0]["data"] == [
+            {"time": "2024-01-01", "value": 1.0},
+            {"time": "2024-01-02", "value": -2.5},
+            {"time": "2024-01-03", "value": 3.25},
+        ]
+        assert p["axis"] == ["2024-01-01", "2024-01-02", "2024-01-03"]
+
+    def test_line_payload_drops_dirty_rows(self):
+        df = pd.DataFrame(
+            {
+                "date": ["2024-01-02", "bad", "2024-01-02", "2024-01-03"],
+                "premium_pct": [1.0, 2.0, 1.5, float("inf")],
+            }
+        )
+        p = charting.line_payload(df, value_col="premium_pct")
+        assert p["lines"][0]["data"] == [{"time": "2024-01-02", "value": 1.5}]
+
     def test_compare_payloads_carry_axis(self):
         """对比/加密货币对比 payload 带 axis 时间轴 (视口锚点索引空间)."""
         f1 = pd.DataFrame(

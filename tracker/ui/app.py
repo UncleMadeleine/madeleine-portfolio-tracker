@@ -4,9 +4,9 @@
   源码树   streamlit run tracker/ui/app.py (仓库根执行)
   已安装   tracker-ui (pip 安装后的控制台入口, 见本文件 cli_main)
 
-每个页面有独立 URL (组合 / · K线 /kline · 指数 /index · 日历 /calendar ·
-导入 /import · 设置 /settings), 当前页由浏览器地址决定 —— 刷新、书签、
-前进后退都不丢页。页面渲染逻辑在各 *_page.py 模块; 行情/汇率缓存在
+每个页面有独立 URL (组合 / · K线 /kline · 指数 /index · 基本面 /fundamentals ·
+日历 /calendar · 导入 /import · 设置 /settings), 当前页由浏览器地址决定 —— 刷新、
+书签、前进后退都不丢页。页面渲染逻辑在各 *_page.py 模块; 行情/汇率缓存在
 portfolio_page.py。
 """
 
@@ -26,6 +26,7 @@ if (_ROOT / "tracker" / "__init__.py").exists() and str(_ROOT) not in sys.path:
 
 from tracker import storage  # noqa: E402
 from tracker.ui.calendar_page import render_calendar_page  # noqa: E402
+from tracker.ui.fundamentals_page import render_fundamentals_page  # noqa: E402
 from tracker.ui.import_page import render_import_page  # noqa: E402
 from tracker.ui.index_page import render_index_page  # noqa: E402
 from tracker.ui.kline_page import render_kline_page  # noqa: E402
@@ -70,6 +71,12 @@ def main() -> None:
             title="指数K线",
             icon=":material/insights:",
             url_path="index",
+        ),
+        st.Page(
+            render_fundamentals_page,
+            title="基本面",
+            icon=":material/query_stats:",
+            url_path="fundamentals",
         ),
         st.Page(
             render_calendar_page,

@@ -640,6 +640,13 @@ export default function (component) {
         });
       } catch (e) {}
     }
+    // 水平参考线 (单序列折线用): 如 AH 溢价率 0% 同价线, 不占用独立价轴
+    if (CFG.reference != null && tracks.length) {
+      tracks[0].series.createPriceLine({
+        price: CFG.reference, color: '#8b949e', lineWidth: 1, lineStyle: 2,
+        axisLabelVisible: true, title: CFG.referenceLabel || ''
+      });
+    }
   } else if (isCrypto) {
     // 加密货币对比: 每币一个独立窗格的蜡烛图 (原始价格不归一化, 各自价轴,
     // 共享时间轴与十字光标); 窗格分隔线可拖拽调高。
@@ -731,7 +738,9 @@ export default function (component) {
   if (!isCompare) {
     CFG.candles.forEach(function (b, i) { timeIdx[b.time] = i; });
   }
-  function fp(v) { return v == null ? '—' : Number(v).toFixed(CFG.precision); }
+  function fp(v) {
+    return v == null ? '—' : Number(v).toFixed(CFG.precision) + (CFG.unit || '');
+  }
   function fp2(v) { return v == null ? '—' : Number(v).toFixed(2); }
   function fv(v) {
     if (v == null) return '—';
@@ -786,7 +795,7 @@ export default function (component) {
         var first = tr.data.length ? tr.data[0].value : null;
         var pct = (v != null && first) ? (v / first - 1) * 100 : null;
         h += ' ' + span(tr.name, tr.color) + ' ' + span(fp(v));
-        if (pct != null) {
+        if (pct != null && CFG.showChange !== false) {
           h += ' ' + span('(' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%)',
             pct >= 0 ? CFG.up : CFG.down);
         }
@@ -1367,6 +1376,92 @@ def compare_payload(
         # 全系列时间轴 (并集, 升序去重): 视口锚点的索引空间 (对比模式
         # candles 为空, 不提供 axis 的话拖动位置无法跨重绘还原)
         "axis": sorted(axis),
+        "candles": [],
+        "volume": [],
+        "mas": [],
+        "boll": [],
+        "macd": None,
+        "rsi": None,
+        "kdj": None,
+        "options": _lwc_options(),
+    }
+
+
+def line_payload(
+    df: pd.DataFrame,
+    *,
+    value_col: str = "close",
+    title: str | None = None,
+    series_name: str = "value",
+    precision: int = 2,
+    reference: float | None = None,
+    reference_label: str | None = None,
+    color: str | None = None,
+    green_up: bool = False,
+    height: int = 560,
+    init_bars: int = 140,
+    query_id: str | None = None,
+    unit: str = "",
+) -> dict:
+    """单序列折线 payload (复用 K线组件的 compare 模式).
+
+    与 compare_payload 的区别: 不按首值归一化, 直接绘制原始值 (适合溢价率 /
+    比率 / 单一指标曲线); reference 可画一条水平参考线 (如 0% 同价线),
+    unit 只用于图题与悬浮提示的数值后缀 (如 "%"), 不参与坐标换算。
+    """
+    if df is None or df.empty:
+        raise ValueError("无有效折线数据")
+    if value_col not in df.columns:
+        raise ValueError(f"缺少折线数值列: {value_col}")
+    d = pd.DataFrame(
+        {
+            "date": pd.to_datetime(df["date"], errors="coerce"),
+            value_col: pd.to_numeric(df[value_col], errors="coerce"),
+        }
+    )
+    d = d.dropna(subset=["date", value_col])
+    d = d[d[value_col].map(lambda v: math.isfinite(float(v)))]
+    d = d.sort_values("date", kind="stable").drop_duplicates(
+        subset="date", keep="last"
+    )
+    if d.empty:
+        raise ValueError("无有效折线数据")
+    data = _to_line_data(
+        d["date"].dt.strftime("%Y-%m-%d"), d[value_col], precision=precision
+    )
+    if not data:
+        raise ValueError("无有效折线数据")
+    up, down = (
+        (INTL_UP_COLOR, INTL_DOWN_COLOR) if green_up else (CN_UP_COLOR, CN_DOWN_COLOR)
+    )
+    label = title or series_name
+    return {
+        "mode": "compare",
+        "title": label,
+        "up": up,
+        "down": down,
+        "precision": precision,
+        "minMove": float(10 ** (-precision)),
+        "initBars": init_bars,
+        "height": height,
+        "lines": [
+            {
+                "name": series_name,
+                "color": color or COMPARE_PALETTE[0],
+                "data": data,
+            }
+        ],
+        "ratio": None,
+        # compare 模式下的水平参考线 (如 AH 溢价 0% 同价线)
+        "reference": reference,
+        "referenceLabel": reference_label,
+        # 数值后缀 (如 "%"): 悬浮提示展示 "30.0%" 而不是裸数字
+        "unit": unit,
+        # 单序列折线不显示「相对首日涨跌」: 溢价率/比率本身已是百分比,
+        # 再叠一个相对涨幅容易被误读成百分点变化
+        "showChange": False,
+        "queryId": query_id,
+        "axis": [p["time"] for p in data],
         "candles": [],
         "volume": [],
         "mas": [],

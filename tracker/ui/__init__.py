@@ -1,4 +1,4 @@
-"""Streamlit 页面包: 组合 / K线 / 指数K线 / 导入 / 设置 五页, st.navigation 路由.
+"""Streamlit 页面包: 组合 / K线 / 指数K线 / 基本面 / 日历 / 导入 / 设置, st.navigation 路由.
 
 运行入口: python -m streamlit run tracker/ui/app.py (每页独立 URL, 刷新不丢页)
 页面模块间用相对导入; app.py 是 streamlit 以裸脚本执行的入口,

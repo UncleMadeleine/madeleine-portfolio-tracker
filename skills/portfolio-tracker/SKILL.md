@@ -11,7 +11,7 @@ description: Use when the user asks to check or manage their investment portfoli
 加密货币 (`BASE-QUOTE` 连字符代码, Binance 优先→Gate.io→Hyperliquid(仅USD系)→yfinance; 数据源偏好 settings.json `crypto_source` 或 CLI `--crypto-source`, 默认 auto=默认链, 指定源前置失败自动回落),
 指数 (`IX.<KEY>`, 中国指数 akshare 优先, 其余 yfinance→akshare 新浪兜底; 水泥网/商品期货/恒生官网/Cameco 铀价指数为专属源无兜底)。
 各域只在投资组合/watchlist 聚合, 数据层面严格分域。有 Streamlit 页面
-(`python -m streamlit run tracker/ui/app.py`, 6 页: 组合 `/` · K线 `/kline` · 指数K线 `/index` · 日历 `/calendar` · 导入 `/import` · 设置 `/settings`)
+(`python -m streamlit run tracker/ui/app.py`, 7 页: 组合 `/` · K线 `/kline` · 指数K线 `/index` · 基本面 `/fundamentals` · 日历 `/calendar` · 导入 `/import` · 设置 `/settings`)
 和命令行两套入口。**AI 操作请优先用 CLI。**
 
 所有子命令都支持机器可读输出: 多数是 `--json`; `report`/`export` 用 `-f json`
@@ -326,6 +326,11 @@ Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致);
    走势对比页的「比例线」为可选开关 (默认关闭): 打开后选分子/分母两代码,
    同图叠加比值线 (具体比值不归一化, 独立纵轴, 虚线=区间均值),
    跨币种默认原币比值, 可切换「汇率调整」。
+
+   **基本面页 (`/fundamentals`, 仅 UI)**: 第一期是单只 A+H 股票的 AH 溢价率曲线,
+   口径 `A股收盘 ÷ (H股收盘 × HKD→CNY 历史汇率) − 1` (正值=A 股溢价, 0%=同价)。
+   股票对目录来自东财 AH 比价 (失败退回内置常见对), 也可手动输入 A/H 代码;
+   A/H 历史都优先 akshare 前复权, H 休市日取最近收盘。暂未提供 CLI 子命令。
 
 9. **IBKR / 长桥同步 / 导入持仓** (IBKR 需本机 Gateway 在线; 长桥需先 `longport-login`, 无凭据则报错回退):
    ```

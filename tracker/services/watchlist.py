@@ -156,6 +156,23 @@ def build_watchlist_view(
             # 与取数层 (orchestration._parse_all) 的错误格式保持一致
             # (symbol: 原因), 供 fetch_watchlist_view 拼接时去重
             issues.append(f"{raw}: {err}")
+            # 不静默丢弃: 代码无法解析也在主表留一行, 否则监控数量悄悄变少
+            # 而用户无从发现 (实测出现过 696→694 无人知晓)。符号用原始输入,
+            # 名称用条目手写名 (离线可用), 价格/涨跌幅全 None → 下游渲染 "-"。
+            rows.append(
+                {
+                    "symbol": raw,
+                    "name": e.get("name") or raw,
+                    "market": "",
+                    "currency": "",
+                    "metric": metric_for_entry(e),
+                    **parse_thresholds(e),
+                    "price": None,
+                    "change_pct": None,
+                    "status": STATUS_NO_DATA,
+                    "note": _note_str(e.get("note")),
+                }
+            )
             continue
         metric = metric_for_entry(e)
         thresholds = parse_thresholds(e)
@@ -167,6 +184,24 @@ def build_watchlist_view(
         # 与 price 分支 (metric_value_for_quote) 一致的守卫
         if q is None or q.price is None or not math.isfinite(q.price) or q.price <= 0:
             issues.append(f"{p.yahoo}: 行情缺失")
+            # 不静默丢弃: 取数失败也在主表留一行占位, 价格/PB 全 None
+            # (下游渲染 "-"), 不再从主表消失。STATUS_NO_DATA 不参与
+            # 触发统计, 所以不会变成告警噪音, 但用户能看见是哪只。
+            rows.append(
+                {
+                    "symbol": p.yahoo,
+                    "name": e.get("name") or (getattr(q, "name", None) or ""),
+                    "market": p.market_label,
+                    "currency": getattr(q, "currency", None),
+                    "metric": metric,
+                    "price": None,
+                    "change_pct": getattr(q, "change_pct", None),
+                    "source": getattr(q, "source", None),
+                    **thresholds,
+                    "status": STATUS_NO_DATA,
+                    "note": _note_str(e.get("note")),
+                }
+            )
             continue
         price = q.price
         base_value = None
@@ -220,7 +255,10 @@ def build_watchlist_view(
             status, dist = evaluate_thresholds(thresholds, base_value if base_value is not None else price)
         row = {
             "symbol": p.yahoo,
-            "name": q.name or "",
+            # 名称优先级与本文件其它字段一致: 条目手写(中文, 离线可用) > 行情自带
+            # (yfinance 英文名) > 空。此前只用 q.name，导致报告输出英文名，
+            # 下游(如 Hermes 日报脚本)不得不另读一份 watchlist 来补中文名。
+            "name": e.get("name") or q.name or "",
             "market": p.market_label,
             "currency": q.currency,
             "metric": metric,

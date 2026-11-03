@@ -7,6 +7,7 @@ from tracker.prices import Quote
 from tracker.rules import (
     STATUS_LOWER_1,
     STATUS_LOWER_2,
+    STATUS_NO_DATA,
     STATUS_UPPER_1,
     STATUS_UPPER_2,
     STATUS_WITHIN,
@@ -144,10 +145,20 @@ def test_missing_quote_and_bad_symbol():
         {"symbol": "AAPL", "upper_1": 999.0},
     ]
     view, issues = build_watchlist_view(entries, {"AAPL": q("AAPL", 100.0)})
-    assert len(view) == 1
+    # 取数失败不再静默丢弃: 坏代码也在主表留一行占位 (STATUS_NO_DATA),
+    # 否则监控数量悄悄变少而用户无从发现。总数 = 3 (1 正常 + 2 占位)
+    assert len(view) == 3
     assert len(issues) == 2
     assert any("NOPE.HK" in i for i in issues)
     assert any("BAD.ZZ" in i for i in issues)
+    # 两条占位行都不算触发 —— 无数据不能变成告警噪音
+    assert set(view.loc[view["status"] == STATUS_NO_DATA, "symbol"]) == {
+        "NOPE.HK",
+        "BAD.ZZ",
+    }
+    assert not view.loc[view["status"] == STATUS_NO_DATA, "triggered"].any()
+    # 占位行价格为空, 下游据此渲染 "-" 而不是编一个数
+    assert view.loc[view["symbol"] == "NOPE.HK", "price"].isna().all()
 
 
 def test_numeric_string_thresholds():

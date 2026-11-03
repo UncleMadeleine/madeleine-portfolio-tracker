@@ -73,6 +73,8 @@ def cmd_index_kline(args) -> None:
         return
 
     period_label = charting.PERIOD_LABELS.get(period, period)
+    # 精度随价格量级 (与 kline 子命令同口径)
+    prec = int(s.get("precision", 3))
     print(
         f"\n=== 指数K线 {label} ({p.yahoo}) · {period_label} · 近 {args.months} 个月"
         f" ({s['bars']} 根) ==="
@@ -80,21 +82,22 @@ def cmd_index_kline(args) -> None:
     chg = f" ({s['change_pct']:+.2f}%)" if s["change_pct"] is not None else ""
     print(
         f"区间: {s['first_date']} → {s['last_date']}"
-        f"  · 收 {s['first_close']:,.3f} → {s['last_close']:,.3f}{chg}"
+        f"  · 收 {s['first_close']:,.{prec}f} → {s['last_close']:,.{prec}f}{chg}"
     )
     print(
-        f"最新 {s['last_date']}: 开 {s['last_open']:,.3f}  高 {s['last_high']:,.3f}"
-        f"  低 {s['last_low']:,.3f}  收 {s['last_close']:,.3f}"
+        f"最新 {s['last_date']}: 开 {s['last_open']:,.{prec}f}"
+        f"  高 {s['last_high']:,.{prec}f}  低 {s['last_low']:,.{prec}f}"
+        f"  收 {s['last_close']:,.{prec}f}"
     )
     if s["ma"]:
         parts = [
-            f"MA{n[2:]} {v:,.3f}" if v is not None else f"MA{n[2:]} —"
+            f"MA{n[2:]} {v:,.{prec}f}" if v is not None else f"MA{n[2:]} —"
             for n, v in s["ma"].items()
         ]
         print("均线: " + "  ".join(parts))
     print(
-        f"区间最高 {s['period_high']:,.3f} ({s['period_high_date']})"
-        f"  · 最低 {s['period_low']:,.3f} ({s['period_low_date']})"
+        f"区间最高 {s['period_high']:,.{prec}f} ({s['period_high_date']})"
+        f"  · 最低 {s['period_low']:,.{prec}f} ({s['period_low_date']})"
     )
 
     fig = charting.build_candlestick_fig(

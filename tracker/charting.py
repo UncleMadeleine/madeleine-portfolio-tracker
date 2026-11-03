@@ -250,11 +250,20 @@ def _month_rule() -> str:
 
 
 def resample_ohlc(df: pd.DataFrame, period: str) -> pd.DataFrame:
-    """日线重采样为周K (W-FRI) / 月K; open=首日开, high=最高, low=最低, close=末日收, volume=求和."""
+    """日线重采样为周K (W-FRI) / 月K; open=首日开, high=最高, low=最低, close=末日收, volume=求和.
+
+    已经处于目标粒度 (或更粗) 的数据直接清洗返回: 调用方常先 resolve_period
+    再无条件 resample (K线页/CLI/对比 payload), 对原生周K/月K源 (水泥网、
+    Cameco 等) 二次重采样会把周一/月末标签改写成 W-FRI/月末, 甚至跨周合并。
+    """
     if df is None or df.empty:
         return pd.DataFrame(columns=list(OHLC_COLUMNS))
     if period == "daily":
         return df.reset_index(drop=True)[list(OHLC_COLUMNS)]
+    if period in PERIOD_ORDER:
+        native = infer_native_period(df)
+        if PERIOD_ORDER.index(period) <= PERIOD_ORDER.index(native):
+            return clean_ohlc(df)[list(OHLC_COLUMNS)]
     rule = "W-FRI" if period == "weekly" else _month_rule()
     out = (
         clean_ohlc(df)
@@ -1477,6 +1486,9 @@ def summarize_ohlc(df: pd.DataFrame, mas=DEFAULT_MA) -> dict:
         "last_close": round(float(last["close"]), nd),
         "last_volume": float(last["volume"]) if pd.notna(last["volume"]) else None,
         "change_pct": round(change_pct, 4) if change_pct is not None else None,
+        # 展示精度: 低价币 (SHIB/PEPE 等 ~1e-5) 若调用方硬编码 3 位小数会全部
+        # 显示成 0.000; CLI/UI 用这个字段格式化摘要 (与上面四舍五入口径一致)。
+        "precision": nd,
         "period_high": round(float(hi["high"]), nd),
         "period_high_date": hi["date"].strftime("%Y-%m-%d"),
         "period_low": round(float(lo["low"]), nd),

@@ -218,29 +218,43 @@ def render_settings_page() -> None:
 
 
 def _clear_source_caches() -> None:
-    """数据源偏好/凭据变化: 清行情、汇率、K线磁盘缓存与进程内负缓存."""
+    """数据源偏好/凭据变化: 清行情、汇率、K线磁盘/内存缓存与进程内负缓存."""
     from tracker.cache import clear_fundamentals, clear_fx, clear_ohlc, clear_quotes
 
-    clear_quotes()
+    failures: list[str] = []
+
+    def _try(label: str, fn) -> None:
+        # 缓存清理是尽力而为: SQLite 忙/只读时 cache.clear_* 会抛 RuntimeError,
+        # 不能因此让设置页在「设置已保存」之后显示一整页 traceback。
+        try:
+            fn()
+        except (RuntimeError, OSError) as e:
+            failures.append(f"{label}: {e}")
+
+    _try("行情", clear_quotes)
     # EODHD fundamentals 角色/PB 数据源切换后, 6h 基本面缓存也要失效
-    clear_fundamentals()
+    _try("基本面", clear_fundamentals)
     # 汇率磁盘缓存同 key 不含数据源偏好: IBKR 开关变化后不清会继续用
     # CFETS/yfinance 旧汇率, 必须一并清
-    clear_fx()
+    _try("汇率", clear_fx)
     # K线(OHLC) 磁盘缓存键只有 symbol+months、不含源偏好: 不清会命中上一个
     # 源的旧K线 (含跨会话/刷新后的首次查询), 必须一并清
-    clear_ohlc()
+    _try("K线磁盘", clear_ohlc)
     # 进程内负缓存只按代码记、不记源链路: 旧偏好下失败的代码会在 TTL 内
     # 继续挡住新链路 ("近期全部数据源失败 (负缓存)"), 必须一起清
     from tracker.providers.orchestration import neg_clear_all
 
-    neg_clear_all()
+    _try("负缓存", neg_clear_all)
+    from tracker.ui.kline_page import clear_kline_caches
     from tracker.ui.portfolio_page import cached_fx, cached_quotes
 
-    cached_quotes.clear()
+    _try("K线内存", clear_kline_caches)
     # 汇率页面缓存 (st.cache_data) 同样要清: 磁盘汇率缓存已清, 不清这个
     # 的话 IBKR 开关切换后 10 分钟内仍返回旧源 (CFETS/yfinance) 汇率
-    cached_fx.clear()
+    _try("行情内存", cached_quotes.clear)
+    _try("汇率内存", cached_fx.clear)
+    for message in failures:
+        st.warning(f"缓存清理失败 ({message})")
 
 
 def _save_eodhd() -> None:

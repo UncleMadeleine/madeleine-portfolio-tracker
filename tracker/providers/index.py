@@ -116,9 +116,14 @@ def _ccement_points(d: dict) -> pd.DataFrame:
     df = pd.DataFrame(
         {"date": pd.to_datetime(dates), "close": [float(v) for v in vals]}
     )
+    # 部分端点 (熟料/混凝土等) 同一日期会返回多条不同口径的记录 (如
+    # ClinkerPrice 的 2016-11-15 有 4 个值)。下游 clean_ohlc 会 keep="last"
+    # 去重, 但响应顺序不保证, 展示值会随机跳变。这里先按日期收敛到最后一
+    # 条 (与下游口径一致), 再交给窗口过滤。
+    df = df.drop_duplicates(subset="date", keep="last").sort_values("date")
     df["open"] = df["high"] = df["low"] = df["close"]
     df["volume"] = 0.0
-    return df
+    return df.reset_index(drop=True)
 
 
 def _ccement_kline(d: dict | str) -> pd.DataFrame:
@@ -130,7 +135,17 @@ def _ccement_kline(d: dict | str) -> pd.DataFrame:
         rows,
         columns=["ts", "open", "high", "low", "close", "prev_close", "chg", "chg_pct"],
     )
-    df["date"] = pd.to_datetime(df["ts"], unit="ms")
+    # ts 是毫秒时间戳。水泥网后端按中国交易日的本地零点生成, 但不同批数据
+    # 有时落成 UTC 零点 —— 直接按 UTC 解释会把东八区零点那批显示成前一天
+    # (例: 1767888000000 = 2026-01-09 00:00 +08, 按 UTC 是 2026-01-08 16:00,
+    # 且会被 start_date 过滤误删)。统一转成 Asia/Shanghai 后剥时区取日期,
+    # 对本来就是 UTC 零点的记录 (08:00 +08) 日期不变。
+    df["date"] = (
+        pd.to_datetime(df["ts"], unit="ms", utc=True)
+        .dt.tz_convert("Asia/Shanghai")
+        .dt.tz_localize(None)
+        .dt.normalize()
+    )
     df["volume"] = 0.0
     return df[["date", "open", "high", "low", "close", "volume"]]
 

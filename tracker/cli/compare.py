@@ -163,6 +163,8 @@ def cmd_compare(args) -> None:
     metric = getattr(args, "metric", "price") or "price"
     mcap_meta: dict[str, dict] = {}
     target_ccy: str | None = None
+    mcap_fx_incomplete = False
+    mcap_original_currency_codes: set[str] = set()
     if metric == "mcap":
         from .. import mcap as mcap_mod
         from .. import storage
@@ -175,6 +177,14 @@ def cmd_compare(args) -> None:
         )
         for w in mcap_warnings:
             print(f"⚠ {w}", file=sys.stderr)
+        # 汇率历史不可得/无重叠时 mcap 会保留原币 (mcap.py to_common_currency),
+        # 此时不能再宣称「已统一折算」, 否则图表标题/终端摘要与数据不符。
+        mcap_fx_incomplete = any("保持原币" in w for w in mcap_warnings)
+        mcap_original_currency_codes = {
+            w.split(":", 1)[0].strip()
+            for w in mcap_warnings
+            if "保持原币" in w and ":" in w
+        }
         if len(mcap_frames) < 2:
             _finish_with_error("取到历史市值数据的代码不足 2 个, 无法市值对比")
         frames = mcap_frames
@@ -292,14 +302,22 @@ def cmd_compare(args) -> None:
         "归一化 (起点=100)"
         if not args.raw
         else (
-            f"市值 (亿 {target_ccy})"
+            (
+                f"市值 (亿 {target_ccy})"
+                if not mcap_fx_incomplete
+                else f"市值 (亿; 目标 {target_ccy}, 部分原币)"
+            )
             if metric == "mcap"
             else "收盘价 (各代码原币种)"
         )
     )
     layout = dict(
         title=f"{label_head} · 近 {args.months} 个月 · {period}"
-        + (f" · 统一 {target_ccy}" if metric == "mcap" else "")
+        + (
+            f" · 统一 {target_ccy}"
+            if metric == "mcap" and not mcap_fx_incomplete
+            else (f" · 目标 {target_ccy} (部分原币)" if metric == "mcap" else "")
+        )
         + " · " + " vs ".join(codes)
         + ("" if args.raw else " (起点=100)"),
         template="plotly_white",
@@ -348,9 +366,17 @@ def cmd_compare(args) -> None:
         pct = (close.iloc[-1] / close.iloc[0] - 1) * 100
         chg_parts.append(f"{code} {pct:+.2f}%")
         if metric == "mcap":
-            src = (mcap_meta.get(code) or {}).get("source_label")
+            info = mcap_meta.get(code) or {}
+            src = info.get("source_label")
+            # 汇率折算失败时该代码保持原币, 摘要必须标实际币种, 不能一律写
+            # target_ccy (把 USD/HKD 市值标成 CNY)。
+            ccy = (
+                info.get("currency") or target_ccy
+                if code in mcap_original_currency_codes
+                else target_ccy
+            )
             mc_parts.append(
-                f"{code} {mcap_mod.describe_amount(float(close.iloc[-1]))} {target_ccy}"
+                f"{code} {mcap_mod.describe_amount(float(close.iloc[-1]))} {ccy}"
                 + (f" ({src})" if src else "")
             )
     print(f"\n=== {label_head} (近 {args.months} 个月, {period}) ===")

@@ -505,11 +505,24 @@ def _disk_refresh_plan() -> dict | None:
         watch = storage.load_watchlist(WATCHLIST_PATH)
     except Exception:  # noqa: BLE001 - 读盘失败: 下个周期再试
         return None
-    symbols = [
+    raw_symbols = [
         str(h.get("symbol", "")).strip() for h in portfolio.get("holdings", [])
     ]
-    symbols += [str(e["symbol"]) for e in merge_entries(watch)]
-    symbols = tuple(dict.fromkeys(s for s in symbols if s))
+    raw_symbols += [str(e["symbol"]) for e in merge_entries(watch)]
+    # 与页面 _load_quotes 同口径: 归一成 parse().yahoo 再查缓存。否则磁盘里
+    # 的别名 (600519.SH) 与缓存键 (600519.SS) 永远对不上, _cache_age 判成
+    # inf → 后台保温线程每个周期都重取同批代码, 永不收敛。
+    symbols_list: list[str] = []
+    for s in raw_symbols:
+        if not s:
+            continue
+        try:
+            yahoo = parse(s).yahoo
+        except ValueError:
+            continue  # 无法识别的代码取不到数, 不进保温计划
+        if yahoo not in symbols_list:
+            symbols_list.append(yahoo)
+    symbols = tuple(symbols_list)
     if not symbols:
         return None
     q_args = (

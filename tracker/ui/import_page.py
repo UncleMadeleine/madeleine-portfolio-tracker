@@ -16,7 +16,7 @@ import pandas as pd
 import streamlit as st
 
 from tracker import importer, longport as longport_mod, storage
-from tracker.storage import CorruptDataError, DataFileLocked
+from tracker.storage import CorruptDataError
 
 _CHAIN_LABELS = {
     "eth": "Ethereum",
@@ -184,7 +184,9 @@ def _longport_watchlist_section() -> None:
                 )
                 storage.backup_file(storage.WATCHLIST_PATH)
                 data["watchlist"] = merged
-        except DataFileLocked as e:
+        except (CorruptDataError, OSError) as e:  # DataFileLocked 是 OSError 子类
+            # watchlist.json 损坏且 .bak 也损坏 / 只读/被锁: 给可读错误而不是
+            # 整页 traceback (与下方持仓导入 _preview_and_confirm 同口径)。
             st.error(f"自选导入失败: {e}")
             return
         st.session_state.pop("imp_lp_wl", None)

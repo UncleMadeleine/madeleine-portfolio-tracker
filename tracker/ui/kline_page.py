@@ -44,6 +44,31 @@ def quick_symbols() -> list[str]:
     return list(st.session_state.get(KLINE_SYMBOLS_KEY, []))
 
 
+def ensure_quick_symbols_from_storage() -> None:
+    """直接打开 /kline (未经过组合页) 时从磁盘补齐「常用」代码.
+
+    组合页每次渲染都会 set_quick_symbols, 但新会话直接访问 /kline、或刷新
+    浏览器后 session_state 丢失时, 该键不存在, 「常用」pills 会是空列表。
+    只在键缺失时读盘, 不覆盖组合页已经算好的快照 (含编辑器未保存内容)。
+    """
+    if KLINE_SYMBOLS_KEY in st.session_state:
+        return
+    try:
+        from tracker import storage
+        from tracker.services.watchlist import merge_entries
+
+        portfolio = storage.load_portfolio(storage.PORTFOLIO_PATH)
+        watch = storage.load_watchlist(storage.WATCHLIST_PATH)
+        symbols = [
+            str(h.get("symbol", "")).strip()
+            for h in portfolio.get("holdings", [])
+        ]
+        symbols += [str(e.get("symbol", "")).strip() for e in merge_entries(watch)]
+    except Exception:  # noqa: BLE001 - 读盘失败时保持空列表, 不影响查询
+        return
+    set_quick_symbols([s for s in symbols if s])
+
+
 def recent_symbols() -> list[str]:
     """本会话最近成功渲染 K线的代码 (最新在前, 上限 RECENT_LIMIT)."""
     return list(st.session_state.get(RECENT_KEY, []))
@@ -193,10 +218,13 @@ def render_kline_view(
         height=680,
     )
     s = charting.summarize_ohlc(kdf, tuple(mas))
+    # 精度随价格量级 (summarize_ohlc 按收盘价中位数算): 低价币 ~1e-5 若固定
+    # 3 位小数会显示成 0.000。
+    prec = int(s.get("precision", 3))
     m1, m2, m3, m4 = st.columns(4)
     m1.metric(
         "最新收盘" + (f" ({currency})" if currency else ""),
-        f"{s['last_close']:,.3f}",
+        f"{s['last_close']:,.{prec}f}",
     )
     m2.metric(
         "区间涨跌",
@@ -210,13 +238,15 @@ def render_kline_view(
     )
     m3.metric(
         f"区间最高 ({s['period_high_date']})",
-        f"{s['period_high']:,.3f}",
+        f"{s['period_high']:,.{prec}f}",
     )
     m4.metric(
         f"区间最低 ({s['period_low_date']})",
-        f"{s['period_low']:,.3f}",
+        f"{s['period_low']:,.{prec}f}",
     )
-    ma_txt = "  ".join(f"MA{n[2:]} {v:,.3f}" for n, v in s["ma"].items())
+    ma_txt = "  ".join(
+        f"MA{n[2:]} {v:,.{prec}f}" for n, v in s["ma"].items()
+    )
     if ma_txt:
         st.caption(f"均线: {ma_txt} · 数据源与行情一致, 日K缓存 30 分钟")
     return result
@@ -243,15 +273,20 @@ def cached_mcap_compare(
     """
     frames: dict[str, pd.DataFrame] = {}
     for s in symbols:
-        d = cached_kline(
-            s,
-            months,
-            prefer_akshare,
-            use_ibkr,
-            use_longport,
-            crypto_source,
-            refresh=refresh,
-        )
+        # 与下方股价对比路径 (render_compare_controls) 同口径: 单个代码取数
+        # 失败只跳过该代码, 不能让异常穿出 st.cache_data 把整页打死。
+        try:
+            d = cached_kline(
+                s,
+                months,
+                prefer_akshare,
+                use_ibkr,
+                use_longport,
+                crypto_source,
+                refresh=refresh,
+            )
+        except Exception:  # noqa: BLE001 - 单代码失败不拖垮整页
+            continue
         if isinstance(d, pd.DataFrame) and not d.empty:
             frames[s] = d
     if refresh:
@@ -1241,6 +1276,7 @@ def render_kline_page(
     只渲染当前激活子功能, 未激活的控件不实例化 → 不发请求; 各子功能内部状态靠显式
     key 存 session_state, 切回不丢。
     """
+    ensure_quick_symbols_from_storage()
     st.session_state.setdefault("kline_subview", "单只查询")
     view = st.segmented_control(
         "K线功能",

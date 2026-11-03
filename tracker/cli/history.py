@@ -44,6 +44,18 @@ def cmd_history(args) -> None:
         if len(close) >= 2 and first > 0 and math.isfinite(first)
         else None
     )
+    # 区间高/低取当日 high/low 的极值, 不能用收盘价: provider 返回的是完整
+    # OHLC, 盘中冲高/探底后收回的交易日会漏掉 (输出与真实区间高低不符)。
+    high = (
+        float(pd.to_numeric(df["high"], errors="coerce").max())
+        if "high" in df.columns
+        else float(close.max())
+    )
+    low = (
+        float(pd.to_numeric(df["low"], errors="coerce").min())
+        if "low" in df.columns
+        else float(close.min())
+    )
     print(
         f"\n=== 历史行情 {args.symbol} (近 {args.months} 个月, 共 {len(df)} 个交易日) ==="
     )
@@ -51,7 +63,7 @@ def cmd_history(args) -> None:
         f"区间: {df['date'].iloc[0]:%Y-%m-%d} → {df['date'].iloc[-1]:%Y-%m-%d}"
         f"  · 收 {close.iloc[0]:,.3f} → {close.iloc[-1]:,.3f}"
         + (f" ({change:+.2f}%)" if change is not None else "")
-        + f"  · 区间高 {close.max():,.3f} / 低 {close.min():,.3f}"
+        + f"  · 区间高 {high:,.3f} / 低 {low:,.3f}"
     )
     tail = df.tail(args.rows)
     tail = tail.copy()

@@ -24,7 +24,7 @@ from __future__ import annotations
 import math
 import threading
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -32,7 +32,7 @@ import pandas as pd
 from .config import load_json_object, merge_config, resolve_config_path
 from .paths import TEMPLATES_DIR, data_home
 from .providers.base import Quote
-from .symbols import _is_us_preferred, parse, type_for_symbol
+from .symbols import Market, _is_us_preferred, parse, type_for_symbol
 from .symbol_migrations import migrate_symbol
 
 # 用户真实配置落数据目录 (源码树即仓库根; pip 安装后 ~/.tracker/longport.json);
@@ -363,7 +363,13 @@ def get_quotes_longport(
         # 股票行情 (IBKR 侧用 _claims_global 做同样的域过滤)。
         # B 股 (900xxx.SS / 200xxx.SZ) 长桥无柜台 (仅沪深港通 A 股), 混入同批
         # 会让整批 quote 报错 → 同批所有股票行情作废; 排除后 B 股回落 akshare/yf
-        if p.type not in ("crypto", "index") and not p.is_b_share
+        # 新加坡 (SGX) 同理: 长桥 OpenAPI 明确不提供 SG 实时行情 (仅 App/桌面
+        # 客户端可看), 把 D05.SI 等塞进 quote 批会拖丢同批港美 A 股行情。
+        if (
+            p.type not in ("crypto", "index")
+            and not p.is_b_share
+            and p.market is not Market.SG
+        )
     ]
     mappable = [(p, lp) for p, lp in mappable if lp]
     if not mappable:
@@ -535,34 +541,57 @@ def get_history_longport(
     api = _sdk()
     end = date.fromisoformat(end_date) if end_date else date.today()
     start = date.fromisoformat(start_date)
-    try:
-        candles = _ctx_call(
-            lambda c: c.history_candlesticks_by_date(
-                lp, api.Period.Day, api.AdjustType.ForwardAdjust, start, end
-            ),
-            cfg=cfg,
-        )
-    except Exception:  # noqa: BLE001 - 历史数据不可用即回退默认源
-        return None
-    if not candles:
-        return None
-    rows = []
-    for c in candles:
-        ts = getattr(c, "timestamp", None)
-        d = ts.date() if isinstance(ts, datetime) else pd.Timestamp(ts).date()
-        rows.append(
-            {
-                # date 对象 (非 isoformat 字符串): 与 IBKR 路径同构, 兼容
-                # cli/history 的 %Y-%m-%d 格式化、charting.clean_ohlc 的
-                # to_datetime 与 astype(str); 字符串会让 history 子命令崩
-                "date": d,
-                "open": _f(getattr(c, "open", None)),
-                "high": _f(getattr(c, "high", None)),
-                "low": _f(getattr(c, "low", None)),
-                "close": _f(getattr(c, "close", None)),
-                "volume": int(getattr(c, "volume", 0) or 0),
-            }
-        )
+    # 长桥 history_candlesticks_by_date 单次最多返回 1000 根, 超过时只给
+    # 靠近 end 的一段 (见官方文档)。60 个月 ≈1250 个交易日, 不翻页会静默
+    # 丢掉最早约一年的数据; 且本函数直接返回非 None 结果, 上游不会再回退
+    # yfinance 补齐。按「取回的第一根日期 - 1 天」向前翻页直到覆盖 start。
+    rows: list[dict] = []
+    seen_dates: set[date] = set()
+    cursor_end = end
+    while True:
+        try:
+            candles = _ctx_call(
+                lambda c, e=cursor_end: c.history_candlesticks_by_date(
+                    lp, api.Period.Day, api.AdjustType.ForwardAdjust, start, e
+                ),
+                cfg=cfg,
+            )
+        except Exception:  # noqa: BLE001 - 历史数据不可用即回退默认源
+            # 已经翻过页时保留已取到的部分, 不让一次远端失败丢掉整段历史
+            if not rows:
+                return None
+            break
+        if not candles:
+            break
+        page_dates: list[date] = []
+        for c in candles:
+            ts = getattr(c, "timestamp", None)
+            d = ts.date() if isinstance(ts, datetime) else pd.Timestamp(ts).date()
+            page_dates.append(d)
+            if d in seen_dates:
+                continue
+            seen_dates.add(d)
+            rows.append(
+                {
+                    # date 对象 (非 isoformat 字符串): 与 IBKR 路径同构, 兼容
+                    # cli/history 的 %Y-%m-%d 格式化、charting.clean_ohlc 的
+                    # to_datetime 与 astype(str); 字符串会让 history 子命令崩
+                    "date": d,
+                    "open": _f(getattr(c, "open", None)),
+                    "high": _f(getattr(c, "high", None)),
+                    "low": _f(getattr(c, "low", None)),
+                    "close": _f(getattr(c, "close", None)),
+                    "volume": int(getattr(c, "volume", 0) or 0),
+                }
+            )
+        first = min(page_dates)
+        # 未达单次上限说明已经到 start; 再往前没有数据可翻
+        if len(candles) < 1000 or first <= start:
+            break
+        next_end = first - timedelta(days=1)
+        if next_end >= cursor_end:  # 防御: 游标不前进时收尾, 避免死循环
+            break
+        cursor_end = next_end
     df = pd.DataFrame(rows)
     if df.empty:
         return None

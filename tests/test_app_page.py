@@ -129,6 +129,22 @@ def test_portfolio_page_renders(app_boot):
     assert any("2,130" in str(m.value) for m in app_boot.metric)
 
 
+def test_nav_snapshot_skips_unchanged_rerun(app_boot, monkeypatch):
+    """数值未变的 rerun 不重复写历史净值 (交互频繁, 避免每次渲染都写盘)."""
+    calls: list[list[dict]] = []
+    real = portfolio_page.nav.save_rows
+
+    def counting(rows, **kw):
+        calls.append(list(rows))
+        return real(rows, **kw)
+
+    monkeypatch.setattr(portfolio_page.nav, "save_rows", counting)
+    # fixture 的首轮渲染已写入并记录指纹: 之后数值不变的重跑应全部跳过
+    app_boot.run(timeout=30)
+    app_boot.run(timeout=30)
+    assert calls == []
+
+
 def test_navigation_registers_independent_urls(app_boot):
     """七页各有独立 url_path: 当前页由 URL 决定, 刷新不回落组合页.
 

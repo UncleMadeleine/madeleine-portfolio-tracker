@@ -43,9 +43,36 @@ FX_FRESH_TTL = CACHE_TTL  # 300s
 FX_STALE_TTL = STALE_TTL  # 1800s
 
 _lock = Lock()
+# 建库/建表只做一次: 原先每次 get_*/set_* 都 connect + CREATE TABLE + 4 次
+# ALTER 试探, 单次约 0.2ms; 600 只代码的逐条读取会白付 ~0.2s, 并发写时还会
+# 反复参与 schema 锁竞争。用 (dev, ino) 标识库文件: 正常写入不改 inode,
+# 删除/重建/隔离损坏库会变 → 自动重新建表。
+_db_ready_lock = Lock()
+_db_ready: dict[str, tuple[int, int]] = {}
+
+
+def _db_identity() -> tuple[int, int] | None:
+    """库文件身份 (dev, ino); 不存在/不可 stat 返回 None."""
+    try:
+        st = CACHE_DB.stat()
+    except OSError:
+        return None
+    return (st.st_dev, st.st_ino)
+
+
+def _connect() -> sqlite3.Connection:
+    """统一连接参数: 5s 锁等待 (与 sqlite3 默认一致, 显式写清意图)."""
+    return sqlite3.connect(CACHE_DB, timeout=5)
 
 
 def _create_schema(con) -> None:
+    # WAL: 后台刷新线程写库时页面/CLI 仍可并发读, 避免「database is locked」
+    # 被 _read_all 当成无缓存 → 重复回源。journal_mode 持久化在库文件里,
+    # 只需在建库时设置一次; 只读挂载/不支持 WAL 的文件系统忽略即可。
+    try:
+        con.execute("PRAGMA journal_mode=WAL")
+    except sqlite3.Error:
+        pass
     con.execute(
         """
         CREATE TABLE IF NOT EXISTS quotes (
@@ -165,7 +192,7 @@ def _read_all(sql: str, params) -> list:
     并发场景真实存在: Streamlit 后台刷新线程写库的同时 CLI 或另一页面读库。
     """
     try:
-        with sqlite3.connect(CACHE_DB) as con:
+        with _connect() as con:
             return con.execute(sql, params).fetchall()
     except (sqlite3.Error, OSError):
         return []
@@ -179,7 +206,7 @@ def _execute_write(sql: str, params, *, many: bool = False) -> bool:
     """
     try:
         _ensure_db()
-        with _lock, sqlite3.connect(CACHE_DB) as con:
+        with _lock, _connect() as con:
             if many:
                 con.executemany(sql, params)
             else:
@@ -197,6 +224,12 @@ def _read_one(sql: str, params):
 
 
 def _ensure_db() -> None:
+    key = str(CACHE_DB)
+    ident = _db_identity()
+    if ident is not None:
+        with _db_ready_lock:
+            if _db_ready.get(key) == ident:
+                return
     try:
         CACHE_DB.parent.mkdir(parents=True, exist_ok=True)
     except OSError:
@@ -204,8 +237,12 @@ def _ensure_db() -> None:
         # 写路径由 _execute_write 吞掉, 不影响取数主流程。
         return
     try:
-        with sqlite3.connect(CACHE_DB) as con:
+        with _connect() as con:
             _create_schema(con)
+        ident = _db_identity()
+        if ident is not None:
+            with _db_ready_lock:
+                _db_ready[key] = ident
     except sqlite3.DatabaseError as exc:
         if not _is_corruption(exc):
             # 锁/IO 等瞬时错误: 不隔离正在使用的库, 交给本次读写自行解释
@@ -226,8 +263,12 @@ def _ensure_db() -> None:
             except OSError:
                 pass
         try:
-            with sqlite3.connect(CACHE_DB) as con:
+            with _connect() as con:
                 _create_schema(con)
+            ident = _db_identity()
+            if ident is not None:
+                with _db_ready_lock:
+                    _db_ready[key] = ident
         except sqlite3.DatabaseError:
             # 重建仍失败 (如目录只读/磁盘满): 放弃建库, 让调用方按「无缓存」继续
             if quarantined:
@@ -295,6 +336,42 @@ def set_ohlc_cached(symbol: str, months: int, df: pd.DataFrame) -> None:
 # ---------- 基本面 (每股净资产) 缓存 ----------
 
 
+def _valid_fundamental(v) -> float | None:
+    """基本面数值归一: None/非有限/≤0 → None (与写入侧 _valid 同口径)."""
+    if isinstance(v, (int, float)) and math.isfinite(v) and v > 0:
+        return float(v)
+    return None
+
+
+def get_fundamentals_cached(
+    symbols: list[str], ttl: int = 21600
+) -> dict[str, dict]:
+    """批量读取基本面缓存; 只返回未过期项 (未命中/过期不在结果里).
+
+    与逐条 get_fundamental_cached 语义一致, 但一次查询覆盖全部代码 ——
+    自选 600+ 时逐条调用要付 600 次连接/建表检查 (~0.2s)。
+    负缓存行 (两个指标均为 None) 同样返回, 调用方据此避免 TTL 内重试。
+    """
+    unique = list(dict.fromkeys(symbols))
+    if not unique:
+        return {}
+    _ensure_db()
+    now = time.time()
+    out: dict[str, dict] = {}
+    for chunk in _chunks(unique):
+        rows = _read_all(
+            f"SELECT symbol, book_value, market_cap FROM fundamentals "
+            f"WHERE symbol IN ({','.join('?' * len(chunk))}) AND fetched_at > ?",
+            [*chunk, now - ttl],
+        )
+        for sym, bv, mc in rows:
+            out[sym] = {
+                "book_value": _valid_fundamental(bv),
+                "market_cap": _valid_fundamental(mc),
+            }
+    return out
+
+
 def get_fundamental_cached(symbol: str, ttl: int = 21600) -> dict | None:
     """读取缓存的基本面指标; 未命中/过期返回 None.
 
@@ -302,29 +379,7 @@ def get_fundamental_cached(symbol: str, ttl: int = 21600) -> dict | None:
     {"book_value": None, "market_cap": None}, 与「未缓存」(None) 区分,
     避免 TTL 内重复网络请求。
     """
-    _ensure_db()
-    now = time.time()
-    row = _read_one(
-        "SELECT book_value, market_cap, fetched_at FROM fundamentals WHERE symbol = ?",
-        (symbol,),
-    )
-    if row is None:
-        return None
-    bv, mc, fetched_at = row
-    if fetched_at is None or now - fetched_at > ttl:
-        return None
-    return {
-        "book_value": (
-            float(bv)
-            if isinstance(bv, (int, float)) and math.isfinite(bv) and bv > 0
-            else None
-        ),
-        "market_cap": (
-            float(mc)
-            if isinstance(mc, (int, float)) and math.isfinite(mc) and mc > 0
-            else None
-        ),
-    }
+    return get_fundamentals_cached([symbol], ttl=ttl).get(symbol)
 
 
 def set_fundamental_cached(
@@ -446,7 +501,11 @@ def set_cached(quotes: dict[str, "Quote"]) -> None:
         INSERT INTO quotes (symbol, name, price, prev_close, change_pct, currency, book_value, market_cap, source, fetched_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(symbol) DO UPDATE SET
-            name=excluded.name, price=excluded.price,
+            -- 名称与基本面字段同样 COALESCE: yfinance/OpenBB 路径常回 name=None,
+            -- 无条件覆盖会把上一轮 akshare/长桥/条目写入的中文名抹成 NULL
+            -- (自选表/组合明细随后只剩代码)。空串也视为缺失。
+            name=COALESCE(NULLIF(excluded.name, ''), quotes.name),
+            price=excluded.price,
             prev_close=excluded.prev_close, change_pct=excluded.change_pct,
             currency=excluded.currency, book_value=COALESCE(excluded.book_value, quotes.book_value),
             market_cap=COALESCE(excluded.market_cap, quotes.market_cap),
@@ -516,7 +575,7 @@ def clear_fx() -> int:
     """清汇率磁盘缓存: 数据源偏好 (IBKR 开关) 变化后强制按新链路重取."""
     _ensure_db()
     try:
-        with _lock, sqlite3.connect(CACHE_DB) as con:
+        with _lock, _connect() as con:
             n = con.execute("DELETE FROM fx_rates").rowcount
             con.commit()
             return n
@@ -528,7 +587,7 @@ def clear_quotes() -> int:
     """只清实时行情缓存 (保留 K线/基本面): 数据源偏好切换后强制按新源链重取."""
     _ensure_db()
     try:
-        with _lock, sqlite3.connect(CACHE_DB) as con:
+        with _lock, _connect() as con:
             n = con.execute("DELETE FROM quotes").rowcount
             con.commit()
             return n
@@ -545,7 +604,7 @@ def clear_ohlc() -> int:
     """
     _ensure_db()
     try:
-        with _lock, sqlite3.connect(CACHE_DB) as con:
+        with _lock, _connect() as con:
             n = con.execute("DELETE FROM ohlc_cache").rowcount
             con.commit()
             return n
@@ -557,7 +616,7 @@ def clear_fundamentals() -> int:
     """只清基本面缓存 (PB/市值): EODHD fundamentals 角色切换后重取."""
     _ensure_db()
     try:
-        with _lock, sqlite3.connect(CACHE_DB) as con:
+        with _lock, _connect() as con:
             n = con.execute("DELETE FROM fundamentals").rowcount
             con.commit()
             return n
@@ -568,6 +627,41 @@ def clear_fundamentals() -> int:
 # ---------- 财经日历 (财报/分红事件) 缓存 ----------
 
 
+def _calendar_row_from_payload(payload: str, fetched_at: float):
+    try:
+        data = json.loads(payload)
+        events = data.get("events") if isinstance(data, dict) else None
+        if not isinstance(events, list):
+            return None
+    except Exception:
+        return None
+    return {"events": events, "fetched_at": fetched_at}
+
+
+def get_calendar_rows(keys: list[str]) -> dict[str, dict]:
+    """批量读取日历缓存行; 未命中/载荷损坏的 key 不在结果里.
+
+    与 get_calendar_row 语义一致 (不套 WHERE fetched_at, TTL 交给调用方),
+    但一次查询覆盖整批 key —— 日历页逐票循环时避免 N 次连接/建表检查。
+    """
+    unique = list(dict.fromkeys(keys))
+    if not unique:
+        return {}
+    _ensure_db()
+    out: dict[str, dict] = {}
+    for chunk in _chunks(unique):
+        rows = _read_all(
+            f"SELECT key, payload, fetched_at FROM calendar_cache "
+            f"WHERE key IN ({','.join('?' * len(chunk))})",
+            list(chunk),
+        )
+        for key, payload, fetched_at in rows:
+            row = _calendar_row_from_payload(payload, fetched_at)
+            if row is not None:
+                out[key] = row
+    return out
+
+
 def get_calendar_row(key: str) -> dict | None:
     """读取日历缓存行; 未命中/载荷损坏返回 None.
 
@@ -575,20 +669,7 @@ def get_calendar_row(key: str) -> dict | None:
     单票缓存按「载荷是否为空」区分正/负缓存两个 TTL (events.py), 整批缓
     存统一 6h —— 这里不套 WHERE fetched_at, 只给原始时间戳。
     """
-    _ensure_db()
-    row = _read_one(
-        "SELECT payload, fetched_at FROM calendar_cache WHERE key = ?", (key,)
-    )
-    if row is None:
-        return None
-    try:
-        payload = json.loads(row[0])
-        events = payload.get("events") if isinstance(payload, dict) else None
-        if not isinstance(events, list):
-            return None
-    except Exception:
-        return None
-    return {"events": events, "fetched_at": row[1]}
+    return get_calendar_rows([key]).get(key)
 
 
 def set_calendar_row(key: str, events: list) -> None:
@@ -660,7 +741,7 @@ def info() -> dict:
     _ensure_db()
     now = time.time()
     try:
-        with sqlite3.connect(CACHE_DB) as con:
+        with _connect() as con:
             total = con.execute("SELECT COUNT(*) FROM quotes").fetchone()[0]
             fresh = con.execute(
                 "SELECT COUNT(*) FROM quotes WHERE fetched_at > ?", (now - CACHE_TTL,)
@@ -722,7 +803,7 @@ def clear() -> int:
     """清空全部缓存 (行情 + K线 + 基本面 + 汇率), 返回删除条数."""
     _ensure_db()
     try:
-        with _lock, sqlite3.connect(CACHE_DB) as con:
+        with _lock, _connect() as con:
             n_quotes = con.execute("DELETE FROM quotes").rowcount
             n_ohlc = con.execute("DELETE FROM ohlc_cache").rowcount
             n_fx = con.execute("DELETE FROM fx_rates").rowcount

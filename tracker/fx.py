@@ -14,6 +14,9 @@ _pair_cache: dict[str, tuple[float, float]] = {}
 
 _CFETS_TTL = 120
 _CFETS_TIMEOUT = 8.0
+# Yahoo 货币对硬超时: OpenBB/yfinance 偶发内部重试, TCP 半开时可挂到分钟级。
+# 汇率在首屏/对比折算的关键路径上, 不能无限等一个可降级的源。
+_YAHOO_FX_TIMEOUT = 8.0
 _cfets_cache: tuple[float, dict[str, float]] = (0.0, {})
 
 # 历史汇率 (比例线汇率调整用): 6 小时进程内缓存, 键含起止日期
@@ -35,8 +38,14 @@ def _yahoo_pair(pair: str) -> float | None:
     rate = None
     try:
         start = (date.today() - timedelta(days=30)).isoformat()
-        res = _obb().currency.price.historical(
-            symbol=pair, provider="yfinance", start_date=start
+        # _obb() 在计时区外求值 (冷启动 5s+ 不能吃掉超时预算), 只把真正的
+        # 网络调用放进 with_timeout。
+        res = with_timeout(
+            _obb().currency.price.historical,
+            _YAHOO_FX_TIMEOUT,
+            symbol=pair,
+            provider="yfinance",
+            start_date=start,
         )
         df = res.to_dataframe()
         if "close" not in df.columns or df.empty:
@@ -159,7 +168,9 @@ def _yahoo_pair_history(pair: str, start_date: str, end_date: str | None = None)
     if end_date:
         kwargs["end_date"] = end_date
     try:
-        df = _obb().currency.price.historical(**kwargs).to_dataframe()
+        df = with_timeout(
+            _obb().currency.price.historical, _YAHOO_FX_TIMEOUT, **kwargs
+        ).to_dataframe()
     except Exception:
         return None
     if df is None or df.empty or "close" not in df.columns:

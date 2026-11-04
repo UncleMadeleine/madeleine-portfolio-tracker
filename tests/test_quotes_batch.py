@@ -86,6 +86,36 @@ def test_progress_callback_tracks_settled(monkeypatch):
     assert any(label == "MSFT" for _, _, label in seen)
 
 
+def test_global_and_cn_domains_fetch_concurrently(monkeypatch):
+    """cn 侧域与 global 主域必须并行: 用 Barrier 证明两域同时在跑.
+
+    串行实现会在 2s 后 BrokenBarrierError (global 先等不到 cn, 或反之)。
+    """
+    import threading
+
+    barrier = threading.Barrier(2, timeout=2.0)
+
+    def fake_fetch_domain(
+        domain, plist, prefer_akshare, errors, crypto_source="auto", on_done=None
+    ):
+        barrier.wait()
+        out = {}
+        for p in plist:
+            out[p.yahoo] = _q(p.yahoo)
+            if on_done is not None:
+                on_done(p.yahoo)
+        return out
+
+    monkeypatch.setattr(orch, "_fetch_domain", fake_fetch_domain)
+    _patch_batch(monkeypatch, set())  # global 批量不命中 → 也走 _fetch_domain
+
+    quotes, errors, _notes = orch.get_quotes(
+        ["AAPL", "600519.SS"], use_ibkr=False, use_longport=False
+    )
+    assert set(quotes) == {"AAPL", "600519.SS"}
+    assert not errors
+
+
 def test_refresh_bypasses_quote_cache_and_negative(monkeypatch):
     """--refresh: 跳过 5min 磁盘行情缓存并清负缓存, 立即回源重试."""
     cache_mod.set_cached({"AAPL": _q("AAPL", 100.0)})

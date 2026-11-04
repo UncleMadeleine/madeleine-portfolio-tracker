@@ -44,6 +44,7 @@ from datetime import date, datetime, timedelta
 
 from . import cache as cache_mod
 from .symbols import parse
+from .util import with_timeout
 
 __all__ = [
     "EVENT_TYPE_LABELS",
@@ -75,6 +76,10 @@ _CN_PERIOD_BACKDAYS = 130
 _CN_DIVIDEND_BACKDAYS = 450
 # 单票 yfinance 取数间隔 (秒): 防连发 429; 与 tahlocks 无关的简单限时
 _YF_PAUSE = 0.2
+# 单次网络请求硬超时 (秒): 日历是可选附加信息, 不能让一个 TCP 半开的
+# yfinance/akshare 请求把整页/整条 CLI 拖到分钟级。
+_YF_TIMEOUT = 10.0
+_AK_TIMEOUT = 15.0
 
 # 事件类型 → 展示名 (CLI/UI 共用)
 EVENT_TYPE_LABELS = {
@@ -262,7 +267,7 @@ def _yf_calendar_rows(symbol: str) -> list[dict]:
     """yf.Ticker(symbol).calendar → 原始事件行 (不含窗口过滤)."""
     import yfinance as yf
 
-    cal = yf.Ticker(symbol).calendar
+    cal = with_timeout(lambda: yf.Ticker(symbol).calendar, _YF_TIMEOUT)
     if not isinstance(cal, dict):
         return []
     out: list[dict] = []
@@ -339,8 +344,12 @@ def _fetch_global_events(
     todo: list[str] = []
     if reporter is not None:
         reporter.plan(len(symbols))
+    # 批量读缓存: 逐票 get_calendar_row 在大自选下是 N 次 SQLite 往返。
+    cached_rows = (
+        {} if refresh else cache_mod.get_calendar_rows([f"g:{s}" for s in symbols])
+    )
     for s in symbols:
-        row = None if refresh else cache_mod.get_calendar_row(f"g:{s}")
+        row = None if refresh else cached_rows.get(f"g:{s}")
         if row is not None:
             evs = row["events"]
             ttl = CAL_TTL if evs else CAL_NEG_TTL
@@ -661,7 +670,9 @@ def _fetch_cn_yysj_board(
 
     try:
         with _quiet_stderr():
-            df = ak.stock_yysj_em(symbol=board, date=period)
+            df = with_timeout(
+                ak.stock_yysj_em, _AK_TIMEOUT, symbol=board, date=period
+            )
     except Exception as e:  # noqa: BLE001 - 单板失败注记并继续另一板
         if reporter is not None:
             reporter.step(f"{period} {board}")
@@ -700,7 +711,7 @@ def _fetch_cn_fhps_period(
 
     try:
         with _quiet_stderr():
-            df = ak.stock_fhps_em(date=period)
+            df = with_timeout(ak.stock_fhps_em, _AK_TIMEOUT, date=period)
     except Exception as e:  # noqa: BLE001 - 分红失败只在 events 缺口上可见
         if reporter is not None:
             reporter.step(f"{period} 分红")

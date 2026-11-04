@@ -33,6 +33,10 @@ def cfets(monkeypatch):
         "_cfets_rate",
         lambda s, d: _TABLE[s] / _TABLE[d] if s in _TABLE and d in _TABLE else None,
     )
+    # 非法币/表外币种 (如 BTC→CNY) 会落到 Yahoo 兜底。测试里 socket 已被
+    # conftest 拦住, 但 OpenBB/yfinance 的内部重试仍要耗 30s+; 直接钉死为
+    # 不可用, 让「缺汇率」路径立即返回 (本文件用例本来就不测 Yahoo 兜底)。
+    monkeypatch.setattr(fx, "_pair_rate", lambda s, d: None)
 
 
 class TestValuationCurrency:

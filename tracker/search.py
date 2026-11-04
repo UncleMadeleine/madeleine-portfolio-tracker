@@ -13,6 +13,7 @@ provider 搜索失败时返回 [] (空结果), 最终由各域的合法代码直
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 
 from .providers import PROVIDERS
@@ -33,16 +34,30 @@ def search_grouped(query: str, limit_per_domain: int = 5) -> dict[str, list[dict
     q = (query or "").strip()
     if not q:
         return {t: [] for t in _DOMAINS}
-    grouped: dict[str, list[dict]] = {}
-    for t in _DOMAINS:
+
+    def _one(domain: str) -> list[dict]:
         try:
-            entries = PROVIDERS[t].search(q, limit=limit_per_domain)
+            entries = PROVIDERS[domain].search(q, limit=limit_per_domain)
         except NotImplementedError:
             entries = []
         except Exception:
             entries = []
-        grouped[t] = [asdict(e) for e in entries]
-    return grouped
+        return [asdict(e) for e in entries]
+
+    # 三域互相独立, 原先串行发网络 → 搜索延迟是三个域之和 (最坏 3×超时)。
+    # global 域留在当前线程执行: 它的第一个源是 IBKR, ib_async 的 asyncio
+    # loop 绑定在创建线程上, 放到 worker 里可能让后续主线程调用失效。
+    # 另外两域 (东财 requests / yfinance Search) 都是无状态的单次 HTTP 调用,
+    # 并发安全。
+    results: dict[str, list[dict]] = {}
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="search") as pool:
+        futures = {
+            t: pool.submit(_one, t) for t in _DOMAINS if t != "global"
+        }
+        results["global"] = _one("global")
+        for t, fut in futures.items():
+            results[t] = fut.result()
+    return {t: results.get(t, []) for t in _DOMAINS}
 
 
 def search_symbols(

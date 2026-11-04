@@ -50,7 +50,9 @@ dev = [
     "pytest>=8.0.0",
     "pytest-timeout>=2.4.0",
     "pytest-xdist>=3.8.0",
+    "pytest-cov>=5.0.0",
     "build>=1.0",
+    "ruff>=0.15.0",
 ]
 # 全部功能 (源码树开发环境等价于 requirements.txt)
 all = [
@@ -82,4 +84,27 @@ tracker = [
     "templates/*.json",
     "templates/*.toml",
     "assets/*.js",
+]
+
+[tool.ruff]
+# 与 requires-python 保持一致, 让 lint 按 3.10 语法判断可用性
+target-version = "py310"
+line-length = 88
+
+[tool.ruff.lint]
+# 先固定当前 CI 实际执行的规则集 (默认 E4/E7/E9/F), 后续可逐步加入
+# I/B/UP/SIM —— 目前全量启用会产生 100+ 处历史风格差异, 留作独立改动。
+select = ["E4", "E7", "E9", "F"]
+
+[tool.coverage.run]
+source = ["tracker"]
+branch = false
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_lines = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "pragma: no cover",
 ]

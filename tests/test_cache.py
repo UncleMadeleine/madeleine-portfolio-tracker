@@ -150,6 +150,76 @@ class TestCacheCoalesce:
         assert hits["600519.SS"].book_value == pytest.approx(38.0)
         assert hits["600519.SS"].market_cap == pytest.approx(1.9e12)
 
+    def test_set_cached_keeps_name_when_new_source_has_none(self, tmp_path, monkeypatch):
+        """yfinance 路径常回 name=None: 不能把长桥/akshare 写的中文名抹掉."""
+        db = tmp_path / "var" / "quotes_cache.db"
+        monkeypatch.setattr(cache_mod, "CACHE_DB", db)
+        cache_mod._ensure_db()
+        cache_mod.set_cached(
+            {"AAPL": Quote("AAPL", "苹果", 100.0, None, None, "USD", source="longport")}
+        )
+        cache_mod.set_cached(
+            {"AAPL": Quote("AAPL", None, 101.0, None, None, "USD", source="yfinance")}
+        )
+        hits, _ = cache_mod.get_cached_with_age(["AAPL"])
+        assert hits["AAPL"].name == "苹果"
+        assert hits["AAPL"].price == pytest.approx(101.0)
+        assert hits["AAPL"].source == "yfinance"
+
+    def test_set_cached_keeps_name_when_new_source_has_empty_string(
+        self, tmp_path, monkeypatch
+    ):
+        db = tmp_path / "var" / "quotes_cache.db"
+        monkeypatch.setattr(cache_mod, "CACHE_DB", db)
+        cache_mod._ensure_db()
+        cache_mod.set_cached(
+            {"AAPL": Quote("AAPL", "Apple", 100.0, None, None, "USD")}
+        )
+        cache_mod.set_cached(
+            {"AAPL": Quote("AAPL", "", 101.0, None, None, "USD")}
+        )
+        hits, _ = cache_mod.get_cached_with_age(["AAPL"])
+        assert hits["AAPL"].name == "Apple"
+
+
+class TestBatchReads:
+    def test_get_fundamentals_cached_batch(self, tmp_path, monkeypatch):
+        """批量读与逐条读语义一致: 命中/过期/负缓存/缺失各归各位."""
+        db = tmp_path / "var" / "quotes_cache.db"
+        monkeypatch.setattr(cache_mod, "CACHE_DB", db)
+        cache_mod._ensure_db()
+        cache_mod.set_fundamental_cached("AAPL", 12.5, market_cap=3e12)
+        cache_mod.set_fundamental_cached("MSFT", None, market_cap=None)  # 负缓存
+        cache_mod.set_fundamental_cached("OLD", 1.0)
+        with sqlite3.connect(db) as con:
+            con.execute(
+                "UPDATE fundamentals SET fetched_at = ? WHERE symbol = 'OLD'",
+                (time.time() - 10**6,),
+            )
+            con.commit()
+
+        out = cache_mod.get_fundamentals_cached(
+            ["AAPL", "MSFT", "OLD", "MISSING", "AAPL"], ttl=3600
+        )
+        assert out["AAPL"] == {"book_value": 12.5, "market_cap": 3e12}
+        assert out["MSFT"] == {"book_value": None, "market_cap": None}
+        assert "OLD" not in out  # 过期
+        assert "MISSING" not in out
+        # 逐条 API 仍与批量一致
+        assert cache_mod.get_fundamental_cached("AAPL", ttl=3600) == out["AAPL"]
+
+    def test_get_calendar_rows_batch(self, tmp_path, monkeypatch):
+        db = tmp_path / "var" / "quotes_cache.db"
+        monkeypatch.setattr(cache_mod, "CACHE_DB", db)
+        cache_mod._ensure_db()
+        cache_mod.set_calendar_row("g:AAPL", [{"type": "earnings", "date": "2026-11-05"}])
+        cache_mod.set_calendar_row("g:MSFT", [])  # 负缓存
+        out = cache_mod.get_calendar_rows(["g:AAPL", "g:MSFT", "g:MISSING"])
+        assert out["g:AAPL"]["events"][0]["date"] == "2026-11-05"
+        assert out["g:MSFT"]["events"] == []
+        assert "g:MISSING" not in out
+        assert cache_mod.get_calendar_row("g:AAPL") == out["g:AAPL"]
+
 
 def test_ensure_db_does_not_quarantine_locked_database(tmp_path, monkeypatch):
     """database is locked 属瞬时错误: 不能把正在使用的库 os.replace 隔离."""

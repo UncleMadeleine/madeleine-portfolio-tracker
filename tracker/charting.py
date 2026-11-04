@@ -1007,6 +1007,42 @@ def kline_component_js() -> str:
     return _lwc_source() + "\n" + _LWC_COMPONENT_MODULE
 
 
+def _base_payload(
+    *,
+    title: str,
+    up: str,
+    down: str,
+    precision: int | None = None,
+    init_bars: int = 140,
+    height: int = 560,
+) -> dict:
+    """四种图表 payload 的公共外壳 (K线/对比/折线/加密货币对比共用).
+
+    这些键必须始终存在: 前端 JS 在模式切换时按固定字段读取, 漏一个就会
+    让同一组件在另一种图表下进 undefined 分支。precision=None 用于加密
+    货币对比模式 (精度按每个币各自给出, 顶层不声明)。
+    """
+    payload: dict = {
+        "title": title,
+        "up": up,
+        "down": down,
+        "initBars": init_bars,
+        "height": height,
+        "candles": [],
+        "volume": [],
+        "mas": [],
+        "boll": [],
+        "macd": None,
+        "rsi": None,
+        "kdj": None,
+        "options": _lwc_options(),
+    }
+    if precision is not None:
+        payload["precision"] = precision
+        payload["minMove"] = float(10 ** (-precision))
+    return payload
+
+
 def kline_payload(
     df: pd.DataFrame,
     symbol: str,
@@ -1142,46 +1178,52 @@ def kline_payload(
                 "jColor": KDJ_J_COLOR,
             }
 
-    payload = {
-        "title": title,
-        "up": up,
-        "down": down,
-        "precision": precision,
-        "minMove": 10**-precision,
-        "initBars": init_bars,
-        "height": height,
-        "candles": candles,
-        "volume": vols if show_volume else [],
-        "mas": ma_series,
-        "boll": boll_series,
-        "macd": macd_data,
-        "rsi": rsi_data,
-        "kdj": kdj_data,
-        "options": _lwc_options(),
-        "candleOpts": {
-            "upColor": up,
-            "downColor": down,
-            "wickUpColor": up,
-            "wickDownColor": down,
-            "borderVisible": False,
-            "priceLineVisible": True,
-            "priceLineStyle": 2,
-            "priceLineColor": _rgba(
-                up
-                if last["close"]
-                >= (float(df["close"].iloc[-2]) if len(df) > 1 else float(last["open"]))
-                else down,
-                0.7,
-            ),
-            "priceFormat": {
-                "type": "price",
-                "precision": precision,
-                "minMove": 10**-precision,
+    payload = _base_payload(
+        title=title,
+        up=up,
+        down=down,
+        precision=precision,
+        init_bars=init_bars,
+        height=height,
+    )
+    payload.update(
+        {
+            "candles": candles,
+            "volume": vols if show_volume else [],
+            "mas": ma_series,
+            "boll": boll_series,
+            "macd": macd_data,
+            "rsi": rsi_data,
+            "kdj": kdj_data,
+            "candleOpts": {
+                "upColor": up,
+                "downColor": down,
+                "wickUpColor": up,
+                "wickDownColor": down,
+                "borderVisible": False,
+                "priceLineVisible": True,
+                "priceLineStyle": 2,
+                "priceLineColor": _rgba(
+                    up
+                    if last["close"]
+                    >= (
+                        float(df["close"].iloc[-2])
+                        if len(df) > 1
+                        else float(last["open"])
+                    )
+                    else down,
+                    0.7,
+                ),
+                "priceFormat": {
+                    "type": "price",
+                    "precision": precision,
+                    "minMove": 10**-precision,
+                },
             },
-        },
-    }
-    # queryId 用于视口锚点失效判定 (换代码后回退初始区间)
-    payload["queryId"] = query_id
+            # queryId 用于视口锚点失效判定 (换代码后回退初始区间)
+            "queryId": query_id,
+        }
+    )
     return payload
 
 
@@ -1358,33 +1400,29 @@ def compare_payload(
     axis = {p["time"] for ln in lines for p in ln["data"]}
     if ratio:
         axis |= {p["time"] for p in ratio.get("data", [])}
-    return {
-        "mode": "compare",
-        "title": title
+    payload = _base_payload(
+        title=title
         or (
             f"{names} · {PERIOD_LABELS.get(period, '日K')}"
             + (" · 归一化" if normalize else "")
         ),
-        "up": up,
-        "down": down,
-        "precision": payload_precision,
-        "minMove": float(10 ** (-payload_precision)),
-        "initBars": init_bars,
-        "height": height,
-        "lines": lines,
-        "ratio": ratio,
-        # 全系列时间轴 (并集, 升序去重): 视口锚点的索引空间 (对比模式
-        # candles 为空, 不提供 axis 的话拖动位置无法跨重绘还原)
-        "axis": sorted(axis),
-        "candles": [],
-        "volume": [],
-        "mas": [],
-        "boll": [],
-        "macd": None,
-        "rsi": None,
-        "kdj": None,
-        "options": _lwc_options(),
-    }
+        up=up,
+        down=down,
+        precision=payload_precision,
+        init_bars=init_bars,
+        height=height,
+    )
+    payload.update(
+        {
+            "mode": "compare",
+            "lines": lines,
+            "ratio": ratio,
+            # 全系列时间轴 (并集, 升序去重): 视口锚点的索引空间 (对比模式
+            # candles 为空, 不提供 axis 的话拖动位置无法跨重绘还原)
+            "axis": sorted(axis),
+        }
+    )
+    return payload
 
 
 def line_payload(
@@ -1434,43 +1472,38 @@ def line_payload(
     up, down = (
         (INTL_UP_COLOR, INTL_DOWN_COLOR) if green_up else (CN_UP_COLOR, CN_DOWN_COLOR)
     )
-    label = title or series_name
-    return {
-        "mode": "compare",
-        "title": label,
-        "up": up,
-        "down": down,
-        "precision": precision,
-        "minMove": float(10 ** (-precision)),
-        "initBars": init_bars,
-        "height": height,
-        "lines": [
-            {
-                "name": series_name,
-                "color": color or COMPARE_PALETTE[0],
-                "data": data,
-            }
-        ],
-        "ratio": None,
-        # compare 模式下的水平参考线 (如 AH 溢价 0% 同价线)
-        "reference": reference,
-        "referenceLabel": reference_label,
-        # 数值后缀 (如 "%"): 悬浮提示展示 "30.0%" 而不是裸数字
-        "unit": unit,
-        # 单序列折线不显示「相对首日涨跌」: 溢价率/比率本身已是百分比,
-        # 再叠一个相对涨幅容易被误读成百分点变化
-        "showChange": False,
-        "queryId": query_id,
-        "axis": [p["time"] for p in data],
-        "candles": [],
-        "volume": [],
-        "mas": [],
-        "boll": [],
-        "macd": None,
-        "rsi": None,
-        "kdj": None,
-        "options": _lwc_options(),
-    }
+    payload = _base_payload(
+        title=title or series_name,
+        up=up,
+        down=down,
+        precision=precision,
+        init_bars=init_bars,
+        height=height,
+    )
+    payload.update(
+        {
+            "mode": "compare",
+            "lines": [
+                {
+                    "name": series_name,
+                    "color": color or COMPARE_PALETTE[0],
+                    "data": data,
+                }
+            ],
+            "ratio": None,
+            # compare 模式下的水平参考线 (如 AH 溢价 0% 同价线)
+            "reference": reference,
+            "referenceLabel": reference_label,
+            # 数值后缀 (如 "%"): 悬浮提示展示 "30.0%" 而不是裸数字
+            "unit": unit,
+            # 单序列折线不显示「相对首日涨跌」: 溢价率/比率本身已是百分比,
+            # 再叠一个相对涨幅容易被误读成百分点变化
+            "showChange": False,
+            "queryId": query_id,
+            "axis": [p["time"] for p in data],
+        }
+    )
+    return payload
 
 
 def crypto_compare_payload(
@@ -1529,25 +1562,22 @@ def crypto_compare_payload(
     up, down = (
         (INTL_UP_COLOR, INTL_DOWN_COLOR) if green_up else (CN_UP_COLOR, CN_DOWN_COLOR)
     )
-    return {
-        "mode": "crypto",
-        "title": f"{names} · {PERIOD_LABELS.get(period, '日K')}",
-        "up": up,
-        "down": down,
-        "initBars": init_bars,
-        "height": height,
-        "coins": coins,
-        # 全系列时间轴 (并集, 升序去重): 视口锚点的索引空间 (同 compare 模式)
-        "axis": sorted({c["time"] for cn in coins for c in cn["candles"]}),
-        "candles": [],
-        "volume": [],
-        "mas": [],
-        "boll": [],
-        "macd": None,
-        "rsi": None,
-        "kdj": None,
-        "options": _lwc_options(),
-    }
+    payload = _base_payload(
+        title=f"{names} · {PERIOD_LABELS.get(period, '日K')}",
+        up=up,
+        down=down,
+        init_bars=init_bars,
+        height=height,
+    )
+    payload.update(
+        {
+            "mode": "crypto",
+            "coins": coins,
+            # 全系列时间轴 (并集, 升序去重): 视口锚点的索引空间 (同 compare 模式)
+            "axis": sorted({c["time"] for cn in coins for c in cn["candles"]}),
+        }
+    )
+    return payload
 
 
 def summarize_ohlc(df: pd.DataFrame, mas=DEFAULT_MA) -> dict:

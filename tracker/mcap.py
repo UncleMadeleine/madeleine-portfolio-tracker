@@ -23,11 +23,16 @@ import pandas as pd
 
 from . import cache as cache_mod
 from .symbols import Market, is_pence, parse
+from .util import with_timeout
 
 # 东财估值分析: 报表级低频数据, 6h 与 fundamentals 同口径
 MCAP_EM_TTL = 21600
 # 历史股本: 变动由增发/回购公告驱动, 7 天内不影响历史形状
 MCAP_SHARES_TTL = 7 * 86400
+# 第三方请求硬超时 (秒): akshare/yfinance 内部 requests 无 timeout,
+# TCP 半开时可挂到分钟级, 而市值对比是同步渲染路径。
+_EM_TIMEOUT = 15.0
+_SHARES_TIMEOUT = 15.0
 
 SOURCE_LABELS = {
     "em": "东财历史总市值",
@@ -215,7 +220,7 @@ def _em_history(bare: str, refresh: bool = False) -> pd.DataFrame | None:
     import akshare as ak
 
     try:
-        raw = ak.stock_value_em(symbol=bare)
+        raw = with_timeout(ak.stock_value_em, _EM_TIMEOUT, symbol=bare)
     except Exception:
         return None
     if raw is None or raw.empty or "总市值" not in raw.columns:
@@ -242,7 +247,10 @@ def _shares_history(yahoo: str, refresh: bool = False) -> pd.DataFrame | None:
     try:
         import yfinance as yf
 
-        srs = yf.Ticker(yahoo).get_shares_full(start="1980-01-01")
+        ticker = yf.Ticker(yahoo)
+        srs = with_timeout(
+            ticker.get_shares_full, _SHARES_TIMEOUT, start="1980-01-01"
+        )
     except Exception:
         return None
     if srs is None or len(srs) == 0:

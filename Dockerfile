@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 # Madeleine Portfolio Tracker — Streamlit UI 容器镜像
 #
 # 构建 (默认含 UI 依赖):
@@ -16,8 +17,9 @@ FROM python:3.12-slim
 # 可选依赖组合 (pyproject.toml extras; 默认仅 UI, 镜像最小)
 ARG EXTRAS=ui
 
-ENV PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+# 不再设 PIP_NO_CACHE_DIR: 下面用 BuildKit cache mount 复用 pip 下载缓存,
+# 改源码后重建时依赖轮子不必重新下载 (openbb/akshare 体积很大)。
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     # 数据目录: 挂卷持久化 (持仓/自选/设置/行情缓存/K线 HTML)
     TRACKER_HOME=/data \
     STREAMLIT_BROWSER_GATHER_USAGE_STATS=false \
@@ -32,7 +34,8 @@ RUN useradd -r -m -u 10001 appuser \
 WORKDIR /data
 
 COPY . /src
-RUN pip install --no-cache-dir "/src[${EXTRAS}]" \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install "/src[${EXTRAS}]" \
     && rm -rf /src
 
 USER appuser

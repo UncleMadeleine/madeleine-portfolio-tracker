@@ -60,12 +60,16 @@ def _load_cached(
     refresh=True: 跳过缓存读取, 全部视为未命中 —— 供用户显式「强制刷新」
     穿透 6h 负缓存 (失败结果同样落库, 但手动刷新不应被上一次失败锁住)。
     """
+    unique = list(dict.fromkeys(symbols))
     if refresh:
-        return {}, list(dict.fromkeys(symbols))
+        return {}, unique
+    # 批量查: 逐条 get_fundamental_cached 在自选 600+ 时要付 600 次
+    # 连接/建表检查, 一次 IN 查询即可。
+    cached = cache_mod.get_fundamentals_cached(unique, ttl=_METRICS_TTL)
     out: dict[str, dict] = {}
     missing: list[str] = []
-    for s in dict.fromkeys(symbols):
-        hit = cache_mod.get_fundamental_cached(s, ttl=_METRICS_TTL)
+    for s in unique:
+        hit = cached.get(s)
         if hit is not None:
             out[s] = hit
         else:

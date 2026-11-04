@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from functools import lru_cache
 
 
 class Market(str, Enum):
@@ -542,7 +543,8 @@ def type_for_symbol(yahoo: str) -> str:
     return "global"
 
 
-def parse(symbol: str) -> ParsedSymbol:
+@lru_cache(maxsize=4096)
+def _parse_cached(symbol: str) -> ParsedSymbol:
     # 非字符串 / 空代码显式报错: 手改 JSON 写成 "symbol": 700 时不再抛
     # AttributeError('int' object has no attribute 'strip') 穿透成裸 traceback,
     # 也避免空串被静默当成合法美股 (yahoo="") 去请求数据源。
@@ -631,3 +633,18 @@ def parse(symbol: str) -> ParsedSymbol:
         is_b_share=is_b_share,
         type=type_for_symbol(yahoo),
     )
+
+
+def parse(symbol: str) -> ParsedSymbol:
+    """代码 → ParsedSymbol (结果进程内缓存; 纯函数, 返回 frozen dataclass).
+
+    自选 600+ 时读盘/视图/取数会反复 parse 同一批代码 (一次约 5µs, 上千次
+    就是毫秒级)。缓存键是原始输入, raw 字段保留原始大小写, 语义不变。
+    非字符串先在这里拦截: 直接交给 lru_cache 会让 list 之类不可哈希输入
+    抛 TypeError, 丢掉既有的可读 ValueError。
+    """
+    if not isinstance(symbol, str):
+        raise ValueError(
+            f"代码必须是字符串 (得到 {type(symbol).__name__}: {symbol!r})"
+        )
+    return _parse_cached(symbol)

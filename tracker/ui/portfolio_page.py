@@ -95,6 +95,9 @@ _REFRESH_POLL = 2.0
 _REFRESH_HISTORY = 64
 # session_state 里的首屏刷新计划 (每次渲染重建, 看门狗据此调度)
 _PLAN_KEY = "_first_screen_plan"
+# 本会话最近一次写入历史净值的记录指纹: 用户每次交互都会 rerun, 数值没变时
+# 不必反复 upsert 同一个 (day, base) 行 (每次都是磁盘写 + schema 检查)。
+_NAV_SNAPSHOT_KEY = "_nav_snapshot_written"
 
 # ---------- 周期保温: 服务长期运行时数据持续更新 ----------
 # 页面开着 → 看门狗片段按周期主动重取 (用户看到的数据滚动更新);
@@ -1131,16 +1134,19 @@ def render_portfolio_page() -> None:
     # 「当天首次」写一次更稳 —— 冷启动行情不全时先写的偏低值, 会在后台
     # 刷新完成后的 rerun 被修正。写失败只记日志, 不能拖垮组合页。
     if not view.empty:
-        try:
-            nav.save_rows(
-                [
-                    nav.record_from_summary(
-                        datetime.now().date().isoformat(), base, summary, view
-                    )
-                ]
-            )
-        except Exception as e:  # noqa: BLE001 - 历史净值是附加能力
-            logging.getLogger(__name__).warning("历史净值保存失败: %s", e)
+        row = nav.record_from_summary(
+            datetime.now().date().isoformat(), base, summary, view
+        )
+        # 值与上次写入完全一致时跳过: 页面交互/看门狗 rerun 很频繁, 同一行
+        # 反复 upsert 只是无谓的磁盘写。后台刷新修正了数值 (或换了日期/币种/
+        # 持仓明细) 时指纹变化, 照常覆盖。
+        if row != st.session_state.get(_NAV_SNAPSHOT_KEY):
+            try:
+                nav.save_rows([row])
+            except Exception as e:  # noqa: BLE001 - 历史净值是附加能力
+                logging.getLogger(__name__).warning("历史净值保存失败: %s", e)
+            else:
+                st.session_state[_NAV_SNAPSHOT_KEY] = row
 
     wview, wissues = build_watchlist_view(watch_entries, quotes)
     issues += wissues

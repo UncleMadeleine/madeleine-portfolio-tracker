@@ -10,7 +10,8 @@
 from __future__ import annotations
 
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from queue import Empty, Queue
 from threading import Lock
 
 import pandas as pd
@@ -281,16 +282,58 @@ def get_quotes(
     # 全球域: 剩余代码先批量 (yfinance), 批量未命中再逐个走源链 (域内并发)。
     # 负缓存前置到批量层: 批量请求同样包含这些死代码, 不剔除会整批重发并
     # 触发数据源限流 (单代码源链阶段原先才过滤, 批量层一直漏着)。
-    # 域间串行保持日志可读, 域内并发: 死代码单次 10s+, 串行会拖死大批量场景。
-    for domain in ("global", "cn", "crypto"):
-        plist = [
+    #
+    # 域间并发: cn/crypto 在各自线程取数, global 留在当前线程 —— global 的
+    # 批量路径会首次初始化 OpenBB (signal 限制, 在非主线程可能失败), 且
+    # IBKR 预取也只在主线程做。这样冷启动 600 只混合组合的等待从
+    # 「global 批量 + cn + crypto」降到「三者最慢的一个」。
+    # 代价: cn 域失败代码回落 yfinance 时会与 global 批量短暂叠加 Yahoo 压力;
+    # 批量侧已有「连续空批早停」兜底 (_yahoo_batch), 未命中项会落逐代码源链。
+    def _prepare(domain: str) -> list[ParsedSymbol]:
+        return [
             p
             for p in _neg_filtered(groups.get(domain, []), errors)
             if p.yahoo not in quotes
         ]
-        if not plist:
-            continue
-        if domain == "global":
+
+    # 侧域完成事件经线程安全队列回到主线程: Streamlit 的 progress 只能在
+    # 主线程调用, worker 里直接 _emit 会踩 ScriptRunner 上下文。
+    side_done: Queue[str] = Queue()
+
+    def _run_side(domain: str, plist: list[ParsedSymbol]):
+        """侧域 (cn/crypto) 取数: 自己的 errors, 不碰共享状态."""
+        errs: dict[str, str] = {}
+        out = _fetch_domain(
+            domain,
+            plist,
+            prefer_akshare,
+            errs,
+            crypto_source,
+            on_done=side_done.put,
+        )
+        return out, errs
+
+    def _drain_side_progress() -> None:
+        while True:
+            try:
+                yahoo = side_done.get_nowait()
+            except Empty:
+                return
+            settled.add(yahoo)
+            _emit(yahoo)
+
+    global_plist = _prepare("global")
+    side_plists = {d: _prepare(d) for d in ("cn", "crypto")}
+
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="quote-domain") as pool:
+        # future → domain (完成顺序与提交顺序无关)
+        pending = {
+            pool.submit(_run_side, domain, plist): domain
+            for domain, plist in side_plists.items()
+            if plist
+        }
+
+        if global_plist:
             # EODHD quotes=primary: 先走 EODHD 批量 (s= 参数, 每批 15 个),
             # 批量未命中的代码再回落 yfinance 批量/逐代码源链。EODHD 未启用或
             # 仅 fallback 时保持原有 yfinance 批量优化 (自选 600+ 必需)。
@@ -300,9 +343,11 @@ def get_quotes(
                 # 与 GlobalStocksProvider.quote_sources 保持一致: 显式开启
                 # prefer_akshare 时港股必须 akshare 先跑, 否则 EODHD 批量
                 # 会抢先命中港股, 逐代码源链里的 akshare 永远没有机会执行。
-                eod_plist = plist
+                eod_plist = global_plist
                 if prefer_akshare:
-                    eod_plist = [p for p in plist if p.market is not Market.HK]
+                    eod_plist = [
+                        p for p in global_plist if p.market is not Market.HK
+                    ]
                 if eod_plist:
                     _emit("EODHD 批量行情")
                     try:
@@ -314,16 +359,18 @@ def get_quotes(
                     except Exception as e:  # noqa: BLE001 - 批量失败回落 yfinance
                         notes.append(f"EODHD 批量行情异常: {e} (已回退默认源)")
                     _emit("EODHD 批量行情")
-                    plist = [p for p in plist if p.yahoo not in quotes]
-                    if not plist:
-                        continue
+                    global_plist = [
+                        p for p in global_plist if p.yahoo not in quotes
+                    ]
 
             # 港股 akshare 优先 (prefer_akshare) 时不能让 yfinance 批量抢先:
             # 批量的结果会直接进 quotes, 逐代码源链就不再执行, 港股永远走
             # yfinance (与设置页/CLI 声明的"港股源顺序翻转"矛盾)。
-            batch_plist = plist
+            batch_plist = global_plist
             if prefer_akshare:
-                batch_plist = [p for p in plist if p.market is not Market.HK]
+                batch_plist = [
+                    p for p in global_plist if p.market is not Market.HK
+                ]
             if batch_plist:
                 _emit("yfinance 批量行情")
                 try:
@@ -332,32 +379,57 @@ def get_quotes(
                     settled.update(batch)
                 except Exception as e:  # noqa: BLE001 - 批量失败不能让整个域崩
                     # 批量是优化不是必需: 失败则全部代码落逐代码源链 (那里每源
-                    # 单独 try, 且域间循环无保护 —— 一抛会连带 cn/crypto 域不执行)
+                    # 单独 try)。逐代码阶段异常也会被 _fetch_domain 收敛成单码错误。
                     notes.append(f"yfinance 批量行情异常: {e} (已回退逐代码取数)")
                 _emit("yfinance 批量行情")
-                plist = [p for p in plist if p.yahoo not in quotes]
-                if not plist:
+                global_plist = [p for p in global_plist if p.yahoo not in quotes]
+
+            if global_plist:
+                if progress is not None:
+
+                    def _on_done(yahoo: str) -> None:
+                        settled.add(yahoo)
+                        _emit(yahoo)
+
+                    quotes.update(
+                        _fetch_domain(
+                            "global",
+                            global_plist,
+                            prefer_akshare,
+                            errors,
+                            crypto_source,
+                            on_done=_on_done,
+                        )
+                    )
+                else:
+                    quotes.update(
+                        _fetch_domain(
+                            "global",
+                            global_plist,
+                            prefer_akshare,
+                            errors,
+                            crypto_source,
+                        )
+                    )
+
+        # 侧域此时多半已完成 (global 批量/回退是主耗时); 边等边把完成事件
+        # 转成进度 (global 缺失时也能逐只推进), 异常不拖垮其它域。
+        _drain_side_progress()
+        while pending:
+            done_futs, _ = wait(
+                list(pending), timeout=0.1, return_when=FIRST_COMPLETED
+            )
+            _drain_side_progress()
+            for fut in done_futs:
+                domain = pending.pop(fut)
+                try:
+                    out, errs = fut.result()
+                except Exception as e:  # noqa: BLE001 - 单域异常不影响其它域
+                    notes.append(f"{domain} 行情取数异常: {e}")
                     continue
-
-        if progress is not None:
-            def _on_done(yahoo: str) -> None:
-                settled.add(yahoo)
-                _emit(yahoo)
-
-            quotes.update(
-                _fetch_domain(
-                    domain,
-                    plist,
-                    prefer_akshare,
-                    errors,
-                    crypto_source,
-                    on_done=_on_done,
-                )
-            )
-        else:
-            quotes.update(
-                _fetch_domain(domain, plist, prefer_akshare, errors, crypto_source)
-            )
+                quotes.update(out)
+                errors.update(errs)
+        _drain_side_progress()
 
     # 只回写本次真正取到的新鲜行情 (IBKR/akshare/yahoo), 缓存命中项不重写,
     # 否则 set_cached 会刷新其 fetched_at, TTL 被无限延长

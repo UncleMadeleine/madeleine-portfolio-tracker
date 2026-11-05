@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from . import settings as S
+from . import settings as S, theme
 from tracker import eodhd as eodhd_mod
 from tracker import storage
 from tracker.storage import CorruptDataError, DataFileLocked
@@ -33,7 +33,7 @@ def render_settings_page() -> None:
     ):
         if st.session_state.get(_k) != _v:
             st.session_state[_k] = _v
-    st.markdown("### :material/settings: 设置")
+    theme.page_header("设置", eyebrow="SETTINGS")
     st.caption(
         "设置保存到项目根目录 settings.json, 全部页面生效; 基础货币另存于 portfolio.json。"
     )

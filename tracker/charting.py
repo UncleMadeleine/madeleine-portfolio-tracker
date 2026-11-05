@@ -441,8 +441,8 @@ def build_candlestick_fig(
     up_marker = "▲" if last_close >= prev_close else "▼"
     fig.update_layout(
         template="plotly_dark",
-        paper_bgcolor="#0e1117",
-        plot_bgcolor="#0e1117",
+        paper_bgcolor="#0a0a0f",
+        plot_bgcolor="#0a0a0f",
         title=dict(text=title, x=0.5, xanchor="center", font=dict(size=15)),
         height=height,
         margin=dict(l=8, r=64, t=48, b=12),
@@ -451,7 +451,7 @@ def build_candlestick_fig(
             orientation="h", yanchor="bottom", y=1.0, x=0, bgcolor="rgba(0,0,0,0)"
         ),
         font=dict(
-            family="system-ui, -apple-system, sans-serif", size=12, color="#d1d5db"
+            family="system-ui, -apple-system, sans-serif", size=12, color="#d7dcf0"
         ),
         dragmode="pan",
         xaxis=dict(
@@ -947,7 +947,7 @@ def _lwc_options() -> dict:
     return {
         "autoSize": True,
         "layout": {
-            "background": {"type": "solid", "color": "#0e1117"},
+            "background": {"type": "solid", "color": "#0a0a0f"},
             "textColor": "#c9d1d9",
             "fontSize": 12,
             "fontFamily": "system-ui, -apple-system, sans-serif",

@@ -43,7 +43,7 @@ from tracker.watchlist import (
     normalize_watch_entry,
     parse_lists,
 )
-from tracker.ui import settings as S
+from tracker.ui import settings as S, theme
 from tracker.ui.kline_page import set_quick_symbols
 
 WATCHLIST_PATH = storage.WATCHLIST_PATH
@@ -615,6 +615,7 @@ def _symbol_pie(view: pd.DataFrame):
         sym_view,
         names="symbol",
         values="market_value",
+        color_discrete_sequence=theme.CHART_COLORS,
         title=(
             f"按代码 (Top {SYMBOL_TOP} + 其他)"
             if view["symbol"].nunique() > SYMBOL_TOP
@@ -630,6 +631,7 @@ def _symbol_pie(view: pd.DataFrame):
             ],
             textinfo="text",
         )
+    theme.style_chart(fig)
     if len(sym_view) > 10:
         fig.update_layout(legend=dict(font=dict(size=10)))
     return fig
@@ -651,7 +653,7 @@ def _render_nav_section(base: str) -> None:
     历史由 snapshot --save / 组合页每次成功渲染时自动 upsert; 没有历史时
     给出保存/回填命令提示, 而不是画一张空图。
     """
-    with st.container(border=True):
+    with st.container(border=True, key="fp_nav"):
         head_l, head_r = st.columns([3, 2], vertical_alignment="center")
         head_l.markdown("**:material/show_chart: 净值走势**")
         range_label = head_r.radio(
@@ -714,7 +716,9 @@ def _render_nav_section(base: str) -> None:
             ),
             yaxis=dict(tickformat=",.0f", hoverformat=",.2f"),
         )
-        st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
+        st.plotly_chart(
+            theme.style_chart(fig), width="stretch", config={"displayModeBar": False}
+        )
         if any(r.get("source") == "backfill" for r in rows):
             st.caption(
                 "回填口径: 当前持仓 × 历史收盘价 (含历史汇率折算), 不含历史调仓; "
@@ -1036,12 +1040,14 @@ def render_portfolio_page() -> None:
                 st.session_state.pop("watchlist_editor", None)
                 st.rerun()
 
-    st.divider()
-    st.caption(
-        "数据源: 美股/港股/全球 Yahoo Finance; A股/北交所 akshare 优先 (港股 akshare 兜底); "
-        "加密货币 Binance; 汇率 CFETS + yfinance。可选前置源: 长桥 / IBKR (设置页开启)。"
-        "每个代码实际命中的源见下方「数据来源」列与页头汇总。"
-        "非美股行情一般延迟 15-30 分钟, 仅供个人参考。"
+    # ---- 顶部: 页头 (数据未就绪也先渲染, 加载期间不空屏) ----
+    theme.page_header(
+        "组合总览",
+        eyebrow="PORTFOLIO OVERVIEW",
+        right_html=theme.chip(
+            f"更新于 {datetime.now():%m-%d %H:%M}",
+            title="免费数据源有延迟 (非美股 15-30 分钟), 仅供参考",
+        ),
     )
 
     holdings = edited.dropna(subset=["symbol"]) if not edited.empty else edited
@@ -1152,13 +1158,7 @@ def render_portfolio_page() -> None:
     issues += wissues
     trig_all = triggered_entries(wview)
 
-    # ---- 顶部: 页头 + KPI 卡片 (券商 App 风格: 关键数字前置) ----
-    head_l, head_r = st.columns([3, 1])
-    head_l.markdown("### 组合总览")
-    head_r.caption(
-        f":material/schedule: {datetime.now():%m-%d %H:%M}",
-        help="免费数据源有延迟 (非美股 15-30 分钟), 仅供参考",
-    )
+    # ---- 数据来源 / 取数提示 ----
     if notes:
         for n in notes:
             st.caption(f":material/info: {n}")
@@ -1171,9 +1171,16 @@ def render_portfolio_page() -> None:
         st.caption(
             "数据来源: "
             + " · ".join(f"{k} ×{v}" for k, v in sorted(src_counts.items()))
-            + " (明细见持仓/自选表「数据来源」列)"
+            + " (明细见持仓/自选表「数据来源」列)",
+            help=(
+                "美股/港股/全球 Yahoo Finance; A股/北交所 akshare 优先 (港股 akshare 兜底); "
+                "加密货币 Binance; 汇率 CFETS + yfinance。可选前置源: 长桥 / IBKR (设置页开启)。"
+                "每个代码实际命中的源见持仓/自选表「数据来源」列。"
+                "非美股行情一般延迟 15-30 分钟, 仅供个人参考。"
+            ),
         )
 
+    # ---- KPI 卡片 (券商 App 风格: 关键数字前置) ----
     if not view.empty:
         cov = m.get("cost_coverage")
         pnl_delta = (
@@ -1183,7 +1190,7 @@ def render_portfolio_page() -> None:
             if m["total_pnl_pct"] is not None
             else None
         )
-        with st.container(horizontal=True):
+        with st.container(horizontal=True, key="fp_kpi"):
             st.metric(f"总市值 ({base})", fmt(m["total_value"]), border=True)
             st.metric(
                 f"浮动盈亏 ({base})",
@@ -1324,28 +1331,42 @@ def render_portfolio_page() -> None:
             c1, c2, c3 = st.columns(3)
             with c1:
                 st.plotly_chart(
-                    px.pie(view, names="market", values="market_value", title="按市场"),
+                    theme.style_chart(
+                        px.pie(
+                            view,
+                            names="market",
+                            values="market_value",
+                            title="按市场",
+                            color_discrete_sequence=theme.CHART_COLORS,
+                        )
+                    ),
                     width="stretch",
                 )
             with c2:
                 st.plotly_chart(
-                    px.pie(
-                        view,
-                        names="currency",
-                        values="market_value",
-                        title="按币种",
+                    theme.style_chart(
+                        px.pie(
+                            view,
+                            names="currency",
+                            values="market_value",
+                            title="按币种",
+                            color_discrete_sequence=theme.CHART_COLORS,
+                        )
                     ),
                     width="stretch",
                 )
             with c3:
                 st.plotly_chart(_symbol_pie(view), width="stretch")
             st.plotly_chart(
-                px.bar(
-                    view.head(15),
-                    x="symbol",
-                    y="market_value",
-                    color="market",
-                    title=f"持仓市值 Top 15 ({base})",
+                theme.style_chart(
+                    px.bar(
+                        view.head(15),
+                        x="symbol",
+                        y="market_value",
+                        color="market",
+                        title=f"持仓市值 Top 15 ({base})",
+                        color_discrete_sequence=theme.CHART_COLORS,
+                    )
                 ),
                 width="stretch",
             )

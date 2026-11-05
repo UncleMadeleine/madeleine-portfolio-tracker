@@ -15,7 +15,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from . import settings
+from . import settings, theme
 
 from tracker import ah_premium, charting
 
@@ -77,7 +77,7 @@ def _fmt_price(value: float) -> str:
 
 def render_fundamentals_page() -> None:
     """「基本面分析」页入口."""
-    st.markdown("### :material/query_stats: 基本面分析")
+    theme.page_header("基本面分析", eyebrow="FUNDAMENTALS")
     st.caption(
         "第一期: 单只 A+H 股票的 AH 溢价率曲线。"
         "A 股与 H 股收盘价按历史汇率折算到同一币种后比较; 0% 虚线 = 两地同价。"

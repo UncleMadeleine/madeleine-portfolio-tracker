@@ -25,6 +25,7 @@ if (_ROOT / "tracker" / "__init__.py").exists() and str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from tracker import storage  # noqa: E402
+from tracker.ui import theme  # noqa: E402
 from tracker.ui.calendar_page import render_calendar_page  # noqa: E402
 from tracker.ui.fundamentals_page import render_fundamentals_page  # noqa: E402
 from tracker.ui.import_page import render_import_page  # noqa: E402
@@ -40,6 +41,8 @@ from tracker.ui.settings_page import render_settings_page  # noqa: E402
 
 def main() -> None:
     st.set_page_config(page_title="投资组合追踪", page_icon="📈", layout="wide")
+    # 全站视觉层 (深色玻璃主题): 每次 rerun 重新注入, 只做样式不影响功能
+    theme.inject()
     # 进程级后台保温: 服务长期运行时持续刷新行情/汇率磁盘缓存 (没有任何页面
     # 打开也更新, 后来者打开即是新鲜数据)。幂等, 每次 rerun 重复调用无副作用
     ensure_background_refresher()

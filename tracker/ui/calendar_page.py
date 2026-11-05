@@ -26,6 +26,7 @@ from tracker import events as events_mod
 from tracker import storage
 from tracker.services.watchlist import entries_for
 from tracker.symbols import parse
+from tracker.ui import theme
 from tracker.watchlist import load_watchlist
 
 # 月历单元格单日最多展示的事件数 (超出折叠: 单元格内省略, 明细表看全集)
@@ -301,7 +302,7 @@ def _resolve_scope() -> list[str]:
 
 def render_calendar_page() -> None:
     """日历页: 范围选择 → 每个自然月一张月历网格 + 明细表."""
-    st.markdown("### :material/event: 财经日历")
+    theme.page_header("财经日历", eyebrow="ECONOMIC CALENDAR")
 
     lists = _watch_lists()
     c1, c2, c3, c4, c5 = st.columns([2, 2, 1.4, 1.6, 1])

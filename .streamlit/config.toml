@@ -1,32 +1,32 @@
-# 金融看板主题 (参考雪球/富途/TradingView 深色行情风格)
+# 深色玻璃拟态主题 (与 tracker/ui/theme.py 的 CSS 常量保持同步)
 [theme]
 base = "dark"
-# 主色: 行情蓝 (链接/主按钮/选中态), 与红绿涨跌色区分
-primaryColor = "#3b82f6"
-backgroundColor = "#0e1117"          # 主背景 (与 K线组件 canvas 一致)
-secondaryBackgroundColor = "#161b22" # 卡片/侧边栏/输入框
-textColor = "#e6edf3"
-borderColor = "#2d333b"             # 控件/卡片边框
+# 主色: 霓虹青 (焦点/主按钮/选中态), 与红绿涨跌色区分
+primaryColor = "#00d4ff"
+backgroundColor = "#0a0a0f"          # 主背景 (与 K线组件 canvas 一致)
+secondaryBackgroundColor = "#141428" # 卡片/侧边栏/输入框
+textColor = "#f6f7ff"
+borderColor = "#2a2a45"             # 控件/卡片边框
 
-# 涨跌语义色: A股习惯红涨绿跌 (与 K线默认一致)
-redColor = "#ef232a"
-greenColor = "#14b143"
-orangeColor = "#f0a30a"
-yellowColor = "#d4a72c"
-blueColor = "#3b82f6"
-grayColor = "#8b949e"
+# 涨跌语义色 (具体红涨/绿涨由设置页切换)
+redColor = "#ff453a"
+greenColor = "#32d74b"
+orangeColor = "#ff9f0a"
+yellowColor = "#f7d774"
+blueColor = "#00d4ff"
+grayColor = "#94a3b8"
 
-# 图表分类配色 (饼图/柱状图): 蓝-黄-紫-橙-青-红-灰, 首色避开涨跌红绿
-chartCategoricalColors = ["#4ea1f3", "#f7d774", "#c883f0", "#ff9f43", "#2ccbc3", "#ef232a", "#8b949e"]
+# 图表分类配色 (饼图/柱状图): 青-紫-琥珀-绿-红-靛-灰, 首色避开涨跌红绿
+chartCategoricalColors = ["#00d4ff", "#bf5af2", "#ff9f0a", "#32d74b", "#ff453a", "#7c6cff", "#94a3b8"]
 
-font = "system-ui, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
+font = "Inter, system-ui, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
 baseFontSize = 14
-baseRadius = "8px"
-buttonRadius = "8px"
+baseRadius = "12px"
+buttonRadius = "10px"
 showWidgetBorder = true
 showSidebarBorder = true
-dataframeBorderColor = "#2d333b"
-dataframeHeaderBackgroundColor = "#161b22"
+dataframeBorderColor = "#ffffff14"
+dataframeHeaderBackgroundColor = "#15152a"
 headingFontSizes = ["1.6rem", "1.25rem", "1.05rem", "1rem", "0.9rem", "0.85rem"]
 headingFontWeights = [700, 650, 600, 600, 600, 600]
 metricValueFontSize = "1.55rem"
@@ -34,11 +34,11 @@ metricValueFontWeight = 700
 linkUnderline = false
 
 [theme.sidebar]
-backgroundColor = "#0b0e14"
-secondaryBackgroundColor = "#161b22"
-borderColor = "#2d333b"
-primaryColor = "#3b82f6"
-textColor = "#e6edf3"
+backgroundColor = "#0b0b14"
+secondaryBackgroundColor = "#141428"
+borderColor = "#2a2a45"
+primaryColor = "#00d4ff"
+textColor = "#f6f7ff"
 
 [browser]
 gatherUsageStats = false

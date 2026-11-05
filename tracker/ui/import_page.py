@@ -17,6 +17,7 @@ import streamlit as st
 
 from tracker import importer, longport as longport_mod, storage
 from tracker.storage import CorruptDataError
+from tracker.ui import theme
 
 _CHAIN_LABELS = {
     "eth": "Ethereum",
@@ -36,7 +37,7 @@ _WALLET_BASES = ["USD", "USDT", "USDC", "EUR", "CNY"]
 
 def render_import_page(on_saved=None) -> None:
     """导入页入口; on_saved: 写入成功后的回调 (app.py 用于清行情缓存)."""
-    st.markdown("### :material/download: 数据导入")
+    theme.page_header("数据导入", eyebrow="IMPORT")
     st.caption(
         "三个来源可分别导入: 「追加合并」按代码更新数量/成本并追加新代码 "
         "(其余持仓保留); 「覆盖全部」清空后重写 (写前自动备份 portfolio.json.bak)。"

@@ -12,7 +12,7 @@ from dataclasses import asdict
 import pandas as pd
 import streamlit as st
 
-from . import settings
+from . import settings, theme
 
 from tracker import charting, fx, mcap, prices, search
 from tracker.providers import PROVIDERS
@@ -883,7 +883,7 @@ def render_kline_controls(
 ) -> None:
     """查询控件 + 拉取/渲染 (滑动 / 范围双模式, 输入驱动)."""
     qs = quick_symbols()
-    st.markdown("### :material/candlestick_chart: K线查询")
+    theme.page_header("K线查询", eyebrow="CHARTS")
 
     # ---- 搜索框: 按代码或名称模糊匹配, 选中后自动填入代码输入框 ----
     _render_symbol_search()

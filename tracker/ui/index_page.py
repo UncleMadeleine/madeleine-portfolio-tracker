@@ -9,7 +9,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from . import settings
+from . import settings, theme
 from .kline_page import render_kline_view
 
 from tracker import charting, prices
@@ -24,7 +24,7 @@ def cached_index_kline(symbol: str, months: int):
 
 def render_index_page() -> None:
     """指数K线查询页: 分组选择指数 → 切换即拉取渲染 (无按钮, 选择驱动)."""
-    st.markdown("### :material/insights: 指数K线")
+    theme.page_header("指数K线", eyebrow="INDEX CHARTS")
 
     labels = {}
     for group, keys in index_groups().items():

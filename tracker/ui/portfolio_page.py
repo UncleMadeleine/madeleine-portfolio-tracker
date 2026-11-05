@@ -859,6 +859,77 @@ def render_portfolio_page() -> None:
                 st.session_state.pop("holdings_editor", None)
                 st.rerun()
 
+            # 显式删除入口。data_editor 的删行只能走行尾「⋮」菜单或选中后按
+            # Delete 键, 侧栏很窄、表格列已横向滚动时该菜单被裁到视野外, 右键
+            # 也没有菜单 (Streamlit 的 data_editor 不支持自定义右键) —— 用户
+            # 找不到删除入口。这里补一个独立控件: 多选 + 确认, 与 CLI
+            # `portfolio remove` 同口径 (锁内读-改-写, 写盘自动备份 .bak)。
+            held = [
+                h
+                for h in portfolio.get("holdings", [])
+                if str(h.get("symbol", "")).strip()
+            ]
+            if held:
+                # 删除后多选框需要清空。Streamlit 1.63 禁止在控件实例化后改
+                # session_state (会抛 StreamlitWidgetAlreadyInstantiatedError),
+                # 所以用 token 自增换 key: 新 key = 新控件, 值自然是空的。
+                # 旧 key 顺手清掉, 避免 session_state 里堆积废弃控件状态。
+                del_token = st.session_state.get("holdings_delete_token", 0)
+                del_key = f"holdings_to_delete_{del_token}"
+                with st.popover(
+                    "删除持仓", icon=":material/delete:", width="stretch"
+                ):
+                    labels: dict[str, str] = {}
+                    for h in held:
+                        sym = _norm_sym(str(h.get("symbol", "")))
+                        qty = h.get("quantity")
+                        qty_text = (
+                            f"{float(qty):g}"
+                            if isinstance(qty, (int, float))
+                            else "-"
+                        )
+                        labels[f"{sym} · {qty_text}"] = sym
+                    picked = st.multiselect(
+                        "选择要删除的代码",
+                        options=list(labels),
+                        key=del_key,
+                        placeholder="可多选",
+                    )
+                    st.caption(
+                        "删除会立即写盘 (自动备份 .bak), 不需要再点「保存」。"
+                    )
+                    # 只认当前仍存在的代码: 前端回填的过期标签安全忽略
+                    targets = {labels[x] for x in picked if x in labels}
+                    if st.button(
+                        "确认删除",
+                        icon=":material/delete_forever:",
+                        width="stretch",
+                        key="delete_holdings_confirm",
+                        disabled=not targets,
+                    ):
+                        try:
+                            with storage.edit_portfolio(
+                                storage.PORTFOLIO_PATH
+                            ) as pf:
+                                pf["holdings"] = [
+                                    h
+                                    for h in pf.get("holdings", [])
+                                    if _norm_sym(str(h.get("symbol", "")))
+                                    not in targets
+                                ]
+                        except (DataFileLocked, CorruptDataError, OSError) as e:
+                            st.error(f"持仓删除失败: {e}")
+                            return
+                        cached_quotes.clear()
+                        cached_fx.clear()
+                        # 编辑器 session_state 里仍留着被删行, 不清理会在下次
+                        # 点「保存」时把刚删掉的持仓又写回去
+                        st.session_state.pop("holdings_editor", None)
+                        st.session_state.pop(del_key, None)
+                        st.session_state["holdings_delete_token"] = del_token + 1
+                        st.toast(f"已删除 {len(targets)} 个持仓")
+                        st.rerun()
+
         with st.expander(":material/notifications: 自选提醒", expanded=False):
             if not watch.get("watchlist"):
                 watch["watchlist"] = []
@@ -1039,6 +1110,56 @@ def render_portfolio_page() -> None:
             ):
                 st.session_state.pop("watchlist_editor", None)
                 st.rerun()
+
+            # 自选删除: 与持仓同款显式入口。自选的 data_editor 行菜单同样在窄
+            # 侧栏里够不着 (几百条时尤其), 这里用可搜索多选 + 确认, 直接按
+            # 磁盘条目删除 (锁内读-改-写, 写盘自动备份 .bak)。
+            if entries:
+                del_w_token = st.session_state.get("watchlist_delete_token", 0)
+                del_w_key = f"watchlist_to_delete_{del_w_token}"
+                with st.popover(
+                    "删除自选", icon=":material/delete:", width="stretch"
+                ):
+                    w_labels = {
+                        sym: sym
+                        for sym in (
+                            _norm_sym(str(e.get("symbol", ""))) for e in entries
+                        )
+                        if sym
+                    }
+                    picked_w = st.multiselect(
+                        f"选择要删除的代码 (共 {len(w_labels)} 条)",
+                        options=list(w_labels),
+                        key=del_w_key,
+                        placeholder="可多选, 支持搜索",
+                    )
+                    st.caption("删除会立即写盘 (自动备份 .bak)。")
+                    targets_w = {w_labels[x] for x in picked_w if x in w_labels}
+                    if st.button(
+                        "确认删除",
+                        icon=":material/delete_forever:",
+                        width="stretch",
+                        key="delete_watchlist_confirm",
+                        disabled=not targets_w,
+                    ):
+                        try:
+                            with storage.edit_watchlist(WATCHLIST_PATH) as wl:
+                                wl["watchlist"] = [
+                                    e
+                                    for e in wl.get("watchlist", [])
+                                    if _norm_sym(str(e.get("symbol", "")))
+                                    not in targets_w
+                                ]
+                        except (DataFileLocked, CorruptDataError, OSError) as e:
+                            st.error(f"自选删除失败: {e}")
+                            return
+                        # 编辑器 session_state 里仍留着被删行, 不清会在下次
+                        # 点「保存」时写回; 多选框换 key 重建避免残留旧标签
+                        st.session_state.pop("watchlist_editor", None)
+                        st.session_state.pop(del_w_key, None)
+                        st.session_state["watchlist_delete_token"] = del_w_token + 1
+                        st.toast(f"已删除 {len(targets_w)} 个自选")
+                        st.rerun()
 
     # ---- 顶部: 页头 (数据未就绪也先渲染, 加载期间不空屏) ----
     theme.page_header(

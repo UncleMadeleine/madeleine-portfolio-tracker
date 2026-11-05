@@ -87,11 +87,6 @@ def style_chart(fig, *, transparent: bool = True):
             size=12,
             color="rgba(246, 247, 255, 0.78)",
         ),
-        title=dict(
-            font=dict(size=13, color="rgba(246, 247, 255, 0.86)"),
-            x=0.5,
-            xanchor="center",
-        ),
         legend=dict(
             bgcolor="rgba(0, 0, 0, 0)",
             font=dict(size=11),
@@ -100,6 +95,15 @@ def style_chart(fig, *, transparent: bool = True):
     if transparent:
         layout["paper_bgcolor"] = "rgba(0, 0, 0, 0)"
         layout["plot_bgcolor"] = "rgba(0, 0, 0, 0)"
+    # 只给已有标题的图补样式: 无标题时塞一个只有样式的 title 对象, plotly
+    # 会把空 text 渲染成字面量 "undefined" (图中央凭空多一行字)。
+    if fig.layout.title.text:
+        layout["title"] = dict(
+            text=fig.layout.title.text,
+            font=dict(size=13, color="rgba(246, 247, 255, 0.86)"),
+            x=0.5,
+            xanchor="center",
+        )
     fig.update_layout(**layout)
     return fig
 

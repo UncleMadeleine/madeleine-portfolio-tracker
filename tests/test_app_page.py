@@ -44,13 +44,13 @@ def app_boot(monkeypatch, tmp_path):
     )
 
 
-def _boot_app(monkeypatch, tmp_path, holdings):
+def _boot_app(monkeypatch, tmp_path, holdings, watchlist=None):
     """以指定持仓启动 app.py 并完整渲染默认页 (组合); 行情/FX 全部 mock."""
     wl = tmp_path / "watchlist.json"
     pf = tmp_path / "portfolio.json"
-    storage.save_watchlist(
-        {"watchlist": [{"symbol": "AAPL", "lists": ["测试"], "upper_1": 140.0}]}, wl
-    )
+    if watchlist is None:
+        watchlist = [{"symbol": "AAPL", "lists": ["测试"], "upper_1": 140.0}]
+    storage.save_watchlist({"watchlist": watchlist}, wl)
     storage.save_portfolio(
         {
             "base_currency": "CNY",
@@ -255,3 +255,71 @@ def test_pnl_pct_uses_percent_format():
     src = open("tracker/ui/portfolio_page.py", encoding="utf-8").read()
     assert '"盈亏%", format="percent"' in src
     assert '"盈亏%", format="%+.2f%%"' not in src
+
+
+def test_sidebar_delete_holdings_action(monkeypatch, tmp_path):
+    """侧栏「删除持仓」: 多选 + 确认即写盘, 不依赖 data_editor 的行菜单.
+
+    回归护栏: data_editor 删行只能走行尾「⋮」菜单或选中后按 Delete, 侧栏窄、
+    表格横向滚动时入口不可见, 右键也没有菜单 —— 用户找不到删除方式。
+    """
+    at = _boot_app(
+        monkeypatch,
+        tmp_path,
+        holdings=[
+            {"symbol": "AAPL", "quantity": 2, "avg_cost": 100},
+            {"symbol": "MSFT", "quantity": 1, "avg_cost": 300},
+        ],
+    )
+    at.multiselect(key="holdings_to_delete_0").select("AAPL · 2")
+    at.run(timeout=30)
+    at.button(key="delete_holdings_confirm").click()
+    at.run(timeout=30)
+    assert not at.exception, at.exception
+    # 显式传路径: load_portfolio 的默认参数在 import 时已绑定, 不吃
+    # monkeypatch 后的 storage.PORTFOLIO_PATH (会读到仓库里的真实组合)
+    left = storage.load_portfolio(storage.PORTFOLIO_PATH)["holdings"]
+    assert [h["symbol"] for h in left] == ["MSFT"]
+    # 删除后换 key 重建控件: 已删代码不会残留在多选框里
+    assert at.multiselect(key="holdings_to_delete_1").value == []
+
+
+def test_style_chart_does_not_inject_empty_title():
+    """无标题的图不注入空 title 对象: 否则图中央会凭空多出 "undefined"."""
+    import plotly.graph_objects as go
+
+    from tracker.ui import theme
+
+    plain = theme.style_chart(go.Figure(go.Scatter(x=[1, 2], y=[1, 2])))
+    assert "title" not in plain.to_plotly_json()["layout"]
+    titled = theme.style_chart(
+        go.Figure(go.Scatter(x=[1], y=[1])).update_layout(title="T")
+    )
+    assert titled.layout.title.text == "T"
+
+
+def test_sidebar_delete_watchlist_action(monkeypatch, tmp_path):
+    """侧栏「删除自选」: 可搜索多选 + 确认即写盘, 不依赖 data_editor 行菜单."""
+    at = _boot_app(
+        monkeypatch,
+        tmp_path,
+        holdings=[{"symbol": "AAPL", "quantity": 2, "avg_cost": 100}],
+        watchlist=[
+            {"symbol": "AAPL", "lists": ["测试"], "upper_1": 140.0},
+            {"symbol": "MSFT", "lists": ["测试"], "upper_1": 500.0},
+        ],
+    )
+    at.multiselect(key="watchlist_to_delete_0").select("AAPL")
+    at.run(timeout=30)
+    at.button(key="delete_watchlist_confirm").click()
+    at.run(timeout=30)
+    assert not at.exception, at.exception
+    left = storage.load_watchlist(portfolio_page.WATCHLIST_PATH)["watchlist"]
+    assert [e["symbol"] for e in left] == ["MSFT"]
+    # 持仓不受自选删除影响
+    assert [
+        h["symbol"]
+        for h in storage.load_portfolio(storage.PORTFOLIO_PATH)["holdings"]
+    ] == ["AAPL"]
+    # 删除后换 key 重建控件: 已删代码不会残留在多选框里
+    assert at.multiselect(key="watchlist_to_delete_1").value == []

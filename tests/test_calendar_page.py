@@ -215,6 +215,37 @@ def test_cache_miss_blocks_with_progress_fetch(monkeypatch, fake_calendar_result
     assert "报 AAPL" in texts
 
 
+def test_cold_start_waits_for_inflight_warmup(monkeypatch):
+    """预热线程已在拉同一范围时, 页面不再重复阻塞取数."""
+    from streamlit.testing.v1 import AppTest
+
+    import tracker.ui.calendar_page as cp
+
+    key = cp._cal_key(("AAPL",), 2, False)
+
+    def boom(*a, **kw):
+        raise AssertionError("预热进行中不应重复发起阻塞取数")
+
+    monkeypatch.setattr(cp, "cached_calendar", lambda *a, **kw: None)
+    monkeypatch.setattr(cp, "_fetch_calendar", boom)
+    monkeypatch.setattr(cp, "_resolve_scope", lambda: ["AAPL"])
+    monkeypatch.setattr(cp, "_watch_lists", lambda: [])
+    monkeypatch.setattr(cp, "load_watchlist", lambda *a, **kw: {"watchlist": []})
+    monkeypatch.setattr(cp, "_start_calendar_refresh", lambda *a, **kw: False)
+    with cp._cal_refresh_lock:
+        cp._cal_refresh_inflight.add(key)
+    try:
+        at = AppTest.from_string(
+            "import tracker.ui.calendar_page as cp\ncp.render_calendar_page()"
+        )
+        at.run(timeout=60)
+    finally:
+        with cp._cal_refresh_lock:
+            cp._cal_refresh_inflight.discard(key)
+    assert not at.exception, at.exception
+    assert any("后台预热" in i.value for i in at.info)
+
+
 def test_stale_peek_shows_banner(monkeypatch, fake_calendar_result):
     """缓存探针命中陈旧数据: 立即渲染 + 提示后台刷新 (不触发阻塞取数)."""
     from streamlit.testing.v1 import AppTest
@@ -250,6 +281,87 @@ def test_stale_peek_shows_banner(monkeypatch, fake_calendar_result):
     assert "先展示约 2.0 小时前的缓存" in caps
     texts = " ".join(m.value for m in at.markdown)
     assert "报 AAPL" in texts
+
+
+def test_disk_scope_symbols_merges_holdings_and_watchlist(monkeypatch):
+    """预热范围 = 持仓 + 全部自选 (去重/跳过空代码)."""
+    import tracker.ui.calendar_page as cp
+
+    monkeypatch.setattr(
+        cp.storage,
+        "load_portfolio",
+        lambda *a, **kw: {
+            "holdings": [{"symbol": "600519.SS"}, {"symbol": "AAPL"}]
+        },
+    )
+    monkeypatch.setattr(
+        cp,
+        "load_watchlist",
+        lambda *a, **kw: {
+            "watchlist": [
+                {"symbol": "000001.SZ"},
+                {"symbol": "600519.SS"},
+                {"symbol": ""},
+            ]
+        },
+    )
+    monkeypatch.setattr(cp, "entries_for", lambda data, name: data["watchlist"])
+    assert cp._disk_scope_symbols() == ["600519.SS", "AAPL", "000001.SZ"]
+
+
+def test_calendar_warm_plan_uses_default_window(monkeypatch):
+    """预热键与页面默认范围一致: 本月+下月, 不开长桥兜底."""
+    import tracker.ui.calendar_page as cp
+
+    monkeypatch.setattr(
+        cp, "_disk_scope_symbols", lambda: ["AAPL", "600519.SS"]
+    )
+    plan = cp._calendar_warm_plan()
+    assert plan == (
+        cp._cal_key(("AAPL", "600519.SS"), 2, False),
+        ("AAPL", "600519.SS"),
+        2,
+        False,
+    )
+    monkeypatch.setattr(cp, "_disk_scope_symbols", lambda: [])
+    assert cp._calendar_warm_plan() is None
+
+
+def test_calendar_warm_tick_starts_background_refresh(monkeypatch):
+    """预热 tick 复用页面刷新协调器 (缓存新鲜时内部只读盘, 不发网络)."""
+    import tracker.ui.calendar_page as cp
+
+    plan = (("AAPL",), ("AAPL",), 2, False)
+    calls: list[tuple] = []
+    monkeypatch.setattr(cp, "_calendar_warm_plan", lambda: plan)
+    monkeypatch.setattr(
+        cp, "_start_calendar_refresh", lambda *a: calls.append(a) or True
+    )
+    cp._calendar_warm_tick()
+    assert calls == [plan]
+    monkeypatch.setattr(cp, "_calendar_warm_plan", lambda: None)
+    cp._calendar_warm_tick()
+    assert calls == [plan]
+
+
+def test_ensure_calendar_refresher_is_idempotent(monkeypatch):
+    """进程级保温线程每进程只启一次 (app 每次 rerun 都会调用)."""
+    import tracker.ui.calendar_page as cp
+
+    started: list[str] = []
+
+    class FakeThread:
+        def __init__(self, target=None, name=None, daemon=None):
+            self.name = name
+
+        def start(self):
+            started.append(self.name)
+
+    monkeypatch.setattr(cp.threading, "Thread", FakeThread)
+    monkeypatch.setattr(cp, "_cal_refresher_started", False)
+    cp.ensure_calendar_refresher()
+    cp.ensure_calendar_refresher()
+    assert started == ["calendar-warm"]
 
 
 def test_calendar_page_fetch_failure_shows_warning(monkeypatch):

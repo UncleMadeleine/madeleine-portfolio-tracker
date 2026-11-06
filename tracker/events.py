@@ -32,6 +32,10 @@
 首屏性能: fetch_calendar(stale_ok=True, cache_only=True) 只读缓存并允许
 CAL_STALE_TTL (7 天) 内的旧行, 页面据此秒开 + 后台重取; cache_only 且无
 任何可用缓存行时返回 None, 调用方改走带 progress 回调的阻塞取数。
+
+取数性能: cn 各板块/报表期与 global 各票分别用线程池并发; 预约披露只
+请求窗口真正可能命中的报表期, 并按范围跳过无关板块, 避免为每个报表期
+重复拉全市场数据。
 """
 
 from __future__ import annotations
@@ -39,6 +43,7 @@ from __future__ import annotations
 import re
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 
@@ -67,15 +72,31 @@ CAL_NEG_TTL = 86400
 # 后台线程静默重取 (与行情 cache.STALE_TTL 同构的 stale-while-revalidate)。
 # 日历是低频数据, 展示 7 天内的旧结果远比首屏干等整批网络请求可用。
 CAL_STALE_TTL = 7 * 86400
-# 预约披露覆盖窗口: 报表期结束到实际/预约披露最长间隔约 4 个月 (年报),
-# 报表期在窗口开始前 130 天内的仍可能披露落在窗口内, 一并拉取
-_CN_PERIOD_BACKDAYS = 130
+# 预约披露: 报表期 qe 的法定披露截止日 = {Q1: 4/30, Q2: 8/31, Q3: 10/31,
+# 年报: 次年 4/30}; 实际/变更披露可能略晚于截止日, 留 30 天宽限。只请求
+# 「截止日+宽限 >= 窗口开始」且 qe < 窗口结束 的报表期 —— 否则整批全市场
+# 请求纯属浪费 (例如 11-12 月窗口只需 9/30 一期, 而不是 6/30、9/30、12/31)。
+_CN_DISCLOSURE_GRACE_DAYS = 30
+# 候选报表期的回看范围: 年报截止日距期末最长 120 天 + 30 天宽限 = 150 天,
+# 再留一个季度余量, 保证截止日刚好落在窗口开始附近的报表期不被漏掉。
+_CN_PERIOD_LOOKBACK_DAYS = 160
 # 分红/送转覆盖窗口: 股权登记/除权除息日可能远晚于报告期末 (年中派息、方案
-# 延后实施), 按 15 个月回看; 与预约披露的 130 天口径分开, 否则窗口内执行
-# 的老报告期分红会被漏掉。
+# 延后实施), 按 15 个月回看; 与预约披露口径分开, 否则窗口内执行的老报告期
+# 分红会被漏掉。
 _CN_DIVIDEND_BACKDAYS = 450
-# 单票 yfinance 取数间隔 (秒): 防连发 429; 与 tahlocks 无关的简单限时
-_YF_PAUSE = 0.2
+# 单票 yfinance 请求启动间隔 (秒): 防连发 429; 多线程下由 _yf_rate_limit
+# 串行化「启动时刻」, 不再依赖顺序循环里的 sleep。
+_YF_PAUSE = 0.05
+# 单票 yfinance 并发数: 自选几百只时, 顺序请求会把冷启动拖到十分钟级。
+# 24 路实测 40 只港股约 6s (顺序约 1 分钟); 每请求仍有 _YF_TIMEOUT 硬超时,
+# 单票失败只丢自己。启动频率另由 _YF_PAUSE 限速, 避免瞬间打满 Yahoo。
+_YF_MAX_WORKERS = 24
+# A股整批请求并发数: 沪深/京市/分红是不同接口, 彼此独立; 并发后冷启动从
+# 「板块×报表期」的累加耗时降到最慢一路的耗时。
+_CN_MAX_WORKERS = 6
+# yfinance 跨线程启动限速状态 (只在 _YF_MAX_WORKERS 个 worker 内使用)。
+_YF_START_LOCK = threading.Lock()
+_YF_NEXT_START = 0.0
 # 单次网络请求硬超时 (秒): 日历是可选附加信息, 不能让一个 TCP 半开的
 # yfinance/akshare 请求把整页/整条 CLI 拖到分钟级。
 _YF_TIMEOUT = 10.0
@@ -133,25 +154,56 @@ def _quarter_ends(start: date, end: date) -> list[date]:
     return sorted(set(out))
 
 
+def _cn_disclosure_deadline(period_end: date) -> date:
+    """A 股定期报告的法定披露截止日 (按报表期末所在季度).
+
+    Q1 → 4/30, H1 → 8/31, Q3 → 10/31, 年报 → 次年 4/30。用于判断一个
+    报表期是否可能在本窗口内产生披露事件, 避免为了「可能」而整批请求全
+    市场数据。
+    """
+    if period_end.month == 3:
+        return date(period_end.year, 4, 30)
+    if period_end.month == 6:
+        return date(period_end.year, 8, 31)
+    if period_end.month == 9:
+        return date(period_end.year, 10, 31)
+    return date(period_end.year + 1, 4, 30)
+
+
 def cn_periods_for_window(start: date, end: date) -> list[str]:
     """窗口内可能披露财报的报表期 → 东财 date 参数 ("YYYYMMDD") 升序.
 
-    披露日 ≥ 报表期末 (财报不可能早于报告期结束), 更晚的报表期披露必然
-    超出窗口, 无需请求。回看 _CN_PERIOD_BACKDAYS 覆盖年报 (~4 个月披露)。
+    披露日 ≥ 报表期末 (财报不可能早于报告期结束), 所以 qe >= 窗口结束的
+    报表期不可能落入窗口; 截止日+宽限 < 窗口开始的报表期也早已披露完毕。
+    只保留真正可能命中的报表期, 冷启动时少发多次全市场请求 (每期约 5k 行,
+    沪深板块单次要拉 10+ 页)。
     """
-    earliest = start - timedelta(days=_CN_PERIOD_BACKDAYS)
-    return [qe.strftime("%Y%m%d") for qe in _quarter_ends(earliest, end)]
+    if end <= start:
+        return []
+    earliest = start - timedelta(days=_CN_PERIOD_LOOKBACK_DAYS)
+    grace = timedelta(days=_CN_DISCLOSURE_GRACE_DAYS)
+    out: list[str] = []
+    for qe in _quarter_ends(earliest, end):
+        if qe >= end:
+            continue
+        if _cn_disclosure_deadline(qe) + grace < start:
+            continue
+        out.append(qe.strftime("%Y%m%d"))
+    return out
 
 
 def cn_dividend_periods_for_window(start: date, end: date) -> list[str]:
     """窗口内可能实施的 A 股分红 → 需要请求的报告期 ("YYYYMMDD") 升序.
 
     分红/送转的股权登记日与除权除息日可以在报告期结束后很久才执行 (年中
-    派息、方案延后实施), 因此不能沿用预约披露的 130 天回看, 单独用
-    _CN_DIVIDEND_BACKDAYS (15 个月) 覆盖老报告期的实施事件。
+    派息、方案延后实施), 因此不能沿用预约披露的截止日口径, 单独用
+    _CN_DIVIDEND_BACKDAYS (15 个月) 覆盖老报告期的实施事件。不过实施日
+    必然晚于报告期末, qe >= 窗口结束的报表期同样不可能命中。
     """
+    if end <= start:
+        return []
     earliest = start - timedelta(days=_CN_DIVIDEND_BACKDAYS)
-    return [qe.strftime("%Y%m%d") for qe in _quarter_ends(earliest, end)]
+    return [qe.strftime("%Y%m%d") for qe in _quarter_ends(earliest, end) if qe < end]
 
 
 def _month_starts(start: date, end: date) -> list[tuple[date, date]]:
@@ -307,13 +359,44 @@ def _yf_calendar_rows(symbol: str) -> list[dict]:
     return out
 
 
-def _fetch_global_one(symbol: str, refresh: bool) -> list[dict]:
-    """单票 global 事件 (磁盘缓存优先); 空结果同样落库 (24h 负缓存语义)."""
-    row = cache_mod.get_calendar_row(f"g:{symbol}")
-    if not refresh and row is not None:
+_UNSET = object()
+
+
+def _yf_rate_limit() -> None:
+    """跨线程限制 yfinance 请求启动频率 (替代顺序循环里的 sleep).
+
+    多线程下单纯 `time.sleep(_YF_PAUSE)` 只会让每个 worker 各睡一次,
+    请求仍可能同时打满 Yahoo; 这里用模块级「下一个可用启动时刻」把启动
+    间隔真正串起来。线程在锁外等待, 不阻塞其它 worker 发起请求。
+    """
+    global _YF_NEXT_START
+    if _YF_PAUSE <= 0:
+        return
+    with _YF_START_LOCK:
+        now = time.monotonic()
+        wait = _YF_NEXT_START - now
+        _YF_NEXT_START = max(now, _YF_NEXT_START) + _YF_PAUSE
+    if wait > 0:
+        time.sleep(wait)
+
+
+def _fetch_global_one(symbol: str, refresh: bool, cached_row=_UNSET) -> list[dict]:
+    """单票 global 事件 (磁盘缓存优先); 空结果同样落库 (24h 负缓存语义).
+
+    cached_row 由批量缓存读取层传入 (None 表示确认无行), 避免未命中的代码
+    再逐只连一次 SQLite; 不传时保持旧的自行读缓存行为。
+    """
+    if refresh:
+        row = None
+    elif cached_row is _UNSET:
+        row = cache_mod.get_calendar_row(f"g:{symbol}")
+    else:
+        row = cached_row
+    if row is not None:
         evs, ttl = row["events"], (CAL_TTL if row["events"] else CAL_NEG_TTL)
         if not _age_exceeded(row["fetched_at"], ttl):
             return evs
+    _yf_rate_limit()
     evs = _yf_calendar_rows(symbol)
     cache_mod.set_calendar_row(f"g:{symbol}", evs)
     return evs
@@ -328,10 +411,11 @@ def _fetch_global_events(
     stale_ok: bool = False,
     cache_only: bool = False,
 ) -> tuple[dict[str, list[dict]], list[str], dict]:
-    """yfinance 单票循环 → {symbol: 窗口过滤后事件}, issues, 执行统计.
+    """yfinance 单票并发取数 → {symbol: 窗口过滤后事件}, issues, 执行统计.
 
-    命中缓存的代码零请求零间隔; 未命中的逐只发出并隔 _YF_PAUSE (防连发
-    429), 单票失败注记进 issues 不拖丢整批。
+    命中缓存的代码零请求; 未命中的由 _YF_MAX_WORKERS 个线程并发发出,
+    启动间隔仍由 _yf_rate_limit 控制 (防 429)。单票失败注记进 issues,
+    不拖丢整批; progress 回调只在主线程调用, 避免 Streamlit API 跨线程。
 
     stale_ok: 过期但仍在 CAL_STALE_TTL 内的缓存先返回 (页面秒开, 后台重取)。
     cache_only: 只读缓存, 缺失/过老的行不进 todo (由调用方决定是否回源)。
@@ -381,18 +465,39 @@ def _fetch_global_events(
                 reporter.step(s)
             continue
         todo.append(s)
-    for i, s in enumerate(todo):
+
+    def _one(s: str) -> tuple[str, list[dict], str | None]:
+        """单票取数 + 窗口过滤; 任何异常都收敛成一条 issue, 不冒泡."""
         try:
-            evs = _fetch_global_one(s, refresh)
-            out[s] = _window_rows(evs, start, end, source="yfinance", symbol=s)
-            stats["fresh"] += 1
+            evs = _fetch_global_one(
+                s,
+                refresh,
+                cached_rows.get(f"g:{s}") if not refresh else None,
+            )
+            return s, _window_rows(evs, start, end, source="yfinance", symbol=s), None
         except Exception as e:  # noqa: BLE001 - 单票失败不拖丢整批
+            return s, [], f"{s}: yfinance 日历失败 ({type(e).__name__}: {e})"[:160]
+
+    def _apply(s: str, rows: list[dict], issue: str | None) -> None:
+        out[s] = rows
+        if issue is None:
+            stats["fresh"] += 1
+        else:
             stats["fail"] += 1
-            issues.append(f"{s}: yfinance 日历失败 ({type(e).__name__}: {e})"[:160])
+            issues.append(issue)
         if reporter is not None:
             reporter.step(s)
-        if i < len(todo) - 1:
-            time.sleep(_YF_PAUSE)
+
+    if todo:
+        workers = min(_YF_MAX_WORKERS, len(todo))
+        if workers <= 1:
+            for s in todo:
+                _apply(*_one(s))
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                futures = [ex.submit(_one, s) for s in todo]
+                for fut in as_completed(futures):
+                    _apply(*fut.result())
     stats["stale_age"] = stale_age
     return out, issues, stats
 
@@ -618,8 +723,8 @@ def _quiet_stderr():
 
     CLI/UI 日历请求一次拉全市场 5 千行, 内层进度条只会刷屏; 我们自己的
     单票循环进度 (fetch_calendar progress 回调) 打到 stderr 的提示不受
-    影响 —— 重定向窗口最短。锁只包住一次网络请求, 并发会话因此串行取数,
-    避免全局 stderr 被并发改写。
+    影响。并发批次只在最外层持锁一次 (worker 传 quiet=False), 既避免全局
+    stderr 被并发会话互相改写, 又允许同一批次内多个请求并行。
     """
     import os
     import sys
@@ -645,11 +750,13 @@ def _fetch_cn_yysj_board(
     stale_ok: bool = False,
     cache_only: bool = False,
     reporter: _ProgressReporter | None = None,
+    quiet: bool = True,
 ) -> tuple[list[dict], str | None, dict]:
     """单个板块的预约披露 (缓存优先, TTL 6h) → events, error, meta.
 
     分板块独立缓存: 一块接口失败只影响该板, 不会把另一板的成功结果一起丢掉,
     也不会把「缺一块」的合并结果缓存 6h。meta 记录该行是否陈旧/缺失。
+    quiet=False 供外层并发批次使用 (stderr 重定向由批次统一负责)。
     """
     key = f"cn:yysj:{period}:{board}"
     meta = {"stale": False, "missing": False, "stale_age": 0.0, "used": False}
@@ -669,10 +776,13 @@ def _fetch_cn_yysj_board(
     import akshare as ak
 
     try:
-        with _quiet_stderr():
-            df = with_timeout(
-                ak.stock_yysj_em, _AK_TIMEOUT, symbol=board, date=period
-            )
+        if quiet:
+            with _quiet_stderr():
+                df = with_timeout(
+                    ak.stock_yysj_em, _AK_TIMEOUT, symbol=board, date=period
+                )
+        else:
+            df = with_timeout(ak.stock_yysj_em, _AK_TIMEOUT, symbol=board, date=period)
     except Exception as e:  # noqa: BLE001 - 单板失败注记并继续另一板
         if reporter is not None:
             reporter.step(f"{period} {board}")
@@ -690,8 +800,12 @@ def _fetch_cn_fhps_period(
     stale_ok: bool = False,
     cache_only: bool = False,
     reporter: _ProgressReporter | None = None,
+    quiet: bool = True,
 ) -> tuple[list[dict], str | None, dict]:
-    """单个报表期的分红送转 (缓存优先, TTL 6h) → events, error, meta."""
+    """单个报表期的分红送转 (缓存优先, TTL 6h) → events, error, meta.
+
+    quiet=False 供外层并发批次使用 (stderr 重定向由批次统一负责)。
+    """
     key = f"cn:fhps:{period}"
     meta = {"stale": False, "missing": False, "stale_age": 0.0, "used": False}
     row = None if refresh else cache_mod.get_calendar_row(key)
@@ -710,7 +824,10 @@ def _fetch_cn_fhps_period(
     import akshare as ak
 
     try:
-        with _quiet_stderr():
+        if quiet:
+            with _quiet_stderr():
+                df = with_timeout(ak.stock_fhps_em, _AK_TIMEOUT, date=period)
+        else:
             df = with_timeout(ak.stock_fhps_em, _AK_TIMEOUT, date=period)
     except Exception as e:  # noqa: BLE001 - 分红失败只在 events 缺口上可见
         if reporter is not None:
@@ -729,15 +846,18 @@ def _fetch_cn_period(
     stale_ok: bool = False,
     cache_only: bool = False,
     reporter: _ProgressReporter | None = None,
+    boards: tuple[str, ...] | list[str] | None = None,
+    quiet: bool = True,
 ) -> tuple[dict, list[str]]:
     """一个报表期的整市场日历 (预约披露 + 分红, 各自独立缓存) → events, issues.
 
     meta 挂在 data 上 (stale/missing/stale_age/used), 保持原有二元组返回结构。
+    boards 可只取本范围真正需要的板块 (如自选里没有北交所代码就跳过京市)。
     """
     evs: list[dict] = []
     issues: list[str] = []
     meta = {"stale": False, "missing": False, "stale_age": 0.0, "used": False}
-    for board in _CN_BOARDS:
+    for board in tuple(boards) if boards is not None else _CN_BOARDS:
         board_evs, issue, bmeta = _fetch_cn_yysj_board(
             board,
             period,
@@ -745,6 +865,7 @@ def _fetch_cn_period(
             stale_ok=stale_ok,
             cache_only=cache_only,
             reporter=reporter,
+            quiet=quiet,
         )
         evs.extend(board_evs)
         if issue:
@@ -756,12 +877,28 @@ def _fetch_cn_period(
         stale_ok=stale_ok,
         cache_only=cache_only,
         reporter=reporter,
+        quiet=quiet,
     )
     evs.extend(fhps_evs)
     if issue:
         issues.append(issue)
     _merge_cache_meta(meta, fmeta)
     return {"events": evs, **meta}, issues
+
+
+def _cn_boards_for(symbols: set[str]) -> tuple[str, ...]:
+    """本范围代码真正需要的东财板块 (沪/深 vs 北交所).
+
+    原实现无条件拉「沪深 + 京市」两块全市场数据; 大部分组合没有北交所
+    代码, 京市那块纯属白请求。反过来只有北交所代码时也无需拉沪深。
+    """
+    suffixes = {s.rpartition(".")[2].upper() for s in symbols if "." in s}
+    boards: list[str] = []
+    if not suffixes or suffixes & {"SS", "SZ"}:
+        boards.append("沪深A股")
+    if "BJ" in suffixes:
+        boards.append("京市A股")
+    return tuple(boards) or _CN_BOARDS
 
 
 def _fetch_cn_events(
@@ -775,8 +912,9 @@ def _fetch_cn_events(
 ) -> tuple[list[dict], list[str], dict[str, str], dict]:
     """cn 域事件: 每报表期整批缓存 + 本窗口过滤. → events, issues, names, meta.
 
-    预约披露用 130 天回看; 分红送转单独用 15 个月回看 (旧报告期的方案可能在
-    窗口内才实施), 只对预约披露集合之外的老报告期补拉 fhps。
+    预约披露只取窗口真正可能命中的报表期; 分红送转单独用 15 个月回看
+    (旧报告期的方案可能在窗口内才实施), 只对预约披露集合之外的老报告期
+    补拉 fhps。各板块/报表期任务并发执行, 冷启动耗时从累加降到最慢一路。
     """
     events: list[dict] = []
     issues: list[str] = []
@@ -792,36 +930,89 @@ def _fetch_cn_events(
                 if sym not in names and ev.get("name"):
                     names[sym] = ev["name"]
 
+    boards = _cn_boards_for(symbols)
     earn_periods = cn_periods_for_window(start, end)
     earn_set = set(earn_periods)
     div_extra = [
         p for p in cn_dividend_periods_for_window(start, end) if p not in earn_set
     ]
-    if reporter is not None:
-        reporter.plan(len(earn_periods) * 3 + len(div_extra))
+
+    # (kind, period, board) 任务清单: 预约披露按板块拆, 分红按报表期拆。
+    tasks: list[tuple[str, str, str | None]] = []
     for period in earn_periods:
-        data, p_issues = _fetch_cn_period(
-            period,
-            refresh,
-            stale_ok=stale_ok,
-            cache_only=cache_only,
-            reporter=reporter,
-        )
-        issues.extend(p_issues)
-        take(data["events"])
-        _merge_cache_meta(meta, data)
+        for board in boards:
+            tasks.append(("yysj", period, board))
+        tasks.append(("fhps", period, None))
     for period in div_extra:
-        period_evs, issue, pmeta = _fetch_cn_fhps_period(
+        tasks.append(("fhps", period, None))
+    if reporter is not None:
+        reporter.plan(len(tasks))
+
+    def _label(task: tuple[str, str, str | None]) -> str:
+        kind, period, board = task
+        return f"{period} {board}" if kind == "yysj" else f"{period} 分红"
+
+    def _run(task: tuple[str, str, str | None]):
+        kind, period, board = task
+        if kind == "yysj":
+            return _fetch_cn_yysj_board(
+                str(board),
+                period,
+                refresh,
+                stale_ok=stale_ok,
+                cache_only=cache_only,
+                reporter=None,
+                quiet=False,
+            )
+        return _fetch_cn_fhps_period(
             period,
             refresh,
             stale_ok=stale_ok,
             cache_only=cache_only,
-            reporter=reporter,
+            reporter=None,
+            quiet=False,
         )
+
+    def _run_safe(task: tuple[str, str, str | None]):
+        try:
+            return _run(task)
+        except Exception as e:  # noqa: BLE001 - 单任务失败不拖整批
+            kind, period, board = task
+            what = f"预约披露 {period} {board}" if kind == "yysj" else f"分红 {period}"
+            return (
+                [],
+                f"akshare {what} 失败 ({type(e).__name__}: {e})"[:200],
+                {"stale": False, "missing": False, "stale_age": 0.0, "used": False},
+            )
+
+    results: dict[int, tuple[list[dict], str | None, dict]] = {}
+    if cache_only or len(tasks) <= 1:
+        # 只读缓存没有网络等待, 顺序执行即可 (也避免无谓的线程/stderr 切换)。
+        for i, task in enumerate(tasks):
+            results[i] = _run_safe(task)
+            if reporter is not None:
+                reporter.step(_label(task))
+    else:
+        # stderr 是进程级状态: 整批只持锁一次, worker 用 quiet=False。
+        with _quiet_stderr():
+            with ThreadPoolExecutor(max_workers=min(_CN_MAX_WORKERS, len(tasks))) as ex:
+                futures = {
+                    ex.submit(_run_safe, task): (i, task)
+                    for i, task in enumerate(tasks)
+                }
+                for fut in as_completed(futures):
+                    i, task = futures[fut]
+                    results[i] = fut.result()
+                    if reporter is not None:
+                        reporter.step(_label(task))
+
+    # 按任务原顺序合并, 保证事件/名称/进度与串行实现一致。
+    for i, task in enumerate(tasks):
+        evs, issue, tmeta = results[i]
+        take(evs)
         if issue:
             issues.append(issue)
-        take(period_evs)
-        _merge_cache_meta(meta, pmeta)
+        _merge_cache_meta(meta, tmeta)
     return events, issues, names, meta
 
 

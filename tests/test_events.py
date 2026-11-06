@@ -101,14 +101,24 @@ class TestWindow:
 
 
 class TestCnPeriods:
-    def test_oct_window_looks_back_two_quarters(self):
+    def test_oct_window_skips_already_disclosed_quarter(self):
+        """10 月窗口只需 Q3: Q2 (截止 8/31) 的披露早已结束, 不再整批请求."""
         ps = cn_periods_for_window(date(2026, 10, 1), date(2026, 11, 30))
-        assert ps == ["20260630", "20260930"]
+        assert ps == ["20260930"]
 
     def test_no_future_period_beyond_window(self):
         # 年报期 (20261231) 披露必在其后, 窗口 Oct-Nov 不应包含
         ps = cn_periods_for_window(date(2026, 10, 1), date(2026, 11, 30))
         assert "20261231" not in ps
+
+    def test_window_ending_on_quarter_end_skips_that_period(self):
+        """窗口恰好在期末结束: 该期披露只能在期后, 不可能命中本窗口."""
+        ps = cn_periods_for_window(date(2026, 11, 1), date(2026, 12, 31))
+        assert ps == ["20260930"]
+        # 分红实施日同样晚于期末, 12/31 这一期无需请求
+        assert "20261231" not in cn_dividend_periods_for_window(
+            date(2026, 11, 1), date(2026, 12, 31)
+        )
 
     def test_january_window_includes_current_year_end(self):
         ps = cn_periods_for_window(date(2027, 1, 1), date(2027, 2, 28))
@@ -393,6 +403,97 @@ class TestFetchCalendar:
         r = fetch_calendar(["600519.SS"], months=2)
         assert len(no_network_calendar["cn"]) == n_first
         assert any(e["symbol"] == "600519.SS" for e in r["events"])
+
+    def test_cn_skips_irrelevant_board(self, no_network_calendar):
+        """自选只有沪深代码时不再白拉京市板块整批数据."""
+        fetch_calendar(["600519.SS"], months=2, refresh=True)
+        boards = {
+            call[0]
+            for call in no_network_calendar["cn"]
+            if isinstance(call, tuple) and call[0] != "fhps"
+        }
+        assert "沪深A股" in boards
+        assert "京市A股" not in boards
+
+    def test_cn_bj_only_skips_hushen_board(self, no_network_calendar):
+        fetch_calendar(["830799.BJ"], months=2, refresh=True)
+        boards = {
+            call[0]
+            for call in no_network_calendar["cn"]
+            if isinstance(call, tuple) and call[0] != "fhps"
+        }
+        assert "京市A股" in boards
+        assert "沪深A股" not in boards
+
+    def test_global_fetch_runs_concurrently(self, monkeypatch):
+        """几百只自选冷启动不能逐只串行 (2 分钟级 → 线程池并发)."""
+        import threading
+        import time
+
+        active = 0
+        peak = 0
+        threads: set[int] = set()
+        lock = threading.Lock()
+
+        def fake(symbol):
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+                threads.add(threading.get_ident())
+            time.sleep(0.05)
+            with lock:
+                active -= 1
+            return []
+
+        monkeypatch.setattr(events, "_yf_calendar_rows", fake)
+        monkeypatch.setattr(events, "_YF_PAUSE", 0)
+        fetch_calendar([f"TST{i}" for i in range(12)], months=2, refresh=True)
+        assert peak > 1
+        assert len(threads) > 1
+
+    def test_cn_fetch_runs_concurrently(self, monkeypatch):
+        """沪深/京市/分红/多报表期彼此独立, 冷启动应并发取数."""
+        import threading
+        import time
+
+        import pandas as pd
+
+        active = 0
+        peak = 0
+        lock = threading.Lock()
+
+        def fake_ak(**kwargs):
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+            time.sleep(0.05)
+            with lock:
+                active -= 1
+            return pd.DataFrame()
+
+        monkeypatch.setattr(
+            "akshare.stock_yysj_em",
+            lambda symbol, date: fake_ak(),
+        )
+        monkeypatch.setattr("akshare.stock_fhps_em", lambda date: fake_ak())
+        fetch_calendar(["600519.SS"], months=2, refresh=True)
+        assert peak > 1
+
+    def test_global_failure_isolated(self, monkeypatch):
+        """并发取数时单票失败只记 issue, 不拖丢同批其它代码."""
+        monkeypatch.setattr(events, "_YF_PAUSE", 0)
+
+        def fake(symbol):
+            if symbol == "BAD":
+                raise RuntimeError("boom")
+            return []
+
+        monkeypatch.setattr(events, "_yf_calendar_rows", fake)
+        r = fetch_calendar(["BAD", "GOOD"], months=2, refresh=True)
+        assert any("BAD" in issue for issue in r["issues"])
+        assert "GOOD" not in " ".join(r["issues"])
 
     def test_global_negative_cache(self, no_network_calendar, monkeypatch):
         monkeypatch.setattr(events, "_YF_PAUSE", 0)

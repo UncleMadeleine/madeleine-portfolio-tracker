@@ -55,17 +55,19 @@ def cmd_longport_login(args) -> None:
             "    open(%r, 'w').write('ERROR:' + str(e))\n"
             "    os._exit(1)\n"
         ) % (_ROOT, url_file, url_file)
+        proc = None
+        url = None
         try:
             proc = subprocess.Popen(
                 [sys.executable, "-c", child_code],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            url = None
             for _ in range(30):
                 _time.sleep(1)
                 try:
-                    content = open(url_file, encoding="utf-8").read().strip()
+                    with open(url_file, encoding="utf-8") as fh:
+                        content = fh.read().strip()
                 except FileNotFoundError:
                     content = ""
                 if content:
@@ -76,7 +78,9 @@ def cmd_longport_login(args) -> None:
                 if proc.poll() is not None:
                     break
         finally:
-            proc.kill()
+            # Popen 本身失败 (缺解释器/资源耗尽) 时 proc 仍未绑定, 不能裸 kill
+            if proc is not None:
+                proc.kill()
             try:
                 os.unlink(url_file)
             except OSError:

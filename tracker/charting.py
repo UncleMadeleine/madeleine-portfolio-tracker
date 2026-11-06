@@ -763,8 +763,15 @@ export default function (component) {
     if (v >= 1e4) return (v / 1e4).toFixed(1) + '万';
     return Math.round(v).toString();
   }
+  // 图例用 innerHTML 拼接 (需要分段着色), 所有来自 payload/代码名的文本
+  // 必须先转义 —— 否则自选/数据源返回的 name 含 HTML 时会在页面里执行。
+  function escHtml(v) {
+    return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
   function span(txt, color) {
-    return '<span style="color:' + (color || '#c9d1d9') + '">' + txt + '</span>';
+    return '<span style="color:' + escHtml(color || '#c9d1d9') + '">' + escHtml(txt) + '</span>';
   }
   function tstr(t) {
     if (t == null) return '';
@@ -1465,8 +1472,10 @@ def kline_payload(
                     "minMove": 10**-precision,
                 },
             },
-            # queryId 用于视口锚点失效判定 (换代码后回退初始区间)
-            "queryId": query_id,
+            # queryId 用于视口锚点失效判定 (换代码后回退初始区间);
+            # 未显式传入时按代码兜底, 指数页等复用 kline_payload 的路径
+            # 也能在数据更新后保留拖动位置。
+            "queryId": query_id or symbol,
             # 右键菜单「复制代码」只复制标的本身, 不把周期/币种/均线一起带上
             "copyText": symbol,
         }
@@ -1593,6 +1602,7 @@ def compare_payload(
     init_bars: int = 140,
     ratio: dict | None = None,
     title: str | None = None,
+    query_id: str | None = None,
 ) -> dict:
     """多股对比 payload (复用 K线组件): 每只代码一条收盘价折线.
 
@@ -1667,6 +1677,12 @@ def compare_payload(
             # 全系列时间轴 (并集, 升序去重): 视口锚点的索引空间 (对比模式
             # candles 为空, 不提供 axis 的话拖动位置无法跨重绘还原)
             "axis": sorted(axis),
+            # 视口锚点 key: 显式传入优先, 否则按模式/周期/代码集/归一化方式
+            # 派生稳定标识。不提供 queryId 时 JS 会把锚点写到 undefined 键,
+            # 对比图每次数据更新都会重置缩放位置。
+            "queryId": query_id
+            or f"compare:{period}:{int(bool(normalize))}:"
+            + ",".join(ln["name"] for ln in lines),
             # 右键「复制代码」: 对比模式复制全部参与代码, 空格分隔便于直接粘贴
             "copyText": " ".join(ln["name"] for ln in lines),
         }
@@ -1763,6 +1779,7 @@ def crypto_compare_payload(
     green_up: bool = False,
     height: int = 560,
     init_bars: int = 140,
+    query_id: str | None = None,
 ) -> dict:
     """加密货币对比 payload (复用 K线组件): 每币一个独立窗格的蜡烛图.
 
@@ -1825,6 +1842,9 @@ def crypto_compare_payload(
             "coins": coins,
             # 全系列时间轴 (并集, 升序去重): 视口锚点的索引空间 (同 compare 模式)
             "axis": sorted({c["time"] for cn in coins for c in cn["candles"]}),
+            # 同 compare_payload: 无 queryId 时视口锚点写到 undefined 键
+            "queryId": query_id
+            or f"crypto:{period}:" + ",".join(cn["name"] for cn in coins),
             "copyText": " ".join(cn["name"] for cn in coins),
         }
     )

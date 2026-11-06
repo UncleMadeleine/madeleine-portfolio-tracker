@@ -191,6 +191,7 @@ def _quote_from_dump(p: ParsedSymbol, d: dict) -> Quote | None:
 
 _QUOTE_TIMEOUT = 5.0  # yfinance/OpenBB 偶发内部重试会把单码失败拖到 8s+; 硬超时快速降级
 _BATCH_TIMEOUT = 30.0  # 批量一次上百代码, 预算放大; 仍挂住则整批放弃走逐代码源链
+_HISTORY_TIMEOUT = 60.0  # 历史K线单码请求 (OpenBB 内部可能重试/半开连接)
 _YAHOO_CHUNK = 50  # 单批代码数: 一次上千代码的 quote 请求会被 Yahoo 429/401 拒掉
 _CHUNK_PAUSE = 1.0  # 批间基础暂停 (s); 出现限流迹象 (空批) 时翻倍
 _EMPTY_STREAK_GIVEUP = 2  # 连续空批: 判定已被限流, 放弃剩余批次 (逐代码源链兜底)
@@ -297,7 +298,9 @@ def _yahoo_history(
     kwargs = {"symbol": p.yahoo, "provider": "yfinance", "start_date": start_date}
     if end_date:
         kwargs["end_date"] = end_date
-    res = _obb().equity.price.historical(**kwargs)
+    # _obb() 在计时区外求值 (冷启动 import 不计入预算); 网络调用硬超时,
+    # 避免半开连接/OpenBB 内部重试把 CLI/页面主线程无限挂住。
+    res = with_timeout(_obb().equity.price.historical, _HISTORY_TIMEOUT, **kwargs)
     df = res.to_dataframe().reset_index()
     df = df.rename(columns={df.columns[0]: "date"})
     df = df.dropna(subset=["close"])
@@ -345,8 +348,10 @@ _AK_QUOTE_HEADERS = {
 }
 _AK_QUOTE_TIMEOUT = 8.0
 # 东财字段码: f43=最新价 f57=代码 f58=名称 f60=昨收
-#              f116=总市值 f167=市净率 f170=涨跌幅(%)
-_AK_QUOTE_FIELDS = "f43,f57,f58,f60,f116,f167,f170"
+#              f116=总市值 f167=市净率 f170=涨跌幅(%) f172=报价币种
+# f172 必须取: 港股有 USD/CNY 计价柜台 (如 09188/82318), 只按代码后缀
+# 推断会把 USD 价格当 HKD 乘汇率, 市值差约 7.8 倍。
+_AK_QUOTE_FIELDS = "f43,f57,f58,f60,f116,f167,f170,f172"
 
 # 单代码行情进程内缓存 (短 TTL): 同一代码紧接着的重复请求 (UI 渲染 + 后台
 # 刷新) 只发一次; per-key 单飞去重并发首拉; 失败写短 TTL 占位防反复打东财
@@ -471,13 +476,16 @@ def _akshare_quote(p: ParsedSymbol) -> Quote:
         raise RuntimeError(f"{p.yahoo}: akshare 无有效最新价 ({d.get('f43')!r})")
     pb = _ak_num(d.get("f167"))
     market_cap = _ak_num(d.get("f116"))
+    # 东财自报币种 (f172): 港股 USD/CNY 柜台不能按后缀推断成 HKD
+    reported_ccy = str(d.get("f172") or "").strip().upper()
+    currency = reported_ccy if reported_ccy and reported_ccy != "NONE" else p.currency
     return Quote(
         symbol=p.yahoo,
         name=str(d.get("f58") or "").strip() or None,
         price=price,
         prev_close=_ak_num(d.get("f60")),
         change_pct=_ak_num(d.get("f170")),
-        currency=p.currency,
+        currency=currency,
         book_value=price / pb if pb is not None and pb > 0 else None,
         market_cap=market_cap if market_cap is not None and market_cap > 0 else None,
         source="akshare",

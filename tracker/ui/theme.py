@@ -205,9 +205,20 @@ export default function (component) {
       '[data-testid^="glide-cell-"][data-testid$="-' + pos.row + '"]'
     );
     var headers = {};
-    df.querySelectorAll('th[role="columnheader"]').forEach(function (th) {
-      headers[String(th.getAttribute('aria-colindex'))] = (th.textContent || '').trim();
+    var headersByAria = {};
+    df.querySelectorAll('th[role="columnheader"]').forEach(function (th, i) {
+      var text = (th.textContent || '').trim();
+      // 优先用 DOM 顺序 (与数据列 0-based 顺序一致), 同时保留 aria-colindex
+      // 作为兜底: Glide 的 aria-colindex 从 1 开始, 直接拿来查会整体错一列,
+      // 导致「复制含表头」串列、识别不到「代码」列。
+      headers[String(i)] = text;
+      var idx = Number(th.getAttribute('aria-colindex'));
+      if (isFinite(idx)) { headersByAria[String(idx)] = text; }
     });
+    function headerFor(col) {
+      return headers[String(col)] || headersByAria[String(col)] ||
+        headersByAria[String(col + 1)] || '';
+    }
     var values = [];
     var byCol = {};
     cells.forEach(function (c) {
@@ -220,14 +231,14 @@ export default function (component) {
     values.sort(function (a, b) { return a.col - b.col; });
     var symbol = '';
     values.forEach(function (v) {
-      var h = headers[String(v.col)] || '';
+      var h = headerFor(v.col);
       if ((h === '代码' || h.toLowerCase() === 'symbol') && v.text) {
         symbol = v.text;
       }
     });
     return {
       values: values,
-      headers: values.map(function (v) { return headers[String(v.col)] || ''; }),
+      headers: values.map(function (v) { return headerFor(v.col); }),
       symbol: symbol
     };
   }

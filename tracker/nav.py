@@ -496,8 +496,11 @@ def backfill(
         s["date"] = _normalize_dates(s["date"])
         s["close"] = pd.to_numeric(s["close"], errors="coerce")
         s = s.dropna(subset=["date", "close"])
-        s = s[s["date"] >= pd.Timestamp(start_day)]
-        s = s.drop_duplicates("date", keep="last")
+        # 不做 start_day 前截断: 不同市场首个交易日不同, 窗口首日可能只有
+        # 部分标的有收盘价; 保留窗口前历史才能 reindex(...).ffill() 把前一
+        # 交易日收盘价带到首日, 否则缺失标的当日市值为 NaN, 而成本仍全额
+        # 计入, 首几个点会出现凭空的巨额亏损。
+        s = s.sort_values("date").drop_duplicates("date", keep="last")
         if s.empty:
             issues.append(f"{sym}: 区间内无历史行情, 回填跳过")
             continue
@@ -528,29 +531,44 @@ def backfill(
         if fx_s is None:
             issues.append(f"{sym}: 缺少 {item['currency']}→{base} 历史汇率, 回填跳过")
             continue
-        # 交易日对齐: 不同市场假期不同, 缺失日沿用最近收盘价
-        s = close.reindex(index).ffill()
-        value_cols[sym] = s * float(item["quantity"]) * fx_s
+        # 交易日对齐: 不同市场假期不同, 缺失日沿用最近收盘价。
+        # method="ffill" 会从 index 之前的历史取值 (窗口首个交易日也能拿到
+        # 上一交易日收盘), 这是上面不截断 start_day 前数据的目的。
+        s = close.reindex(index, method="ffill")
+        value_s = s * float(item["quantity"]) * fx_s
+        value_cols[sym] = value_s
         if item["has_cost"]:
-            cost_cols[sym] = pd.Series(
+            # 成本只在该标的当日有可估值价格时计入: 否则 covered_value 的
+            # min_count 会跳过缺价标的, 而成本照减, 盈亏被凭空拉低。
+            cost_s = pd.Series(
                 float(item["cost"]) * fx_s, index=index, dtype=float
             )
+            cost_cols[sym] = cost_s.where(value_s.notna())
 
     if not value_cols:
         return [], issues or ["无可用持仓数据, 未生成回填数据"]
     values = pd.DataFrame(value_cols, index=index)
     total = values.sum(axis=1, min_count=1)
     # 成本金额 = Σ(qty×avg_cost) 按历史汇率折算, 与价格无关;
-    # 浮动盈亏只覆盖有成本数据的持仓 (与 summarize 的 cost_mask 同口径)
+    # 浮动盈亏只覆盖有成本数据的持仓 (与 summarize 的 cost_mask 同口径)。
+    # total_cost 用毛成本 (绝对值求和): 多空混合时带符号净额会让收益率
+    # 分母偏离真实投入资本 (与 analytics.summarize 口径一致); 盈亏本身仍用
+    # 带符号成本, 空头才能正确计算。
     if cost_cols:
-        costs = pd.DataFrame(cost_cols, index=index).sum(axis=1, min_count=1)
+        signed_costs = pd.DataFrame(cost_cols, index=index).sum(
+            axis=1, min_count=1
+        )
+        gross_costs = pd.DataFrame(cost_cols, index=index).abs().sum(
+            axis=1, min_count=1
+        )
         covered_value = values[[c for c in cost_cols if c in values.columns]].sum(
             axis=1, min_count=1
         )
     else:
-        costs = pd.Series(float("nan"), index=index)
+        signed_costs = pd.Series(float("nan"), index=index)
+        gross_costs = pd.Series(float("nan"), index=index)
         covered_value = pd.Series(float("nan"), index=index)
-    pnl = covered_value - costs
+    pnl = covered_value - signed_costs
 
     recorded_at = time.time()
     rows: list[dict] = []
@@ -559,7 +577,7 @@ def backfill(
         if value is None:
             continue
         cov_value = _num(covered_value.get(ts))
-        cost = _num(costs.get(ts))
+        cost = _num(gross_costs.get(ts))
         pnl_v = _num(pnl.get(ts))
         coverage = (
             (cov_value / value)

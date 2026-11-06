@@ -619,19 +619,23 @@ def save_watchlist(data: dict, path: str | Path = WATCHLIST_PATH) -> None:
             merged = _read_json_or_recover(p)
         else:
             merged = {}
-        merged["watchlist"] = dedupe_watch_entries(
-            # _clean_rows: 与 save_portfolio 同一道清洗 —— data_editor 空单元格 /
-            # CLI 传入 nan/inf 会在 json.dumps(allow_nan=False) 处直接抛
-            # ValueError ("Out of range float values are not JSON compliant"),
-            # 让保存整条失败。非有限阈值/覆盖值应直接剔除, 而不是炸写盘。
-            _clean_rows(
-                [
-                    normalize_watch_entry(dict(raw))
-                    for raw in _watchlist_rows(data)
-                    if isinstance(raw, dict)
-                ]
+        # 与 save_portfolio 的 holdings 同口径: 未提供 watchlist 键时保留
+        # 磁盘旧值, 只有显式传入 (含显式 null → 清空) 才覆写。否则任何
+        # 只改 _说明/其它字段的调用都会把整份自选静默删掉。
+        if "watchlist" in data:
+            merged["watchlist"] = dedupe_watch_entries(
+                # _clean_rows: 与 save_portfolio 同一道清洗 —— data_editor 空单元格 /
+                # CLI 传入 nan/inf 会在 json.dumps(allow_nan=False) 处直接抛
+                # ValueError ("Out of range float values are not JSON compliant"),
+                # 让保存整条失败。非有限阈值/覆盖值应直接剔除, 而不是炸写盘。
+                _clean_rows(
+                    [
+                        normalize_watch_entry(dict(raw))
+                        for raw in _watchlist_rows(data)
+                        if isinstance(raw, dict)
+                    ]
+                )
             )
-        )
         _write_json(merged, p)
 
 

@@ -57,6 +57,9 @@ def clear_ah_caches() -> None:
     """强制刷新: 清页面缓存, 并让底层取数穿透磁盘缓存/汇率进程缓存."""
     cached_ah_pairs.clear()
     cached_ah_premium.clear()
+    # list_pairs() 在 st.cache_data 之外还有 1h 的模块级缓存; 不清掉的话
+    # 上面的 cached_ah_pairs.clear() 只会重新命中旧目录, 强制刷新失效。
+    ah_premium.clear_pair_cache()
 
 
 def _pair_label(pair: ah_premium.AHPair) -> str:

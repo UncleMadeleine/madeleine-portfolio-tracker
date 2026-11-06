@@ -530,7 +530,7 @@ def type_for_symbol(yahoo: str) -> str:
             and not base.endswith("-")
             and not is_us_class
             and not _is_us_preferred(quote)
-            and (base in _KNOWN_CRYPTO or quote in _CRYPTO_QUOTES)
+            and quote in _CRYPTO_QUOTES
         ):
             return "crypto"
     # 宏观/风险指数 (IX.<KEY>): 独立域, 与股票代码永不冲突 (IX 前缀 + 目录校验)
@@ -587,6 +587,19 @@ def _parse_cached(symbol: str) -> ParsedSymbol:
             )
     if "-" in yahoo and "." not in yahoo:
         base, _, quote = yahoo.rpartition("-")
+        # 已识别为加密货币基准币、但计价货币不在支持列表 (如 BTC-PLN):
+        # 不能落到下面的美股分支标成 USD —— type_for_symbol 与 parse 会互相
+        # 矛盾, 且 PLN 价格会被当成 USD 估值 (偏差数倍)。显式报错让用户
+        # 改用支持的法币/稳定币计价。
+        if (
+            base in _KNOWN_CRYPTO
+            and quote not in _CRYPTO_QUOTES
+            and not (len(quote) == 1 and quote.isalpha())
+            and not _is_us_preferred(quote)
+        ):
+            raise ValueError(
+                f"不支持的加密货币计价货币: {quote} ({symbol})"
+            )
         # 连字符既不是 crypto 计价货币、也不符合美股类别代码 (如 BRK-B / BRK.B)
         # 或美股优先股系列 (WFC-PL) 的形态 (类别 1 个大写字母; 优先股 P+系列字母)
         # 且 base 非已知 crypto → 大概率是无效代码, 显式报错

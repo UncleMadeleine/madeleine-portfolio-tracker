@@ -17,10 +17,13 @@ import time
 import pandas as pd
 
 from ..symbols import ParsedSymbol
+from ..util import with_timeout
 from .base import Provider, Quote, SymbolEntry
 
 _BINANCE_HOSTS = ("https://api.binance.com", "https://data-api.binance.vision")
 _HTTP_TIMEOUT = 8.0
+_YF_QUOTE_TIMEOUT = 5.0
+_YF_HISTORY_TIMEOUT = 60.0
 _KLINES_LIMIT = 1000
 # Gate.io candlesticks 单请求数据点硬上限 (超出直接 HTTP 400, 与 limit 无关)
 _GATE_MAX_POINTS = 1000
@@ -85,7 +88,7 @@ def _hl_quote(p: ParsedSymbol) -> Quote:
     if ctx is None:
         raise RuntimeError(f"{coin}: Hyperliquid 永续无此币种")
     price = float(ctx.get("markPx") or 0)
-    if price <= 0:
+    if not math.isfinite(price) or price <= 0:
         raise RuntimeError(f"{coin}: Hyperliquid 无有效最新价")
     try:
         prev = float(ctx["prevDayPx"]) if ctx.get("prevDayPx") else None
@@ -227,10 +230,11 @@ def _binance_spot_raw(pair: str) -> dict:
         if acquired:  # 本线程负责拉取; 其它线程等拉取方写回缓存后读结果
             d = _get("/api/v3/ticker/24hr", {"symbol": pair})
             try:
-                if float(d.get("lastPrice") or 0) > 0:
-                    _spot_cache[pair] = (now, d)
+                last = float(d.get("lastPrice") or 0)
             except (TypeError, ValueError):
-                pass  # 坏响应不缓存, 让调用方抛错走下一数据源
+                last = float("nan")
+            if math.isfinite(last) and last > 0:
+                _spot_cache[pair] = (now, d)
             return d
         gate.acquire()
         gate.release()  # 拉取方已 pop 此 gate: 立即释放, 不留持有者
@@ -251,7 +255,7 @@ def _binance_quote(p: ParsedSymbol) -> Quote:
     pair = binance_pair(p)
     d = _binance_spot_raw(pair)
     price = float(d["lastPrice"])
-    if price <= 0:
+    if not math.isfinite(price) or price <= 0:
         raise RuntimeError(f"{pair}: Binance 无有效最新价")
     prev = None
     try:
@@ -287,7 +291,7 @@ def _gate_quote(p: ParsedSymbol) -> Quote:
     if not d:
         raise RuntimeError(f"{pair}: Gate.io 无此交易对")
     price = float(d.get("last") or 0)
-    if price <= 0:
+    if not math.isfinite(price) or price <= 0:
         raise RuntimeError(f"{pair}: Gate.io 无有效最新价")
     chg = None
     try:
@@ -328,7 +332,8 @@ def _quote_ccy(p: ParsedSymbol, reported: str | None = None) -> str:
 
 def _yf_quote(p: ParsedSymbol) -> Quote:
     """yfinance 直连降级: fast_info 含 lastPrice."""
-    info = _yf().Ticker(p.yahoo).fast_info
+    # _yf() (import yfinance) 在计时区外; 只有 fast_info 网络访问受硬超时约束
+    info = with_timeout(lambda: _yf().Ticker(p.yahoo).fast_info, _YF_QUOTE_TIMEOUT)
     price = info.get("lastPrice")
     try:
         price = float(price) if price is not None and pd.notna(price) else None
@@ -481,7 +486,9 @@ def _yf_history(p: ParsedSymbol, start_date: str, end_date: str | None) -> pd.Da
     kwargs = {"symbol": p.yahoo, "provider": "yfinance", "start_date": start_date}
     if end_date:
         kwargs["end_date"] = end_date
-    res = obb_mod.equity.price.historical(**kwargs)
+    res = with_timeout(
+        obb_mod.equity.price.historical, _YF_HISTORY_TIMEOUT, **kwargs
+    )
     df = res.to_dataframe().reset_index()
     df = df.rename(columns={df.columns[0]: "date"})
     df = df.dropna(subset=["close"])

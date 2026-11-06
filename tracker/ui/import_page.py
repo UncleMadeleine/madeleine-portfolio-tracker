@@ -184,7 +184,6 @@ def _longport_watchlist_section() -> None:
                 merged, stats = importer.merge_watchlist(
                     data.get("watchlist", []), rows, importer.MODE_APPEND
                 )
-                storage.backup_file(storage.WATCHLIST_PATH)
                 data["watchlist"] = merged
         except (CorruptDataError, OSError) as e:  # DataFileLocked 是 OSError 子类
             # watchlist.json 损坏且 .bak 也损坏 / 只读/被锁: 给可读错误而不是
@@ -244,6 +243,10 @@ def _wallet_section(mode: str, on_saved) -> None:
                         "rows": rows,
                         "skipped": errors,
                         "preview": raw.get("holdings", []),
+                        # 查询无失败时才允许清理该地址已归零/下架的旧持仓
+                        "prune_source": (
+                            importer.wallet_source(raw) if not errors else None
+                        ),
                     }
     _preview_and_confirm(
         "imp_wallet",
@@ -302,16 +305,20 @@ def _preview_and_confirm(state_key: str, mode: str, on_saved, note: str = "") ->
     if not payload:
         return
     rows = payload.get("rows", [])
+    prune_source = payload.get("prune_source")
     for s in payload.get("skipped", []):
         st.caption(f":material/warning: {s}")
-    if not rows:
+    if not rows and not prune_source:
         st.caption("未发现可导入的持仓。")
         return
-    st.dataframe(
-        pd.DataFrame(payload.get("preview") or rows),
-        width="stretch",
-        hide_index=True,
-    )
+    if not rows:
+        st.caption("该地址当前余额为 0，确认后将清理此前导入的持仓。")
+    else:
+        st.dataframe(
+            pd.DataFrame(payload.get("preview") or rows),
+            width="stretch",
+            hide_index=True,
+        )
     if note:
         st.caption(note)
     if st.button(
@@ -324,7 +331,10 @@ def _preview_and_confirm(state_key: str, mode: str, on_saved, note: str = "") ->
             # 旧写法先 load_portfolio 再 merge 再 save_portfolio, 读在锁外,
             # 与并发的 CLI/其它页面编辑会互相覆盖 (静默丢持仓)。
             result = importer.apply_import(
-                rows, storage.PORTFOLIO_PATH, mode=mode
+                rows,
+                storage.PORTFOLIO_PATH,
+                mode=mode,
+                prune_source=payload.get("prune_source"),
             )
         except (CorruptDataError, OSError) as e:  # DataFileLocked 是 OSError 子类
             # portfolio.json 损坏且 .bak 也损坏 / 只读: 可读错误而不是整页

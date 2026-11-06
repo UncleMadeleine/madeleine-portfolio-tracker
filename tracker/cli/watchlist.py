@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from .. import importer, prices, storage
+from .. import importer, prices
 from ..symbols import parse
 from ..services.watchlist import (
     build_watchlist_view,
@@ -361,12 +361,13 @@ def watchlist_import_longport(args) -> None:
             rows,
             importer.MODE_OVERWRITE if args.overwrite else importer.MODE_APPEND,
         )
-        backup = None
-        if args.overwrite:
-            p = Path(args.file)
-            if p.exists():
-                backup = storage.backup_file(p)
         data["watchlist"] = merged
+    # 备份由 _write_json 在保存前完成 (且只在主文件可解析时刷新 .bak);
+    # 提前 backup_file 会把损坏主文件复制到唯一的好副本上。
+    backup = None
+    if args.overwrite:
+        bak = Path(f"{args.file}.bak")
+        backup = str(bak) if bak.exists() else None
     verb = "覆盖写入" if args.overwrite else "追加合并"
     if args.json:
         _print_json(

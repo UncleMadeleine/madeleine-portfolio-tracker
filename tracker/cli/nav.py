@@ -83,6 +83,9 @@ def cmd_nav(args) -> None:
     days = None if args.all else args.days
 
     if args.save:
+        # take_snapshot 以 portfolio["base_currency"] 为估值口径; --base 只
+        # 改传参而不改这里, 会把 CNY 市值写成 USD 净值 (此后历史全错)。
+        portfolio = {**portfolio, "base_currency": base}
         _base, view, summary, _wview, _issues = take_snapshot(
             portfolio,
             watch_name=None,

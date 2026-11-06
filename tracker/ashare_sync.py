@@ -160,13 +160,16 @@ def _to_float(v) -> float | None:
         .replace("，", "")
         .replace("　", "")
     )
+    # 会计负数括号先剥掉, 再剥括号内的货币符号: "(¥1,000)" 先去括号得
+    # "¥1000", 若顺序反过来 (`strip` 先做) 括号把货币符号挡在中间, 最终
+    # float("¥1000") 失败 → 成本静默丢失。
+    neg = False
+    if s.startswith("(") and s.endswith(")"):
+        neg, s = True, s[1:-1]
     # 货币符号与百分号: 只剥前后缀, 不动中间
     s = s.strip("¥￥$€£%")
     if not s:
         return None
-    neg = False
-    if s.startswith("(") and s.endswith(")"):  # 会计格式负数
-        neg, s = True, s[1:-1]
     try:
         f = float(s)
     except (TypeError, ValueError):

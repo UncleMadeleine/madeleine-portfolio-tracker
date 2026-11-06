@@ -298,6 +298,10 @@ def get_ohlc_cached(
         df = pd.DataFrame(json.loads(row[0]))
         if df.empty:
             return None
+        if not {"date", "open", "high", "low", "close"}.issubset(df.columns):
+            # 旧版/损坏但仍是合法 JSON 的载荷 (只剩 date 等) 若当缓存命中,
+            # 调用方会跳过网络重取并在图表/回测处 KeyError。
+            return None
         df["date"] = pd.to_datetime(df["date"])
         cols = [
             c
@@ -444,7 +448,7 @@ def get_cached_with_age(
             [*chunk, now - ttl],
         )
         for sym, name, price, prev, chg, ccy, bv, mc, src, fetched_at in rows:
-            if price is not None and price > 0:
+            if price is not None and math.isfinite(price) and price > 0:
                 hits[sym] = Quote(
                     symbol=sym,
                     name=name,
@@ -480,7 +484,7 @@ def set_cached(quotes: dict[str, "Quote"]) -> None:
     now = time.time()
     rows: list[tuple] = []
     for q in quotes.values():
-        if q.price is None or q.price <= 0:
+        if q.price is None or not math.isfinite(q.price) or q.price <= 0:
             continue
         rows.append(
             (
@@ -542,7 +546,7 @@ def get_fx_cached(
             [base, *chunk, now - ttl],
         )
         for ccy, rate, fetched_at in rows:
-            if rate is None or rate <= 0:
+            if rate is None or not math.isfinite(rate) or rate <= 0:
                 continue
             rates[ccy] = float(rate)
             ages[ccy] = max(0.0, now - float(fetched_at or now))
@@ -555,7 +559,7 @@ def set_fx_cached(base: str, rates: dict[str, float]) -> None:
     rows = [
         (base, str(c).upper(), float(r), time.time())
         for c, r in rates.items()
-        if r and float(r) > 0 and str(c).upper() != base
+        if r and math.isfinite(float(r)) and float(r) > 0 and str(c).upper() != base
     ]
     if not rows:
         return

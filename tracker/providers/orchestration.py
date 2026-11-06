@@ -159,17 +159,20 @@ def _cached_source_ok(
     crypto_source: str,
 ) -> bool:
     """缓存行情是否满足本次显式数据源偏好 (未指定偏好时任何源都接受)."""
-    required: set[str] = set()
+    # 同时开启多个显式源时, 缓存必须来自优先级最高的那个来源, 而不是
+    # 「集合里任意一个」。否则 `--ibkr --longport` 只要缓存里是长桥数据
+    # 就会在批量取数前提前返回, IBKR 根本没执行 (执行顺序是 IBKR 覆盖长桥)。
+    required: str | None = None
     if use_ibkr and parsed.type == "global":
-        required.add("ibkr")
-    if use_longport and parsed.type in ("global", "cn") and not parsed.is_b_share:
-        required.add("longport")
-    if prefer_akshare and parsed.market is Market.HK:
-        required.add("akshare")
-    if parsed.type == "crypto" and crypto_source != "auto":
+        required = "ibkr"
+    elif use_longport and parsed.type in ("global", "cn") and not parsed.is_b_share:
+        required = "longport"
+    elif prefer_akshare and parsed.market is Market.HK:
+        required = "akshare"
+    elif parsed.type == "crypto" and crypto_source != "auto":
         # settings/CLI 用 gate 指 Gate.io, Quote.source 是 "gate.io"
-        required.add("gate.io" if crypto_source == "gate" else crypto_source)
-    return not required or (getattr(quote, "source", None) in required)
+        required = "gate.io" if crypto_source == "gate" else crypto_source
+    return required is None or getattr(quote, "source", None) == required
 
 
 def get_quotes(

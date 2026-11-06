@@ -25,7 +25,6 @@ from typing import Any
 
 from .storage import (
     PORTFOLIO_PATH as DEFAULT_PORTFOLIO,
-    backup_file,
     edit_portfolio,
     load_portfolio,
 )
@@ -77,12 +76,24 @@ def _aggregate_rows(rows: list[dict]) -> list[dict]:
         if cur is None:
             out[key] = dict(r)
             continue
-        cur["quantity"] = float(cur.get("quantity") or 0) + float(
-            r.get("quantity") or 0
-        )
-        # 多账户成本可能不同, 不编造加权成本: 保留先出现的有效成本价
-        if cur.get("avg_cost") is None and r.get("avg_cost") is not None:
-            cur["avg_cost"] = r["avg_cost"]
+        prev_qty = float(cur.get("quantity") or 0)
+        add_qty = float(r.get("quantity") or 0)
+        cur["quantity"] = prev_qty + add_qty
+        # 多账户成本不同: 能拿到全部成本时按数量加权 (100@10 + 200@20 =
+        # 300@16.67); 任一腿缺失成本则标记为未知, 不能拿先出现那条腿的
+        # 成本套到合并后的全部数量上 (那会把 300@16.67 算成 300@10)。
+        cur_cost = cur.get("avg_cost")
+        add_cost = r.get("avg_cost")
+        if cur_cost is None or add_cost is None:
+            cur["avg_cost"] = None
+        else:
+            total_qty = cur["quantity"]
+            cur["avg_cost"] = (
+                (prev_qty * float(cur_cost) + add_qty * float(add_cost))
+                / total_qty
+                if total_qty
+                else None
+            )
         for k, v in r.items():
             cur.setdefault(k, v)
     return list(out.values())
@@ -119,6 +130,11 @@ def collect_ashare_file(path: str | Path) -> tuple[list[dict], list[str]]:
     return parse_positions_file(path)
 
 
+def wallet_source(result: dict) -> str:
+    """钱包查询结果 → 来源记账键 (链 + 地址); CLI/UI 重导时据此清理旧余额."""
+    return f"wallet:{result.get('chain') or ''}:{result.get('address') or ''}"
+
+
 def wallet_rows(result: dict) -> list[dict]:
     """wallet.import_wallet() 结果 → portfolio rows (无 avg_cost, 导入后补填).
 
@@ -126,7 +142,7 @@ def wallet_rows(result: dict) -> list[dict]:
     不同地址/链的同名代币 (如 eth 与 bsc 上的 USDT-USD) 在合并时累加,
     避免多钱包余额互相覆盖造成静默丢失。
     """
-    source = f"wallet:{result.get('chain') or ''}:{result.get('address') or ''}"
+    source = wallet_source(result)
     rows: list[dict] = []
     for h in result.get("holdings", []):
         rows.append(
@@ -179,7 +195,10 @@ def _source_quantities(row: dict) -> dict[str, float]:
 
 
 def merge_holdings(
-    existing: list[dict], rows: list[dict], mode: str = MODE_APPEND
+    existing: list[dict],
+    rows: list[dict],
+    mode: str = MODE_APPEND,
+    prune_source: str | None = None,
 ) -> tuple[list[dict], dict[str, list[str]]]:
     """按模式合并持仓, 返回 (合并后 holdings, {added, updated}).
 
@@ -190,6 +209,10 @@ def merge_holdings(
     多来源记账: 带 import_source 的行 (钱包导入) 在条目上维护
     source_quantities {来源: 分量}, quantity 为各分量之和。同一来源重复导入
     只替换该分量 (幂等, 不翻倍); 不同来源 (多链/多地址) 累加分量, 总量相加。
+
+    prune_source: 本次查询完整成功时传入来源键。该来源上次导入、但本次
+    已不存在的代码 (余额归零/代币移出 tokenlist) 会被清零并移除, 避免钱包
+    清仓后旧持仓永远留在组合里。查询有失败项时不要传 (结果不完整)。
     """
     if mode not in IMPORT_MODES:
         raise ValueError(f"未知导入模式: {mode} (支持: {', '.join(IMPORT_MODES)})")
@@ -244,6 +267,36 @@ def merge_holdings(
         merged.append(row)
         index[key] = len(merged) - 1
         stats["added"].append(sym)
+    if prune_source:
+        # 本次查询完整: 该来源上次导入过、但本次结果里没有的代码 → 清零。
+        # 若该条目还有来自其它钱包/手动录入的分量, 只清当前来源, 保留其余。
+        incoming = {
+            r["symbol"]
+            for r in normalized
+            if str(r.get("import_source") or "") == prune_source
+        }
+        kept: list[dict] = []
+        for h in merged:
+            sym = _norm_sym(h.get("symbol", ""))
+            if sym in incoming:
+                kept.append(h)
+                continue
+            sq = h.get("source_quantities")
+            touched = False
+            if isinstance(sq, dict) and prune_source in sq:
+                sq[prune_source] = 0.0
+                h["quantity"] = sum(float(v or 0) for v in sq.values())
+                touched = True
+            elif str(h.get("import_source") or "") == prune_source:
+                h["quantity"] = 0.0
+                touched = True
+            if not touched:
+                kept.append(h)
+            elif float(h.get("quantity") or 0) != 0:
+                kept.append(h)
+            elif sym not in stats["updated"]:
+                stats["updated"].append(sym)
+        merged = kept
     return merged, stats
 
 
@@ -253,28 +306,40 @@ def apply_import(
     *,
     mode: str = MODE_APPEND,
     dry_run: bool = False,
+    prune_source: str | None = None,
 ) -> dict[str, Any]:
     """合并并写盘 (导入写盘的唯一入口).
 
     写前自动备份 <portfolio>.bak; 保留 portfolio.json 中的 base_currency
     与其它自定义键。dry_run=True 或 rows 为空时不写文件 (written=False)。
+    prune_source 见 merge_holdings: 调用方应在来源查询完整成功时传入。
     """
     target = Path(portfolio)
     written = False
     backup = None
-    if dry_run or not rows:
+    # 空 rows 通常表示「无可导入」不写盘; 但带 prune_source 的空结果是
+    # 钱包已清仓, 必须允许写入以清理旧持仓。
+    if dry_run or (not rows and not prune_source):
         # 不写盘: 合并结果仅用于预览 (统计与总数), 读锁都不必拿
         data: dict = load_portfolio(target) if target.exists() else {}
-        merged, stats = merge_holdings(data.get("holdings", []), rows, mode)
+        merged, stats = merge_holdings(
+            data.get("holdings", []), rows, mode, prune_source=prune_source
+        )
     else:
         # 锁内读-改-写: 读盘也在临界区内, 与并发的 CLI/页面编辑互不丢失
         # (旧写法 load→merge→save 全量替换, 窗口内的并发写入会被静默覆盖)
         with edit_portfolio(target) as data:
-            merged, stats = merge_holdings(data.get("holdings", []), rows, mode)
-            backup = backup_file(target)
+            merged, stats = merge_holdings(
+                data.get("holdings", []), rows, mode, prune_source=prune_source
+            )
             data["holdings"] = merged
             data.setdefault("base_currency", "CNY")
             written = True
+        # 备份由 _write_json 在保存前完成, 且只在主文件可解析时刷新 .bak。
+        # 这里不能在 edit_portfolio 块内提前 backup_file: 主文件损坏、本次
+        # 数据来自 .bak 恢复时, 会把损坏主文件复制到唯一的好副本上。
+        bak = Path(f"{target}.bak")
+        backup = str(bak) if bak.exists() else None
     return {
         "mode": mode,
         "dry_run": bool(dry_run),

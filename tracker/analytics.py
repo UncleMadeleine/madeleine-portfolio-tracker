@@ -74,7 +74,12 @@ def build_view(
                 issues.append(f"{p.yahoo}: 成本无法解析 ({raw_cost!r}), 按缺失处理")
                 cost = None
         q = quotes.get(p.yahoo)
-        if q is None or q.price is None or not math.isfinite(q.price):
+        if (
+            q is None
+            or q.price is None
+            or not math.isfinite(q.price)
+            or q.price <= 0
+        ):
             issues.append(f"{p.yahoo}: 行情缺失")
             continue
         rate = fx.get(q.currency)

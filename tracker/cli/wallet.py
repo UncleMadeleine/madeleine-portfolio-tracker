@@ -59,10 +59,15 @@ def cmd_import_wallet(args: argparse.Namespace) -> None:
 
     # 写入先于输出完成, 保证 --json 只打印一个 JSON 对象 (查询结果 + 写入结果)
     rows = importer.wallet_rows(result) if (args.add or args.overwrite) else []
+    # 只有查询完整成功 (无单币失败) 才清理该地址已归零/下架的旧持仓;
+    # 部分 RPC 失败时结果不完整, 清理会误删仍存在的余额。
+    prune = importer.wallet_source(result) if not errors else None
     res = None
-    if rows:
+    if rows or (prune and args.add):
         mode = importer.MODE_OVERWRITE if args.overwrite else importer.MODE_APPEND
-        res = importer.apply_import(rows, args.portfolio, mode=mode)
+        res = importer.apply_import(
+            rows, args.portfolio, mode=mode, prune_source=prune
+        )
 
     if args.json:
         _print_json({**result, "import": res})
@@ -80,7 +85,10 @@ def cmd_import_wallet(args: argparse.Namespace) -> None:
     if not (args.add or args.overwrite):
         return
     if not rows:
-        print("\n⏭ 未发现非零余额, 跳过写入 portfolio.json")
+        if res is None:
+            print("\n⏭ 未发现非零余额, 跳过写入 portfolio.json")
+        else:
+            print("\n✅ 链上余额已归零, 已清理该地址的旧持仓")
         return
     n = len(res["added"]) + len(res["updated"])
     print(

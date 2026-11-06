@@ -1243,6 +1243,10 @@ def render_portfolio_page() -> None:
         with st.expander("错误详情"):
             for k, v in errors.items():
                 st.write(f"{k}: {v}")
+        # 冷启动失败时 _load_quotes 已把 plan 标脏并让看门狗按最短间隔补刷;
+        # 但下面的 st.stop() 会终止本页渲染, 若看门狗在 stop 之后才注册,
+        # 自动重试永远不会启动, 用户只能手动刷新。
+        _first_screen_watchdog()
         st.stop()
 
     issues: list[str] = []

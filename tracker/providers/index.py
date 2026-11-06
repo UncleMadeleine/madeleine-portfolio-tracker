@@ -256,6 +256,7 @@ _CAMECO_HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 _CAMECO_TIMEOUT = 30.0
+_YF_HISTORY_TIMEOUT = 60.0
 
 
 def _cameco_history(
@@ -315,7 +316,10 @@ def _yf_history(
     kwargs = {"symbol": yf_symbol, "provider": "yfinance", "start_date": start_date}
     if end_date:
         kwargs["end_date"] = end_date
-    df = _obb().equity.price.historical(**kwargs).to_dataframe().reset_index()
+    res = with_timeout(
+        _obb().equity.price.historical, _YF_HISTORY_TIMEOUT, **kwargs
+    )
+    df = res.to_dataframe().reset_index()
     df = df.rename(columns={df.columns[0]: "date"})
     df = df.dropna(subset=["close"])
     keep = [

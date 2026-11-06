@@ -238,7 +238,15 @@ def get_fx_rates(
 
     base = base.upper()
     curs = list(dict.fromkeys(str(c).upper() for c in currencies))
-    cached, _ages = cache_mod.get_fx_cached(base, curs, ttl=cache_mod.FX_FRESH_TTL)
+    # 显式 use_ibkr 时不能复用磁盘缓存里的其它来源汇率: 缓存键只有
+    # (base, currency), 不区分来源, 否则 `fx --ibkr` 在 TTL 内会直接拿到
+    # 之前 CFETS/Yahoo 的结果, IBKR 根本没执行。UI 侧仍由 _load_fx 自行
+    # 读缓存, 不会因此每次渲染都打 IBKR。
+    cached, _ages = (
+        ({}, {})
+        if use_ibkr
+        else cache_mod.get_fx_cached(base, curs, ttl=cache_mod.FX_FRESH_TTL)
+    )
     rates: dict[str, float] = {}
     missing: list[str] = []
     for ccy in curs:

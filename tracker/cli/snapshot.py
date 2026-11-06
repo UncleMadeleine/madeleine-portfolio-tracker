@@ -148,12 +148,12 @@ def run_snapshot(args) -> None:
                 metric = r.get("metric") or "price"
                 bv = r.get("base_value")
                 if metric == "pb" and bv is not None and pd.notna(bv):
-                    base = f"PB {bv:,.2f}"
+                    trigger_text = f"PB {bv:,.2f}"
                 elif metric == "mcap" and bv is not None and pd.notna(bv):
-                    base = f"市值 {bv:,.0f} {r['currency']}"
+                    trigger_text = f"市值 {bv:,.0f} {r['currency']}"
                 else:
-                    base = f"现价 {r['price']:,.2f} {r['currency']}"
-                print(f"  {r['symbol']} {r['status']} {base}")
+                    trigger_text = f"现价 {r['price']:,.2f} {r['currency']}"
+                print(f"  {r['symbol']} {r['status']} {trigger_text}")
 
     if issues:
         print("\n⚠ 问题:")

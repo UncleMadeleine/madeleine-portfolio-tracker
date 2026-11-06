@@ -90,6 +90,17 @@ def test_calendar_page_detail_table(monkeypatch, fake_calendar_result):
     assert len(at.dataframe[0].value) == 3
 
 
+def test_calendar_page_agenda_and_adjacent_days(monkeypatch, fake_calendar_result):
+    """日程视图按日期分组; 月历用相邻月淡显日期补齐首尾周."""
+    at = _run_page(monkeypatch, fake_calendar_result)
+    assert not at.exception, at.exception
+    texts = " ".join(m.value for m in at.markdown)
+    assert "fp-agenda" in texts
+    assert "日程" in texts
+    assert "is-out" in texts  # 相邻月日期占位 (不重复展示事件)
+    assert at.expander, "完整表格收进折叠面板"
+
+
 def test_calendar_page_empty_scope(monkeypatch):
     """范围内零代码 → info 提示, 不炸."""
     from streamlit.testing.v1 import AppTest

@@ -504,79 +504,369 @@ h1, h2, h3, h4 {{
 /* ---------- 图表容器去白边 ---------- */
 [data-testid="stPlotlyChart"] {{ border-radius: 12px; overflow: hidden; }}
 
-/* ---------- 财经日历: 纯 CSS Grid (固定 7 列, 窄屏不折行) ---------- */
+/* ---------- 财经日历: 概览 / 月历卡 / 日程 ---------- */
+/* 事件类型主色: 财报=青, 除权除息=琥珀, 股权登记=紫, 派息=绿 */
+.fp-ev-earnings {{ --ev: #00d4ff; --ev-bg: rgba(0, 212, 255, 0.12); --ev-fg: #a9eeff; }}
+.fp-ev-ex_dividend {{ --ev: #ff9f0a; --ev-bg: rgba(255, 159, 10, 0.13); --ev-fg: #ffd9a1; }}
+.fp-ev-record_date {{ --ev: #bf5af2; --ev-bg: rgba(191, 90, 242, 0.14); --ev-fg: #e3c1ff; }}
+.fp-ev-dividend {{ --ev: #32d74b; --ev-bg: rgba(50, 215, 75, 0.12); --ev-fg: #b9f7c1; }}
+.fp-ev-other {{ --ev: #94a3b8; --ev-bg: rgba(148, 163, 184, 0.12); --ev-fg: #cbd5e1; }}
+.fp-dot {{
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ev, #94a3b8);
+  box-shadow: 0 0 8px -1px var(--ev, #94a3b8);
+  flex: none;
+}}
+
+/* 概览条: 统计卡 + 事件图例 */
+.fp-cal-overview {{
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 0.5rem;
+  margin: 0.55rem 0 0.95rem;
+}}
+.fp-cal-stat {{
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.1rem;
+  min-width: 104px;
+  padding: 0.5rem 0.85rem;
+  border: 1px solid var(--fp-border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(12px);
+}}
+.fp-cal-stat-v {{
+  font-family: var(--fp-mono);
+  font-size: 1.02rem;
+  font-weight: 700;
+  line-height: 1.2;
+  color: #ffffff;
+  font-variant-numeric: tabular-nums;
+}}
+.fp-cal-stat-l {{
+  font-size: 0.66rem;
+  letter-spacing: 0.06em;
+  color: var(--fp-text-3);
+}}
+.fp-cal-legend {{
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.95rem;
+  margin-left: auto;
+  padding: 0.55rem 0.95rem;
+  border: 1px solid var(--fp-border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+}}
+.fp-cal-legend-item {{
+  display: inline-flex;
+  align-items: center;
+  gap: 0.38rem;
+  font-size: 0.72rem;
+  color: var(--fp-text-2);
+  white-space: nowrap;
+}}
+.fp-cal-legend-item b {{
+  font-family: var(--fp-mono);
+  font-weight: 600;
+  color: var(--fp-text);
+}}
+
+/* 月历卡: 玻璃底板 + 头部标题 */
+.fp-cal-month {{
+  margin: 0.2rem 0 1.3rem;
+  padding: 1rem 1.05rem 1.1rem;
+  border: 1px solid var(--fp-border);
+  border-radius: var(--fp-radius);
+  background:
+    linear-gradient(160deg, rgba(255, 255, 255, 0.04), rgba(0, 212, 255, 0.012) 45%, rgba(191, 90, 242, 0.024));
+  box-shadow:
+    0 20px 44px -30px rgba(0, 0, 0, 0.9),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+}}
+.fp-cal-head {{
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin: 0 0 0.8rem;
+}}
+.fp-cal-title {{
+  font-size: 1.02rem;
+  font-weight: 650;
+  letter-spacing: -0.012em;
+  color: var(--fp-text);
+}}
+.fp-cal-month-meta {{
+  font-family: var(--fp-mono);
+  font-size: 0.7rem;
+  color: var(--fp-text-3);
+}}
 .fp-cal-grid {{
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 5px;
-  margin: 0.15rem 0 1.35rem;
 }}
 .fp-cal-wd {{
-  padding: 0 2px 0.15rem;
+  padding: 0.05rem 0 0.4rem;
   text-align: center;
-  font-size: 0.7rem;
-  letter-spacing: 0.08em;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
   color: var(--fp-text-3);
 }}
+.fp-cal-wd.is-weekend {{ color: rgba(255, 159, 10, 0.72); }}
 .fp-cal-cell {{
-  min-height: 78px;
-  padding: 4px 6px 5px;
-  border: 1px solid var(--fp-border);
-  border-radius: 9px;
-  background: rgba(255, 255, 255, 0.022);
+  display: flex;
+  flex-direction: column;
+  min-height: 120px;
+  padding: 6px 6px 7px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.024);
   overflow: hidden;
+  transition: background 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
 }}
-.fp-cal-cell.is-empty {{
-  border-color: transparent;
+.fp-cal-cell:hover {{
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--fp-border);
+}}
+.fp-cal-cell.is-weekend {{ background: rgba(255, 255, 255, 0.014); }}
+.fp-cal-cell.is-out {{
   background: transparent;
+  border-color: transparent;
 }}
+.fp-cal-cell.is-out .fp-cal-num {{ color: rgba(246, 247, 255, 0.18); }}
 .fp-cal-cell.has-ev {{
-  border-color: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.035);
 }}
 .fp-cal-cell.is-today {{
-  border-color: rgba(0, 212, 255, 0.42);
-  box-shadow: inset 0 0 0 1px rgba(0, 212, 255, 0.16);
+  border-color: rgba(0, 212, 255, 0.5);
+  background:
+    radial-gradient(130% 100% at 18% 0%, rgba(0, 212, 255, 0.14), rgba(255, 255, 255, 0.02) 62%);
+  box-shadow:
+    0 0 0 1px rgba(0, 212, 255, 0.12),
+    0 14px 34px -24px rgba(0, 212, 255, 0.8);
 }}
 .fp-cal-num {{
-  margin-bottom: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.55rem;
+  height: 1.55rem;
+  margin-bottom: 3px;
+  border-radius: 50%;
   font-family: var(--fp-mono);
-  font-size: 0.72rem;
-  line-height: 1.3;
-  color: var(--fp-text-3);
-}}
-.fp-cal-cell.has-ev .fp-cal-num {{ color: var(--fp-text-2); }}
-.fp-cal-cell.is-today .fp-cal-num {{ color: var(--fp-cyan); font-weight: 700; }}
-.fp-cal-ev {{
-  font-size: 0.69rem;
-  line-height: 1.35;
+  font-size: 0.73rem;
+  font-weight: 600;
+  line-height: 1;
   color: var(--fp-text-2);
+  font-variant-numeric: tabular-nums;
+}}
+.fp-cal-cell.has-ev .fp-cal-num {{ color: var(--fp-text); }}
+.fp-cal-cell.is-today .fp-cal-num {{
+  background: linear-gradient(135deg, #22e0ff, #7d7bff 68%, #bf5af2);
+  color: #04121a;
+  font-weight: 800;
+  box-shadow: 0 0 18px -4px rgba(0, 212, 255, 0.85);
+}}
+.fp-cal-evs {{
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}}
+.fp-cal-ev {{
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 2px 5px;
+  border-radius: 5px;
+  background: var(--ev-bg, rgba(255, 255, 255, 0.06));
+  color: var(--ev-fg, var(--fp-text-2));
+}}
+.fp-cal-ev .fp-dot {{ width: 5px; height: 5px; }}
+.fp-cal-ev-text {{
+  flex: none;
+  font-family: var(--fp-mono);
+  font-size: 0.62rem;
+  line-height: 1.4;
+  white-space: nowrap;
+}}
+.fp-cal-name {{
+  flex: 1;
+  min-width: 0;
+  font-size: 0.62rem;
+  line-height: 1.4;
+  color: var(--fp-text-3);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }}
 .fp-cal-more {{
-  font-size: 0.62rem;
-  line-height: 1.4;
+  margin-top: auto;
+  padding: 2px 2px 0 4px;
+  font-size: 0.6rem;
   color: var(--fp-text-3);
 }}
-/* 窄屏用「类型标记」代替被截断的代码 (完整代码见下方明细表) */
+/* 窄屏用类型色点代替被截断的代码 (完整信息见下方日程/表格) */
 .fp-cal-marks {{ display: none; }}
 .fp-cal-tag {{
   display: inline-block;
-  min-width: 1.05em;
-  padding: 0 2px;
-  border-radius: 3px;
-  font-size: 0.55rem;
-  line-height: 1.55;
-  text-align: center;
-  background: rgba(255, 255, 255, 0.08);
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ev, #94a3b8);
+  box-shadow: 0 0 6px -1px var(--ev, #94a3b8);
+}}
+.fp-cal-tag-more {{
+  font-size: 0.52rem;
+  line-height: 1;
+  color: var(--fp-text-3);
+}}
+
+/* 小节标题 (日程等) */
+.fp-section-head {{
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0.35rem 0 0.55rem;
+}}
+.fp-section-title {{
+  font-size: 1.02rem;
+  font-weight: 650;
+  letter-spacing: -0.012em;
+  color: var(--fp-text);
+}}
+.fp-section-sub {{
+  font-family: var(--fp-mono);
+  font-size: 0.7rem;
+  color: var(--fp-text-3);
+}}
+
+/* 日程 (agenda): 左侧日期栏 + 右侧事件条目 */
+.fp-agenda {{
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1.15rem;
+}}
+.fp-agenda-day {{
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 0.85rem;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--fp-border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.024);
+  transition: border-color 160ms ease, background 160ms ease;
+}}
+.fp-agenda-day:hover {{
+  border-color: var(--fp-border-strong);
+  background: rgba(255, 255, 255, 0.035);
+}}
+.fp-agenda-day.is-today {{
+  border-color: rgba(0, 212, 255, 0.38);
+  background:
+    radial-gradient(120% 100% at 0% 0%, rgba(0, 212, 255, 0.1), rgba(255, 255, 255, 0.02) 60%);
+}}
+.fp-agenda-day.is-past {{ opacity: 0.62; }}
+.fp-agenda-date {{
+  display: flex;
+  flex-direction: column;
+  gap: 0.08rem;
+  padding-top: 0.1rem;
+}}
+.fp-agenda-dow {{
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--fp-cyan);
+}}
+.fp-agenda-num {{
+  font-family: var(--fp-mono);
+  font-size: 0.98rem;
+  font-weight: 700;
+  line-height: 1.25;
+  color: var(--fp-text);
+  font-variant-numeric: tabular-nums;
+}}
+.fp-agenda-rel {{
+  font-size: 0.64rem;
+  color: var(--fp-text-3);
+}}
+.fp-agenda-items {{
+  display: flex;
+  flex-direction: column;
+  gap: 0.32rem;
+  min-width: 0;
+}}
+.fp-agenda-item {{
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.55rem;
+  min-width: 0;
+  padding: 0.32rem 0.5rem;
+  border-radius: 8px;
+  border-left: 2px solid var(--ev, #94a3b8);
+  background: var(--ev-bg, rgba(255, 255, 255, 0.04));
+}}
+.fp-agenda-badge {{
+  padding: 0.02rem 0.38rem;
+  border-radius: 4px;
+  font-size: 0.64rem;
+  font-weight: 600;
+  white-space: nowrap;
+  background: rgba(255, 255, 255, 0.09);
+  color: var(--ev-fg, var(--fp-text-2));
+}}
+.fp-agenda-symbol {{
+  font-family: var(--fp-mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--fp-text);
+  white-space: nowrap;
+}}
+.fp-agenda-name {{
+  font-size: 0.74rem;
   color: var(--fp-text-2);
 }}
-.fp-cal-tag-earnings {{ background: rgba(0, 212, 255, 0.16); color: #7fe9ff; }}
-.fp-cal-tag-ex_dividend,
-.fp-cal-tag-dividend,
-.fp-cal-tag-record_date {{ background: rgba(255, 159, 10, 0.16); color: #ffc46b; }}
+.fp-agenda-status {{
+  padding: 0.02rem 0.36rem;
+  border-radius: 4px;
+  font-size: 0.62rem;
+  white-space: nowrap;
+  color: var(--fp-text-3);
+  background: rgba(255, 255, 255, 0.05);
+}}
+.fp-agenda-note {{
+  flex: 1;
+  min-width: 8rem;
+  font-size: 0.7rem;
+  color: var(--fp-text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}}
+.fp-agenda-src {{
+  margin-left: auto;
+  font-family: var(--fp-mono);
+  font-size: 0.6rem;
+  color: rgba(246, 247, 255, 0.28);
+  white-space: nowrap;
+}}
 
 /* ---------- 滚动条 ---------- */
 * {{ scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.16) transparent; }}
@@ -627,19 +917,40 @@ h1, h2, h3, h4 {{
     flex: 1 1 calc(50% - 0.35rem);
     justify-content: center;
   }}
-  /* 日历: 7 列固定, 窄屏只留类型标记 (完整代码/名称见下方明细表) */
-  .fp-cal-grid {{ gap: 2px; margin-bottom: 1rem; }}
-  .fp-cal-wd {{ font-size: 0.6rem; letter-spacing: 0; }}
-  .fp-cal-cell {{ min-height: 58px; padding: 3px 3px 4px; border-radius: 6px; }}
-  .fp-cal-num {{ font-size: 0.64rem; margin-bottom: 1px; }}
-  .fp-cal-ev {{ display: none; }}
+  /* 日历: 7 列固定, 窄屏只留类型色点 (完整信息见下方日程/表格) */
+  .fp-cal-overview {{ gap: 0.4rem; margin: 0.45rem 0 0.8rem; }}
+  .fp-cal-stat {{ min-width: 86px; padding: 0.42rem 0.65rem; }}
+  .fp-cal-stat-v {{ font-size: 0.9rem; }}
+  .fp-cal-legend {{
+    width: 100%;
+    margin-left: 0;
+    padding: 0.45rem 0.7rem;
+    gap: 0.3rem 0.7rem;
+  }}
+  .fp-cal-month {{ padding: 0.7rem 0.55rem 0.8rem; border-radius: 12px; margin-bottom: 0.9rem; }}
+  .fp-cal-head {{ margin-bottom: 0.5rem; }}
+  .fp-cal-title {{ font-size: 0.88rem; }}
+  .fp-cal-month-meta {{ font-size: 0.62rem; }}
+  .fp-cal-grid {{ gap: 2px; }}
+  .fp-cal-wd {{ padding: 0.05rem 0 0.25rem; font-size: 0.58rem; letter-spacing: 0; }}
+  .fp-cal-cell {{ min-height: 62px; padding: 3px 3px 4px; border-radius: 6px; }}
+  .fp-cal-num {{ width: 1.3rem; height: 1.3rem; margin-bottom: 1px; font-size: 0.62rem; }}
+  .fp-cal-evs {{ display: none; }}
   .fp-cal-name {{ display: none; }}
+  .fp-cal-more {{ display: none; }}
   .fp-cal-marks {{
     display: flex;
     flex-wrap: wrap;
     gap: 2px;
     margin-top: 2px;
   }}
-  .fp-cal-more {{ display: none; }}
+  .fp-agenda-day {{
+    grid-template-columns: 56px minmax(0, 1fr);
+    gap: 0.55rem;
+    padding: 0.55rem 0.6rem;
+  }}
+  .fp-agenda-num {{ font-size: 0.86rem; }}
+  .fp-agenda-note {{ flex-basis: 100%; white-space: normal; }}
+  .fp-agenda-src {{ margin-left: 0; }}
 }}
 """

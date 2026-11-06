@@ -21,7 +21,7 @@ import logging
 import threading
 import time
 
-from datetime import date
+from datetime import date, timedelta
 
 import pandas as pd
 
@@ -34,8 +34,8 @@ from tracker.symbols import parse
 from tracker.ui import theme
 from tracker.watchlist import load_watchlist
 
-# 月历单元格单日最多展示的事件数 (超出折叠: 单元格内省略, 明细表看全集)
-MAX_PER_CELL = 4
+# 月历单元格单日最多展示的事件数 (超出折叠: 单元格内省略, 日程/明细表看全集)
+MAX_PER_CELL = 3
 
 # 首屏 stale-while-revalidate: 磁盘有旧日历 (7 天内) 时先渲染, 后台按正常
 # 缓存链重取过期/缺失的键, 完成后看门狗 rerun 换新。周期/节流与组合页同口径。
@@ -66,6 +66,11 @@ TYPE_MARK = {
     "record_date": "登",
     "dividend": "派",
 }
+
+# 事件类型展示顺序/配色类名 (CSS 中 fp-ev-* 定义 --ev 主色)
+TYPE_ORDER = ("earnings", "ex_dividend", "record_date", "dividend")
+TYPE_RANK = {t: i for i, t in enumerate(TYPE_ORDER)}
+WEEKDAYS = ("一", "二", "三", "四", "五", "六", "日")
 
 
 def _fetch_calendar(
@@ -394,36 +399,41 @@ def ensure_calendar_refresher() -> None:
 
 
 def render_calendar_page() -> None:
-    """日历页: 范围选择 → 每个自然月一张月历网格 + 明细表."""
+    """日历页: 工具栏 → 概览 → 月历卡 → 按日日程 → 完整表格."""
     theme.page_header("财经日历", eyebrow="ECONOMIC CALENDAR")
 
     lists = _watch_lists()
-    c1, c2, c3, c4, c5 = st.columns([2, 2, 1.4, 1.6, 1])
-    with c1:
-        scope_opts = (
-            ["持仓+自选", "仅持仓", "仅自选"]
-            if not lists
-            else ["持仓+自选", "仅持仓", "仅自选", "仅自选列表"]
+    with st.container(border=True):
+        c1, c2, c3, c4, c5 = st.columns(
+            [2, 2, 1.5, 1.5, 1], vertical_alignment="bottom"
         )
-        st.selectbox("范围", scope_opts, key="cal_scope")
-    with c2:
-        if st.session_state.get("cal_scope") == "仅自选列表":
-            st.selectbox("自选列表", ["全部"] + lists, key="cal_list")
-        else:
-            st.caption("切换选择即读缓存; 旧数据先展示, 后台刷新 (磁盘缓存 6 小时)")
-    with c3:
-        months = st.selectbox(
-            "窗口",
-            [2, 3, 4],
-            index=0,
-            format_func=lambda m: f"{m} 个月 (本月起)",
-            key="cal_months",
+        with c1:
+            scope_opts = (
+                ["持仓+自选", "仅持仓", "仅自选"]
+                if not lists
+                else ["持仓+自选", "仅持仓", "仅自选", "仅自选列表"]
+            )
+            st.selectbox("范围", scope_opts, key="cal_scope")
+        with c2:
+            if st.session_state.get("cal_scope") == "仅自选列表":
+                st.selectbox("自选列表", ["全部"] + lists, key="cal_list")
+            else:
+                st.caption("旧数据先展示, 后台自动刷新 · 磁盘缓存 6 小时")
+        with c3:
+            months = st.selectbox(
+                "窗口",
+                [2, 3, 4],
+                index=0,
+                format_func=lambda m: f"{m} 个月 (本月起)",
+                key="cal_months",
+            )
+        use_longport = c4.checkbox(
+            "长桥兜底",
+            help="yfinance/akshare 拿不到的标的用长桥日历补 (需已 longport-login)",
         )
-    use_longport = c4.checkbox(
-        "长桥兜底",
-        help="yfinance/akshare 拿不到的标的用长桥日历补 (需已 longport-login)",
-    )
-    refresh = c5.button(":material/refresh: 刷新", use_container_width=True)
+        refresh = c5.button(
+            ":material/refresh: 刷新", use_container_width=True, type="primary"
+        )
 
     syms = _resolve_scope()
     if not syms:
@@ -486,6 +496,7 @@ def render_calendar_page() -> None:
         f"窗口 {w0} → {w1} · {len(evs)} 个事件 · {src_bits or '无来源'} · "
         "标记: 报=财报 息=除权除息 登=股权登记 派=派息日"
     )
+    _render_overview(evs)
     cmeta = _cache_meta(data)
     if cmeta.get("stale"):
         age_h = float(cmeta.get("stale_age") or 0.0) / 3600.0
@@ -500,73 +511,268 @@ def render_calendar_page() -> None:
         return
 
     _render_month_grids(evs, w0, w1)
-    st.divider()
+    _render_agenda(evs)
     _render_detail_table(evs)
 
 
+def _event_date(ev: dict) -> date:
+    return date.fromisoformat(str(ev["date"])[:10])
+
+
+def _type_class(ev: dict) -> str:
+    t = str(ev.get("type") or "")
+    return t if t in TYPE_RANK else "other"
+
+
+def _sorted_events(evs: list[dict]) -> list[dict]:
+    return sorted(
+        evs,
+        key=lambda e: (
+            str(e.get("date") or ""),
+            TYPE_RANK.get(str(e.get("type")), 9),
+            str(e.get("symbol") or ""),
+        ),
+    )
+
+
+def _section_head(title: str, meta: str = "") -> None:
+    """页面内小节标题 (左侧标题 + 右侧辅助说明)."""
+    meta_html = (
+        f'<span class="fp-section-sub">{html.escape(meta)}</span>' if meta else ""
+    )
+    st.markdown(
+        '<div class="fp-section-head">'
+        f'<span class="fp-section-title">{html.escape(title)}</span>'
+        f"{meta_html}</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _render_overview(evs: list[dict]) -> None:
+    """概览条: 事件/标的/下一事件统计 + 事件类型图例 (带数量)."""
+    today = date.today()
+    symbols = {str(e.get("symbol") or "") for e in evs}
+    symbols.discard("")
+    future = sorted(d for d in (_event_date(e) for e in evs) if d >= today)
+    if future:
+        nd = future[0]
+        delta = (nd - today).days
+        rel = "今天" if delta == 0 else "明天" if delta == 1 else f"{delta} 天后"
+        next_v, next_l = f"{nd:%m-%d}", rel
+    else:
+        next_v, next_l = "—", "暂无未来事件"
+
+    stats = [
+        (str(len(evs)), "个事件"),
+        (str(len(symbols)), "只标的"),
+        (next_v, next_l),
+    ]
+    parts = ['<div class="fp-cal-overview">']
+    for value, label in stats:
+        parts.append(
+            '<div class="fp-cal-stat">'
+            f'<span class="fp-cal-stat-v">{html.escape(value)}</span>'
+            f'<span class="fp-cal-stat-l">{html.escape(label)}</span></div>'
+        )
+    parts.append('<div class="fp-cal-legend">')
+    for t in TYPE_ORDER:
+        count = sum(1 for e in evs if str(e.get("type")) == t)
+        label = events_mod.EVENT_TYPE_LABELS.get(t, t)
+        parts.append(
+            f'<span class="fp-cal-legend-item fp-ev-{t}"><i class="fp-dot"></i>'
+            f"{html.escape(label)}<b>{count}</b></span>"
+        )
+    parts.append("</div></div>")
+    st.markdown("".join(parts), unsafe_allow_html=True)
+
+
 def _render_month_grids(evs: list[dict], w0: date, w1: date) -> None:
-    """每个自然月一张 7 列网格 (首行表头 + 周行; 当日高亮, 单日折叠).
+    """每个自然月一张 7 列月历卡 (周行 + 相邻月淡显; 当日高亮, 单日折叠).
 
     用原生 CSS Grid 输出整月 (而不是 7×N 个 st.columns): Streamlit 的列在
     窄屏会自动折成单列, 会把月历拆成一条竖线; CSS Grid 固定 7 列, 移动端
-    只缩小字号/隐藏名称, 保持日历语义。
+    只缩小字号/隐藏名称, 保持日历语义。相邻月的日期只做视觉占位、不重复
+    展示事件 (事件属于窗口内另一个月的卡片)。
     """
     by_day: dict[date, list[dict]] = {}
     for e in evs:
-        d = date.fromisoformat(str(e["date"])[:10])
-        by_day.setdefault(d, []).append(e)
+        by_day.setdefault(_event_date(e), []).append(e)
+    for day_evs in by_day.values():
+        day_evs.sort(
+            key=lambda e: (
+                TYPE_RANK.get(str(e.get("type")), 9),
+                str(e.get("symbol") or ""),
+            )
+        )
     today = date.today()
-    weekdays = ("一", "二", "三", "四", "五", "六", "日")
+
     for start, _end in events_mod._month_starts(w0, w1):
-        st.markdown(f"#### {start.year} 年 {start.month} 月")
-        parts = ['<div class="fp-cal-grid">']
-        parts.extend(f'<div class="fp-cal-wd">{wd}</div>' for wd in weekdays)
-        for week in _cal.monthcalendar(start.year, start.month):
-            for d in week:
-                if not d:
-                    parts.append('<div class="fp-cal-cell is-empty"></div>')
-                    continue
-                dt = date(start.year, start.month, d)
-                day_evs = by_day.get(dt) or []
-                classes = "fp-cal-cell"
+        y, m = start.year, start.month
+        first = date(y, m, 1)
+        last = date(y, m, _cal.monthrange(y, m)[1])
+        month_evs = [
+            e for d, day_evs in by_day.items() if (d.year, d.month) == (y, m)
+            for e in day_evs
+        ]
+        meta = f"{len(month_evs)} 个事件" if month_evs else "本月无事件"
+
+        parts = [
+            '<div class="fp-cal-month">',
+            '<div class="fp-cal-head">',
+            f'<span class="fp-cal-title">{y} 年 {m} 月</span>',
+            f'<span class="fp-cal-month-meta">{meta}</span>',
+            "</div>",
+            '<div class="fp-cal-grid">',
+        ]
+        for idx, wd in enumerate(WEEKDAYS):
+            cls = "fp-cal-wd is-weekend" if idx >= 5 else "fp-cal-wd"
+            parts.append(f'<div class="{cls}">{wd}</div>')
+
+        for week_idx, week in enumerate(_cal.monthcalendar(y, m)):
+            for col, day_num in enumerate(week):
+                if day_num:
+                    dt = date(y, m, day_num)
+                elif week_idx == 0:
+                    dt = first - timedelta(days=first.weekday() - col)
+                else:
+                    dt = last + timedelta(days=col - last.weekday())
+                out = dt.month != m
+                classes = ["fp-cal-cell"]
+                if col >= 5:
+                    classes.append("is-weekend")
+                if out:
+                    classes.append("is-out")
+                elif dt == today:
+                    classes.append("is-today")
+                day_evs = [] if out else (by_day.get(dt) or [])
                 if day_evs:
-                    classes += " has-ev"
-                if dt == today:
-                    classes += " is-today"
-                body = [f'<div class="fp-cal-num">{d}</div>']
-                for ev in day_evs[:MAX_PER_CELL]:
-                    mark = TYPE_MARK.get(ev["type"], "?")
-                    sym = html.escape(str(ev["symbol"]))
-                    name = _short_name(ev.get("name"))
-                    line = f"· {mark} {sym}"
-                    if name:
-                        line += f' <span class="fp-cal-name">{html.escape(name)}</span>'
-                    tooltip = html.escape(f"{ev['symbol']} {name}".strip())
-                    body.append(
-                        f'<div class="fp-cal-ev" title="{tooltip}">{line}</div>'
+                    classes.append("has-ev")
+                body = [f'<div class="fp-cal-num">{dt.day}</div>']
+                if day_evs:
+                    body.append('<div class="fp-cal-evs">')
+                    for ev in day_evs[:MAX_PER_CELL]:
+                        mark = TYPE_MARK.get(ev["type"], "?")
+                        sym = html.escape(str(ev["symbol"]))
+                        name = _short_name(ev.get("name"))
+                        label = events_mod.EVENT_TYPE_LABELS.get(
+                            ev["type"], ev["type"]
+                        )
+                        tooltip = html.escape(
+                            f"{ev['symbol']} {name or ''} · {label}".strip()
+                        )
+                        name_html = (
+                            f'<span class="fp-cal-name">{html.escape(name)}</span>'
+                            if name
+                            else ""
+                        )
+                        body.append(
+                            f'<div class="fp-cal-ev fp-ev-{_type_class(ev)}" '
+                            f'title="{tooltip}"><i class="fp-dot"></i>'
+                            f'<span class="fp-cal-ev-text">{mark} {sym}</span>'
+                            f"{name_html}</div>"
+                        )
+                    body.append("</div>")
+                    extra = len(day_evs) - MAX_PER_CELL
+                    if extra > 0:
+                        body.append(
+                            f'<div class="fp-cal-more">+{extra} 更多</div>'
+                        )
+                    # 窄屏只保留类型色点 (完整代码/名称见下方日程与表格)
+                    tags = "".join(
+                        f'<i class="fp-cal-tag fp-ev-{_type_class(ev)}"></i>'
+                        for ev in day_evs[:4]
                     )
-                if len(day_evs) > MAX_PER_CELL:
-                    body.append(
-                        f'<div class="fp-cal-more">(+{len(day_evs) - MAX_PER_CELL})</div>'
-                    )
-                tags = "".join(
-                    f'<span class="fp-cal-tag fp-cal-tag-{html.escape(str(ev["type"]))}">'
-                    f'{TYPE_MARK.get(ev["type"], "?")}</span>'
-                    for ev in day_evs[:MAX_PER_CELL]
-                )
-                extra = len(day_evs) - MAX_PER_CELL
-                if extra > 0:
-                    tags += f'<span class="fp-cal-tag">+{extra}</span>'
-                if tags:
+                    if len(day_evs) > 4:
+                        tags += (
+                            f'<span class="fp-cal-tag-more">'
+                            f"+{len(day_evs) - 4}</span>"
+                        )
                     body.append(f'<div class="fp-cal-marks">{tags}</div>')
-                parts.append(f'<div class="{classes}">{"".join(body)}</div>')
-        parts.append("</div>")
+                parts.append(f'<div class="{" ".join(classes)}">{"".join(body)}</div>')
+
+        parts.append("</div></div>")
         st.markdown("".join(parts), unsafe_allow_html=True)
-    return
+
+
+def _render_agenda(evs: list[dict]) -> None:
+    """按日期分组的日程列表 (比裸表格更接近成熟日历的 agenda 视图)."""
+    grouped: dict[date, list[dict]] = {}
+    for e in _sorted_events(evs):
+        grouped.setdefault(_event_date(e), []).append(e)
+    today = date.today()
+    _section_head("日程", f"{len(grouped)} 个交易日")
+
+    parts = ['<div class="fp-agenda">']
+    for dt in sorted(grouped):
+        delta = (dt - today).days
+        if delta == 0:
+            rel = "今天"
+        elif delta == 1:
+            rel = "明天"
+        elif delta > 1:
+            rel = f"{delta} 天后"
+        elif delta == -1:
+            rel = "昨天"
+        else:
+            rel = f"{-delta} 天前"
+        classes = ["fp-agenda-day"]
+        if delta == 0:
+            classes.append("is-today")
+        elif delta < 0:
+            classes.append("is-past")
+
+        items = []
+        for ev in grouped[dt]:
+            label = events_mod.EVENT_TYPE_LABELS.get(
+                ev.get("type"), str(ev.get("type") or "")
+            )
+            status = events_mod.DATE_STATUS_LABELS.get(
+                ev.get("date_status") or "", ""
+            )
+            note = str(ev.get("note") or "").strip()
+            source = str(ev.get("source") or "").strip()
+            name = str(ev.get("name") or "").strip()
+            items.append(
+                f'<div class="fp-agenda-item fp-ev-{_type_class(ev)}">'
+                f'<span class="fp-agenda-badge">{html.escape(label)}</span>'
+                f'<span class="fp-agenda-symbol">'
+                f'{html.escape(str(ev.get("symbol") or ""))}</span>'
+                + (
+                    f'<span class="fp-agenda-name">{html.escape(name)}</span>'
+                    if name
+                    else ""
+                )
+                + (
+                    f'<span class="fp-agenda-status">{html.escape(status)}</span>'
+                    if status
+                    else ""
+                )
+                + (
+                    f'<span class="fp-agenda-note">{html.escape(note)}</span>'
+                    if note
+                    else ""
+                )
+                + (
+                    f'<span class="fp-agenda-src">{html.escape(source)}</span>'
+                    if source
+                    else ""
+                )
+                + "</div>"
+            )
+        parts.append(
+            f'<div class="{" ".join(classes)}">'
+            f'<div class="fp-agenda-date">'
+            f'<span class="fp-agenda-dow">周{WEEKDAYS[dt.weekday()]}</span>'
+            f'<span class="fp-agenda-num">{dt.month}/{dt.day}</span>'
+            f'<span class="fp-agenda-rel">{rel}</span></div>'
+            f'<div class="fp-agenda-items">{"".join(items)}</div></div>'
+        )
+    parts.append("</div>")
+    st.markdown("".join(parts), unsafe_allow_html=True)
 
 
 def _render_detail_table(evs: list[dict]) -> None:
-    st.markdown("**明细**")
+    """完整事件表: 收进折叠面板, 不打断日历/日程的浏览节奏."""
     df = pd.DataFrame(
         [
             {
@@ -580,23 +786,24 @@ def _render_detail_table(evs: list[dict]) -> None:
                 "说明": e.get("note") or None,
                 "来源": e.get("source") or None,
             }
-            for e in evs
+            for e in _sorted_events(evs)
         ]
     )
-    st.dataframe(
-        df,
-        hide_index=True,
-        use_container_width=True,
-        column_config={
-            "日期": st.column_config.TextColumn("日期", width="small"),
-            "代码": st.column_config.TextColumn("代码", width="small"),
-            "名称": st.column_config.TextColumn("名称", width="medium"),
-            "类型": st.column_config.TextColumn("类型", width="small"),
-            "状态": st.column_config.TextColumn("状态", width="small"),
-            "说明": st.column_config.TextColumn("说明", width="large"),
-            "来源": st.column_config.TextColumn("来源", width="small"),
-        },
-    )
+    with st.expander(f"表格视图 · 全部 {len(df)} 个事件", expanded=False):
+        st.dataframe(
+            df,
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "日期": st.column_config.TextColumn("日期", width="small"),
+                "代码": st.column_config.TextColumn("代码", width="small"),
+                "名称": st.column_config.TextColumn("名称", width="medium"),
+                "类型": st.column_config.TextColumn("类型", width="small"),
+                "状态": st.column_config.TextColumn("状态", width="small"),
+                "说明": st.column_config.TextColumn("说明", width="large"),
+                "来源": st.column_config.TextColumn("来源", width="small"),
+            },
+        )
 
 
 def _short_name(nm: str | None, limit: int = 8) -> str:

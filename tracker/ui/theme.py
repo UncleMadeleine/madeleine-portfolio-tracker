@@ -32,9 +32,386 @@ DOWN_CN = "#32d74b"
 _MAX_WIDTH = "1560px"
 
 
+# ---------- 全局右键菜单 ----------
+# Streamlit 的表格 (Glide Data Grid) 与图表默认弹浏览器原生菜单, 在数据面板里
+# 既没有「复制整行」也没有「查看 K 线」, 与桌面行情软件的习惯不符。这里用
+# components.v2 挂一个 0 高度的全局脚本组件:
+#   * 表格: 右键落在可见单元格上时, 用无障碍表格里同位置的 td 反查行列与文本;
+#   * 图表 (Plotly): 右键落在画布上时提供重置视图 / 下载图片;
+#   * 输入框、正文等仍保留浏览器原生菜单 (复制/粘贴/翻译是用户预期行为)。
+# 菜单 DOM 追加到 document.body, 复用本模块的全局 CSS, 避免被 ShadowRoot 裁剪。
+_TABLE_CONTEXT_MENU_JS = r"""
+export default function (component) {
+  // rerun 会重新执行组件函数但不一定先调用上一次 cleanup: 用 window 级单例
+  // 防止 document 上叠加多个 contextmenu 监听器。返回同一个 cleanup, 保证
+  // Streamlit 真正卸载组件时仍能把监听器摘干净。
+  if (window.__fpContextMenuCleanup) { return window.__fpContextMenuCleanup; }
+
+  var MENU_ID = 'fp-context-menu';
+  var TOAST_ID = 'fp-context-toast';
+  var menu = null;
+  var toastTimer = null;
+
+  function make(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) { e.className = cls; }
+    if (text != null) { e.textContent = text; }
+    return e;
+  }
+
+  function ensureMenu() {
+    if (menu && document.body.contains(menu)) { return menu; }
+    menu = document.createElement('div');
+    menu.id = MENU_ID;
+    menu.className = 'fp-ctx-menu';
+    menu.setAttribute('role', 'menu');
+    menu.setAttribute('aria-label', '右键菜单');
+    menu.tabIndex = -1;
+    document.body.appendChild(menu);
+    return menu;
+  }
+
+  function hideMenu() {
+    if (menu) {
+      // 直接移除节点 (而不是留一个空壳): 否则每次右键都会在 body 里
+      // 堆积一个不可见的 #fp-context-menu。
+      menu.remove();
+      menu = null;
+    }
+  }
+
+  function toast(text) {
+    var el = document.getElementById(TOAST_ID);
+    if (!el) {
+      el = make('div', 'fp-ctx-toast');
+      el.id = TOAST_ID;
+      el.setAttribute('role', 'status');
+      document.body.appendChild(el);
+    }
+    el.textContent = text;
+    el.classList.add('fp-ctx-show');
+    if (toastTimer) { clearTimeout(toastTimer); }
+    toastTimer = setTimeout(function () {
+      el.classList.remove('fp-ctx-show');
+    }, 1300);
+  }
+
+  function fallbackCopy(text) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    ta.style.top = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); } catch (e) {}
+    ta.remove();
+  }
+
+  function copy(text) {
+    if (!text) { return; }
+    // 先给反馈再写剪贴板: 部分浏览器 (尤其 Firefox headless / 未授权)
+    // 的 clipboard Promise 会长时间不落定, 等它再弹提示会让用户以为没生效。
+    toast('已复制到剪贴板');
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).catch(function () {
+        fallbackCopy(text);
+      });
+    } else {
+      fallbackCopy(text);
+    }
+  }
+
+  function icon(name) {
+    var paths = {
+      copy: '<rect x="9" y="9" width="11" height="11" rx="2"></rect>' +
+            '<path d="M5 15V5a2 2 0 0 1 2-2h10"></path>',
+      row: '<path d="M4 6h16M4 12h16M4 18h16"></path>',
+      table: '<rect x="3" y="4" width="18" height="16" rx="2"></rect>' +
+             '<path d="M3 10h18M9 4v16"></path>',
+      chart: '<path d="M4 19V5M4 19h16"></path>' +
+             '<path d="M8 15l3-4 3 2 4-6"></path>'
+    };
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+      'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" ' +
+      'aria-hidden="true">' + (paths[name] || '') + '</svg>';
+  }
+
+  function showMenu(x, y, title, items) {
+    var box = ensureMenu();
+    box.innerHTML = '';
+    if (title) {
+      box.appendChild(make('div', 'fp-ctx-header', title));
+    }
+    items.forEach(function (item) {
+      if (item.sep) {
+        box.appendChild(make('div', 'fp-ctx-sep'));
+        return;
+      }
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'fp-ctx-item';
+      btn.setAttribute('role', 'menuitem');
+      btn.innerHTML = icon(item.icon) + '<span></span>';
+      btn.querySelector('span').textContent = item.label;
+      if (item.disabled) {
+        btn.disabled = true;
+      } else {
+        btn.addEventListener('click', function (ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          hideMenu();
+          item.action();
+        });
+      }
+      box.appendChild(btn);
+    });
+    // 先按左上角定位量出尺寸, 再贴边翻转, 避免菜单溢出窗口
+    box.style.left = '0px';
+    box.style.top = '0px';
+    box.style.visibility = 'hidden';
+    box.classList.add('fp-ctx-open');
+    box.setAttribute('aria-hidden', 'false');
+    var r = box.getBoundingClientRect();
+    var left = Math.max(8, Math.min(x, window.innerWidth - r.width - 8));
+    var top = y + r.height > window.innerHeight - 8 ? y - r.height : y;
+    top = Math.max(8, Math.min(top, window.innerHeight - r.height - 8));
+    box.style.left = left + 'px';
+    box.style.top = top + 'px';
+    box.style.visibility = 'visible';
+    // 鼠标右键打开时不预选第一项 (与系统右键菜单一致); 键盘用户按
+    // ArrowDown 再进入菜单项, 由 onKeyDown 处理。
+  }
+
+  function getCell(df, x, y) {
+    var cells = df.querySelectorAll('[data-testid^="glide-cell-"]');
+    for (var i = 0; i < cells.length; i++) {
+      var r = cells[i].getBoundingClientRect();
+      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
+        return cells[i];
+      }
+    }
+    return null;
+  }
+
+  function cellParts(cell) {
+    var m = /^glide-cell-(\d+)-(\d+)$/.exec(cell.getAttribute('data-testid') || '');
+    return m ? { col: parseInt(m[1], 10), row: parseInt(m[2], 10) } : null;
+  }
+
+  function rowInfo(df, pos) {
+    var cells = df.querySelectorAll(
+      '[data-testid^="glide-cell-"][data-testid$="-' + pos.row + '"]'
+    );
+    var headers = {};
+    df.querySelectorAll('th[role="columnheader"]').forEach(function (th) {
+      headers[String(th.getAttribute('aria-colindex'))] = (th.textContent || '').trim();
+    });
+    var values = [];
+    var byCol = {};
+    cells.forEach(function (c) {
+      var p = cellParts(c);
+      if (!p) { return; }
+      var text = (c.textContent || '').trim();
+      byCol[p.col] = text;
+      values.push({ col: p.col, text: text });
+    });
+    values.sort(function (a, b) { return a.col - b.col; });
+    var symbol = '';
+    values.forEach(function (v) {
+      var h = headers[String(v.col)] || '';
+      if ((h === '代码' || h.toLowerCase() === 'symbol') && v.text) {
+        symbol = v.text;
+      }
+    });
+    return {
+      values: values,
+      headers: values.map(function (v) { return headers[String(v.col)] || ''; }),
+      symbol: symbol
+    };
+  }
+
+  function onContext(ev) {
+    if (ev.defaultPrevented) { return; }
+    var t = ev.target;
+    if (!(t instanceof Element)) { return; }
+    // 输入/编辑状态保留原生菜单: 复制、粘贴、拼写检查都在这里
+    if (t.closest('input, textarea, [contenteditable="true"], [data-baseweb="input"]')) {
+      return;
+    }
+
+    var cell = null;
+    var df = t.closest('[data-testid="stDataFrame"], [data-testid="stDataEditor"]');
+    if (df) {
+      cell = getCell(df, ev.clientX, ev.clientY);
+      if (!cell) { return; }
+      var pos = cellParts(cell);
+      if (!pos) { return; }
+      var row = rowInfo(df, pos);
+      var cellText = (cell.textContent || '').trim();
+      var rowText = row.values.map(function (v) { return v.text; }).join('\t');
+      var withHeader = row.headers.join('\t') + '\n' + rowText;
+      var cellHeader = row.headers[row.values.findIndex(function (v) {
+        return v.col === pos.col;
+      })] || '';
+      var title = (row.symbol || cellText) + (cellHeader ? '  ·  ' + cellHeader : '');
+      var items = [
+        {
+          label: '复制单元格',
+          icon: 'copy',
+          disabled: !cellText,
+          action: function () { copy(cellText); }
+        },
+        {
+          label: '复制整行',
+          icon: 'row',
+          disabled: !rowText,
+          action: function () { copy(rowText); }
+        },
+        {
+          label: '复制含表头',
+          icon: 'table',
+          disabled: !rowText,
+          action: function () { copy(withHeader); }
+        }
+      ];
+      if (row.symbol) {
+        items.push({ sep: true });
+        items.push({
+          label: '查看 K 线',
+          icon: 'chart',
+          action: function () {
+            window.location.assign(
+              '/kline?symbol=' + encodeURIComponent(row.symbol) + '&t=' + Date.now()
+            );
+          }
+        });
+      }
+      ev.preventDefault();
+      ev.stopPropagation();
+      showMenu(ev.clientX, ev.clientY, title, items);
+      return;
+    }
+
+    // Plotly 图: 浏览器菜单里没有图表操作, 提供重置视图与导出图片
+    var plot = t.closest('.js-plotly-plot');
+    if (plot) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      var items = [
+        {
+          label: '重置视图',
+          icon: 'chart',
+          action: function () {
+            try {
+              var el = plot;
+              var update = {};
+              Object.keys(el._fullLayout || {}).forEach(function (k) {
+                if (/^[xy]axis\d*$/.test(k)) {
+                  update[k + '.autorange'] = true;
+                }
+              });
+              if (window.Plotly && Object.keys(update).length) {
+                window.Plotly.relayout(el, update);
+              }
+            } catch (e) {}
+          }
+        },
+        {
+          label: '下载图片 (PNG)',
+          icon: 'table',
+          action: function () {
+            try {
+              if (window.Plotly) {
+                window.Plotly.downloadImage(plot, {
+                  format: 'png',
+                  filename: 'chart',
+                  scale: 2
+                });
+              }
+            } catch (e) {}
+          }
+        }
+      ];
+      showMenu(ev.clientX, ev.clientY, '图表', items);
+    }
+  }
+
+  function onPointerDown(ev) {
+    if (menu && !menu.contains(ev.target)) { hideMenu(); }
+  }
+  function onKeyDown(ev) {
+    if (!menu) { return; }
+    if (ev.key === 'Escape') {
+      ev.preventDefault();
+      hideMenu();
+      return;
+    }
+    if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+      ev.preventDefault();
+      var items = Array.prototype.slice.call(
+        menu.querySelectorAll('.fp-ctx-item:not([disabled])')
+      );
+      if (!items.length) { return; }
+      var idx = items.indexOf(document.activeElement);
+      var next = ev.key === 'ArrowDown' ? idx + 1 : idx - 1;
+      if (next < 0) { next = items.length - 1; }
+      if (next >= items.length) { next = 0; }
+      items[next].focus();
+    }
+  }
+  function onViewportChange() { hideMenu(); }
+
+  document.addEventListener('contextmenu', onContext, true);
+  document.addEventListener('pointerdown', onPointerDown, true);
+  document.addEventListener('keydown', onKeyDown, true);
+  window.addEventListener('scroll', onViewportChange, true);
+  window.addEventListener('resize', onViewportChange);
+
+  var cleanup = function () {
+    document.removeEventListener('contextmenu', onContext, true);
+    document.removeEventListener('pointerdown', onPointerDown, true);
+    document.removeEventListener('keydown', onKeyDown, true);
+    window.removeEventListener('scroll', onViewportChange, true);
+    window.removeEventListener('resize', onViewportChange);
+    hideMenu();
+    var t = document.getElementById(TOAST_ID);
+    if (t) { t.remove(); }
+    window.__fpContextMenuCleanup = null;
+  };
+  window.__fpContextMenuCleanup = cleanup;
+  return cleanup;
+}
+"""
+
+_CONTEXT_MENU = None
+
+
+def _context_menu():
+    """惰性注册全局右键菜单组件, 并返回当前运行时可用的渲染器.
+
+    不能在 import 时只注册一次: AppTest / 多 Runtime 场景下组件注册表可能在
+    脚本运行前被清空, 之后挂载会报 "Component is not registered"。
+    """
+    global _CONTEXT_MENU
+    from streamlit.components.v2 import get_bidi_component_manager
+
+    if _CONTEXT_MENU is None or get_bidi_component_manager().get(
+        "fp_context_menu"
+    ) is None:
+        _CONTEXT_MENU = st.components.v2.component(
+            "fp_context_menu",
+            js=_TABLE_CONTEXT_MENU_JS,
+        )
+    return _CONTEXT_MENU
+
+
 def inject() -> None:
     """注入全局主题样式 (幂等: 每次 rerun 重新渲染即可, 无状态副作用)."""
-    st.html(f"<style>{_CSS}</style>")
+    st.html(f"<style>{_CSS}{_CONTEXT_MENU_CSS}</style>")
+    # 0 高度脚本组件: 接管表格/图表的右键菜单, 自身不占版面
+    _context_menu()(key="fp_context_menu", height=0)
 
 
 def page_header(title: str, eyebrow: str = "", right_html: str = "") -> None:
@@ -112,6 +489,112 @@ _FONT_STACK = (
     "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', "
     "'PingFang SC', 'Microsoft YaHei', sans-serif"
 )
+
+
+# 右键菜单样式独立成串, 避免塞进 f-string 后每个 CSS 花括号都要写两遍。
+# 菜单挂在 document.body 上 (非 ShadowRoot), 因此这里的选择器是全局作用域。
+_CONTEXT_MENU_CSS = """
+.fp-ctx-menu {
+  position: fixed;
+  z-index: 2147483000;
+  min-width: 188px;
+  max-width: min(320px, calc(100vw - 16px));
+  padding: 6px;
+  border: 1px solid var(--fp-border-strong);
+  border-radius: 12px;
+  background: rgba(18, 18, 34, 0.97);
+  box-shadow: 0 22px 56px -18px rgba(0, 0, 0, 0.9),
+    0 0 0 1px rgba(0, 0, 0, 0.25);
+  backdrop-filter: blur(20px) saturate(140%);
+  color: var(--fp-text);
+  font-family: var(--fp-sans);
+  font-size: 13px;
+  line-height: 1.35;
+  user-select: none;
+  opacity: 0;
+  transform: translateY(-3px) scale(0.985);
+  transform-origin: top left;
+  transition: opacity 110ms ease, transform 110ms ease;
+}
+.fp-ctx-menu.fp-ctx-open {
+  opacity: 1;
+  transform: none;
+}
+.fp-ctx-header {
+  padding: 5px 10px 7px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--fp-border);
+  color: var(--fp-text-2);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fp-ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--fp-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 110ms ease, color 110ms ease;
+}
+.fp-ctx-item svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  color: var(--fp-cyan);
+  opacity: 0.82;
+}
+.fp-ctx-item:hover,
+.fp-ctx-item:focus-visible {
+  background: rgba(0, 212, 255, 0.13);
+  color: #ffffff;
+  outline: none;
+}
+.fp-ctx-item:hover svg,
+.fp-ctx-item:focus-visible svg { opacity: 1; }
+.fp-ctx-item:disabled {
+  opacity: 0.38;
+  cursor: default;
+  background: transparent;
+}
+.fp-ctx-sep {
+  height: 1px;
+  margin: 5px 8px;
+  background: var(--fp-border);
+}
+.fp-ctx-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 32px;
+  z-index: 2147483001;
+  padding: 8px 16px;
+  border: 1px solid var(--fp-border-strong);
+  border-radius: 999px;
+  background: rgba(18, 18, 34, 0.96);
+  box-shadow: 0 16px 40px -16px rgba(0, 0, 0, 0.9);
+  color: var(--fp-text);
+  font-family: var(--fp-sans);
+  font-size: 12px;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-50%, 8px);
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+.fp-ctx-toast.fp-ctx-show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+"""
 
 
 _CSS = f"""

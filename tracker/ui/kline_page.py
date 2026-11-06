@@ -887,6 +887,17 @@ def render_kline_controls(
     qs = quick_symbols()
     theme.page_header("K线查询", eyebrow="CHARTS")
 
+    # 表格右键「查看 K 线」会跳转 /kline?symbol=CODE&t=时间戳。带 t 是为了
+    # 同一代码连续跳转也能识别成一次新请求 (只用 symbol 时第二次会被误判为
+    # 已消费)。消费一次后记住 key, 后续 rerun 不覆盖用户手动改的输入框。
+    qp_symbol = str(st.query_params.get("symbol") or "").strip().upper()
+    if qp_symbol:
+        qp_key = f"{qp_symbol}|{st.query_params.get('t') or ''}"
+        if qp_key != st.session_state.get("_kline_query_param_key"):
+            st.session_state["kline_symbol"] = qp_symbol
+            st.session_state["_kline_query_pending"] = True
+            st.session_state["_kline_query_param_key"] = qp_key
+
     # ---- 搜索框: 按代码或名称模糊匹配, 选中后自动填入代码输入框 ----
     _render_symbol_search()
 
@@ -934,6 +945,9 @@ def render_kline_controls(
     if "kline_last_symbol" not in st.session_state:
         st.session_state["kline_last_symbol"] = ksym
     submitted = st.session_state["kline_last_symbol"] != ksym
+    # 右键菜单跳转带进来的代码: 首次渲染就视为已提交, 不需要用户再点查询
+    if st.session_state.pop("_kline_query_pending", False):
+        submitted = True
     if c4.button("查询", type="primary", icon=":material/search:"):
         submitted = True
     force_refresh = c5.button(

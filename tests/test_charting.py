@@ -298,6 +298,29 @@ class TestKlineComponent:
         assert "window.LightweightCharts" in js
         assert "export default function" in js
 
+    def test_component_js_has_right_click_menu(self):
+        """图表右键: 自己的菜单而不是浏览器原生菜单 (重置/复制/导出)."""
+        js = charting.kline_component_js()
+        assert "contextmenu" in js
+        assert "重置缩放" in js
+        assert "复制数据 (CSV)" in js
+        assert "导出图片 (PNG)" in js
+        assert "takeScreenshot" in js
+
+    def test_payload_copy_text_is_symbol(self):
+        """右键「复制代码」只复制标的, 不把周期/币种一起带出去."""
+        p = charting.kline_payload(_mk_df(), "AAPL", currency="USD")
+        assert p["copyText"] == "AAPL"
+
+    def test_compare_and_line_payload_copy_text(self):
+        frames = {"AAPL": _mk_df(), "MSFT": _mk_df()}
+        cmp = charting.compare_payload(frames)
+        assert cmp["copyText"] == "AAPL MSFT"
+        line = charting.line_payload(
+            _mk_df(), value_col="close", series_name="AH 溢价率"
+        )
+        assert line["copyText"] == "AH 溢价率"
+
     def test_empty_raises(self):
         with pytest.raises(ValueError):
             charting.kline_payload(pd.DataFrame(), "AAPL")

@@ -261,7 +261,8 @@ def test_sidebar_delete_holdings_action(monkeypatch, tmp_path):
     """侧栏「删除持仓」: 多选 + 确认即写盘, 不依赖 data_editor 的行菜单.
 
     回归护栏: data_editor 删行只能走行尾「⋮」菜单或选中后按 Delete, 侧栏窄、
-    表格横向滚动时入口不可见, 右键也没有菜单 —— 用户找不到删除方式。
+    表格横向滚动时入口不可见; 右键菜单只做复制/查看 K 线, 不提供删行 ——
+    用户仍需要一个显式删除入口。
     """
     at = _boot_app(
         monkeypatch,
@@ -296,6 +297,20 @@ def test_style_chart_does_not_inject_empty_title():
         go.Figure(go.Scatter(x=[1], y=[1])).update_layout(title="T")
     )
     assert titled.layout.title.text == "T"
+
+
+def test_theme_table_right_click_menu_js():
+    """表格右键菜单: 复制单元格/整行/含表头 + 跳转 K线, 但不劫持输入框."""
+    from tracker.ui import theme
+
+    js = theme._TABLE_CONTEXT_MENU_JS
+    assert "contextmenu" in js
+    assert "复制单元格" in js
+    assert "复制整行" in js
+    assert "复制含表头" in js
+    assert "/kline?symbol=" in js
+    # 输入/编辑状态必须保留浏览器原生菜单 (复制/粘贴/拼写检查)
+    assert 'input, textarea, [contenteditable="true"]' in js
 
 
 def test_sidebar_delete_watchlist_action(monkeypatch, tmp_path):

@@ -599,6 +599,12 @@ export default function (component) {
   var root = component.parentElement;
   var el = root.querySelector('.lwc-chart');
   var legend = root.querySelector('.lwc-legend');
+  // data 变化时 Streamlit 只重执行、不先调用上一次 cleanup: 先手动清掉上一轮
+  // 挂在 document/window 上的右键监听器, 否则每次重绘都会多叠一层。
+  if (root.__fpChartDispose) {
+    try { root.__fpChartDispose(); } catch (e) {}
+    root.__fpChartDispose = null;
+  }
   // data 变化时 Streamlit 会重新执行本函数但不调用上一次的 cleanup (仅 unmount 时调用),
   // 残留的旧 chart 实例会叠层并遮挡新图 — 挂载前先清空容器。
   while (el.firstChild) { el.removeChild(el.firstChild); }
@@ -946,7 +952,237 @@ export default function (component) {
     };
   });
 
-  return function () { try { chart.remove(); } catch (e) {} };
+  // ---------- 图表右键菜单 ----------
+  // 券商/交易软件里右键图表通常给「重置缩放 / 复制 / 导出」, 而不是浏览器
+  // 原生菜单。菜单挂到 document.body 上, 复用 theme.py 的全局 .fp-ctx-* 样式;
+  // 图表在 ShadowRoot 里, 但组件 JS 不受 sandbox 限制, 可以直接操作宿主 DOM。
+  var ctxEl = null;
+  function cxMake(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) { e.className = cls; }
+    if (text != null) { e.textContent = text; }
+    return e;
+  }
+  function cxHide() {
+    if (ctxEl) {
+      // 同 theme.py: 移除节点, 避免反复右键在 body 里堆积空菜单
+      ctxEl.remove();
+      ctxEl = null;
+    }
+  }
+  function cxToast(text) {
+    var t = document.getElementById('fp-context-toast');
+    if (!t) {
+      t = cxMake('div', 'fp-ctx-toast');
+      t.id = 'fp-context-toast';
+      t.setAttribute('role', 'status');
+      document.body.appendChild(t);
+    }
+    t.textContent = text;
+    t.classList.add('fp-ctx-show');
+    clearTimeout(t.__fpTimer);
+    t.__fpTimer = setTimeout(function () { t.classList.remove('fp-ctx-show'); }, 1300);
+  }
+  function cxCopy(text) {
+    if (!text) { return; }
+    // 与 theme.py 的表格菜单一致: 先给反馈, clipboard Promise 不阻塞提示
+    cxToast('已复制到剪贴板');
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).catch(function () {
+        cxFallbackCopy(text);
+      });
+    } else {
+      cxFallbackCopy(text);
+    }
+  }
+  function cxFallbackCopy(text) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); } catch (e) {}
+    ta.remove();
+  }
+  function cxDownload(blob, filename) {
+    if (!blob) { return; }
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1500);
+  }
+  function cxCsvCell(v) {
+    var s = v == null ? '' : String(v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+  function cxCsv() {
+    var rows = [];
+    function add(values) {
+      rows.push(values.map(cxCsvCell).join(','));
+    }
+    if (isCompare) {
+      add(['series', 'time', 'value']);
+      tracks.forEach(function (tr) {
+        tr.data.forEach(function (p) { add([tr.name, tstr(p.time), p.value]); });
+      });
+      if (ratio) {
+        ratio.data.forEach(function (p) { add(['ratio', tstr(p.time), p.value]); });
+      }
+    } else if (isCrypto) {
+      add(['symbol', 'time', 'open', 'high', 'low', 'close']);
+      tracks.forEach(function (tr) {
+        tr.data.forEach(function (b) {
+          add([tr.name, tstr(b.time), b.open, b.high, b.low, b.close]);
+        });
+      });
+    } else {
+      add(['time', 'open', 'high', 'low', 'close', 'volume']);
+      CFG.candles.forEach(function (b, i) {
+        add([tstr(b.time), b.open, b.high, b.low, b.close,
+          CFG.volume[i] ? CFG.volume[i].value : '']);
+      });
+    }
+    return rows.join('\n');
+  }
+  function cxFilename(ext) {
+    var base = String(CFG.copyText || CFG.title || 'chart')
+      .replace(/[^\w\u4e00-\u9fa5.\-]+/g, '_')
+      .replace(/^_+|_+$/g, '') || 'chart';
+    return base + '.' + ext;
+  }
+  function cxReset() {
+    try {
+      if (window.__lwcViewStore) { window.__lwcViewStore[CFG.queryId] = null; }
+      chart.timeScale().setVisibleLogicalRange(
+        { from: n - Math.min(n, CFG.initBars), to: n - 1 + 4 }
+      );
+    } catch (e) {
+      try { chart.timeScale().fitContent(); } catch (e2) {}
+    }
+  }
+  function cxIcon(name) {
+    var paths = {
+      reset: '<path d="M3 12a9 9 0 1 0 3-6.7"></path><path d="M3 4v5h5"></path>',
+      copy: '<rect x="9" y="9" width="11" height="11" rx="2"></rect>' +
+        '<path d="M5 15V5a2 2 0 0 1 2-2h10"></path>',
+      table: '<rect x="3" y="4" width="18" height="16" rx="2"></rect>' +
+        '<path d="M3 10h18M9 4v16"></path>',
+      download: '<path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path>' +
+        '<path d="M5 21h14"></path>'
+    };
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+      'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" ' +
+      'aria-hidden="true">' + (paths[name] || '') + '</svg>';
+  }
+  function cxShow(x, y) {
+    if (ctxEl) { cxHide(); }
+    ctxEl = document.createElement('div');
+    ctxEl.className = 'fp-ctx-menu';
+    ctxEl.setAttribute('role', 'menu');
+    ctxEl.setAttribute('aria-label', '图表右键菜单');
+    ctxEl.tabIndex = -1;
+
+    var head = cxMake('div', 'fp-ctx-header', CFG.copyText || CFG.title || '图表');
+    ctxEl.appendChild(head);
+
+    var items = [
+      { label: '重置缩放', icon: 'reset', action: cxReset },
+      { label: '复制代码', icon: 'copy',
+        action: function () { cxCopy(CFG.copyText || CFG.title || ''); } },
+      { label: '复制数据 (CSV)', icon: 'table',
+        action: function () { cxCopy(cxCsv()); } },
+      { sep: true },
+      { label: '导出图片 (PNG)', icon: 'download', action: function () {
+        try {
+          var canvas = chart.takeScreenshot();
+          if (canvas && canvas.toBlob) {
+            canvas.toBlob(function (blob) {
+              cxDownload(blob, cxFilename('png'));
+            }, 'image/png');
+          }
+        } catch (e) {}
+      } }
+    ];
+    items.forEach(function (item) {
+      if (item.sep) {
+        ctxEl.appendChild(cxMake('div', 'fp-ctx-sep'));
+        return;
+      }
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'fp-ctx-item';
+      btn.setAttribute('role', 'menuitem');
+      btn.innerHTML = cxIcon(item.icon) + '<span></span>';
+      btn.querySelector('span').textContent = item.label;
+      btn.addEventListener('click', function (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        cxHide();
+        item.action();
+      });
+      ctxEl.appendChild(btn);
+    });
+
+    document.body.appendChild(ctxEl);
+    ctxEl.style.left = '0px';
+    ctxEl.style.top = '0px';
+    ctxEl.style.visibility = 'hidden';
+    ctxEl.classList.add('fp-ctx-open');
+    var r = ctxEl.getBoundingClientRect();
+    var left = Math.max(8, Math.min(x, window.innerWidth - r.width - 8));
+    var top = y + r.height > window.innerHeight - 8 ? y - r.height : y;
+    top = Math.max(8, Math.min(top, window.innerHeight - r.height - 8));
+    ctxEl.style.left = left + 'px';
+    ctxEl.style.top = top + 'px';
+    ctxEl.style.visibility = 'visible';
+    // 鼠标右键打开时不预选第一项; 键盘用户按 ArrowDown 进入菜单项。
+  }
+  function cxOnContext(ev) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    cxShow(ev.clientX, ev.clientY);
+  }
+  function cxOnPointerDown(ev) {
+    if (ctxEl && !ctxEl.contains(ev.target)) { cxHide(); }
+  }
+  function cxOnKeyDown(ev) {
+    if (!ctxEl) { return; }
+    if (ev.key === 'Escape') {
+      ev.preventDefault();
+      cxHide();
+      return;
+    }
+    if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+      ev.preventDefault();
+      var list = Array.prototype.slice.call(ctxEl.querySelectorAll('.fp-ctx-item'));
+      if (!list.length) { return; }
+      var idx = list.indexOf(document.activeElement);
+      var next = ev.key === 'ArrowDown' ? idx + 1 : idx - 1;
+      if (next < 0) { next = list.length - 1; }
+      if (next >= list.length) { next = 0; }
+      list[next].focus();
+    }
+  }
+  el.addEventListener('contextmenu', cxOnContext);
+  document.addEventListener('pointerdown', cxOnPointerDown, true);
+  document.addEventListener('keydown', cxOnKeyDown, true);
+  window.addEventListener('scroll', cxHide, true);
+
+  var dispose = function () {
+    try { chart.remove(); } catch (e) {}
+    cxHide();
+    el.removeEventListener('contextmenu', cxOnContext);
+    document.removeEventListener('pointerdown', cxOnPointerDown, true);
+    document.removeEventListener('keydown', cxOnKeyDown, true);
+    window.removeEventListener('scroll', cxHide, true);
+  };
+  root.__fpChartDispose = dispose;
+  return dispose;
 }
 """
 
@@ -1231,6 +1467,8 @@ def kline_payload(
             },
             # queryId 用于视口锚点失效判定 (换代码后回退初始区间)
             "queryId": query_id,
+            # 右键菜单「复制代码」只复制标的本身, 不把周期/币种/均线一起带上
+            "copyText": symbol,
         }
     )
     return payload
@@ -1429,6 +1667,8 @@ def compare_payload(
             # 全系列时间轴 (并集, 升序去重): 视口锚点的索引空间 (对比模式
             # candles 为空, 不提供 axis 的话拖动位置无法跨重绘还原)
             "axis": sorted(axis),
+            # 右键「复制代码」: 对比模式复制全部参与代码, 空格分隔便于直接粘贴
+            "copyText": " ".join(ln["name"] for ln in lines),
         }
     )
     return payload
@@ -1510,6 +1750,7 @@ def line_payload(
             "showChange": False,
             "queryId": query_id,
             "axis": [p["time"] for p in data],
+            "copyText": series_name,
         }
     )
     return payload
@@ -1584,6 +1825,7 @@ def crypto_compare_payload(
             "coins": coins,
             # 全系列时间轴 (并集, 升序去重): 视口锚点的索引空间 (同 compare 模式)
             "axis": sorted({c["time"] for cn in coins for c in cn["candles"]}),
+            "copyText": " ".join(cn["name"] for cn in coins),
         }
     )
     return payload

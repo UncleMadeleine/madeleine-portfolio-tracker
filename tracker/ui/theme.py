@@ -504,6 +504,80 @@ h1, h2, h3, h4 {{
 /* ---------- 图表容器去白边 ---------- */
 [data-testid="stPlotlyChart"] {{ border-radius: 12px; overflow: hidden; }}
 
+/* ---------- 财经日历: 纯 CSS Grid (固定 7 列, 窄屏不折行) ---------- */
+.fp-cal-grid {{
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 5px;
+  margin: 0.15rem 0 1.35rem;
+}}
+.fp-cal-wd {{
+  padding: 0 2px 0.15rem;
+  text-align: center;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  color: var(--fp-text-3);
+}}
+.fp-cal-cell {{
+  min-height: 78px;
+  padding: 4px 6px 5px;
+  border: 1px solid var(--fp-border);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.022);
+  overflow: hidden;
+}}
+.fp-cal-cell.is-empty {{
+  border-color: transparent;
+  background: transparent;
+}}
+.fp-cal-cell.has-ev {{
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.035);
+}}
+.fp-cal-cell.is-today {{
+  border-color: rgba(0, 212, 255, 0.42);
+  box-shadow: inset 0 0 0 1px rgba(0, 212, 255, 0.16);
+}}
+.fp-cal-num {{
+  margin-bottom: 2px;
+  font-family: var(--fp-mono);
+  font-size: 0.72rem;
+  line-height: 1.3;
+  color: var(--fp-text-3);
+}}
+.fp-cal-cell.has-ev .fp-cal-num {{ color: var(--fp-text-2); }}
+.fp-cal-cell.is-today .fp-cal-num {{ color: var(--fp-cyan); font-weight: 700; }}
+.fp-cal-ev {{
+  font-size: 0.69rem;
+  line-height: 1.35;
+  color: var(--fp-text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}}
+.fp-cal-more {{
+  font-size: 0.62rem;
+  line-height: 1.4;
+  color: var(--fp-text-3);
+}}
+/* 窄屏用「类型标记」代替被截断的代码 (完整代码见下方明细表) */
+.fp-cal-marks {{ display: none; }}
+.fp-cal-tag {{
+  display: inline-block;
+  min-width: 1.05em;
+  padding: 0 2px;
+  border-radius: 3px;
+  font-size: 0.55rem;
+  line-height: 1.55;
+  text-align: center;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--fp-text-2);
+}}
+.fp-cal-tag-earnings {{ background: rgba(0, 212, 255, 0.16); color: #7fe9ff; }}
+.fp-cal-tag-ex_dividend,
+.fp-cal-tag-dividend,
+.fp-cal-tag-record_date {{ background: rgba(255, 159, 10, 0.16); color: #ffc46b; }}
+
 /* ---------- 滚动条 ---------- */
 * {{ scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.16) transparent; }}
 ::-webkit-scrollbar {{ width: 9px; height: 9px; }}
@@ -520,13 +594,52 @@ h1, h2, h3, h4 {{
 @media (max-width: 640px) {{
   [data-testid="stMainBlockContainer"] {{ padding-top: 3.75rem; }}
   .st-key-watch_scope {{ max-width: none; }}
+  .fp-page-header {{ align-items: flex-start; }}
+  .fp-page-header-right {{ flex-wrap: wrap; }}
   .fp-page-title {{ font-size: 1.45rem; }}
   [data-testid="stMetric"] {{ padding: 0.8rem 0.9rem; }}
   [data-testid="stMetricValue"] {{ font-size: 1.3rem !important; }}
+  [data-testid="stTabs"] [role="tablist"],
   [data-testid="stTabs"] [data-baseweb="tab-list"] {{
     width: 100%;
     overflow-x: auto;
     flex-wrap: nowrap;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
   }}
+  [data-testid="stTabs"] [role="tablist"]::-webkit-scrollbar,
+  [data-testid="stTabs"] [data-baseweb="tab-list"]::-webkit-scrollbar {{
+    display: none;
+  }}
+  [data-testid="stTab"],
+  [data-testid="stTabs"] [data-baseweb="tab"] {{
+    flex: 0 0 auto;
+    padding: 0.36rem 0.7rem;
+    font-size: 0.78rem;
+  }}
+  /* 导入页 4 个来源标签: 折成 2×2, 避免最后一个被横向裁切 */
+  .st-key-import_source_tabs [data-testid="stTabs"] [role="tablist"] {{
+    flex-wrap: wrap;
+    overflow: visible;
+    row-gap: 0.25rem;
+  }}
+  .st-key-import_source_tabs [data-testid="stTab"] {{
+    flex: 1 1 calc(50% - 0.35rem);
+    justify-content: center;
+  }}
+  /* 日历: 7 列固定, 窄屏只留类型标记 (完整代码/名称见下方明细表) */
+  .fp-cal-grid {{ gap: 2px; margin-bottom: 1rem; }}
+  .fp-cal-wd {{ font-size: 0.6rem; letter-spacing: 0; }}
+  .fp-cal-cell {{ min-height: 58px; padding: 3px 3px 4px; border-radius: 6px; }}
+  .fp-cal-num {{ font-size: 0.64rem; margin-bottom: 1px; }}
+  .fp-cal-ev {{ display: none; }}
+  .fp-cal-name {{ display: none; }}
+  .fp-cal-marks {{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    margin-top: 2px;
+  }}
+  .fp-cal-more {{ display: none; }}
 }}
 """

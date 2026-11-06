@@ -577,6 +577,15 @@ KLINE_COMPONENT_CSS = """
   font: 12px/1.8 system-ui, -apple-system, sans-serif; color: #9aa4b2;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 96%;
 }
+/* 窄屏: 标题/OHLC/均线允许换行显示, 不再用省略号把关键读数全部截掉 */
+@media (max-width: 640px) {
+  .lwc-legend {
+    left: 8px; right: 8px; top: 4px; max-width: none;
+    font-size: 10px; line-height: 1.5;
+    white-space: normal; overflow-wrap: anywhere;
+    max-height: 4.6em; text-overflow: clip;
+  }
+}
 """
 
 # 组件 JS (ES module, 默认导出在挂载/数据变化时执行, 返回值作清理函数).

@@ -12,6 +12,7 @@ longport 兜底), 缓存三层: st.cache_data (页面内存) + 磁盘 calendar_c
 from __future__ import annotations
 
 import calendar as _cal
+import html
 import logging
 import threading
 import time
@@ -399,40 +400,63 @@ def render_calendar_page() -> None:
 
 
 def _render_month_grids(evs: list[dict], w0: date, w1: date) -> None:
-    """每个自然月一张 7 列网格 (首行表头 + 周行; 当日高亮, 单日折叠)."""
+    """每个自然月一张 7 列网格 (首行表头 + 周行; 当日高亮, 单日折叠).
+
+    用原生 CSS Grid 输出整月 (而不是 7×N 个 st.columns): Streamlit 的列在
+    窄屏会自动折成单列, 会把月历拆成一条竖线; CSS Grid 固定 7 列, 移动端
+    只缩小字号/隐藏名称, 保持日历语义。
+    """
     by_day: dict[date, list[dict]] = {}
     for e in evs:
         d = date.fromisoformat(str(e["date"])[:10])
         by_day.setdefault(d, []).append(e)
     today = date.today()
+    weekdays = ("一", "二", "三", "四", "五", "六", "日")
     for start, _end in events_mod._month_starts(w0, w1):
         st.markdown(f"#### {start.year} 年 {start.month} 月")
-        header = st.columns(7)
-        for i, wd in enumerate(("一", "二", "三", "四", "五", "六", "日")):
-            header[i].caption(wd)
+        parts = ['<div class="fp-cal-grid">']
+        parts.extend(f'<div class="fp-cal-wd">{wd}</div>' for wd in weekdays)
         for week in _cal.monthcalendar(start.year, start.month):
-            row = st.columns(7)
-            for i, d in enumerate(week):
+            for d in week:
                 if not d:
+                    parts.append('<div class="fp-cal-cell is-empty"></div>')
                     continue
                 dt = date(start.year, start.month, d)
                 day_evs = by_day.get(dt) or []
+                classes = "fp-cal-cell"
+                if day_evs:
+                    classes += " has-ev"
                 if dt == today:
-                    label = f":red[**{d}**]"
-                elif day_evs:
-                    label = f"**{d}**"
-                else:
-                    label = f":gray[{d}]"
-                lines = [label]
+                    classes += " is-today"
+                body = [f'<div class="fp-cal-num">{d}</div>']
                 for ev in day_evs[:MAX_PER_CELL]:
                     mark = TYPE_MARK.get(ev["type"], "?")
-                    lines.append(
-                        f"· {mark} {ev['symbol']} {_short_name(ev.get('name'))}"
+                    sym = html.escape(str(ev["symbol"]))
+                    name = _short_name(ev.get("name"))
+                    line = f"· {mark} {sym}"
+                    if name:
+                        line += f' <span class="fp-cal-name">{html.escape(name)}</span>'
+                    tooltip = html.escape(f"{ev['symbol']} {name}".strip())
+                    body.append(
+                        f'<div class="fp-cal-ev" title="{tooltip}">{line}</div>'
                     )
                 if len(day_evs) > MAX_PER_CELL:
-                    lines.append(f"(+{len(day_evs) - MAX_PER_CELL})")
-                # Markdown 单换行是软换行 (渲染成空格), 用行尾两空格强制换行
-                row[i].markdown("  \n".join(lines))
+                    body.append(
+                        f'<div class="fp-cal-more">(+{len(day_evs) - MAX_PER_CELL})</div>'
+                    )
+                tags = "".join(
+                    f'<span class="fp-cal-tag fp-cal-tag-{html.escape(str(ev["type"]))}">'
+                    f'{TYPE_MARK.get(ev["type"], "?")}</span>'
+                    for ev in day_evs[:MAX_PER_CELL]
+                )
+                extra = len(day_evs) - MAX_PER_CELL
+                if extra > 0:
+                    tags += f'<span class="fp-cal-tag">+{extra}</span>'
+                if tags:
+                    body.append(f'<div class="fp-cal-marks">{tags}</div>')
+                parts.append(f'<div class="{classes}">{"".join(body)}</div>')
+        parts.append("</div>")
+        st.markdown("".join(parts), unsafe_allow_html=True)
     return
 
 

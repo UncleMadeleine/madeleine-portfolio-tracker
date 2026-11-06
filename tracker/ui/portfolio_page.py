@@ -688,11 +688,14 @@ def _render_nav_section(base: str) -> None:
         )
 
         fig = go.Figure()
+        # 只有 1-2 个快照时纯 lines 在图上几乎不可见; 补圆点让用户知道数据点在哪。
+        nav_mode = "lines+markers" if len(df) <= 2 else "lines"
         fig.add_trace(
             go.Scatter(
                 x=df["day"],
                 y=df["total_value"],
-                mode="lines",
+                mode=nav_mode,
+                marker=dict(size=7),
                 name=f"总市值 ({base})",
                 line=dict(width=2),
             )
@@ -702,7 +705,8 @@ def _render_nav_section(base: str) -> None:
                 go.Scatter(
                     x=df["day"],
                     y=df["total_cost"],
-                    mode="lines",
+                    mode=nav_mode,
+                    marker=dict(size=7),
                     name="成本",
                     line=dict(width=1.5, dash="dash"),
                 )
@@ -716,6 +720,17 @@ def _render_nav_section(base: str) -> None:
             ),
             yaxis=dict(tickformat=",.0f", hoverformat=",.2f"),
         )
+        # 统一日期刻度: 避免单点数据时 Plotly 自动生成 "23:59:59.999" 这类
+        # 无意义刻度 (手机上尤其明显), 同时限制刻度数量防止窄屏挤成一团。
+        tick_fmt, hover_fmt = "%m-%d", "%Y-%m-%d"
+        fig.update_xaxes(tickformat=tick_fmt, hoverformat=hover_fmt, nticks=6)
+        if len(df) == 1:
+            d0 = df["day"].iloc[0]
+            fig.update_xaxes(
+                range=[d0 - pd.Timedelta(days=1), d0 + pd.Timedelta(days=1)],
+                tickvals=[d0],
+                ticktext=[d0.strftime("%Y-%m-%d")],
+            )
         st.plotly_chart(
             theme.style_chart(fig), width="stretch", config={"displayModeBar": False}
         )

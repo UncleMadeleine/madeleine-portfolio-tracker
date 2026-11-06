@@ -221,29 +221,31 @@ def render_kline_view(
     # 精度随价格量级 (summarize_ohlc 按收盘价中位数算): 低价币 ~1e-5 若固定
     # 3 位小数会显示成 0.000。
     prec = int(s.get("precision", 3))
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric(
-        "最新收盘" + (f" ({currency})" if currency else ""),
-        f"{s['last_close']:,.{prec}f}",
-    )
-    m2.metric(
-        "区间涨跌",
-        f"{s['change_pct']:+.2f}%" if s["change_pct"] is not None else "—",
-        delta=None if s["change_pct"] is None else round(s["change_pct"], 2),
-        delta_color=(
-            "off"
-            if s["change_pct"] is None
-            else ("normal" if green_up else "inverse")  # 跟随全局涨跌配色
-        ),
-    )
-    m3.metric(
-        f"区间最高 ({s['period_high_date']})",
-        f"{s['period_high']:,.{prec}f}",
-    )
-    m4.metric(
-        f"区间最低 ({s['period_low_date']})",
-        f"{s['period_low']:,.{prec}f}",
-    )
+    # horizontal 容器 (而不是 st.columns): 窄屏按卡片宽度自动换行成 2×2,
+    # 避免 4 张指标卡各占一整行、把图表挤到很下面。
+    with st.container(horizontal=True):
+        st.metric(
+            "最新收盘" + (f" ({currency})" if currency else ""),
+            f"{s['last_close']:,.{prec}f}",
+        )
+        st.metric(
+            "区间涨跌",
+            f"{s['change_pct']:+.2f}%" if s["change_pct"] is not None else "—",
+            delta=None if s["change_pct"] is None else round(s["change_pct"], 2),
+            delta_color=(
+                "off"
+                if s["change_pct"] is None
+                else ("normal" if green_up else "inverse")  # 跟随全局涨跌配色
+            ),
+        )
+        st.metric(
+            f"区间最高 ({s['period_high_date']})",
+            f"{s['period_high']:,.{prec}f}",
+        )
+        st.metric(
+            f"区间最低 ({s['period_low_date']})",
+            f"{s['period_low']:,.{prec}f}",
+        )
     ma_txt = "  ".join(
         f"MA{n[2:]} {v:,.{prec}f}" for n, v in s["ma"].items()
     )
@@ -960,6 +962,7 @@ def render_kline_controls(
         ["MACD", "RSI", "KDJ", "布林带"],
         default=[],
         key="kline_indicators",
+        placeholder="选择指标 (可多选)",
     )
     indicators: dict = {}
     if ind_sel:

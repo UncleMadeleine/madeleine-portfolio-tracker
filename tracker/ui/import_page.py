@@ -59,22 +59,23 @@ def render_import_page(on_saved=None) -> None:
             icon=":material/warning:",
         )
 
-    tab_ibkr, tab_lp, tab_wallet, tab_file = st.tabs(
-        [
-            ":material/account_balance: IBKR 账户",
-            ":material/candlestick_chart: 长桥账户",
-            ":material/account_balance_wallet: 链上钱包",
-            ":material/description: 券商文件",
-        ]
-    )
-    with tab_ibkr:
-        _ibkr_section(mode, on_saved)
-    with tab_lp:
-        _longport_section(mode, on_saved)
-    with tab_wallet:
-        _wallet_section(mode, on_saved)
-    with tab_file:
-        _file_section(mode, on_saved)
+    with st.container(key="import_source_tabs"):
+        tab_ibkr, tab_lp, tab_wallet, tab_file = st.tabs(
+            [
+                ":material/account_balance: IBKR 账户",
+                ":material/candlestick_chart: 长桥账户",
+                ":material/account_balance_wallet: 链上钱包",
+                ":material/description: 券商文件",
+            ]
+        )
+        with tab_ibkr:
+            _ibkr_section(mode, on_saved)
+        with tab_lp:
+            _longport_section(mode, on_saved)
+        with tab_wallet:
+            _wallet_section(mode, on_saved)
+        with tab_file:
+            _file_section(mode, on_saved)
 
 
 # ---------------------------------------------------------------------------

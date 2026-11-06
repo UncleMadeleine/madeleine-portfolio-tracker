@@ -191,16 +191,17 @@ def render_fundamentals_page() -> None:
     _LINE_CHART(key="ah_premium_chart", data=payload, height=520)
 
     summary = ah_premium.summarize_premium(series)
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric(
-        "最新溢价率",
-        f"{summary['last_premium']:+.2f}%",
-        delta=f"{summary['change_pp']:+.2f}pp",
-        delta_color=settings.delta_color(),
-    )
-    m2.metric("区间均值", f"{summary['mean']:+.2f}%")
-    m3.metric(f"区间最高 ({summary['high_date']})", f"{summary['high']:+.2f}%")
-    m4.metric(f"区间最低 ({summary['low_date']})", f"{summary['low']:+.2f}%")
+    # 与 K线页一致: 横向容器在窄屏自动排成 2×2, 而不是 4 张全宽卡片
+    with st.container(horizontal=True):
+        st.metric(
+            "最新溢价率",
+            f"{summary['last_premium']:+.2f}%",
+            delta=f"{summary['change_pp']:+.2f}pp",
+            delta_color=settings.delta_color(),
+        )
+        st.metric("区间均值", f"{summary['mean']:+.2f}%")
+        st.metric(f"区间最高 ({summary['high_date']})", f"{summary['high']:+.2f}%")
+        st.metric(f"区间最低 ({summary['low_date']})", f"{summary['low']:+.2f}%")
 
     fx_txt = (
         f" · {meta['fx_pair']} {summary['fx_rate']:.4f}"

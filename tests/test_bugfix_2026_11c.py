@@ -141,6 +141,46 @@ def test_hyperliquid_non_finite_price_raises(monkeypatch):
         crypto_mod._hl_quote(parse("BTC-USD"))
 
 
+def test_crypto_non_finite_change_and_prev_are_dropped(monkeypatch):
+    """涨跌幅/昨收为 inf/nan 时归一成 None, 不能污染今日盈亏与 JSON 输出."""
+    import tracker.providers.crypto as crypto_mod
+    from tracker.symbols import parse
+
+    monkeypatch.setattr(
+        crypto_mod,
+        "_binance_spot_raw",
+        lambda pair: {
+            "lastPrice": "100",
+            "prevClosePrice": "inf",
+            "priceChangePercent": "inf",
+        },
+    )
+    q = crypto_mod._binance_quote(parse("BTC-USD"))
+    assert q.prev_close is None
+    assert q.change_pct is None
+
+    monkeypatch.setattr(
+        crypto_mod,
+        "_gate_get",
+        lambda *a, **k: [{"last": "100", "change_percentage": "nan"}],
+    )
+    q = crypto_mod._gate_quote(parse("BTC-USD"))
+    assert q.prev_close is None
+    assert q.change_pct is None
+
+    monkeypatch.setattr(
+        crypto_mod,
+        "_hl_post",
+        lambda payload: (
+            {"universe": [{"name": "BTC"}]},
+            [{"markPx": "100", "prevDayPx": "inf"}],
+        ),
+    )
+    q = crypto_mod._hl_quote(parse("BTC-USD"))
+    assert q.prev_close is None
+    assert q.change_pct is None
+
+
 def test_ohlc_cache_rejects_payload_missing_price_columns(monkeypatch):
     monkeypatch.setattr(
         cache_mod, "_read_one", lambda *a, **k: ('[{"date": "2025-01-01"}]',)

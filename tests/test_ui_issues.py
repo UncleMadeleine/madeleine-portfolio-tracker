@@ -11,6 +11,23 @@ from streamlit.testing.v1 import AppTest
 from tracker.ui.issues import summarize_issues
 
 
+def test_summarize_groups_nested_colon_reasons():
+    """原因本身带 ": " 时按第一段归并, 不把尾部代码/URL 当成原因."""
+    total, top, hidden = summarize_issues(
+        [
+            "BAD.ZZ: 无法识别的交易所后缀: BAD.ZZ",
+            "BAD.YY: 无法识别的交易所后缀: BAD.YY",
+            "X: HTTP 404: <html>",
+            "Y: HTTP 404: <html>",
+        ],
+        max_reasons=5,
+    )
+    assert total == 4
+    assert ("无法识别的交易所后缀", 2) in top
+    assert ("HTTP 404", 2) in top
+    assert hidden == 0
+
+
 def test_summarize_groups_reasons_and_hides_tail():
     total, top, hidden = summarize_issues(
         [
@@ -72,6 +89,8 @@ render_issue_summary(
     assert not at.exception
     assert len(at.caption) == 1
     assert "共 2 条导入跳过项" in at.caption[0].value
-    # 带 icon 的 expander 在 AppTest 里呈现为 status 元素 (label 仍是展开器标题)
-    assert len(at.status) == 1
-    assert "查看跳过明细 (2)" in at.status[0].label
+    # 带 icon 的 expander 在部分 Streamlit 版本里呈现为 status 元素; 新版
+    # AppTest 直接暴露为 expander。两种形态都接受, 只校验标题与明细可用。
+    details = list(at.expander) + list(at.status)
+    assert len(details) == 1
+    assert "查看跳过明细 (2)" in details[0].label

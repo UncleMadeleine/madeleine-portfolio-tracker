@@ -24,8 +24,9 @@ from __future__ import annotations
 import math
 import threading
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pandas as pd
 
@@ -528,6 +529,54 @@ def static_names_longport(
     return names, currencies
 
 
+_MARKET_TZ = {
+    Market.US: "America/New_York",
+    Market.HK: "Asia/Hong_Kong",
+    Market.CN: "Asia/Shanghai",
+    Market.BJ: "Asia/Shanghai",
+}
+
+
+def _market_date(value, market: Market) -> date | None:
+    """K线时间戳 → 交易所所在时区的日期.
+
+    SDK 的 ``Candlestick.timestamp`` 由 Rust 侧
+    ``PyDateTime::from_timestamp(..., None)`` 生成: 它是**进程本地时区**的
+    naive datetime。Docker 默认 UTC 下, 港股 00:00 会被表示成前一天
+    16:00 UTC, 直接 ``.date()`` 会让整段历史提前一天。这里先还原为绝对
+    时刻 (naive 按系统本地时区解释), 再换算到交易所时区取日期。
+    """
+    tz_name = _MARKET_TZ.get(market)
+    try:
+        tz = ZoneInfo(tz_name) if tz_name else None
+    except (ZoneInfoNotFoundError, ValueError):
+        tz = None
+
+    if isinstance(value, datetime):
+        dt = value
+        if dt.tzinfo is None:
+            # 与 SDK 的 from_timestamp(..., None) 对偶: naive 即系统本地墙上时间
+            dt = dt.astimezone()
+        if tz is None:
+            return dt.date()
+        return dt.astimezone(tz).date()
+
+    if isinstance(value, (int, float)) and math.isfinite(value):
+        # 数字按 Unix 秒处理 (长桥文档口径), 而非 pandas 默认的纳秒
+        dt = datetime.fromtimestamp(value, tz=timezone.utc)
+        return dt.astimezone(tz).date() if tz else dt.date()
+
+    try:
+        ts = pd.Timestamp(value)
+    except (TypeError, ValueError):
+        return None
+    if pd.isna(ts):
+        return None
+    if ts.tzinfo is not None:
+        return ts.tz_convert(tz).date() if tz else ts.date()
+    return ts.date()
+
+
 def get_history_longport(
     p, start_date: str, end_date: str | None = None, cfg: dict | None = None
 ) -> pd.DataFrame | None:
@@ -535,6 +584,10 @@ def get_history_longport(
 
     前复权 (ForwardAdjust) 与 yfinance 口径一致; 输出 date/open/high/low/close/volume 升序。
     """
+    # 与 get_quotes_longport 相同的域过滤: crypto/index/B 股/SG 没有长桥
+    # 历史柜台, 伪 ticker 只会浪费配额并把死连接重连一次 (最终仍回退)。
+    if p.type in ("crypto", "index") or p.is_b_share or p.market is Market.SG:
+        return None
     lp = yahoo_to_longport(p.yahoo)
     if lp is None:
         return None
@@ -565,8 +618,9 @@ def get_history_longport(
             break
         page_dates: list[date] = []
         for c in candles:
-            ts = getattr(c, "timestamp", None)
-            d = ts.date() if isinstance(ts, datetime) else pd.Timestamp(ts).date()
+            d = _market_date(getattr(c, "timestamp", None), p.market)
+            if d is None:
+                continue
             page_dates.append(d)
             if d in seen_dates:
                 continue
@@ -584,6 +638,8 @@ def get_history_longport(
                     "volume": int(getattr(c, "volume", 0) or 0),
                 }
             )
+        if not page_dates:
+            break
         first = min(page_dates)
         # 未达单次上限说明已经到 start; 再往前没有数据可翻
         if len(candles) < 1000 or first <= start:

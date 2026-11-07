@@ -28,6 +28,30 @@ def test_save_portfolio_stamps_authoritative_type(tmp_path):
     assert data["base_currency"] == "CNY"
 
 
+def test_ui_settings_cached_until_file_changes(tmp_path, monkeypatch):
+    """逐单元格配色读取命中缓存; settings.json 原子替换后自动失效."""
+    from tracker.ui import settings as ui_settings
+
+    p = tmp_path / "settings.json"
+    storage.save_settings({"color_scheme": "intl"}, p)
+    monkeypatch.setattr(storage, "SETTINGS_PATH", p)
+
+    calls = {"n": 0}
+    real = storage.load_settings
+
+    def counting(*a, **k):
+        calls["n"] += 1
+        return real(p)
+
+    monkeypatch.setattr(storage, "load_settings", counting)
+    assert ui_settings.green_up() is True
+    assert ui_settings.green_up() is True
+    assert calls["n"] == 1
+    storage.save_settings({"color_scheme": "cn"}, p)
+    assert ui_settings.green_up() is False
+    assert calls["n"] == 2
+
+
 def test_save_portfolio_keeps_other_keys(tmp_path):
     """保存持仓不得丢掉文件中的文档/自定义键, 且 NaN 单元格被清理."""
     path = tmp_path / "portfolio.json"

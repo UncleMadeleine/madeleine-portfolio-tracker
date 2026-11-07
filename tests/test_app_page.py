@@ -274,6 +274,15 @@ def test_pnl_pct_uses_percent_format():
     assert '"盈亏%", format="%+.2f%%"' not in src
 
 
+def test_merged_issue_lines_dedupes_fetch_and_view_errors():
+    """解析错误在 errors/issues 各出现一次时只显示一行, 计数不翻倍."""
+    line = "BAD.ZZ: 无法识别的交易所后缀: BAD.ZZ"
+    merged = portfolio_page._merged_issue_lines(
+        {"BAD.ZZ": "无法识别的交易所后缀: BAD.ZZ"}, [line]
+    )
+    assert merged == [line]
+
+
 def test_context_menu_delete_watchlist_action(monkeypatch, tmp_path):
     """右键「从自选删除」: 复用现有确认弹窗, 不绕过确认直接落盘."""
     from tracker.ui import theme

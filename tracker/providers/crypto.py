@@ -54,6 +54,20 @@ _HL_URL = "https://api.hyperliquid.xyz/info"
 _GATE_HOST = "https://api.gateio.ws"
 
 
+def _finite_opt(value) -> float | None:
+    """可选数值字段归一: None/空串/非数字/NaN/Infinity 一律 None.
+
+    数据源偶发返回 ``"inf"``/``"nan"`` 字面量; 不做有限性校验时,
+    ``change_pct=inf`` 会让今日盈亏等于整个市值, 非有限值还会污染
+    Quote 缓存与 CLI --json 输出。
+    """
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
 def _hl_usd_quote(quote: str) -> bool:
     """该计价货币可否用 HL 永续价近似 (USD 系: USD/USDT/USDC/FDUSD 等)."""
     return quote.upper() in {"USD", "USDT", "USDC", "FDUSD", "TUSD", "BUSD", "DAI"}
@@ -90,9 +104,8 @@ def _hl_quote(p: ParsedSymbol) -> Quote:
     price = float(ctx.get("markPx") or 0)
     if not math.isfinite(price) or price <= 0:
         raise RuntimeError(f"{coin}: Hyperliquid 无有效最新价")
-    try:
-        prev = float(ctx["prevDayPx"]) if ctx.get("prevDayPx") else None
-    except (TypeError, ValueError):
+    prev = _finite_opt(ctx.get("prevDayPx"))
+    if prev is not None and prev <= 0:
         prev = None
     chg = (price / prev - 1) * 100 if prev else None
     return Quote(
@@ -257,22 +270,12 @@ def _binance_quote(p: ParsedSymbol) -> Quote:
     price = float(d["lastPrice"])
     if not math.isfinite(price) or price <= 0:
         raise RuntimeError(f"{pair}: Binance 无有效最新价")
-    prev = None
-    try:
-        prev = float(d.get("prevClosePrice")) if d.get("prevClosePrice") else None
-    except (TypeError, ValueError):
+    prev = _finite_opt(d.get("prevClosePrice"))
+    if prev is not None and prev <= 0:
         prev = None
-    chg = None
-    try:
-        chg = (
-            float(d["priceChangePercent"])
-            if d.get("priceChangePercent") not in (None, "")
-            else None
-        )
-    except (TypeError, ValueError):
-        chg = None
+    chg = _finite_opt(d.get("priceChangePercent"))
     if chg is None and prev:
-        chg = (price / prev - 1) * 100
+        chg = _finite_opt((price / prev - 1) * 100)
     return Quote(
         symbol=p.yahoo,
         name=pair,
@@ -293,13 +296,14 @@ def _gate_quote(p: ParsedSymbol) -> Quote:
     price = float(d.get("last") or 0)
     if not math.isfinite(price) or price <= 0:
         raise RuntimeError(f"{pair}: Gate.io 无有效最新价")
-    chg = None
-    try:
-        raw = d.get("change_percentage")
-        chg = float(raw) if raw not in (None, "") else None
-    except (TypeError, ValueError):
-        chg = None
-    prev = price / (1 + chg / 100) if chg is not None and chg != -100 else None
+    chg = _finite_opt(d.get("change_percentage"))
+    prev = (
+        _finite_opt(price / (1 + chg / 100))
+        if chg is not None and chg != -100
+        else None
+    )
+    if prev is not None and prev <= 0:
+        prev = None
     return Quote(
         symbol=p.yahoo,
         name=pair,
@@ -343,16 +347,18 @@ def _yf_quote(p: ParsedSymbol) -> Quote:
     # 价格 0 会让市值归零并触发全部下限阈值, 且会挡住后面的源链降级。
     if price is None or not math.isfinite(price) or price <= 0:
         raise RuntimeError(f"{p.yahoo}: yfinance 无最新价")
-    prev = info.get("previousClose")
+    prev = _finite_opt(info.get("previousClose"))
+    if prev is not None and prev <= 0:
+        prev = None
     chg = None
-    if prev and prev > 0:
-        chg = (price / float(prev) - 1) * 100
+    if prev is not None:
+        chg = _finite_opt((price / prev - 1) * 100)
     return Quote(
         symbol=p.yahoo,
         name=None,
         price=price,
-        prev_close=float(prev) if prev and pd.notna(prev) else None,
-        change_pct=float(chg) if chg is not None and pd.notna(chg) else None,
+        prev_close=prev,
+        change_pct=chg,
         currency=_quote_ccy(p, info.get("currency")),
         source="yfinance",
     )

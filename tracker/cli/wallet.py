@@ -56,6 +56,7 @@ def cmd_import_wallet(args: argparse.Namespace) -> None:
 
     holdings = result.get("holdings", [])
     errors = result.get("errors", [])
+    notes = list(result.get("notes", []))
 
     # 写入先于输出完成, 保证 --json 只打印一个 JSON 对象 (查询结果 + 写入结果)
     rows = importer.wallet_rows(result) if (args.add or args.overwrite) else []
@@ -77,9 +78,9 @@ def cmd_import_wallet(args: argparse.Namespace) -> None:
     print(f"地址: {result['address']}")
     print(f"计价: {args.base_currency.upper()}")
     _print_holdings_table(holdings)
-    if errors:
+    if errors or notes:
         print("\n⚠ 警告:")
-        for e in errors:
+        for e in errors + notes:
             print(f"  - {e}")
 
     if not (args.add or args.overwrite):

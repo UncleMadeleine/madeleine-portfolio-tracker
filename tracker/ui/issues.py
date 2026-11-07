@@ -14,9 +14,19 @@ import streamlit as st
 
 
 def _reason(text: str) -> str:
-    """从 "<代码>: <原因>" 中取原因; 没有分隔符时用原文."""
-    _, sep, tail = text.rpartition(": ")
-    return tail.strip() if sep and tail.strip() else text
+    """从 "<代码>: <原因>" 中取原因; 没有分隔符时用原文.
+
+    只按**第一个** ``": "`` 切分: 原因本身常带冒号 (如
+    ``"BAD.ZZ: 无法识别的交易所后缀: BAD.ZZ"``、``"X: HTTP 404: ..."``),
+    从最后一次出现处切会把尾部的代码/URL 当成原因, 每个代码各成一组,
+    摘要失去归并意义。摘要再取原因的第一段 (冒号前的标题), 具体代码/
+    URL 等细节保留在折叠明细里。
+    """
+    _, sep, tail = text.partition(": ")
+    reason = tail.strip() if sep and tail.strip() else text
+    # 摘要只取原因的「标题段」: 具体代码/URL 等细节放在折叠明细里。
+    # 例: "X: HTTP 404: <html>" → 归并为 "HTTP 404", 而不是每个 URL 一组。
+    return reason.split(": ", 1)[0].strip() or reason
 
 
 def _short(text: str, limit: int = 40) -> str:

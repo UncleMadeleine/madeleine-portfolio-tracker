@@ -41,6 +41,32 @@ SOURCE_LABELS = {
 }
 
 
+def _naive_dates(values) -> pd.Series:
+    """日期列统一为 naive Timestamp (字符串/aware/naive 混合输入均可).
+
+    K线缓存回填的是字符串→naive, 个别数据源给 tz-aware; 同一张对比图里
+    混用时 ``min()`` / ``bisect`` / 汇率按日查表都会抛 TypeError 或静默
+    全部不匹配 (整页崩/不折算)。剥时区只改显示口径, 不移动墙上日期。
+
+    逐元素剥时区后再交给 ``pd.to_datetime``: 直接对混合 aware/naive 的
+    列调用会把 aware 项静默转成 NaT, 丢失整段日期。
+    """
+    if isinstance(values, pd.Series):
+        clean = values.map(_strip_tz)
+    elif isinstance(values, pd.Index):
+        clean = values.map(_strip_tz)
+    else:
+        clean = pd.Series(values).map(_strip_tz)
+    return pd.to_datetime(clean, errors="coerce")
+
+
+def _strip_tz(value):
+    """单个日期值剥时区 (非 Timestamp 原样返回, 由 to_datetime 解析)."""
+    if isinstance(value, pd.Timestamp) and value.tzinfo is not None:
+        return value.tz_localize(None)
+    return value
+
+
 @dataclass
 class McapResult:
     code: str
@@ -76,8 +102,12 @@ def _map_by_closest_date(price_df: pd.DataFrame, pairs: pd.Series) -> pd.DataFra
     股本事件按日期直接对位即可; 不做前向填充 —— 中间缺日不虚构市值。
     返回 date (Timestamp) / close (value) 两列, 升序去重。
     """
-    lookup = {pd.Timestamp(k).normalize(): v for k, v in pairs.items()}
-    dates = pd.to_datetime(price_df["date"], errors="coerce").dt.normalize()
+    lookup = {
+        d.normalize(): v
+        for d, v in zip(_naive_dates(pd.Series(pairs.index)), pairs.to_numpy())
+        if pd.notna(d)
+    }
+    dates = _naive_dates(price_df["date"]).dt.normalize()
     out = pd.DataFrame(
         {"date": dates, "close": dates.map(lookup)},
     ).dropna(subset=["close"])
@@ -125,9 +155,14 @@ def to_common_currency(
     warnings: list[str] = []
     if not df_map:
         return out, warnings
-    start = (
-        min(df["date"].min() for df in df_map.values()) - pd.Timedelta(days=10)
-    ).strftime("%Y-%m-%d")
+    starts = [_naive_dates(df["date"]).min() for df in df_map.values()]
+    starts = [s for s in starts if pd.notna(s)]
+    if not starts:
+        # 全是无法解析的日期: 无从确定汇率区间, 原样返回并提示, 不让
+        # min()/strftime 在 NaT 上抛异常。
+        warnings.extend(f"{code}: 日期列不可解析, 未折算" for code in df_map)
+        return dict(df_map), warnings
+    start = (min(starts) - pd.Timedelta(days=10)).strftime("%Y-%m-%d")
     end = pd.Timestamp.today().strftime("%Y-%m-%d")
     rate_tables: dict[str, pd.DataFrame | None] = {}
     for ccy in dict.fromkeys(currencies.values()):
@@ -148,9 +183,15 @@ def to_common_currency(
             out[code] = df
             continue
         conv = df.copy()
-        # 公入入口: date 列可能是字符串 (旧缓存/调用方自造帧), 统一转datetime
-        conv["date"] = pd.to_datetime(conv["date"], errors="coerce")
-        rates = {pd.Timestamp(r["date"]).normalize(): float(r["close"]) for _, r in fx_df.iterrows()}
+        # 公共入口: date 列可能是字符串/带时区 (旧缓存/调用方自造帧),
+        # 统一成 naive Timestamp, 否则 min()/按日查表会失配或抛 TypeError。
+        conv["date"] = _naive_dates(conv["date"])
+        rate_dates = _naive_dates(fx_df["date"])
+        rates = {
+            d.normalize(): float(v)
+            for d, v in zip(rate_dates, fx_df["close"])
+            if pd.notna(d)
+        }
         factor = [
             rates[d.normalize()] if d.normalize() in rates else None
             for d in conv["date"]
@@ -359,9 +400,10 @@ def history_for(
             close = pd.to_numeric(price_df["close"], errors="coerce")
             # 股本是稀疏事件序列 (增发/回购公告日): 事件间股数不变 → 前向填充,
             # 每个交易日取 ≤ 该日期 的最近事件股数; 首个事件之前 (无已知股数) 丢弃
+            price_dates = _naive_dates(price_df["date"])
             events = pd.DataFrame(
                 {
-                    "date": pd.to_datetime(sh["date"]).dt.normalize(),
+                    "date": _naive_dates(sh["date"]).dt.normalize(),
                     "count": pd.to_numeric(sh["close"], errors="coerce"),
                 }
             ).dropna().sort_values("date")
@@ -369,16 +411,16 @@ def history_for(
                 ev_dates = list(events["date"])
                 ev_vals = list(events["count"])
                 counts = {}
-                for d in pd.to_datetime(price_df["date"]).dt.normalize():
+                for d in price_dates.dt.normalize():
                     j = bisect_right(ev_dates, d) - 1
                     if j >= 0:
                         counts[d] = ev_vals[j]
-                share_counts = pd.to_datetime(price_df["date"]).map(
-                    lambda d: counts.get(d.normalize())
+                share_counts = price_dates.map(
+                    lambda d: counts.get(d.normalize()) if pd.notna(d) else None
                 )
                 mcap_pairs = pd.Series(
                     (close * share_counts).to_numpy(),
-                    index=price_df["date"].to_numpy(),
+                    index=price_dates.to_numpy(),
                 )
                 source = "shares"
 

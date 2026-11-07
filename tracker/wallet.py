@@ -593,7 +593,11 @@ def import_wallet(
                 ...
             ],
             "errors": ["..."]
+            "notes": ["..."]
         }
+
+    ``errors`` 只表示查询失败 (结果可能不完整, 不能据此清理旧持仓);
+    ``notes`` 是已计入数量/已跳过的信息性提示, 不影响结果完整性。
     """
     # 链名归一化: _CHAIN_CONFIG 键全小写, 大写/混合大小写链名 ("ETH") 会让
     # _erc20_balance 的 _CHAIN_CONFIG[chain] KeyError; 入口统一 lower 一次
@@ -665,6 +669,7 @@ def import_wallet(
         "address": addr,
         "holdings": holdings,
         "errors": errors,
+        "notes": [],
     }
 
 
@@ -679,6 +684,7 @@ def _import_tron(
     """TRON 导入: 单次 /v1/accounts 调用取回 TRX 原生余额 + 全部 TRC-20."""
     holdings: list[dict[str, Any]] = []
     errors: list[str] = []
+    notes: list[str] = []
     try:
         account = _tron_account(address, chain_cfg, timeout)
     except RuntimeError as e:
@@ -750,14 +756,15 @@ def _import_tron(
                 "chain": chain,
             }
         )
-    notes = []
+    stake_notes = []
     if staked_sun > 0:
-        notes.append(f"质押 {staked_sun / 1e6:g}")
+        stake_notes.append(f"质押 {staked_sun / 1e6:g}")
     if unstaking_sun > 0:
-        notes.append(f"解冻中 {unstaking_sun / 1e6:g}")
-    if notes:
-        errors.append(
-            f"TRX 合计含 {' + '.join(notes)} TRX (已计入数量, 当前不可转账)"
+        stake_notes.append(f"解冻中 {unstaking_sun / 1e6:g}")
+    if stake_notes:
+        notes.append(
+            f"TRX 合计含 {' + '.join(stake_notes)} TRX "
+            f"(已计入数量, 当前不可转账)"
         )
 
     # TRC-20: trc20 字段为 [{contract: raw_amount_str}, ...], 只纳入 tokenlist
@@ -791,7 +798,7 @@ def _import_tron(
         )
     if unknown:
         skipped = ", ".join(c[:12] + "…" for c in unknown[:5])
-        errors.append(
+        notes.append(
             f"{len(unknown)} 个 TRC-20 代币不在 tokenlist, 已跳过: {skipped}"
         )
 
@@ -800,6 +807,7 @@ def _import_tron(
         "address": address,
         "holdings": holdings,
         "errors": errors,
+        "notes": notes,
     }
 
 
@@ -829,6 +837,7 @@ def _import_solana(
     """
     holdings: list[dict[str, Any]] = []
     errors: list[str] = []
+    notes: list[str] = []
     hosts = _solana_rpc_hosts(chain_cfg)
 
     # 1. 原生 SOL (lamports → SOL)
@@ -908,7 +917,7 @@ def _import_solana(
             }
         )
     if wsol_lamports > 0:
-        errors.append(
+        notes.append(
             f"SOL 合计含 wSOL {wsol_lamports / 1e9:g} (已计入数量)"
         )
 
@@ -931,7 +940,7 @@ def _import_solana(
         )
     if unknown:
         skipped = ", ".join(c[:12] + "…" for c in unknown[:5])
-        errors.append(
+        notes.append(
             f"{len(unknown)} 个 SPL 代币不在 tokenlist, 已跳过: {skipped}"
         )
 
@@ -940,4 +949,5 @@ def _import_solana(
         "address": address,
         "holdings": holdings,
         "errors": errors,
+        "notes": notes,
     }

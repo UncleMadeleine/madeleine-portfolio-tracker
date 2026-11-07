@@ -252,6 +252,59 @@ def test_ensure_db_still_recovers_corrupt_file(tmp_path, monkeypatch):
     assert "quotes" in tables
 
 
+def test_ensure_db_quarantines_wal_sidecars_with_corrupt_main(tmp_path, monkeypatch):
+    """隔离坏库时必须一并搬走 -wal/-shm, 避免旧 WAL 重放进新库."""
+    db = tmp_path / "cache.db"
+    db.write_bytes(b"this is definitely not a sqlite database")
+    wal = tmp_path / "cache.db-wal"
+    shm = tmp_path / "cache.db-shm"
+    wal.write_bytes(b"stale wal")
+    shm.write_bytes(b"stale shm")
+    monkeypatch.setattr(cache_mod, "CACHE_DB", db)
+
+    cache_mod._ensure_db()
+
+    assert db.exists()
+    backups = list(tmp_path.glob("cache.db.corrupt-*"))
+    assert any(p.name.endswith("-wal") for p in backups)
+    assert any(p.name.endswith("-shm") for p in backups)
+    # 旧边车内容已搬到隔离文件 (SQLite 连接坏库时可能重写 -shm, 只校验存在)
+    assert any(p.read_bytes() == b"stale wal" for p in backups)
+    with sqlite3.connect(db) as con:
+        tables = {
+            r[0]
+            for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+    assert "quotes" in tables
+
+
+def test_runtime_corruption_is_recovered_on_next_access(tmp_path, monkeypatch):
+    """进程启动后同 inode 被写坏: 读路径要摘掉 ready 标记, 下次访问隔离重建."""
+    db = tmp_path / "cache.db"
+    monkeypatch.setattr(cache_mod, "CACHE_DB", db)
+    cache_mod._ensure_db()
+    cache_mod.set_cached(
+        {"AAPL": Quote("AAPL", "Apple", 100.0, 99.0, 1.0, "USD")}
+    )
+    assert "AAPL" in cache_mod.get_cached(["AAPL"])
+
+    # 就地截断 (inode 不变), 模拟磁盘错误/外部工具覆盖; 同时清掉 WAL 边车,
+    # 否则 SQLite 仍会从 WAL 恢复出旧数据 (那也是合法行为)。
+    for suffix in ("-wal", "-shm"):
+        (tmp_path / f"cache.db{suffix}").unlink(missing_ok=True)
+    db.write_bytes(b"this is definitely not a sqlite database")
+    assert cache_mod.get_cached(["AAPL"]) == {}
+    assert str(db) not in cache_mod._db_ready
+
+    # 下一次访问触发 _ensure_db → 隔离坏库并重建
+    assert cache_mod.get_cached(["AAPL"]) == {}
+    assert list(tmp_path.glob("cache.db.corrupt-*"))
+    cache_mod.set_cached(
+        {"MSFT": Quote("MSFT", "Microsoft", 100.0, 99.0, 1.0, "USD")}
+    )
+    assert "MSFT" in cache_mod.get_cached(["MSFT"])
+
+
 def test_kline_cache_key_includes_source_flags(monkeypatch):
     from tracker import prices
 

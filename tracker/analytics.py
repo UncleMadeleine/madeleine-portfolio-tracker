@@ -158,7 +158,6 @@ def summarize(view: pd.DataFrame) -> dict:
         }
     total_value = float(view["market_value"].sum())
     cost_mask = view["cost"].notna() & view["pnl"].notna()
-    covered_value = float(view.loc[cost_mask, "market_value"].sum())
     # 成本按**绝对值求和** (毛成本): 多空混合时带符号净额会让分母严重偏离
     # 真实投入资本 (多 1000/空 1500 → 净 -500, 收益率放大约 5 倍), 且净额
     # 趋近 0 时收益率变成 None 或反号; 单行口径 (build_view) 本就是
@@ -168,8 +167,15 @@ def summarize(view: pd.DataFrame) -> dict:
     )
     total_pnl = float(view["pnl"].sum()) if cost_mask.any() else None
     today = float(view["today_pnl"].sum()) if view["today_pnl"].notna().any() else None
-    # 盈亏口径仅覆盖有成本数据的部分; 覆盖率供展示层标注
-    cost_coverage = covered_value / total_value if total_value else None
+    # 盈亏口径仅覆盖有成本数据的部分; 覆盖率供展示层标注。
+    # 分母用**市值绝对值之和**: 多空混合时净市值可能为负或远小于实际敞口
+    # (多 1000 + 空 1500 → 净 -500), 用净额会让覆盖率显示 -200% 或 >100%,
+    # 而 UI/CLI 的 ``<1.0 才提示`` 判断随之失真。
+    total_abs_value = float(view["market_value"].abs().sum())
+    covered_abs_value = float(view.loc[cost_mask, "market_value"].abs().sum())
+    cost_coverage = (
+        covered_abs_value / total_abs_value if total_abs_value else None
+    )
     return {
         "total_value": total_value,
         "total_cost": total_cost,

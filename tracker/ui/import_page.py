@@ -246,7 +246,9 @@ def _wallet_section(mode: str, on_saved) -> None:
                 else:
                     st.session_state["imp_wallet"] = {
                         "rows": rows,
-                        "skipped": errors,
+                        # 查询失败 + 信息性提示都展示; prune 只由真正的查询
+                        # 失败阻断 (质押/wSOL/空投代币等提示不影响余额完整性)。
+                        "skipped": errors + list(raw.get("notes", [])),
                         "preview": raw.get("holdings", []),
                         # 查询无失败时才允许清理该地址已归零/下架的旧持仓
                         "prune_source": (
@@ -276,7 +278,10 @@ def _file_section(mode: str, on_saved) -> None:
         st.session_state.pop("imp_file", None)
         st.session_state.pop("imp_file_sig", None)
         return
-    sig = (up.name, up.size)
+    # file_id 由 Streamlit 为每次上传分配: 同名同大小的另一个文件 (重新导出
+    # 的券商报告) 内容不同但 (name, size) 相同, 只按两者判断会沿用上一次
+    # 解析结果, 确认后写入错误持仓。
+    sig = (up.name, up.size, getattr(up, "file_id", None))
     if st.session_state.get("imp_file_sig") != sig:
         suffix = Path(up.name).suffix or ".csv"
         tmp_path = None

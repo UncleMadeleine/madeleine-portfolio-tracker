@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pytest
@@ -139,7 +140,9 @@ def test_longport_quote_excludes_singapore(monkeypatch):
 
 def _fake_candle(d: date, close: float = 1.0):
     return SimpleNamespace(
-        timestamp=datetime(d.year, d.month, d.day),
+        # 与真实 SDK 对偶: 美股日线时间戳是交易所本地 00:00。这里用 aware
+        # datetime, 避免 CI 进程时区 (UTC/HKT) 改变日期断言。
+        timestamp=datetime(d.year, d.month, d.day, tzinfo=ZoneInfo("America/New_York")),
         open=close,
         high=close,
         low=close,

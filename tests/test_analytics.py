@@ -140,6 +140,22 @@ def test_summarize_partial_cost_coverage():
     assert m["cost_coverage"] == 1500.0 / 2500.0
 
 
+def test_cost_coverage_uses_absolute_exposure_for_mixed_long_short():
+    """多空混合时覆盖率用 |市值| 分母, 不能出现负数或 >100% 后失真."""
+    holdings = [
+        {"symbol": "AAPL", "quantity": 10, "avg_cost": 100.0},
+        {"symbol": "MSFT", "quantity": -5},  # 空头且无成本
+    ]
+    quotes = {
+        "AAPL": make_quote("AAPL", 110.0, ccy="USD"),
+        "MSFT": make_quote("MSFT", 100.0, ccy="USD"),
+    }
+    view, _ = build_view(holdings, quotes, {"USD": 1.0})
+    m = summarize(view)
+    # 有成本多头 1100 / 总敞口 (1100 + 500) = 0.6875, 落在 0..1
+    assert m["cost_coverage"] == pytest.approx(1100.0 / 1600.0)
+
+
 def test_summarize_no_cost_at_all():
     holdings = [{"symbol": "AAPL", "quantity": 10}]
     quotes = {"AAPL": make_quote("AAPL", 150.0)}

@@ -3,11 +3,14 @@
 不联网: SDK 层全部用假对象替换; 真实网络行为由 smoke 覆盖。
 """
 
-from datetime import datetime
+from datetime import date, datetime
 import json
 from decimal import Decimal
+import os
 from types import SimpleNamespace
+import time
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pytest
@@ -344,6 +347,31 @@ def test_pb_ratios_longport_empty_and_error(monkeypatch):
         assert lp._pb_ratios_longport(["700.HK"]) == {}
 
 
+def test_market_date_uses_exchange_timezone():
+    """UTC 进程里 SDK 的本地 naive 时间不能把港股日K提前一天."""
+    old_tz = os.environ.get("TZ")
+    try:
+        os.environ["TZ"] = "UTC"
+        time.tzset()
+        # 港股 2026-09-24 00:00 HKT = 2026-09-23 16:00 UTC
+        assert lp._market_date(
+            datetime(2026, 9, 23, 16, 0), lp.Market.HK
+        ) == date(2026, 9, 24)
+        # 数字时间戳按 Unix 秒 (长桥文档口径)
+        assert lp._market_date(1650384000, lp.Market.HK) == date(2022, 4, 20)
+    finally:
+        if old_tz is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = old_tz
+        time.tzset()
+    # 已带交易所时区的 aware 值直接按该时区取日期
+    assert lp._market_date(
+        datetime(2026, 9, 24, tzinfo=ZoneInfo("Asia/Hong_Kong")),
+        lp.Market.HK,
+    ) == date(2026, 9, 24)
+
+
 def test_get_history_longport_returns_sorted_df(monkeypatch):
     candles = [
         SimpleNamespace(
@@ -375,6 +403,17 @@ def test_get_history_longport_returns_sorted_df(monkeypatch):
     assert [d.isoformat() for d in df["date"]] == ["2026-09-23", "2026-09-24"]  # 升序
     assert float(df["close"].iloc[-1]) == 2.0
     assert float(df["volume"].iloc[-1]) == 20
+
+
+def test_get_history_longport_skips_unsupported_domains(monkeypatch):
+    """crypto/B股/SG 不映射成伪长桥代码, 直接回退默认源 (不浪费配额)."""
+
+    def boom(*a, **k):
+        raise AssertionError("不应为不支持的市场发起长桥请求")
+
+    monkeypatch.setattr(lp, "_ctx_call", boom)
+    for sym in ("BTC-USD", "900901.SS", "D05.SI", "IXIC"):
+        assert lp.get_history_longport(parse(sym), "2026-01-01") is None
 
 
 def test_get_history_longport_unsupported_or_unavailable(monkeypatch):

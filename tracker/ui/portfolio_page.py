@@ -245,6 +245,11 @@ def _start_refresh(key: tuple, plan: dict) -> bool:
     return True
 
 
+def _merged_issue_lines(errors: dict[str, str], issues: list[str]) -> list[str]:
+    """合并取数错误与视图问题, 按完整文本去重 (两者可能报同一代码的同一原因)."""
+    return list(dict.fromkeys([f"{k}: {v}" for k, v in errors.items()] + issues))
+
+
 def _local_quote_errors(fetch_symbols) -> dict[str, str]:
     """纯本地计算的低级错误 (代码无法识别), 不依赖刷新结果.
 
@@ -1470,14 +1475,16 @@ def render_portfolio_page() -> None:
                     )
 
     if errors or issues:
+        # errors (取数失败) 与 issues (视图计算问题) 可能报同一代码的同一原因
+        # (如无法解析的代码在 _local_quote_errors 与 build_view 各产生一条):
+        # 按完整文本去重, 否则展开明细里出现两遍、标题计数也翻倍。
+        detail = _merged_issue_lines(errors, issues)
         with st.expander(
-            f":material/warning: 数据问题 ({len(errors) + len(issues)})",
+            f":material/warning: 数据问题 ({len(detail)})",
             icon=":material/warning:",
         ):
-            for k, v in errors.items():
-                st.write(f"- {k}: {v}")
-            for i in issues:
-                st.write(f"- {i}")
+            for line in detail:
+                st.write(f"- {line}")
 
     tab1, tab4, tab2 = st.tabs(
         [

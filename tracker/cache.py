@@ -185,6 +185,17 @@ def _chunks(seq: list, size: int = _CHUNK):
         yield seq[i : i + size]
 
 
+def _forget_ready_on_corruption(exc: BaseException) -> None:
+    """运行期发现库损坏时清掉「已建表」标记, 让下次 _ensure_db 走隔离重建。
+
+    (dev, ino) 短路只适合「文件被替换」; 同一 inode 被就地写坏时若不摘掉
+    标记, 会一直把 DatabaseError 吞成缓存 miss, cache clear 也无从自愈。
+    """
+    if isinstance(exc, sqlite3.DatabaseError) and _is_corruption(exc):
+        with _db_ready_lock:
+            _db_ready.pop(str(CACHE_DB), None)
+
+
 def _read_all(sql: str, params) -> list:
     """只读查询; 锁竞争 (OperationalError, busy timeout 5s 后仍拿不到锁)
     视为「无缓存」返回空列表, 不让裸 traceback 打死 CLI/页面。
@@ -194,7 +205,8 @@ def _read_all(sql: str, params) -> list:
     try:
         with _connect() as con:
             return con.execute(sql, params).fetchall()
-    except (sqlite3.Error, OSError):
+    except (sqlite3.Error, OSError) as e:
+        _forget_ready_on_corruption(e)
         return []
 
 
@@ -213,7 +225,8 @@ def _execute_write(sql: str, params, *, many: bool = False) -> bool:
                 con.execute(sql, params)
             con.commit()
         return True
-    except (sqlite3.Error, OSError):
+    except (sqlite3.Error, OSError) as e:
+        _forget_ready_on_corruption(e)
         return False
 
 
@@ -251,17 +264,34 @@ def _ensure_db() -> None:
         # 缓存库损坏 (写入中途断电/磁盘满/误写文本): 行情/K线/基本面缓存全是可再生
         # 的派生数据。若不处理, snapshot/quote/kline 与 cache info/clear 全链路都会
         # 因一个坏文件裸 traceback —— 连用户想「cache clear 自愈」的那条路也崩。
-        # 备份损坏文件并重建空库, 缓存自然重取。
+        # 备份损坏文件并重建空库, 缓存自然重取。WAL 边车文件 (-wal/-shm)
+        # 必须一起隔离: 只搬主文件会让 SQLite 在新空库上重放旧 WAL, 可能
+        # 再报 malformed 或把旧库页恢复进来; 备份也不完整。
         stamp = int(time.time())
         quarantined = False
+        main = Path(f"{CACHE_DB}")
         try:
-            os.replace(CACHE_DB, CACHE_DB.with_name(f"{CACHE_DB.name}.corrupt-{stamp}"))
+            os.replace(main, CACHE_DB.with_name(f"{CACHE_DB.name}.corrupt-{stamp}"))
             quarantined = True
         except OSError:
             try:
-                CACHE_DB.unlink()
+                main.unlink()
             except OSError:
                 pass
+        for suffix in ("-wal", "-shm", "-journal"):
+            sidecar = Path(f"{CACHE_DB}{suffix}")
+            if not sidecar.exists():
+                continue
+            try:
+                os.replace(
+                    sidecar,
+                    CACHE_DB.with_name(f"{CACHE_DB.name}.corrupt-{stamp}{suffix}"),
+                )
+            except OSError:
+                try:
+                    sidecar.unlink()
+                except OSError:
+                    pass
         try:
             with _connect() as con:
                 _create_schema(con)
@@ -775,7 +805,8 @@ def info() -> dict:
                 (now - OHLC_TTL,),
             ).fetchone()[0]
             cal_total = con.execute("SELECT COUNT(*) FROM calendar_cache").fetchone()[0]
-    except sqlite3.OperationalError as e:
+    except sqlite3.Error as e:
+        _forget_ready_on_corruption(e)
         raise RuntimeError(f"缓存数据库忙或不可用 ({e}); 稍后重试") from e
     size = CACHE_DB.stat().st_size if CACHE_DB.exists() else 0
     return {
@@ -817,5 +848,6 @@ def clear() -> int:
             n_fund = con.execute("DELETE FROM fundamentals").rowcount
             con.commit()
             return n_quotes + n_ohlc + n_fund + n_fx + n_series + n_cal
-    except sqlite3.OperationalError as e:
+    except sqlite3.Error as e:
+        _forget_ready_on_corruption(e)
         raise RuntimeError(f"缓存数据库忙或不可用 ({e}); 稍后重试") from e

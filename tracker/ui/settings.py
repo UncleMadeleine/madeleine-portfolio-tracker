@@ -40,12 +40,51 @@ CRYPTO_SOURCE_CHAINS = {
 }
 
 
+_SETTINGS_CACHE: dict[str, object] = {"key": None, "value": None}
+
+
+def _settings_file_key():
+    """settings.json 身份 (路径+inode+mtime+ctime+size); 不存在时也稳定."""
+    from tracker.storage import SETTINGS_PATH
+
+    try:
+        st = SETTINGS_PATH.stat()
+    except OSError:
+        return ("missing", str(SETTINGS_PATH))
+    return (
+        str(SETTINGS_PATH),
+        st.st_dev,
+        st.st_ino,
+        st.st_mtime_ns,
+        st.st_ctime_ns,
+        st.st_size,
+    )
+
+
+def _current_settings() -> dict:
+    """进程内缓存当前设置, 按文件身份失效.
+
+    表格样式会对每个单元格调用配色函数; 每次 ``load_settings`` 都是一次
+    读盘 + JSON 解析, 上千行 × 多列会放大成数千次 I/O。设置页保存走原子
+    替换 (inode/ctime 变化), 缓存自动失效, 不会读到旧配色。
+    """
+    from tracker.storage import load_settings
+
+    key = _settings_file_key()
+    if _SETTINGS_CACHE["key"] == key and isinstance(
+        _SETTINGS_CACHE["value"], dict
+    ):
+        return _SETTINGS_CACHE["value"]
+    value = load_settings()
+    _SETTINGS_CACHE["key"] = key
+    _SETTINGS_CACHE["value"] = value
+    return value
+
+
 def green_up(settings: dict | None = None) -> bool:
     """True = 绿涨红跌 (国际配色)."""
     if settings is None:
-        from tracker.storage import load_settings
-
-        settings = load_settings()
+        settings = _current_settings()
     return settings.get("color_scheme") == SCHEME_INTL
 
 

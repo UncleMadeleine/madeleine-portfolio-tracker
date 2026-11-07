@@ -678,7 +678,7 @@ class TestTronWallet:
         result = wallet_mod.import_wallet("tron", self.ADDR)
         trx = next(h for h in result["holdings"] if h["symbol"] == "TRX-USD")
         assert trx["quantity"] == pytest.approx(0.930279 + 124.0 + 10.0)
-        assert any("质押 124" in e and "解冻中 10" in e for e in result["errors"])
+        assert any("质押 124" in e and "解冻中 10" in e for e in result["notes"])
 
     def test_unknown_trc20_noted_not_imported(self, monkeypatch):
         body = {"data": [{"trc20": [{"TUnknownContractxxxxxxxxxxxxxxxxxxx": "9"}]}]}
@@ -687,7 +687,8 @@ class TestTronWallet:
         )
         result = wallet_mod.import_wallet("tron", self.ADDR)
         assert result["holdings"] == []
-        assert result["errors"] and "不在 tokenlist" in result["errors"][0]
+        assert result["notes"] and "不在 tokenlist" in result["notes"][0]
+        assert result["errors"] == []
 
     def test_unactivated_account_empty(self, monkeypatch):
         monkeypatch.setattr(
@@ -834,7 +835,7 @@ class TestSolanaWallet:
         sols = [h for h in result["holdings"] if h["symbol"] == "SOL-USD"]
         assert len(sols) == 1
         assert sols[0]["quantity"] == pytest.approx(1.5)
-        assert any("wSOL" in e for e in result["errors"])
+        assert any("wSOL" in e for e in result["notes"])
 
     def test_unknown_mint_skipped(self, monkeypatch):
         monkeypatch.setattr(
@@ -848,7 +849,8 @@ class TestSolanaWallet:
         )
         result = wallet_mod.import_wallet("solana", self.ADDR)
         assert result["holdings"] == []
-        assert result["errors"] and "不在 tokenlist" in result["errors"][0]
+        assert result["notes"] and "不在 tokenlist" in result["notes"][0]
+        assert result["errors"] == []
 
     def test_rpc_failure_partial_result(self, monkeypatch):
         """SPL 索引调用失败时原生 SOL 仍返回, 失败记 errors."""

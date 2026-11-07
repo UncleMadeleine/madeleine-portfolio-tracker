@@ -220,6 +220,39 @@ class TestToCommonCurrency:
         # 逐日折算: 10×0.9, 11×0.9, 12×0.9, 13×0.8, 14×0.8
         assert vals == pytest.approx([9.0, 9.9, 10.8, 10.4, 11.2])
 
+    def test_mixed_timezone_and_string_dates_do_not_crash(self, monkeypatch):
+        """日期间隔 frame 混合 aware/naive/字符串时仍能按日折算 (不能 TypeError)."""
+        rates = pd.DataFrame(
+            {
+                "date": pd.to_datetime(
+                    [
+                        "2025-01-05",
+                        "2025-01-06",
+                        "2025-01-07",
+                        "2025-01-08",
+                        "2025-01-09",
+                        "2025-01-10",
+                    ]
+                ).astype(str),
+                "close": [0.9, 0.9, 0.9, 0.9, 0.8, 0.8],
+            }
+        )
+        import tracker.fx as fx_mod
+
+        monkeypatch.setattr(fx_mod, "get_fx_history", lambda *a, **k: rates)
+        aware = PRICE.copy()
+        aware["date"] = aware["date"].dt.tz_localize("Asia/Shanghai")
+        as_text = PRICE.copy()
+        as_text["date"] = as_text["date"].dt.strftime("%Y-%m-%d")
+        out, warns = mcap.to_common_currency(
+            {"AAPL": aware, "MSFT": as_text}, {"AAPL": "USD", "MSFT": "USD"}, "HKD"
+        )
+        assert not warns
+        assert out["AAPL"]["date"].is_monotonic_increasing
+        assert out["MSFT"]["close"].tolist() == pytest.approx(
+            [9.0, 9.9, 10.8, 10.4, 11.2]
+        )
+
     def test_fx_missing_keeps_original(self, monkeypatch):
         import tracker.fx as fx_mod
 

@@ -18,6 +18,7 @@ import tempfile
 import threading
 import time
 from contextlib import contextmanager
+from errno import EACCES, EAGAIN, EINTR
 from pathlib import Path
 
 try:  # Unix 有 flock; Windows 没有 → 退化为进程内锁 (仍防同进程多线程丢更新)
@@ -117,14 +118,35 @@ def _file_lock(path: Path):
             finally:
                 held.discard(key)
             return
-        fd = os.open(key + ".lock", os.O_CREAT | os.O_RDWR, 0o644)
+        try:
+            # 锁文件不承载数据, 权限与数据文件同口径: 容器内 CLI/Streamlit
+            # 用不同 UID 时, 先前由别的 UID 创建的 0644 锁会让 O_RDWR 直接
+            # PermissionError。新建时给 0666 & ~umask; 已有无写权限的文件
+            # 退化为只读 fd —— flock 不要求写权限。
+            fd = os.open(
+                key + ".lock",
+                os.O_CREAT | os.O_RDWR,
+                0o666 & ~_umask(),
+            )
+        except PermissionError:
+            fd = os.open(key + ".lock", os.O_RDONLY)
         try:
             deadline = time.monotonic() + _LOCK_WAIT
             while True:
                 try:
                     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     break
-                except OSError:
+                except OSError as e:
+                    if e.errno == EINTR:
+                        continue
+                    if e.errno not in (EACCES, EAGAIN):
+                        # ENOLCK/EOPNOTSUPP/EINVAL 等表示文件系统不支持
+                        # flock, 不是「别人正在写」。不能白等 30 秒后给
+                        # 出误导性的占用错误。
+                        raise DataFileLocked(
+                            f"{p} 所在文件系统不支持文件锁 ({e}); "
+                            f"为避免并发写入丢数据, 本次保存未执行"
+                        ) from e
                     if time.monotonic() >= deadline:
                         raise DataFileLocked(
                             f"{p} 正被其它进程写入 (锁等待超过 {_LOCK_WAIT:.0f} 秒), "
@@ -654,10 +676,12 @@ def load_settings(path: str | Path = SETTINGS_PATH) -> dict:
     p = Path(path)
     if p.exists():
         try:
-            # utf-8-sig: 兼容编辑器存成的带 BOM settings.json, 否则 json.loads
-            # 报错被吞 → 全部设置静默回退默认 (与 portfolio/watchlist 读取一致)
-            raw = json.loads(p.read_text(encoding="utf-8-sig"))
-        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+            # 复用通用读取口: 同时获得 UTF-8(BOM) → GBK 编码兜底与
+            # NaN/Infinity 字面量归一。此前单独用 utf-8-sig 读取, 中文
+            # Windows 存成 GBK 的 settings.json 会 UnicodeDecodeError 后
+            # 静默回退默认值, 用户已启用的 IBKR/长桥等开关全部失效。
+            raw = _read_json(p)
+        except (json.JSONDecodeError, CorruptDataError, OSError):
             raw = None
         if isinstance(raw, dict):
             data.update({k: v for k, v in raw.items() if k in DEFAULT_SETTINGS})

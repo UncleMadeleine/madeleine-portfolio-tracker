@@ -111,6 +111,30 @@ for i in range(n):
         storage.save_portfolio({"holdings": []}, p)
         assert (tmp_path / "p.json.lock").exists()
 
+    def test_read_only_lock_file_does_not_block_save(self, tmp_path):
+        """另一 UID 留下的 0644/0444 锁文件不能让保存直接 PermissionError."""
+        p = tmp_path / "p.json"
+        lock = tmp_path / "p.json.lock"
+        lock.write_bytes(b"")
+        lock.chmod(0o400)
+        try:
+            storage.save_portfolio({"holdings": []}, p)
+        finally:
+            lock.chmod(0o600)
+        assert json.loads(p.read_text(encoding="utf-8"))["holdings"] == []
+
+    def test_new_lock_file_follows_umask(self, tmp_path):
+        """新建锁文件不能固定 0644: 跨 UID 场景要与数据文件同样可写."""
+        import os
+
+        p = tmp_path / "p.json"
+        old = os.umask(0o077)
+        try:
+            storage.save_portfolio({"holdings": []}, p)
+        finally:
+            os.umask(old)
+        assert (tmp_path / "p.json.lock").stat().st_mode & 0o777 == 0o600
+
     def test_reentrant_lock_same_thread(self, tmp_path):
         """同线程嵌套持锁不死锁 (edit_* 内部调 save_*, 同进程再开 fd 会自锁)。"""
         p = tmp_path / "p.json"
@@ -224,6 +248,21 @@ def test_save_settings_still_writable_when_file_corrupt(tmp_path):
     p.write_text("not json{", encoding="utf-8")
     storage.save_settings({"color_scheme": "intl"}, p)
     assert storage.load_settings(p)["color_scheme"] == "intl"
+
+
+def test_load_settings_gbk_and_non_finite_literals(tmp_path):
+    """GBK settings.json 不能静默回退默认; NaN/Infinity 读侧归一不炸保存."""
+    p = tmp_path / "settings.json"
+    p.write_text(
+        '{"color_scheme": "intl", "use_ibkr": true, "bad": NaN}',
+        encoding="gbk",
+    )
+    data = storage.load_settings(p)
+    assert data["color_scheme"] == "intl"
+    assert data["use_ibkr"] is True
+    # 非有限字面量不进入已知键; 保存时不因 allow_nan=False 抛错
+    storage.save_settings({"use_longport": True}, p)
+    assert storage.load_settings(p)["use_longport"] is True
 
 
 def test_save_watchlist_normalizes_lists_string(tmp_path):

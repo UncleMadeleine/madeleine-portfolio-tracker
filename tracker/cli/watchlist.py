@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pandas as pd
 
 from .. import importer, prices
@@ -292,7 +290,7 @@ def watchlist_import_longport(args) -> None:
     """从长桥账户自选分组导入 (归一为 Yahoo 规范代码, 按组名建列表).
 
     合并语义与持仓导入一致: 已有代码只并列表/补空字段, 其余保留;
-    --overwrite 清空现有自选后写入。写前自动备份 .bak。
+    --overwrite 清空现有自选后写入。
     """
     from .. import longport as lp
 
@@ -362,19 +360,12 @@ def watchlist_import_longport(args) -> None:
             importer.MODE_OVERWRITE if args.overwrite else importer.MODE_APPEND,
         )
         data["watchlist"] = merged
-    # 备份由 _write_json 在保存前完成 (且只在主文件可解析时刷新 .bak);
-    # 提前 backup_file 会把损坏主文件复制到唯一的好副本上。
-    backup = None
-    if args.overwrite:
-        bak = Path(f"{args.file}.bak")
-        backup = str(bak) if bak.exists() else None
     verb = "覆盖写入" if args.overwrite else "追加合并"
     if args.json:
         _print_json(
             {
                 "written": args.file,
                 "mode": verb,
-                "backup": backup,
                 "added": stats["added"],
                 "updated": stats["updated"],
                 "total": len(merged),

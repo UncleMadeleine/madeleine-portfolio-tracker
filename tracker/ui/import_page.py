@@ -2,7 +2,7 @@
 
 每个来源独立 查询/解析 → 预览 → 确认导入; 导入方式全页共享:
   追加合并  按代码更新数量/成本, 新代码追加, 其余持仓保留
-  覆盖全部  清空现有持仓后写入 (写前自动备份 portfolio.json.bak)
+  覆盖全部  清空现有持仓后写入
 
 合并与写盘逻辑在 tracker.importer, 与 CLI `tracker import <来源>` 一致.
 """
@@ -40,7 +40,7 @@ def render_import_page(on_saved=None) -> None:
     theme.page_header("数据导入", eyebrow="IMPORT")
     st.caption(
         "三个来源可分别导入: 「追加合并」按代码更新数量/成本并追加新代码 "
-        "(其余持仓保留); 「覆盖全部」清空后重写 (写前自动备份 portfolio.json.bak)。"
+        "(其余持仓保留); 「覆盖全部」清空后重写。"
     )
     choice = st.segmented_control(
         "导入方式",
@@ -55,7 +55,7 @@ def render_import_page(on_saved=None) -> None:
     )
     if mode == importer.MODE_OVERWRITE:
         st.warning(
-            "覆盖模式将清空现有持仓再写入, 写前自动备份 portfolio.json.bak。",
+            "覆盖模式将清空现有持仓再写入。",
             icon=":material/warning:",
         )
 

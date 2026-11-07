@@ -39,16 +39,13 @@ class TestStorageWritePaths:
         with pytest.raises(storage.CorruptDataError):
             storage.load_watchlist(p)
 
-    def test_bak_refreshed_on_every_save(self, tmp_path):
-        """.bak 每次保存刷新: 主文件损坏时恢复的是最近一次内容, 不是数月前快照."""
+    def test_save_does_not_write_bak(self, tmp_path):
+        """保存不再自动生成 .bak (历史备份文件仍可用于读取恢复)."""
         p = tmp_path / "p.json"
         storage.save_portfolio({"holdings": [{"symbol": "AAPL", "quantity": 1}]}, p)
         storage.save_portfolio({"holdings": [{"symbol": "MSFT", "quantity": 2}]}, p)
-        bak = json.loads(p.with_suffix(".json.bak").read_text(encoding="utf-8"))
-        assert bak["holdings"][0]["symbol"] == "AAPL"  # 上一次的内容
-        p.write_text("{broken", encoding="utf-8")
-        recovered = storage.load_portfolio(p)
-        assert recovered["holdings"][0]["symbol"] == "AAPL"
+        assert json.loads(p.read_text(encoding="utf-8"))["holdings"][0]["symbol"] == "MSFT"
+        assert not p.with_suffix(".json.bak").exists()
 
 
 class TestStorageCrossProcessLock:

@@ -14,7 +14,6 @@ from __future__ import annotations
 import json
 import math
 import os
-import shutil
 import tempfile
 import threading
 import time
@@ -150,16 +149,6 @@ def _file_lock(path: Path):
 # ---------------------------------------------------------------------------
 
 
-def backup_file(path: str | Path) -> str | None:
-    """备份 <path> 为 <path>.bak; 文件不存在返回 None。导入写盘前统一调用。"""
-    p = Path(path)
-    if not p.exists():
-        return None
-    backup = str(p) + ".bak"
-    shutil.copy(p, backup)
-    return backup
-
-
 def _read_json(path: str | Path) -> dict:
     # utf-8-sig: 容忍带 BOM 的文件 (部分编辑器保存 JSON 时加 BOM, utf-8 直接解码报错)。
     # 中文 Windows 编辑器 (记事本 ANSI / Excel 另存) 常写成 GBK, 直接按 UTF-8
@@ -196,6 +185,7 @@ def _read_json(path: str | Path) -> dict:
 def _read_json_or_recover(path: str | Path) -> dict:
     """读取 JSON; 文件损坏时尝试同名 .bak 恢复, 仍失败则抛出可读错误。
 
+    不再自动生成 .bak (历史版本留下的同名备份仍会用于恢复)。
     不静默返回空数据 —— 否则下一次保存会把损坏文件直接覆盖成空组合, 造成数据丢失。
     """
 
@@ -232,21 +222,6 @@ def _write_json(data: dict, path: str | Path) -> None:
     # atomic_write_text 同口径先建目录。
     p.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False)
-    # 保存前把当前内容刷新成 .bak: _read_json_or_recover 在主文件损坏时直接
-    # 读 .bak 当恢复结果, 若 .bak 还是数月前导入时的快照, 恢复会把期间的
-    # 全部编辑静默丢掉。备份失败 (只读目录等) 不阻断保存本身。
-    # 只在主文件本身可解析时备份: 主文件损坏、本次内容是从 .bak 恢复来的
-    # 情况下, 若仍把损坏主文件复制到 .bak, 唯一的好副本会被覆盖; 后续写入
-    # 失败 (磁盘满/掉电) 就彻底无法恢复。
-    try:
-        _read_json(p)
-    except (json.JSONDecodeError, CorruptDataError, OSError, UnicodeDecodeError):
-        pass
-    else:
-        try:
-            backup_file(p)
-        except OSError:
-            pass
     fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=f".{p.name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:

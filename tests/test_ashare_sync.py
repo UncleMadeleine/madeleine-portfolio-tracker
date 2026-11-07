@@ -129,12 +129,8 @@ def test_missing_file_raises(tmp_path):
 # ---------- 写盘回执 ----------
 
 
-def test_backup_notice_only_when_backup_exists(tmp_path, capsys):
-    """首次导入 (目标 portfolio.json 不存在) 不谎报「已备份原文件».
-
-    修复前只要 result["written"] 就打印 .bak 提示, 但 backup_file 对
-    不存在的文件返回 None —— 提示了一个不存在的回滚路径。
-    """
+def test_no_backup_notice_or_file(tmp_path, capsys):
+    """导入不再自动生成 .bak, 也不打印「已备份原文件」提示."""
     import argparse
 
     from tracker import ashare_sync
@@ -158,11 +154,11 @@ def test_backup_notice_only_when_backup_exists(tmp_path, capsys):
     assert "已备份原文件" not in out
     assert target.exists()
 
-    # 目标已存在的第二次导入: 确有 .bak, 提示保留
+    # 目标已存在的第二次导入同样不生成备份
     ashare_sync.run_sync(args)
     out = capsys.readouterr().out
-    assert "已备份原文件" in out
-    assert (tmp_path / "portfolio.json.bak").exists()
+    assert "已备份原文件" not in out
+    assert not (tmp_path / "portfolio.json.bak").exists()
 
 
 def test_ashare_prefers_total_over_available(tmp_path):

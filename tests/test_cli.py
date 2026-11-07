@@ -690,7 +690,6 @@ class TestImportCli:
         assert "覆盖" in out
         data = _load(pf)
         assert [h["symbol"] for h in data["holdings"]] == ["600519.SS"]
-        assert (tmp_path / "p.json.bak").exists()
 
     def test_import_file_dry_run_json(self, tmp_path, capsys):
         pf = self._portfolio(tmp_path)

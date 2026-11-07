@@ -257,13 +257,8 @@ def test_pnl_pct_uses_percent_format():
     assert '"盈亏%", format="%+.2f%%"' not in src
 
 
-def test_sidebar_delete_holdings_action(monkeypatch, tmp_path):
-    """侧栏「删除持仓」: 多选 + 确认即写盘, 不依赖 data_editor 的行菜单.
-
-    回归护栏: data_editor 删行只能走行尾「⋮」菜单或选中后按 Delete, 侧栏窄、
-    表格横向滚动时入口不可见; 右键菜单只做复制/查看 K 线, 不提供删行 ——
-    用户仍需要一个显式删除入口。
-    """
+def test_selected_holdings_delete_action(monkeypatch, tmp_path):
+    """持仓明细表选中行 + 「删除选中」: 弹窗确认后写盘."""
     at = _boot_app(
         monkeypatch,
         tmp_path,
@@ -272,17 +267,43 @@ def test_sidebar_delete_holdings_action(monkeypatch, tmp_path):
             {"symbol": "MSFT", "quantity": 1, "avg_cost": 300},
         ],
     )
-    at.multiselect(key="holdings_to_delete_0").select("AAPL · 2")
+    at.session_state["holdings_detail_select"] = {"selection": {"rows": [0]}}
     at.run(timeout=30)
-    at.button(key="delete_holdings_confirm").click()
+    assert not at.exception, at.exception
+    at.button(key="delete_holdings_selected").click()
+    at.run(timeout=30)
+    assert not at.exception, at.exception
+    at.button(key="confirm_delete_holdings").click()
     at.run(timeout=30)
     assert not at.exception, at.exception
     # 显式传路径: load_portfolio 的默认参数在 import 时已绑定, 不吃
     # monkeypatch 后的 storage.PORTFOLIO_PATH (会读到仓库里的真实组合)
     left = storage.load_portfolio(storage.PORTFOLIO_PATH)["holdings"]
     assert [h["symbol"] for h in left] == ["MSFT"]
-    # 删除后换 key 重建控件: 已删代码不会残留在多选框里
-    assert at.multiselect(key="holdings_to_delete_1").value == []
+
+
+def test_detail_table_keeps_unpriced_holdings_deletable():
+    """无行情/代码写错的持仓也要出现在明细表, 否则页面上没有删除入口."""
+    view = pd.DataFrame(
+        [
+            {
+                "symbol": "AAPL",
+                "quantity": 2,
+                "avg_cost": 100,
+                "market_value": 200,
+            }
+        ]
+    )
+    detail = portfolio_page._detail_with_unpriced(
+        view,
+        [
+            {"symbol": "AAPL", "quantity": 2, "avg_cost": 100},
+            {"symbol": "BAD!!", "quantity": 1, "avg_cost": 10},
+        ],
+    )
+    assert list(detail["symbol"]) == ["AAPL", "BAD!!"]
+    assert detail.iloc[1]["source"] == "行情缺失"
+    assert detail.iloc[1]["quantity"] == 1
 
 
 def test_style_chart_does_not_inject_empty_title():
@@ -313,8 +334,8 @@ def test_theme_table_right_click_menu_js():
     assert 'input, textarea, [contenteditable="true"]' in js
 
 
-def test_sidebar_delete_watchlist_action(monkeypatch, tmp_path):
-    """侧栏「删除自选」: 可搜索多选 + 确认即写盘, 不依赖 data_editor 行菜单."""
+def test_selected_watchlist_delete_action(monkeypatch, tmp_path):
+    """自选观察表选中行 + 「删除选中」: 弹窗确认后写盘."""
     at = _boot_app(
         monkeypatch,
         tmp_path,
@@ -324,9 +345,13 @@ def test_sidebar_delete_watchlist_action(monkeypatch, tmp_path):
             {"symbol": "MSFT", "lists": ["测试"], "upper_1": 500.0},
         ],
     )
-    at.multiselect(key="watchlist_to_delete_0").select("AAPL")
+    at.session_state["watchlist_detail_select"] = {"selection": {"rows": [0]}}
     at.run(timeout=30)
-    at.button(key="delete_watchlist_confirm").click()
+    assert not at.exception, at.exception
+    at.button(key="delete_watchlist_selected").click()
+    at.run(timeout=30)
+    assert not at.exception, at.exception
+    at.button(key="confirm_delete_watchlist").click()
     at.run(timeout=30)
     assert not at.exception, at.exception
     left = storage.load_watchlist(portfolio_page.WATCHLIST_PATH)["watchlist"]
@@ -336,5 +361,3 @@ def test_sidebar_delete_watchlist_action(monkeypatch, tmp_path):
         h["symbol"]
         for h in storage.load_portfolio(storage.PORTFOLIO_PATH)["holdings"]
     ] == ["AAPL"]
-    # 删除后换 key 重建控件: 已删代码不会残留在多选框里
-    assert at.multiselect(key="watchlist_to_delete_1").value == []

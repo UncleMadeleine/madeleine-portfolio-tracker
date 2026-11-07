@@ -246,14 +246,14 @@ class TestMergeHoldings:
 
 
 class TestApplyImport:
-    def test_append_writes_and_backs_up(self, tmp_path):
+    def test_append_writes_without_backup(self, tmp_path):
         p = _pf(tmp_path, [{"symbol": "AAPL", "quantity": 10}])
         res = importer.apply_import(
             [{"symbol": "NVDA", "quantity": 3}], p, mode=importer.MODE_APPEND
         )
         assert res["written"] is True
-        assert res["backup"] == str(p) + ".bak"
-        assert (tmp_path / "p.json.bak").exists()
+        assert "backup" not in res
+        assert not (tmp_path / "p.json.bak").exists()
         data = _load(p)
         assert [h["symbol"] for h in data["holdings"]] == ["AAPL", "NVDA"]
         assert data["base_currency"] == "CNY"

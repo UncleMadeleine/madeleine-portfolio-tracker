@@ -221,7 +221,7 @@ def _add_watchlist_parser(sub: argparse.ArgumentParser) -> None:
     p_w.add_argument(
         "--overwrite",
         action="store_true",
-        help="import-longport: 清空现有自选后写入 (写前备份 .bak)",
+        help="import-longport: 清空现有自选后写入",
     )
     p_w.add_argument("--json", action="store_true", help="输出 JSON")
     p_w.add_argument(
@@ -676,7 +676,7 @@ def _add_import_parser(sub: argparse.ArgumentParser) -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "导入方式: 默认追加合并 (按代码更新数量/成本, 新代码追加, 其余持仓保留);\n"
-            "          --overwrite 覆盖全部持仓 (写前自动备份 .bak)。\n"
+            "          --overwrite 覆盖全部持仓。\n"
             "示例:\n"
             "  tracker import ibkr --dry-run                     # 预览 IBKR 账户持仓\n"
             "  tracker import ibkr --mode live --overwrite       # 实盘账户, 覆盖写入\n"
@@ -827,7 +827,7 @@ def _add_sync_parser(sub: argparse.ArgumentParser) -> None:
     p_sync.add_argument(
         "--overwrite",
         action="store_true",
-        help="覆盖全部持仓 (清空后重写, 写前自动备份 portfolio.json.bak)",
+        help="覆盖全部持仓 (清空后重写)",
     )
     p_sync.add_argument("--json", action="store_true")
     p_sync.set_defaults(func=_cmd(".sync", "cmd_sync"))

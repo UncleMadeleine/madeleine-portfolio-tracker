@@ -345,7 +345,7 @@ Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致);
    .venv/bin/python -m tracker.cli sync --dry-run               # 兼容入口, 等价 import ibkr (缺省追加合并)
    ```
    `import` 子命令默认追加合并 (按代码更新数量/成本, 其余保留); `--overwrite` 覆盖全部;
-   持仓导入任何写盘前自动备份 `.bak` (自选 `import-longport` 仅 `--overwrite` 时备份)。
+   写盘为原子操作, 不再自动生成 `.bak` (历史遗留的同名备份仍可用于损坏恢复)。
    兼容入口 `sync` (→import ibkr) 同口径: 缺省追加合并, `--overwrite` 覆盖全部, `--append` 为兼容 no-op。
    并发写安全: 所有写盘路径走 `storage.edit_portfolio/edit_watchlist` 锁内读-改-写
    (跨进程 flock + 进程内 RLock, 锁文件 `<path>.lock`), 并发保存不会互相覆盖; 锁等待超 30s 报

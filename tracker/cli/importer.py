@@ -98,8 +98,6 @@ def cmd_import(args: argparse.Namespace) -> None:
     if not result["written"]:
         print("\n⏭ 无可导入持仓, 未写入")
         return
-    if result["backup"]:
-        print(f"\n已备份原文件: {Path(result['portfolio']).name}.bak")
     print(
         f"✅ 已写入 {result['portfolio']} "
         f"({_mode_label(mode)}: 新增 {len(result['added'])} · "

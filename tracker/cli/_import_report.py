@@ -1,8 +1,8 @@
 """import 系兼容入口共用的 CLI 输出管线.
 
 `python -m tracker.ibkr_sync` / `python -m tracker.ashare_sync` 与
-`tracker sync` 走同一套语义: 缺省追加合并、--overwrite 覆盖、写前备份、
-JSON / 表格二选一。此前两份 run_sync 各写一遍, 提示文案与备份判断逐渐漂移;
+`tracker sync` 走同一套语义: 缺省追加合并、--overwrite 覆盖、
+JSON / 表格二选一。此前两份 run_sync 各写一遍, 提示文案逐渐漂移;
 本模块收敛为单一实现, 两个入口只保留「如何收集 rows / skipped」。
 """
 
@@ -75,9 +75,6 @@ def run_import_report(
         return
 
     if result["written"]:
-        # 仅当确有备份 (目标文件原本存在) 才提示, 否则会报一个不存在的 .bak
-        if result.get("backup"):
-            print(f"\n已备份原文件: {Path(args.portfolio).name}.bak")
         print(
             f"✅ 已写入 {args.portfolio} "
             f"({'追加合并' if mode == importer.MODE_APPEND else '覆盖'}; "

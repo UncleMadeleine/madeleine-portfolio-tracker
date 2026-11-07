@@ -11,8 +11,7 @@ merge_holdings() 与 apply_import() 是合并与写盘的唯一入口, 支持两
               不同来源累加 (多链/多地址同名代币不互相覆盖)
   - overwrite 覆盖:     忽略现有持仓, 全部由本次 rows 组成
 
-apply_import() 写盘前自动备份 <portfolio>.bak, 并保留文件中的
-base_currency 与其它自定义键 (如 _说明)。
+apply_import() 保留文件中的 base_currency 与其它自定义键 (如 _说明)。
 
 CLI (tracker import <来源>) 与 Streamlit「导入」页共用本模块;
 tracker.ibkr_sync / tracker.ashare_sync 的 run_sync 为兼容入口.
@@ -310,13 +309,12 @@ def apply_import(
 ) -> dict[str, Any]:
     """合并并写盘 (导入写盘的唯一入口).
 
-    写前自动备份 <portfolio>.bak; 保留 portfolio.json 中的 base_currency
-    与其它自定义键。dry_run=True 或 rows 为空时不写文件 (written=False)。
+    保留 portfolio.json 中的 base_currency 与其它自定义键。
+    dry_run=True 或 rows 为空时不写文件 (written=False)。
     prune_source 见 merge_holdings: 调用方应在来源查询完整成功时传入。
     """
     target = Path(portfolio)
     written = False
-    backup = None
     # 空 rows 通常表示「无可导入」不写盘; 但带 prune_source 的空结果是
     # 钱包已清仓, 必须允许写入以清理旧持仓。
     if dry_run or (not rows and not prune_source):
@@ -335,11 +333,6 @@ def apply_import(
             data["holdings"] = merged
             data.setdefault("base_currency", "CNY")
             written = True
-        # 备份由 _write_json 在保存前完成, 且只在主文件可解析时刷新 .bak。
-        # 这里不能在 edit_portfolio 块内提前 backup_file: 主文件损坏、本次
-        # 数据来自 .bak 恢复时, 会把损坏主文件复制到唯一的好副本上。
-        bak = Path(f"{target}.bak")
-        backup = str(bak) if bak.exists() else None
     return {
         "mode": mode,
         "dry_run": bool(dry_run),
@@ -348,7 +341,6 @@ def apply_import(
         "updated": stats["updated"],
         "total": len(merged),
         "portfolio": str(target),
-        "backup": backup,
     }
 
 

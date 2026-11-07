@@ -957,9 +957,8 @@ class TestIbkrSyncDefaultAppend:
         syms = sorted(h["symbol"] for h in json.loads(p.read_text())["holdings"])
         assert syms == ["600519.SS", "BTC-USD", "MSFT"]
 
-    def test_overwrite_still_supported_with_backup(self, tmp_path, monkeypatch, capsys):
+    def test_overwrite_still_supported(self, tmp_path, monkeypatch, capsys):
         import json
-        from pathlib import Path
 
         from tracker import ibkr, ibkr_sync
 
@@ -981,7 +980,6 @@ class TestIbkrSyncDefaultAppend:
         assert out["mode"] == "overwrite"
         syms = [h["symbol"] for h in json.loads(p.read_text())["holdings"]]
         assert syms == ["MSFT"]
-        assert Path(str(p) + ".bak").exists()
 
     def test_append_flag_is_compat_noop(self, tmp_path, monkeypatch, capsys):
         """旧调用方传的 --append 仍是缺省行为, 不会因此变成覆盖。"""

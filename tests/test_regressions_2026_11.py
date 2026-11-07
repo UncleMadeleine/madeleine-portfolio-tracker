@@ -78,17 +78,6 @@ def test_load_watchlist_legacy_group_with_string_lists(tmp_path):
     assert set(entry["lists"]) == {"成长", "科技", "美股"}
 
 
-def test_recover_then_save_keeps_good_backup(tmp_path):
-    """主文件损坏、从 .bak 恢复后保存, 不能把坏文件覆盖到好备份上."""
-    p = tmp_path / "portfolio.json"
-    storage.save_portfolio({"holdings": [{"symbol": "AAPL"}]}, p)
-    storage.save_portfolio({"holdings": [{"symbol": "MSFT"}]}, p)  # .bak = AAPL
-    p.write_text("{broken", encoding="utf-8")
-    storage.save_portfolio({"holdings": [{"symbol": "GOOG"}]}, p)
-    bak = json.loads((tmp_path / "portfolio.json.bak").read_text(encoding="utf-8"))
-    assert bak["holdings"][0]["symbol"] == "AAPL"
-
-
 def test_save_portfolio_rejects_non_list_holdings(tmp_path):
     """畸形 holdings 不能静默清空已有持仓."""
     p = tmp_path / "portfolio.json"

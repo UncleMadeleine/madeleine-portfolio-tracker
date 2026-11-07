@@ -54,7 +54,7 @@ def main(argv=None) -> None:
     ap.add_argument(
         "--overwrite",
         action="store_true",
-        help="覆盖全部持仓 (清空后重写, 写前自动备份 .bak)",
+        help="覆盖全部持仓 (清空后重写)",
     )
     ap.add_argument("--json", action="store_true", help="输出 JSON 而非表格")
     args = ap.parse_args(argv)

@@ -181,7 +181,7 @@ python -m tracker.cli import wallet solana Hxxxx...            # Solana 链 (bas
 python -m tracker.cli cache info
 python -m tracker.cli cache clear
 
-# 统一导入（追加合并为默认，--overwrite 覆盖全部持仓，写前自动备份 .bak）
+# 统一导入（追加合并为默认，--overwrite 覆盖全部持仓）
 python -m tracker.cli import ibkr --dry-run            # 预览 IBKR 账户持仓（需 Gateway 已登录）
 python -m tracker.cli import ibkr --mode live --overwrite
 python -m tracker.cli import wallet eth 0xd8dA...      # 链上钱包余额追加导入
@@ -410,7 +410,7 @@ tracker/
 │   ├── wallet.py         链上钱包导入（兼容入口 → import wallet, 缺省只查询不写盘）
 │   ├── longport_login.py 长桥 OAuth 登录（浏览器授权, token 自动缓存与刷新）
 │   └── cache.py          磁盘缓存管理
-├── storage.py          所有 JSON 配置唯一读写口（portfolio/watchlist/settings, 原子写 + 损坏 .bak 恢复）
+├── storage.py          所有 JSON 配置唯一读写口（portfolio/watchlist/settings, 原子写 + 损坏时尝试历史 .bak 恢复）
 ├── nav.py              历史净值存储（独立 SQLite nav_history.db）+ 按当前持仓回填
 ├── symbols.py          自有代码规范、市场域识别、type_for_symbol() 权威域推导（唯一入口）
 ├── symbol_migrations.py 退市/改码 → 接替代码迁移表（长桥导入时自动迁移）
@@ -441,7 +441,7 @@ tracker/
 ├── longport.py         长桥行情/历史/持仓接入（可选依赖 longport，失败静默回退）
 ├── eodhd.py            EODHD BYOK 接入（token 自备; 行情/历史源, 配置与自检, 失败静默回退）
 ├── longport_oauth.py   长桥 OAuth 授权子进程（独立进程运行, 状态写 var/longport_oauth_state.json）
-├── importer.py         **统一导入管道**：四来源采集 → 追加/覆盖合并 → 备份写盘
+├── importer.py         **统一导入管道**：四来源采集 → 追加/覆盖合并 → 原子写盘
 ├── ibkr_sync.py        IBKR 持仓导入兼容入口（委托 importer，等价 import ibkr，缺省追加合并）
 ├── ashare_sync.py      A股券商文件解析 + 兼容入口（等价 import file，缺省追加合并）
 └── wallet.py           链上钱包余额查询（EVM 五链 + TRON + Solana, 只读）
@@ -542,16 +542,16 @@ IBKR_CONFIG=/data/my-ibkr.json python -m tracker.cli snapshot --ibkr
   同一来源后续导入仍按“覆盖该来源”处理。
 - **覆盖**（`--overwrite`）：清空现有持仓后重写
 
-写盘前自动备份 `portfolio.json.bak`；保留 `base_currency`（大小写不敏感，读取/保存时归一为大写，非法/空值回退 `CNY`）与文件中的其它自定义键；
+写盘不再自动生成 `.bak`；保留 `base_currency`（大小写不敏感，读取/保存时归一为大写，非法/空值回退 `CNY`）与文件中的其它自定义键；
 写盘为原子操作（临时文件 + `os.replace`），中断不会留下半截 JSON；若 `portfolio.json` /
-`watchlist.json` 损坏，读取时自动尝试同名 `.bak` 恢复，仍失败则报可读错误退出（不会静默清空数据）。
+`watchlist.json` 损坏，读取时会尝试同名历史 `.bak` 恢复（如有），仍失败则报可读错误退出（不会静默清空数据）。
 `--dry-run` 仅预览不写入；采集结果为空时即使覆盖模式也不会清空文件。
 
 ### IBKR 账户
 
 ```bash
 python -m tracker.cli import ibkr --dry-run          # 预览，仅打印不写入
-python -m tracker.cli import ibkr --mode live        # 实盘模式追加导入（自动备份 .bak）
+python -m tracker.cli import ibkr --mode live        # 实盘模式追加导入
 python -m tracker.cli import ibkr --overwrite        # 覆盖全部持仓
 ```
 
@@ -570,7 +570,7 @@ python -m tracker.cli import longport --dry-run       # 预览长桥账户持仓
 python -m tracker.cli import longport --overwrite     # 覆盖全部持仓
 python -m tracker.cli watchlist import-longport --dry-run  # 预览长桥自选分组导入
 python -m tracker.cli watchlist import-longport            # 追加合并到 watchlist.json
-python -m tracker.cli watchlist import-longport --overwrite  # 覆盖现有自选（写前备份 .bak）
+python -m tracker.cli watchlist import-longport --overwrite  # 覆盖现有自选
 ```
 
 **长桥自选导入**：读取账户全部自选分组（QuoteContext.watchlist），每个分组映射为
@@ -640,11 +640,11 @@ python -m tracker.cli kline AAPL --months 12
 ### A股券商文件导入
 
 A股券商无跨券商统一 API（监管对个人程序化接入持续收紧），采用**文件导入**模式：
-在券商客户端（同花顺/通达信/华泰/东财/QMT 等）手动导出持仓为 CSV/Excel，本工具解析后映射为 `.SS/.SZ/.BJ` 代码写入 `portfolio.json`。零凭证、跨平台、自动备份。
+在券商客户端（同花顺/通达信/华泰/东财/QMT 等）手动导出持仓为 CSV/Excel，本工具解析后映射为 `.SS/.SZ/.BJ` 代码写入 `portfolio.json`。零凭证、跨平台。
 
 ```bash
 python -m tracker.cli import file 持仓.csv --dry-run   # 预览
-python -m tracker.cli import file 持仓.xlsx            # 追加导入（自动备份 .bak）
+python -m tracker.cli import file 持仓.xlsx            # 追加导入
 python -m tracker.cli import file 持仓.csv --overwrite --json
 ```
 
@@ -789,7 +789,7 @@ A **local-first** portfolio tracker supporting **A-shares / B-shares / Beijing S
 - **Fundamentals (phase 1)** — single A+H stock AH-premium curve: A-share close ÷ (H-share close × historical HKD/CNY FX) − 1, selectable pair/range, 0% parity reference line, range high/low/mean/percentile summary (dedicated `/fundamentals` page)
 - **Financial calendar** — earnings, scheduled disclosures, ex-dividend/record dates for holdings & watchlist over the current and next months (yfinance per-symbol + akshare bulk, optional LongPort fallback), dedicated page & `calendar` subcommand; only probabilistically relevant A-share report periods/boards are fetched, requests run concurrently, and a process-level warmer keeps the disk cache fresh for the default scope
 - **Historical NAV** — daily portfolio snapshots in an isolated SQLite DB (`nav_history.db`, separate from the quote cache), NAV + cost chart on the portfolio page, `nav --save` / auto-upsert on every successful portfolio render (same-day overwrite, corrected by background refreshes), and `nav --backfill` (current holdings × historical closes, historical FX converted; approximate, no historical position changes)
-- **Unified import pipeline** — IBKR account / LongPort account / on-chain wallet (5 EVM chains + TRON + Solana) / A-share broker CSV-Excel file, each with append-merge or overwrite mode (auto .bak backup); same logic drives the Streamlit「导入」page
+- **Unified import pipeline** — IBKR account / LongPort account / on-chain wallet (5 EVM chains + TRON + Solana) / A-share broker CSV-Excel file, each with append-merge or overwrite mode; same logic drives the Streamlit「导入」page
 - **Unified CLI** — 21 subcommands (snapshot, nav, quote, watchlist, portfolio, report, export, fx, history, kline, calendar, search, compare, index-kline, import, longport-login, eodhd, cache, init; `sync` / `import-wallet` kept as compat aliases); all support machine-readable output (`--json`, or `-f json` for report/export)
 
 ### Quick Start

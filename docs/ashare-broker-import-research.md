@@ -157,7 +157,7 @@ akshare 是项目已依赖的行情库（`tracker/prices.py` 中 `_akshare_quote
    "持仓数量"/"当前持仓"/"股份余额"，"成本价"/"参考成本价"/"买入均价"），
    用候选键列表逐个匹配，兼容同花顺/通达信/华泰/东财/QMT 等常见格式。
 4. **支持 CSV / Excel**：CSV 用 pandas 内置；Excel 需 `openpyxl`（惰性导入，缺失时提示）。
-5. **安全写入**：写入前备份 `portfolio.json` 为 `.bak`，保留 `base_currency`。
+5. **安全写入**：原子写盘并保留 `base_currency`。
 6. **零新增硬依赖**：仅用 `pandas`（已有）；Excel 支持为可选，缺失 `openpyxl` 时
    优雅降级并提示安装。
 

@@ -104,14 +104,6 @@ def test_settings_roundtrip_and_defaults(tmp_path):
     assert storage.load_settings(path) == storage.DEFAULT_SETTINGS
 
 
-def test_backup_file(tmp_path):
-    src = tmp_path / "p.json"
-    assert storage.backup_file(src) is None
-    src.write_text("{}", encoding="utf-8")
-    assert storage.backup_file(src) == str(src) + ".bak"
-    assert (tmp_path / "p.json.bak").exists()
-
-
 def test_load_portfolio_recovers_from_backup_when_corrupt(tmp_path):
     """portfolio.json 损坏时从 .bak 恢复, 不静默返回空组合 (否则下次保存会清空数据)."""
     path = tmp_path / "portfolio.json"

@@ -274,6 +274,46 @@ def test_pnl_pct_uses_percent_format():
     assert '"盈亏%", format="%+.2f%%"' not in src
 
 
+def test_context_menu_delete_watchlist_action(monkeypatch, tmp_path):
+    """右键「从自选删除」: 复用现有确认弹窗, 不绕过确认直接落盘."""
+    from tracker.ui import theme
+
+    at = _boot_app(
+        monkeypatch,
+        tmp_path,
+        holdings=[{"symbol": "AAPL", "quantity": 2, "avg_cost": 100}],
+        watchlist=[
+            {"symbol": "AAPL", "lists": ["测试"], "upper_1": 140.0},
+            {"symbol": "MSFT", "lists": ["测试"], "upper_1": 500.0},
+        ],
+    )
+    at.session_state[theme.CONTEXT_ACTION_KEY] = {
+        "action": "delete_watchlist",
+        "symbol": "MSFT",
+    }
+    at.run(timeout=30)
+    assert not at.exception, at.exception
+    assert at.session_state["_delete_watchlist_pending"] == ["MSFT"]
+    # 未点确认前不写盘
+    assert [
+        e["symbol"]
+        for e in storage.load_watchlist(portfolio_page.WATCHLIST_PATH)["watchlist"]
+    ] == ["AAPL", "MSFT"]
+
+    at.button(key="confirm_delete_watchlist").click()
+    at.run(timeout=30)
+    assert not at.exception, at.exception
+    assert [
+        e["symbol"]
+        for e in storage.load_watchlist(portfolio_page.WATCHLIST_PATH)["watchlist"]
+    ] == ["AAPL"]
+    # 持仓不受影响
+    assert [
+        h["symbol"]
+        for h in storage.load_portfolio(storage.PORTFOLIO_PATH)["holdings"]
+    ] == ["AAPL"]
+
+
 def test_selected_holdings_delete_action(monkeypatch, tmp_path):
     """持仓明细表选中行 + 「删除选中」: 弹窗确认后写盘."""
     at = _boot_app(
@@ -347,6 +387,15 @@ def test_theme_table_right_click_menu_js():
     assert "复制整行" in js
     assert "复制含表头" in js
     assert "/kline?symbol=" in js
+    # 特定表格 (持仓/自选) 提供删除, 并经组件 trigger 交回 Python 确认
+    assert "从自选删除" in js
+    assert "从持仓删除" in js
+    assert "watchlist_detail_select" in js
+    assert "setTriggerValue" in js
+    assert "ctx_action" in js
+    # Glide 单元格列号从 1 开始而 th DOM 顺序从 0 开始: 代码列不能错位
+    assert "headersByAria[String(col)]" in js
+    assert "headers[String(col - 1)]" in js
     # 输入/编辑状态必须保留浏览器原生菜单 (复制/粘贴/拼写检查)
     assert 'input, textarea, [contenteditable="true"]' in js
 

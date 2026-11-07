@@ -714,6 +714,25 @@ def _clear_delete_watchlist() -> None:
     st.session_state.pop("_delete_watchlist_pending", None)
 
 
+def _consume_context_action() -> None:
+    """消费右键菜单的删除操作: 复用现有确认弹窗, 前端不直接落盘.
+
+    trigger 由 theme.inject() 暂存; 这里只把目标代码挂到 pending 槽位, 后续
+    表格渲染处的 _confirm_delete_* 弹窗负责确认与锁内读-改-写。
+    """
+    payload = st.session_state.pop(theme.CONTEXT_ACTION_KEY, None)
+    if not isinstance(payload, dict):
+        return
+    action = str(payload.get("action") or "")
+    symbol = _norm_sym(str(payload.get("symbol") or "").strip())
+    if not symbol:
+        return
+    if action == "delete_watchlist":
+        st.session_state["_delete_watchlist_pending"] = [symbol]
+    elif action == "delete_holdings":
+        st.session_state["_delete_holdings_pending"] = [symbol]
+
+
 @st.dialog("删除持仓", on_dismiss=_clear_delete_holdings)
 def _confirm_delete_holdings(symbols: list[str]) -> None:
     """从主表选中行删除持仓: 弹窗确认后锁内读-改-写."""
@@ -940,6 +959,8 @@ def render_portfolio_page() -> None:
     首屏行情经 _load_quotes 走 stale-while-revalidate: 旧缓存秒渲染 + 后台
     刷新, 不再每次打开都干等网络; 冷启动 (无缓存) 才阻塞拉取。
     """
+    # 右键菜单「删除」先转成 pending 目标, 由下方现有确认弹窗处理
+    _consume_context_action()
     watch = storage.load_watchlist(WATCHLIST_PATH)
     if not watch.get("watchlist"):
         watch["watchlist"] = []

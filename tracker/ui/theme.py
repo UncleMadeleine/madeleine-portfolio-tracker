@@ -17,6 +17,7 @@ Streamlit 自带控件只能靠 ``.streamlit/config.toml`` 调色, 版式/卡片
 from __future__ import annotations
 
 import html
+import json
 
 import streamlit as st
 
@@ -49,6 +50,9 @@ export default function (component) {
 
   var MENU_ID = 'fp-context-menu';
   var TOAST_ID = 'fp-context-toast';
+  // 组件的 trigger 通道: 删除等有副作用的操作交给 Python 处理 (确认弹窗 +
+  // 锁内读-改-写), 前端只负责把「哪张表、哪一行」送出去。
+  var setTriggerValue = component && component.setTriggerValue;
   var menu = null;
   var toastTimer = null;
 
@@ -131,7 +135,11 @@ export default function (component) {
       table: '<rect x="3" y="4" width="18" height="16" rx="2"></rect>' +
              '<path d="M3 10h18M9 4v16"></path>',
       chart: '<path d="M4 19V5M4 19h16"></path>' +
-             '<path d="M8 15l3-4 3 2 4-6"></path>'
+             '<path d="M8 15l3-4 3 2 4-6"></path>',
+      trash: '<path d="M3 6h18"></path>' +
+             '<path d="M8 6V4h8v2"></path>' +
+             '<path d="M19 6l-1 14H6L5 6"></path>' +
+             '<path d="M10 11v5M14 11v5"></path>'
     };
     return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
       'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" ' +
@@ -184,15 +192,40 @@ export default function (component) {
     // ArrowDown 再进入菜单项, 由 onKeyDown 处理。
   }
 
+  // 右键落点对应的表: 用 st.dataframe/data_editor 的 key 区分持仓/自选。
+  // 只在已知 key 上提供「删除」这类有副作用的操作, 其它表格保持通用菜单。
+  var TABLE_KEYS = [
+    'holdings_detail_select', 'holdings_editor',
+    'watchlist_detail_select', 'watchlist_editor'
+  ];
+  function contextKey(df) {
+    var el = df.closest('[class*="st-key-"]');
+    if (!el) { return ''; }
+    for (var i = 0; i < TABLE_KEYS.length; i++) {
+      if (el.classList.contains('st-key-' + TABLE_KEYS[i])) {
+        return TABLE_KEYS[i];
+      }
+    }
+    return '';
+  }
+
   function getCell(df, x, y) {
     var cells = df.querySelectorAll('[data-testid^="glide-cell-"]');
+    var rowBest = null;
+    var rowDist = Infinity;
     for (var i = 0; i < cells.length; i++) {
       var r = cells[i].getBoundingClientRect();
       if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
         return cells[i];
       }
+      // 行右侧空白/行号列也可能落点: 同一行内取水平距离最近的单元格,
+      // 这样右键整行任意位置都能拿到 symbol, 不会掉回浏览器默认菜单。
+      if (y >= r.top && y <= r.bottom) {
+        var d = x < r.left ? r.left - x : (x > r.right ? x - r.right : 0);
+        if (d < rowDist) { rowDist = d; rowBest = cells[i]; }
+      }
     }
-    return null;
+    return rowBest;
   }
 
   function cellParts(cell) {
@@ -216,8 +249,11 @@ export default function (component) {
       if (isFinite(idx)) { headersByAria[String(idx)] = text; }
     });
     function headerFor(col) {
-      return headers[String(col)] || headersByAria[String(col)] ||
-        headersByAria[String(col + 1)] || '';
+      // Glide 的 glide-cell-<col> 从 1 开始, th 的 DOM 顺序从 0 开始:
+      // 直接 headers[col] 会整体错一列 (「symbol」列被认成「name」, 代码
+      // 提取失败 → 右键菜单没有 K线/删除入口)。优先用 aria-colindex 对齐。
+      return headersByAria[String(col)] || headers[String(col - 1)] ||
+        headersByAria[String(col + 1)] || headers[String(col)] || '';
     }
     var values = [];
     var byCol = {};
@@ -241,6 +277,16 @@ export default function (component) {
       headers: values.map(function (v) { return headerFor(v.col); }),
       symbol: symbol
     };
+  }
+
+  function sendContextAction(action, symbol) {
+    if (!setTriggerValue || !symbol) { return; }
+    // nonce 让 Python 能区分「同一条目再次删除」和上一次残留的 trigger 值
+    setTriggerValue('ctx_action', JSON.stringify({
+      action: action,
+      symbol: symbol,
+      nonce: Date.now() + ':' + Math.random().toString(36).slice(2)
+    }));
   }
 
   function onContext(ev) {
@@ -287,6 +333,7 @@ export default function (component) {
           action: function () { copy(withHeader); }
         }
       ];
+      var tableKey = contextKey(df);
       if (row.symbol) {
         items.push({ sep: true });
         items.push({
@@ -298,6 +345,25 @@ export default function (component) {
             );
           }
         });
+        if (tableKey === 'watchlist_detail_select' ||
+            tableKey === 'watchlist_editor') {
+          items.push({
+            label: '从自选删除',
+            icon: 'trash',
+            action: function () {
+              sendContextAction('delete_watchlist', row.symbol);
+            }
+          });
+        } else if (tableKey === 'holdings_detail_select' ||
+                   tableKey === 'holdings_editor') {
+          items.push({
+            label: '从持仓删除',
+            icon: 'trash',
+            action: function () {
+              sendContextAction('delete_holdings', row.symbol);
+            }
+          });
+        }
       }
       ev.preventDefault();
       ev.stopPropagation();
@@ -500,11 +566,41 @@ def _trackpad_guard():
     return _TRACKPAD_GUARD
 
 
+# 右键菜单有副作用的操作 (删除) 经组件 trigger 回到 Python, 暂存在 session
+# state, 由组合页在下一轮渲染时消费 (弹现有确认框 + 锁内读-改-写)。
+CONTEXT_ACTION_KEY = "_ctx_action"
+_CONTEXT_NONCE_KEY = "_ctx_action_nonce"
+
+
+def _stash_context_action(result) -> None:
+    """把组件 trigger 收到的右键操作写入 session_state (同一 trigger 只消费一次)."""
+    raw = getattr(result, "ctx_action", None)
+    if not raw:
+        return
+    try:
+        payload = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError):
+        return
+    if not isinstance(payload, dict):
+        return
+    nonce = str(payload.get("nonce") or "")
+    if nonce and st.session_state.get(_CONTEXT_NONCE_KEY) == nonce:
+        return
+    if nonce:
+        st.session_state[_CONTEXT_NONCE_KEY] = nonce
+    st.session_state[CONTEXT_ACTION_KEY] = payload
+
+
 def inject() -> None:
     """注入全局主题样式 (幂等: 每次 rerun 重新渲染即可, 无状态副作用)."""
     st.html(f"<style>{_CSS}{_CONTEXT_MENU_CSS}</style>")
     # 0 高度脚本组件: 接管表格/图表的右键菜单, 自身不占版面
-    _context_menu()(key="fp_context_menu", height=0)
+    result = _context_menu()(
+        key="fp_context_menu",
+        height=0,
+        on_ctx_action_change=lambda: None,
+    )
+    _stash_context_action(result)
     # 触控板双指横滑不触发浏览器前进/后退 (尤其在侧边栏持仓表附近)
     _trackpad_guard()(key="fp_trackpad_guard", height=0)
 

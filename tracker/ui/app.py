@@ -141,6 +141,13 @@ def cli_main() -> None:
     except ImportError:  # 旧版本 streamlit
         from streamlit import cli as st_cli
 
+    # 服务常驻: 在 Streamlit 启动前就把行情/日历保温线程拉起, 不必等第一个
+    # 浏览器会话触发脚本执行。否则容器/服务空跑时 main() 从未运行, 磁盘
+    # 缓存只会越来越旧 ——「常驻服务」场景下自动刷新实际从未开始。
+    # 两条线程都只做取数 + SQLite, 不碰 st.* API, 可在 server 就绪前安全启动。
+    ensure_background_refresher()
+    ensure_calendar_refresher()
+
     with as_file(files(__package__).joinpath("app.py")) as app_path:
         sys.argv = ["streamlit", "run", str(app_path), *sys.argv[1:]]
         st_cli.main()

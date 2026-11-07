@@ -145,6 +145,23 @@ def test_nav_snapshot_skips_unchanged_rerun(app_boot, monkeypatch):
     assert calls == []
 
 
+def test_cli_main_starts_background_warmers(monkeypatch, tmp_path):
+    """tracker-ui 启动即拉起保温线程, 不等第一个浏览器会话触发 main()."""
+    import streamlit.web.cli as st_cli
+
+    events: list[str] = []
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(
+        app_mod, "ensure_background_refresher", lambda: events.append("quotes")
+    )
+    monkeypatch.setattr(
+        app_mod, "ensure_calendar_refresher", lambda: events.append("calendar")
+    )
+    monkeypatch.setattr(st_cli, "main", lambda: events.append("streamlit"))
+    app_mod.cli_main()
+    assert events == ["quotes", "calendar", "streamlit"]
+
+
 def test_navigation_registers_independent_urls(app_boot):
     """七页各有独立 url_path: 当前页由 URL 决定, 刷新不回落组合页.
 

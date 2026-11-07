@@ -398,13 +398,14 @@ class TestFirstScreenStaleWhileRevalidate:
         assert any("1,420" in str(m.value) for m in at.metric)
         assert not _plan_dirty(at)
 
-    def test_periodic_keep_warm_updates_open_page(
+    def test_periodic_keep_warm_waits_for_cache_expiry(
         self, monkeypatch, tmp_path, _clean_quote_state
     ):
-        """页面级周期保温: 数据 250s 龄 (仍新鲜但已过 240s 保温周期).
+        """页面静置: 用「测量年龄 + 流逝时间」判断保温周期, 到期才回源.
 
-        首屏按新鲜数据渲染 (不走 SWR 脏路径), 看门狗到时主动重取 → 完成后
-        rerun 换新 —— 页面一直开着数据也持续滚动更新。
+        回归: 旧实现只看首屏写入的年龄快照 (新鲜时为 0), 片段每 2s 重跑也
+        不会推进年龄, 服务常驻开着页面会一直显示缓存旧价。基准周期同时
+        对齐行情新鲜期 (300s): 早于过期触发的刷新会命中磁盘缓存空转。
         """
         _seed_quotes({"AAPL": 100.0}, age_seconds=250)
         fake = _recording_quotes(200.0)
@@ -412,18 +413,15 @@ class TestFirstScreenStaleWhileRevalidate:
 
         # 250s < 300s 新鲜期: 首屏直接渲染这批数据 (2×100×7.1=1,420)
         assert any("1,420" in str(m.value) for m in at.metric)
-        # 但已过保温周期 → 看门狗挂上刷新任务并给提示
-        assert any("后台刷新中" in c.value for c in at.caption)
-        assert _wait_for(lambda: fake.calls), "周期保温未触发刷新"
-        hits, _ = cache_mod.get_cached_with_age(["AAPL"])
-        assert hits["AAPL"].price == 200.0
-
-        # 完成 → rerun → 换新 (2×200×7.1=2,840), 计划归位
-        at.run(timeout=60)
-        assert any("2,840" in str(m.value) for m in at.metric)
-        assert not _plan_dirty(at)
-        # 数据刚刷新生效, 不会立刻再刷一次 (无热循环)
+        # 还没到周期: 不刷新, 也不显示「后台刷新中」
+        assert fake.calls == []
         assert not any("后台刷新中" in c.value for c in at.caption)
+        plan = at.session_state[portfolio_page._PLAN_KEY]
+        assert not portfolio_page._plan_needs_periodic_refresh(plan)
+
+        # 片段继续空转 60s 后: 250 + 60 > 300 → 到点, 看门狗会发起刷新
+        plan["checked_at"] -= 60
+        assert portfolio_page._plan_needs_periodic_refresh(plan)
 
     def test_no_periodic_refresh_while_data_is_young(
         self, monkeypatch, tmp_path, _clean_quote_state
@@ -549,8 +547,10 @@ class TestPeriodicKeepWarm:
     """
 
     def test_period_scales_with_symbol_count(self):
-        # 100 个代码: 100*2=200 < 基准 240 → 仍为基准
-        assert portfolio_page._refresh_period(100) == 240.0
+        # 基准周期 = 行情新鲜期: 早于过期触发只会空转 (get_quotes 仍命中磁盘)
+        assert portfolio_page._REFRESH_PERIOD == cache_mod.CACHE_TTL
+        # 100 个代码: 100*2=200 < 基准 300 → 仍为基准
+        assert portfolio_page._refresh_period(100) == 300.0
         # 685 个代码: 685*2=1370, 介于基准与上限之间
         assert portfolio_page._refresh_period(685) == 1370.0
         # 超大组合封顶在上限 (= 陈旧期)
@@ -558,6 +558,20 @@ class TestPeriodicKeepWarm:
             portfolio_page._REFRESH_PERIOD_MAX
         )
         assert portfolio_page._refresh_period(1) == portfolio_page._REFRESH_PERIOD
+
+    def test_plan_age_advances_while_page_is_idle(self, monkeypatch):
+        """页面静置时看门狗不重跑整页: 年龄必须按流逝时间继续增长.
+
+        回归: 旧实现直接返回 q_age/f_age 快照, 首屏新鲜时快照恒为 0, 页面
+        永远等不到保温周期, 服务常驻开着也一直显示缓存里的旧价。
+        """
+        now = time.time()
+        monkeypatch.setattr(portfolio_page.time, "time", lambda: now)
+        plan = {"q_age": 10.0, "f_age": 5.0, "checked_at": now - 600}
+        assert portfolio_page._plan_data_age(plan) == 610.0
+        # 缺数据视为无限旧, 不能被流逝时间掩盖
+        plan = {"q_age": float("inf"), "f_age": 0.0, "checked_at": now}
+        assert portfolio_page._plan_data_age(plan) == float("inf")
 
     def test_cache_age_missing_means_inf(self):
         assert portfolio_page._cache_age() == 0.0

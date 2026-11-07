@@ -102,12 +102,16 @@ _NAV_SNAPSHOT_KEY = "_nav_snapshot_written"
 # ---------- 周期保温: 服务长期运行时数据持续更新 ----------
 # 页面开着 → 看门狗片段按周期主动重取 (用户看到的数据滚动更新);
 # 页面全关 → 进程级保温线程照常刷磁盘缓存 (后来者打开即是新鲜数据)。
-# 基准周期小于行情新鲜期 (300s), 保证磁盘缓存常新; 符号集越大周期越长
-# (大组合一轮刷新就要数分钟, 周期不拉长会把刷新器拖到常驻满负荷, Yahoo
-# 限流是 IP 级的, 连累 K线页), 上限 = 陈旧期。
-_REFRESH_PERIOD = 240.0
+# 基准周期等于行情新鲜期 (300s): 早于它触发时 get_quotes 仍会命中磁盘缓存,
+# 只是空转一轮并把「完成」记账, 真正回源反而被推迟到下一个周期。符号集越
+# 大周期越长 (大组合一轮刷新就要数分钟, 周期不拉长会把刷新器拖到常驻满
+# 负荷, Yahoo 限流是 IP 级的, 连累 K线页), 上限 = 陈旧期。
+_REFRESH_PERIOD = float(cache_mod.CACHE_TTL)
 _REFRESH_PERIOD_PER_SYMBOL = 2.0
 _REFRESH_PERIOD_MAX = 1800.0
+# 保温线程的检查粒度: 磁盘年龄才是刷新依据, 每 60s 查一次才能让实际回源
+# 贴近缓存过期时刻 (而不是睡满一个周期后才刚好看一眼)。
+_REFRESH_TICK = 60.0
 
 _refresh_lock = threading.Lock()
 # key → 是否正在刷新 (进程内跨会话共享: 同数据面多个标签页只发一次网络)
@@ -134,6 +138,9 @@ def _plan() -> dict:
     - dirty: 是否有待后台刷新的数据面
     - seen: 已消费的刷新完成时间戳 (只消费一次, 防热循环)
     - q_age/f_age: 行情/汇率磁盘缓存的最旧年龄 (秒), 周期保温据此判断
+    - checked_at: q_age/f_age 的测量时刻; 看门狗片段没有完整 rerun 时,
+      用「测量时的年龄 + 此后流逝的时间」估算当前年龄, 否则页面静置后
+      年龄永远停在 0, 周期保温永远不会触发
     """
     return st.session_state.setdefault(
         _PLAN_KEY,
@@ -144,6 +151,7 @@ def _plan() -> dict:
             "seen": 0.0,
             "q_age": 0.0,
             "f_age": 0.0,
+            "checked_at": 0.0,
         },
     )
 
@@ -153,9 +161,12 @@ def _plan_reset() -> None:
 
     只清脏标记, 其余字段原地保留: seen 丢失会让一次完成事件被反复当成
     "新完成"触发 rerun (数据仍脏时形成热循环); quotes/fx 参数与年龄丢失
-    则周期保温无依据。
+    则周期保温无依据。checked_at 在这里重置: 下方 loader 马上会重新测量
+    q_age/f_age, 之后看门狗用「年龄 + 流逝时间」延续计时。
     """
-    _plan()["dirty"] = False
+    plan = _plan()
+    plan["dirty"] = False
+    plan["checked_at"] = time.time()
 
 
 def _plan_set(kind: str, args, dirty: bool = False) -> None:
@@ -426,9 +437,7 @@ def _first_screen_watchdog() -> None:
     inflight, done = _refresh_state(key)
     if not plan.get("dirty") and not inflight:
         # 周期保温: 没有可取数的参数 (无持仓也无自选) 时直接退出
-        if not (plan.get("quotes") or plan.get("fx")):
-            return
-        if _plan_data_age(plan) < _refresh_period(_plan_symbol_count(plan)):
+        if not _plan_needs_periodic_refresh(plan):
             return
         plan["dirty"] = True  # 复用脏路径: 发起 → 完成 → rerun 换新
     if inflight:
@@ -451,8 +460,25 @@ def _plan_symbol_count(plan: dict) -> int:
 
 
 def _plan_data_age(plan: dict) -> float:
-    """计划覆盖数据的磁盘年龄 (秒): 取行情/汇率两者最旧; 缺数据视为无限旧."""
-    return max(plan.get("q_age") or 0.0, plan.get("f_age") or 0.0)
+    """计划覆盖数据的磁盘年龄 (秒): 取行情/汇率两者最旧; 缺数据视为无限旧.
+
+    看门狗片段每 2s 只重跑片段而不是整页, 不会重新读盘测年龄。这里在最近
+    一次测量值上叠加流逝时间, 页面静置时年龄才会继续增长到保温周期。
+    """
+    age = max(plan.get("q_age") or 0.0, plan.get("f_age") or 0.0)
+    if age == float("inf"):
+        return age
+    checked_at = plan.get("checked_at") or 0.0
+    if checked_at:
+        age += max(0.0, time.time() - checked_at)
+    return age
+
+
+def _plan_needs_periodic_refresh(plan: dict) -> bool:
+    """周期保温是否到点 (无持仓/自选、数据仍年轻都返回 False)."""
+    if not (plan.get("quotes") or plan.get("fx")):
+        return False
+    return _plan_data_age(plan) >= _refresh_period(_plan_symbol_count(plan))
 
 
 def _cache_age(symbols=(), fx=None) -> float:
@@ -547,16 +573,16 @@ def _disk_refresh_plan() -> dict | None:
 
 
 def _background_refresher_loop() -> None:
-    """保温线程主循环: 每周期检查磁盘数据年龄, 旧了才刷新.
+    """保温线程主循环: 每 60s 检查磁盘数据年龄, 到周期才刷新.
 
-    首周期等满一个基准周期再动, 避开服务启动风暴 (页面打开时首屏 SWR 已
-    负责立即刷新); 之后周期按符号集规模缩放。年龄判定与页面看门狗同口径
-    (_cache_age): 页面刚刷新的数据这里会跳过, 不重复发网络。任何异常都
-    吞掉续命 —— 保温失败不该影响服务本身。
+    检查粒度固定 60s, 刷新周期按符号集规模缩放 (见 _refresh_period):
+    这样实际回源贴近缓存过期时刻, 而不用睡满整个周期才看一次年龄。
+    年龄判定与页面看门狗同口径 (_cache_age): 页面刚刷新的数据这里会跳过,
+    不重复发网络。任何异常都吞掉续命 —— 保温失败不该影响服务本身。
     """
-    period = _REFRESH_PERIOD
+    logger = logging.getLogger(__name__)
     while True:
-        time.sleep(period)
+        time.sleep(_REFRESH_TICK)
         try:
             plan = _disk_refresh_plan()
             if not plan or not (plan.get("quotes") or plan.get("fx")):
@@ -570,9 +596,7 @@ def _background_refresher_loop() -> None:
             _start_refresh(_plan_key(plan), plan)
         except Exception:  # noqa: BLE001 - 保温失败不影响服务
             # 吞掉续命但留日志: 持续失败 (如缓存库损坏) 不能完全无痕迹
-            logging.getLogger(__name__).warning(
-                "保温线程刷新失败 (period=%ss)", period, exc_info=True
-            )
+            logger.warning("保温线程刷新失败", exc_info=True)
 
 
 def _post_import() -> None:

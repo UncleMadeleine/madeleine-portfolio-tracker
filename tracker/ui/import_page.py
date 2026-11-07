@@ -18,6 +18,7 @@ import streamlit as st
 from tracker import importer, longport as longport_mod, storage
 from tracker.storage import CorruptDataError
 from tracker.ui import theme
+from tracker.ui.issues import render_issue_summary
 
 _CHAIN_LABELS = {
     "eth": "Ethereum",
@@ -164,8 +165,12 @@ def _longport_watchlist_section() -> None:
     payload = st.session_state.get("imp_lp_wl")
     if not payload:
         return
-    for s in payload.get("skipped", []):
-        st.caption(f":material/warning: {s}")
+    render_issue_summary(
+        payload.get("skipped", []),
+        noun="自选导入跳过项",
+        details_label="查看跳过明细",
+        key="imp_lp_wl_issues",
+    )
     rows = payload.get("rows", [])
     if not rows:
         st.caption("未发现可导入的自选。")
@@ -306,8 +311,12 @@ def _preview_and_confirm(state_key: str, mode: str, on_saved, note: str = "") ->
         return
     rows = payload.get("rows", [])
     prune_source = payload.get("prune_source")
-    for s in payload.get("skipped", []):
-        st.caption(f":material/warning: {s}")
+    render_issue_summary(
+        payload.get("skipped", []),
+        noun="导入跳过项",
+        details_label="查看跳过明细",
+        key=f"{state_key}_issues",
+    )
     if not rows and not prune_source:
         st.caption("未发现可导入的持仓。")
         return

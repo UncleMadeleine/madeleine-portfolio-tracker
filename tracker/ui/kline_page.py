@@ -13,6 +13,7 @@ import pandas as pd
 import streamlit as st
 
 from . import settings, theme
+from .issues import render_issue_summary
 
 from tracker import charting, fx, mcap, prices, search
 from tracker.providers import PROVIDERS
@@ -579,9 +580,14 @@ def render_compare_controls(
                     crypto_source,
                     target_ccy,
                 )
-        for w in mcap_warnings:
-            st.warning(w)
+        render_issue_summary(
+            mcap_warnings,
+            noun="市值对比提示",
+            details_label="查看提示详情",
+            key="compare_mcap_issues",
+        )
     else:
+        compare_issues: list[str] = []
         with st.spinner(f"拉取 {len(sel)} 只代码近 {cmp_months} 个月 K线..."):
             for s in sel:
                 try:
@@ -605,11 +611,17 @@ def render_compare_controls(
                             crypto_source,
                         )
                     if d.empty:
-                        st.warning(f"{s}: 无有效K线数据")
+                        compare_issues.append(f"{s}: 无有效K线数据")
                     else:
                         frames[s] = d
                 except Exception as e:
-                    st.warning(f"{s}: {e}")
+                    compare_issues.append(f"{s}: {e}")
+        render_issue_summary(
+            compare_issues,
+            noun="K线取数问题",
+            details_label="查看失败明细",
+            key="compare_kline_issues",
+        )
     if not frames:
         st.info(
             "所选代码均无历史市值数据 (crypto/指数无市值语义, 或数据源不可得)"
@@ -1225,6 +1237,7 @@ def render_crypto_compare_controls(
         st.info("选择或输入加密货币代码 (如 BTC-USD · ETH-USD) 开始对比。")
         return
     frames = {}
+    crypto_issues: list[str] = []
     with st.spinner(f"拉取 {len(sel)} 个币种近 {ccmp_months} 个月 K线..."):
         for s in sel:
             try:
@@ -1243,11 +1256,17 @@ def render_crypto_compare_controls(
                         s, ccmp_months, False, False, False, crypto_source
                     )
                 if d.empty:
-                    st.warning(f"{s}: 无有效K线数据")
+                    crypto_issues.append(f"{s}: 无有效K线数据")
                 else:
                     frames[s] = d
             except Exception as e:
-                st.warning(f"{s}: {e}")
+                crypto_issues.append(f"{s}: {e}")
+    render_issue_summary(
+        crypto_issues,
+        noun="币种取数问题",
+        details_label="查看失败明细",
+        key="crypto_compare_issues",
+    )
     if not frames:
         return
     render_crypto_compare_chart(

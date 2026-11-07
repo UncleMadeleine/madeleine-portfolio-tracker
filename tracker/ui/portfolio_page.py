@@ -44,6 +44,7 @@ from tracker.watchlist import (
     parse_lists,
 )
 from tracker.ui import settings as S, theme
+from tracker.ui.issues import render_issue_summary
 from tracker.ui.kline_page import set_quick_symbols
 
 WATCHLIST_PATH = storage.WATCHLIST_PATH
@@ -1641,8 +1642,14 @@ def render_portfolio_page() -> None:
                 label_visibility="collapsed",
             )
             trig = trig_all
-            for i in wissues:
-                st.caption(f":material/warning: {i}")
+            # 批量行情失败时 wissues 可能上百条: 逐条 caption 会把自选表挤到
+            # 首屏之外。这里只留一行原因计数, 完整明细在上方「数据问题」里。
+            render_issue_summary(
+                wissues,
+                noun="自选数据问题",
+                hint="详情见上方「数据问题」",
+                details=False,
+            )
             if not trig.empty:
                 for _, r in trig.iterrows():
                     metric = r.get("metric") or "price"

@@ -334,6 +334,23 @@ def test_theme_table_right_click_menu_js():
     assert 'input, textarea, [contenteditable="true"]' in js
 
 
+def test_theme_trackpad_guard_blocks_history_swipe():
+    """触控板双指横滑到边界不应触发浏览器后退 (侧边栏持仓表最易误触)."""
+    from tracker.ui import theme
+
+    css = theme._CSS
+    assert "overscroll-behavior-x: none" in css
+    assert "overscroll-behavior-x: contain" in css
+
+    js = theme._TRACKPAD_GUARD_JS
+    assert "wheel" in js
+    assert "preventDefault" in js
+    assert "composedPath" in js
+    # 只在 CSS 不生效的 Safari / 旧浏览器挂非 passive 监听, 不拖慢 Chrome
+    assert "Safari" in js or "safari" in js
+    assert "passive: false" in js
+
+
 def test_selected_watchlist_delete_action(monkeypatch, tmp_path):
     """自选观察表选中行 + 「删除选中」: 弹窗确认后写盘."""
     at = _boot_app(

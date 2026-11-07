@@ -396,7 +396,74 @@ export default function (component) {
 }
 """
 
+# 触控板双指横滑防误触后退: Chrome/Edge/Firefox 用 CSS
+# (overscroll-behavior-x: none) 就能关掉浏览器历史导航, 但 Safari 不认这个
+# 语义 (WebKit bug 240183), 只能拦 wheel。这里只在 Safari / 不支持
+# overscroll-behavior 的浏览器上挂非 passive 监听; 其余浏览器保持合成器滚动,
+# 避免全局 wheel 监听拖慢纵向滚动。
+_TRACKPAD_GUARD_JS = r"""
+export default function (component) {
+  // rerun 会重跑组件函数但不一定先 cleanup: window 级单例避免叠加监听器
+  if (window.__fpTrackpadGuardCleanup) { return window.__fpTrackpadGuardCleanup; }
+
+  var cssSupported = !!(window.CSS && CSS.supports &&
+    CSS.supports('overscroll-behavior-x', 'none'));
+  var ua = navigator.userAgent || '';
+  var isSafari = /safari/i.test(ua) &&
+    !/chrome|chromium|crios|edg|opr|android/i.test(ua);
+  if (cssSupported && !isSafari) {
+    var noop = function () {};
+    window.__fpTrackpadGuardCleanup = noop;
+    return noop;
+  }
+
+  var THRESHOLD = 3;
+
+  // 鼠标下仍有容器能沿手势方向横向滚动 → 保留原生滚动; 否则说明已到
+  // 边界, 阻断默认行为, 浏览器就不会把继续横滑当成前进/后退。
+  function canScrollHorizontally(path, deltaX) {
+    for (var i = 0; i < path.length; i++) {
+      var el = path[i];
+      if (!el || el.nodeType !== 1) { continue; }
+      var overflowX = window.getComputedStyle(el).overflowX;
+      if (overflowX !== 'auto' && overflowX !== 'scroll' &&
+          overflowX !== 'overlay') {
+        continue;
+      }
+      var max = el.scrollWidth - el.clientWidth;
+      if (max <= 1) { continue; }
+      var left = el.scrollLeft;
+      if (deltaX > 0 && left < max - 1) { return true; }
+      if (deltaX < 0 && left > 1) { return true; }
+    }
+    return false;
+  }
+
+  function onWheel(ev) {
+    // 捏合缩放 (ctrlKey) 和已有人处理的 wheel (如图表) 不再插手
+    if (!ev.cancelable || ev.defaultPrevented || ev.ctrlKey) { return; }
+    var dx = ev.deltaX;
+    // Shift+滚轮 = 鼠标用户把纵向滚轮当横向滚动
+    if (ev.shiftKey && Math.abs(ev.deltaY) > Math.abs(dx)) { dx = ev.deltaY; }
+    if (Math.abs(dx) < THRESHOLD) { return; }
+    if (!ev.shiftKey && Math.abs(dx) <= Math.abs(ev.deltaY)) { return; }
+    var path = ev.composedPath ? ev.composedPath() : [ev.target];
+    if (!canScrollHorizontally(path, dx)) { ev.preventDefault(); }
+  }
+
+  window.addEventListener('wheel', onWheel, { capture: true, passive: false });
+
+  var cleanup = function () {
+    window.removeEventListener('wheel', onWheel, { capture: true });
+    window.__fpTrackpadGuardCleanup = null;
+  };
+  window.__fpTrackpadGuardCleanup = cleanup;
+  return cleanup;
+}
+"""
+
 _CONTEXT_MENU = None
+_TRACKPAD_GUARD = None
 
 
 def _context_menu():
@@ -418,11 +485,28 @@ def _context_menu():
     return _CONTEXT_MENU
 
 
+def _trackpad_guard():
+    """惰性注册触控板手势护栏组件 (Safari 兜底, 防止横滑误触后退)."""
+    global _TRACKPAD_GUARD
+    from streamlit.components.v2 import get_bidi_component_manager
+
+    if _TRACKPAD_GUARD is None or get_bidi_component_manager().get(
+        "fp_trackpad_guard"
+    ) is None:
+        _TRACKPAD_GUARD = st.components.v2.component(
+            "fp_trackpad_guard",
+            js=_TRACKPAD_GUARD_JS,
+        )
+    return _TRACKPAD_GUARD
+
+
 def inject() -> None:
     """注入全局主题样式 (幂等: 每次 rerun 重新渲染即可, 无状态副作用)."""
     st.html(f"<style>{_CSS}{_CONTEXT_MENU_CSS}</style>")
     # 0 高度脚本组件: 接管表格/图表的右键菜单, 自身不占版面
     _context_menu()(key="fp_context_menu", height=0)
+    # 触控板双指横滑不触发浏览器前进/后退 (尤其在侧边栏持仓表附近)
+    _trackpad_guard()(key="fp_trackpad_guard", height=0)
 
 
 def page_header(title: str, eyebrow: str = "", right_html: str = "") -> None:
@@ -644,6 +728,14 @@ html, body, .stApp {{
 [data-testid="stAppViewContainer"] {{ background: transparent; }}
 [data-testid="stDecoration"] {{ display: none; }}
 [data-testid="stAppViewContainer"] > .main {{ background: transparent; }}
+
+/* ---------- 触控板: 双指横滑不触发浏览器前进/后退 ---------- */
+/* 浏览器把「横向滚到边界后继续滑」当成历史导航。持仓表/自选表窄, 两指
+   横滑很容易在左边界误触后退 —— 根节点关掉历史滑动, 所有滚动容器禁止
+   横向滚动链; 容器内部横向滚动本身不受影响。Safari 不认这条 CSS, 由
+   _TRACKPAD_GUARD_JS 的 wheel 兜底。 */
+html, body {{ overscroll-behavior-x: none; }}
+* {{ overscroll-behavior-x: contain; }}
 
 /* ---------- 主区容器: 统一留白, 超宽屏居中 ---------- */
 [data-testid="stMainBlockContainer"] {{

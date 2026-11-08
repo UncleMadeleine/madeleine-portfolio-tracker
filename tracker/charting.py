@@ -541,6 +541,7 @@ def fig_to_html(fig: go.Figure) -> str:
 # 与 plotly 的关键交互差异 (券商 App 通用习惯):
 #   拖动 = 平移 (带惯性); 滚轮/捏合 = 围绕光标缩放时间轴;
 #   触控板双指横向滑动 = 平移 (wheel deltaX), 双指纵向/捏合 = 缩放 (deltaY);
+#   触控板捏合跨浏览器兼容: Chromium/Firefox 的 ctrl+wheel 与 Safari gesture 事件;
 #   价格轴随可见区间自动缩放; 十字光标 + 顶部 OHLC 信息栏.
 
 @lru_cache(maxsize=1)
@@ -959,6 +960,77 @@ export default function (component) {
     };
   });
 
+  // ---------- 触控板双指捏合缩放 ----------
+  // Chrome/Edge/Firefox 把触控板捏合映射成带 ctrlKey 的 wheel, 但
+  // lightweight-charts 的缩放步长按鼠标滚轮 (deltaY≈±100) 标定: 触控板每帧
+  // deltaY 只有 ±1~5, Windows 上还要再除以 devicePixelRatio, 结果几乎不动,
+  // 同时浏览器会先执行整页缩放。Safari 则根本不发 ctrl+wheel, 只发私有的
+  // gesturestart/gesturechange/gestureend。这里统一接管这两条路径: 阻止
+  // 浏览器整页缩放, 以光标为锚点按连续倍率缩放时间轴 (与 TradingView 一致)。
+  var PINCH_WHEEL_RATE = 0.01;
+  function zoomTimeScaleAt(clientX, factor) {
+    if (!(factor > 0) || factor === 1) { return; }
+    var ts = chart.timeScale();
+    var range = ts.getVisibleLogicalRange();
+    if (!range) { return; }
+    var rect = el.getBoundingClientRect();
+    // Safari 的 GestureEvent 不一定带 clientX: 拿不到就以视口中心为锚点
+    var localX = typeof clientX === 'number' ? clientX - rect.left : NaN;
+    var anchor = isFinite(localX) ? ts.coordinateToLogical(localX) : null;
+    if (anchor == null || !isFinite(anchor)) {
+      anchor = (range.from + range.to) / 2;
+    }
+    anchor = Math.max(range.from, Math.min(range.to, anchor));
+    var from = anchor - (anchor - range.from) / factor;
+    var to = anchor + (range.to - anchor) / factor;
+    // 最多放大到 2 根 bar 宽, 再窄会让十字光标/蜡烛渲染失去意义
+    if (to - from < 2) {
+      var mid = (from + to) / 2;
+      from = mid - 1;
+      to = mid + 1;
+    }
+    try {
+      ts.setVisibleLogicalRange({ from: from, to: to });
+    } catch (e) {}
+  }
+  function onPinchWheel(ev) {
+    if (!ev.ctrlKey) { return; }
+    // 触摸屏双指由 lightweight-charts 的 handleScale.pinch 处理; wheel 分支
+    // 只对应触控板/按住 Ctrl 的滚轮缩放。
+    ev.preventDefault();
+    ev.stopPropagation();
+    if (ev.stopImmediatePropagation) { ev.stopImmediatePropagation(); }
+    var dy = ev.deltaY || 0;
+    if (ev.deltaMode === 1) { dy *= 16; }
+    else if (ev.deltaMode === 2) { dy *= 100; }
+    // 单次事件的缩放幅度封顶, 避免 Ctrl+鼠标滚轮一格直接放大/缩小一个量级
+    dy = Math.max(-20, Math.min(20, dy));
+    if (dy) { zoomTimeScaleAt(ev.clientX, Math.exp(-dy * PINCH_WHEEL_RATE)); }
+  }
+  var gestureScale = 1;
+  function onGestureStart(ev) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    gestureScale = ev.scale || 1;
+  }
+  function onGestureChange(ev) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    var s = ev.scale || gestureScale;
+    var factor = gestureScale ? s / gestureScale : 1;
+    gestureScale = s;
+    zoomTimeScaleAt(ev.clientX, factor);
+  }
+  function onGestureEnd(ev) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    gestureScale = 1;
+  }
+  el.addEventListener('wheel', onPinchWheel, { capture: true, passive: false });
+  el.addEventListener('gesturestart', onGestureStart, { passive: false });
+  el.addEventListener('gesturechange', onGestureChange, { passive: false });
+  el.addEventListener('gestureend', onGestureEnd, { passive: false });
+
   // ---------- 图表右键菜单 ----------
   // 券商/交易软件里右键图表通常给「重置缩放 / 复制 / 导出」, 而不是浏览器
   // 原生菜单。菜单挂到 document.body 上, 复用 theme.py 的全局 .fp-ctx-* 样式;
@@ -1184,6 +1256,10 @@ export default function (component) {
     try { chart.remove(); } catch (e) {}
     cxHide();
     el.removeEventListener('contextmenu', cxOnContext);
+    el.removeEventListener('wheel', onPinchWheel, { capture: true });
+    el.removeEventListener('gesturestart', onGestureStart);
+    el.removeEventListener('gesturechange', onGestureChange);
+    el.removeEventListener('gestureend', onGestureEnd);
     document.removeEventListener('pointerdown', cxOnPointerDown, true);
     document.removeEventListener('keydown', cxOnKeyDown, true);
     window.removeEventListener('scroll', cxHide, true);

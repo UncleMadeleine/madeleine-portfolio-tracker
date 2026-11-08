@@ -298,6 +298,18 @@ class TestKlineComponent:
         assert "window.LightweightCharts" in js
         assert "export default function" in js
 
+    def test_component_js_supports_trackpad_pinch_zoom(self):
+        """触控板双指捏合: ctrl+wheel (Chromium/Firefox) 与 Safari gesture 事件."""
+        js = charting.kline_component_js()
+        # Chromium/Firefox 把捏合映射为 ctrlKey + wheel, 需要阻止整页缩放
+        assert "onPinchWheel" in js and "ev.ctrlKey" in js
+        # Safari 只发私有 gesture 事件
+        assert "gesturestart" in js and "gesturechange" in js
+        # 以光标为锚点缩放时间轴, 且用非 passive 监听才能 preventDefault
+        assert "coordinateToLogical" in js
+        assert "setVisibleLogicalRange" in js
+        assert "passive: false" in js
+
     def test_component_js_has_right_click_menu(self):
         """图表右键: 自己的菜单而不是浏览器原生菜单 (重置/复制/导出)."""
         js = charting.kline_component_js()

@@ -33,6 +33,19 @@ def render_settings_page() -> None:
     ):
         if st.session_state.get(_k) != _v:
             st.session_state[_k] = _v
+    # on_change 回调在页面重跑前执行, 此时上面这次「外部改动同步」还没发生。
+    # 记下本轮渲染刚校正过的值, _save_display 只写「用户本次真正改动」的键,
+    # 其余键用磁盘最新值, 避免把另一标签页/CLI 刚改的设置回滚。
+    st.session_state["_settings_synced"] = {
+        k: st.session_state.get(k)
+        for k in (
+            "set_color_scheme",
+            "set_prefer_akshare",
+            "set_use_ibkr",
+            "set_use_longport",
+            "set_crypto_source",
+        )
+    }
     theme.page_header("设置", eyebrow="SETTINGS")
     st.caption(
         "设置保存到项目根目录 settings.json, 全部页面生效; 基础货币另存于 portfolio.json。"
@@ -272,28 +285,45 @@ def _save_eodhd() -> None:
 
 
 def _save_display() -> None:
-    """保存显示与数据源设置; 基础货币以外的改动只影响前端渲染."""
+    """保存显示与数据源设置; 只写本次用户真正改动过的键.
+
+    同一设置页可能开在多个标签页: 另一个标签页/CLI 改了数据源偏好后, 本页
+    on_change 回调里 session_state 仍是旧值。若照旧把全部键写回, 就会把对方
+    刚改的值静默回滚。这里以磁盘最新值为底, 只覆盖相对本轮渲染基线发生变化
+    的键 (即用户刚刚操作的那个控件)。
+    """
     old = storage.load_settings()
+    payload = dict(old)
+    synced = st.session_state.get("_settings_synced") or {}
+    changed_keys = [
+        k for k in synced if st.session_state.get(k) != synced.get(k)
+    ]
+    for key in changed_keys:
+        if key == "set_color_scheme":
+            scheme = st.session_state.get(key)
+            if scheme not in (storage.SCHEME_CN, storage.SCHEME_INTL):
+                scheme = storage.SCHEME_CN
+            payload["color_scheme"] = scheme
+        elif key == "set_prefer_akshare":
+            payload["prefer_akshare"] = bool(st.session_state.get(key))
+        elif key == "set_use_ibkr":
+            payload["use_ibkr"] = bool(st.session_state.get(key))
+        elif key == "set_use_longport":
+            payload["use_longport"] = bool(st.session_state.get(key))
+        elif key == "set_crypto_source":
+            crypto_source = str(st.session_state.get(key) or "auto")
+            payload["crypto_source"] = (
+                crypto_source
+                if crypto_source in storage.CRYPTO_SOURCES
+                else "auto"
+            )
     source_keys = ("prefer_akshare", "use_ibkr", "use_longport", "crypto_source")
-    crypto_source = str(st.session_state.get("set_crypto_source") or "auto")
-    if crypto_source not in storage.CRYPTO_SOURCES:
-        crypto_source = "auto"
     try:
-        storage.save_settings(
-            {
-                "color_scheme": st.session_state.get("set_color_scheme", S.SCHEME_CN),
-                "prefer_akshare": bool(st.session_state.get("set_prefer_akshare")),
-                "use_ibkr": bool(st.session_state.get("set_use_ibkr")),
-                "use_longport": bool(st.session_state.get("set_use_longport")),
-                "crypto_source": crypto_source,
-            }
-        )
+        storage.save_settings(payload)
     except (DataFileLocked, CorruptDataError, OSError) as e:
         st.error(f"设置保存失败: {e}")
         return
-    changed = {
-        k: st.session_state.get(f"set_{k}", old.get(k)) for k in source_keys
-    }
+    changed = {k: payload.get(k) for k in source_keys}
     if any(old.get(k) != changed[k] for k in source_keys):
         # 数据源偏好变化: 清缓存, 下次取数按新链路执行并重新打标来源;
         # 页面缓存 (st.cache_data) 由组合页「重载」或 TTL 兜底

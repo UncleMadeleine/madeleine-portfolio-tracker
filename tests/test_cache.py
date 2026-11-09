@@ -396,6 +396,51 @@ class TestCacheFixes:
         assert "BAD" in errors
 
 
+def test_truncated_database_recreates_schema_at_same_inode(tmp_path, monkeypatch):
+    """库被就地截断成 0 字节 (inode 不变) 后仍要自动重建表, 不能永久 miss."""
+    db = tmp_path / "cache.db"
+    monkeypatch.setattr(cache_mod, "CACHE_DB", db)
+    cache_mod._db_ready.clear()
+    cache_mod._ensure_db()
+    cache_mod.set_cached(
+        {"AAPL": Quote("AAPL", "Apple", 100.0, 99.0, 1.0, "USD")}
+    )
+    for suffix in ("-wal", "-shm"):
+        (tmp_path / f"cache.db{suffix}").unlink(missing_ok=True)
+    db.write_bytes(b"")
+
+    assert cache_mod.get_cached(["AAPL"]) == {}
+    # 读写都要能触发重建, 而不是一直返回空/静默不写
+    cache_mod.set_cached(
+        {"MSFT": Quote("MSFT", "Microsoft", 100.0, 99.0, 1.0, "USD")}
+    )
+    assert "MSFT" in cache_mod.get_cached(["MSFT"])
+    assert cache_mod.clear_quotes() >= 0
+
+
+def test_clear_cache_corruption_is_readable_error(tmp_path, monkeypatch):
+    """运行期损坏时 cache clear 抛 RuntimeError, 且摘掉 ready 以便下次自愈."""
+    db = tmp_path / "cache.db"
+    monkeypatch.setattr(cache_mod, "CACHE_DB", db)
+    cache_mod._db_ready.clear()
+    cache_mod._ensure_db()
+    cache_mod.set_cached(
+        {"AAPL": Quote("AAPL", "Apple", 100.0, 99.0, 1.0, "USD")}
+    )
+    for suffix in ("-wal", "-shm"):
+        (tmp_path / f"cache.db{suffix}").unlink(missing_ok=True)
+    db.write_bytes(b"this is definitely not a sqlite database")
+
+    with pytest.raises(RuntimeError, match="缓存数据库"):
+        cache_mod.clear_quotes()
+    assert str(db) not in cache_mod._db_ready
+    # 下一次访问隔离坏库并重建, 恢复可写
+    cache_mod.set_cached(
+        {"MSFT": Quote("MSFT", "Microsoft", 100.0, 99.0, 1.0, "USD")}
+    )
+    assert "MSFT" in cache_mod.get_cached(["MSFT"])
+
+
 def test_fundamental_cache_filters_non_finite():
     """±Infinity 不能当作有效基本面落库 (否则 6h 内在 snapshot JSON 里变非法)."""
     from tracker import cache as cache_mod

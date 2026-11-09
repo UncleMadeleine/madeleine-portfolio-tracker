@@ -254,7 +254,18 @@ def _wallet_section(mode: str, on_saved) -> None:
                         "prune_source": (
                             importer.wallet_source(raw) if not errors else None
                         ),
+                        # 记下产生这份预览的参数: 用户改地址/链/计价后若直接
+                        # 点确认, 旧预览会以新参数的名义导入另一地址的资产。
+                        "signature": (w_chain, w_addr.strip(), w_base),
                     }
+    # 表单参数已变: 丢弃旧预览, 强制重新查询。否则确认按钮仍会用旧 rows
+    # 导入上一次地址/计价的结果 (界面上却显示新参数)。
+    _pending = st.session_state.get("imp_wallet")
+    _current_sig = (w_chain, w_addr.strip(), w_base)
+    if _pending and _pending.get("signature") != _current_sig:
+        st.session_state.pop("imp_wallet", None)
+        if _pending:
+            st.info("查询参数已改变, 请重新点击「查询余额」。")
     _preview_and_confirm(
         "imp_wallet",
         mode,

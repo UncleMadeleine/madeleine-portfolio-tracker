@@ -47,6 +47,37 @@ def test_history_interval_high_low_uses_ohlc(monkeypatch, capsys):
     assert "区间高 120.000 / 低 80.000" in out
 
 
+def test_history_ignores_trailing_nan_close(monkeypatch, capsys):
+    """末根 close=NaN 时用最后有效收盘, 不能打印 "收 10 → nan (+nan%)"."""
+    from tracker.cli import history as history_cli
+
+    df = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2026-01-02", "2026-01-05"]),
+            "open": [10.0, 12.0],
+            "high": [10.5, 12.5],
+            "low": [9.5, 11.5],
+            "close": [10.0, float("nan")],
+            "volume": [1.0, 1.0],
+        }
+    )
+    monkeypatch.setattr(history_cli.prices, "get_history", lambda *a, **k: df)
+    args = SimpleNamespace(
+        symbol="AAPL",
+        months=1,
+        akshare=False,
+        ibkr=False,
+        longport=False,
+        crypto_source="auto",
+        json=False,
+        rows=5,
+    )
+    history_cli.cmd_history(args)
+    out = capsys.readouterr().out
+    assert "收 10.000 → 10.000" in out
+    assert "+nan%" not in out.lower()
+
+
 # ---------------------------------------------------------------------------
 # K线摘要: 低价币精度随价格量级
 # ---------------------------------------------------------------------------

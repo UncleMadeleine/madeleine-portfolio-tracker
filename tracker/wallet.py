@@ -496,7 +496,15 @@ def _load_tokenlist(tokenlist_path: str | None) -> dict[str, dict[str, dict[str,
             raise FileNotFoundError(f"tokenlist 文件不存在: {tokenlist_path}")
         try:
             # utf-8-sig: 与 storage 同口径, 容忍编辑器保存 JSON 时带 BOM
-            raw = json.loads(p.read_text(encoding="utf-8-sig"))
+            text = p.read_text(encoding="utf-8-sig")
+        except OSError as e:
+            # 目录/权限不足: 不是 FileNotFoundError, CLI 只捕 ValueError/
+            # RuntimeError/FileNotFoundError 时会裸 traceback。
+            raise FileNotFoundError(
+                f"无法读取 tokenlist 文件: {tokenlist_path} ({e})"
+            ) from e
+        try:
+            raw = json.loads(text)
         except json.JSONDecodeError as e:
             raise ValueError(f"tokenlist 不是合法 JSON: {e}") from e
         if not isinstance(raw, dict):

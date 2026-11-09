@@ -147,7 +147,9 @@ def _quote_from_dump(p: ParsedSymbol, d: dict) -> Quote | None:
     # yfinance 对 LSE 返回的价为便士且 currency=GBp; 若字段缺失, GB 市场按便士处理
     # 避免回退到 p.currency(GBP) 导致价格放大 100 倍
     raw_ccy = _pick(d, "currency")
-    if raw_ccy is None:
+    # 空字符串与缺失同口径: 只判 None 会让 currency="" 绕过 .L 便士兜底
+    # (VOD.L 报 109.5 便士, 不 ÷100 就成了 £109.5), 且空币种查不到汇率。
+    if raw_ccy is None or not str(raw_ccy).strip():
         # .IL (LSE 国际挂盘) 证券以 USD/EUR 计价 (KAP.IL=USD): 币种缺失时不能按
         # LSE 主板惯例兜底 GBp, 便士兜底会把价格再缩小 100 倍
         if p.yahoo.endswith(".IL"):

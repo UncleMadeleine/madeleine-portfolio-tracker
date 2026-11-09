@@ -204,18 +204,28 @@ def _read_json(path: str | Path) -> dict:
     return data
 
 
-def _read_json_or_recover(path: str | Path) -> dict:
+def _read_json_or_recover(path: str | Path, validator=None) -> dict:
     """读取 JSON; 文件损坏时尝试同名 .bak 恢复, 仍失败则抛出可读错误。
+
+    validator 在解析后做结构校验 (如 holdings 必须是对象数组); 校验失败与
+    JSON 解码失败走同一条 .bak 恢复路径 —— 否则「合法 JSON 但结构畸形」会
+    绕过后备文件, 让 load/save 永久失败, 而完好的 .bak 明明可以救回。
 
     不再自动生成 .bak (历史版本留下的同名备份仍会用于恢复)。
     不静默返回空数据 —— 否则下一次保存会把损坏文件直接覆盖成空组合, 造成数据丢失。
     """
 
+    def _load(p: str | Path) -> dict:
+        data = _read_json(p)
+        if validator is not None:
+            validator(data)
+        return data
+
     def _recover(e: Exception, reason: str) -> dict:
         bak = Path(f"{path}.bak")
         if bak.exists():
             try:
-                return _read_json(bak)
+                return _load(bak)
             except (json.JSONDecodeError, CorruptDataError, OSError):
                 pass
         raise CorruptDataError(
@@ -224,12 +234,12 @@ def _read_json_or_recover(path: str | Path) -> dict:
         ) from e
 
     try:
-        return _read_json(path)
+        return _load(path)
     except json.JSONDecodeError as e:
         return _recover(e, f"不是合法 JSON ({e.msg}, 第 {e.lineno} 行)")
     except CorruptDataError as e:
-        # _read_json 对「顶层非对象」直接抛 CorruptDataError: 这里走同一条
-        # .bak 恢复路径, 不能静默当空数据 (原因信息含具体文件与类型)
+        # _read_json 对「顶层非对象」/validator 对结构畸形直接抛
+        # CorruptDataError: 这里走同一条 .bak 恢复路径, 不能静默当空数据
         return _recover(e, str(e))
     except OSError as e:
         # 权限/IO 错误: .bak 通常不可读同一路径, 直接给可读错误而不是裸 traceback
@@ -276,11 +286,24 @@ def _write_json(data: dict, path: str | Path) -> None:
         raise
 
 
-def _umask() -> int:
-    """读取当前 umask (os.umask 是读-写原子对, 取完立刻还原)。"""
+def _read_umask() -> int:
+    """在模块导入时读取一次进程 umask.
+
+    os.umask 没有只读接口, 只能「先设再还原」, 这一步不是原子的: 两个线程
+    同时读取会互相覆盖, 最终可能把进程 umask 永久改成 022 (本应 077)。
+    文件锁/数据文件权限都依赖它, 故只在单线程的 import 阶段取一次。
+    """
     cur = os.umask(0o022)
     os.umask(cur)
     return cur
+
+
+_UMASK = _read_umask()
+
+
+def _umask() -> int:
+    """当前进程 umask (导入时缓存, 运行时不再改动全局状态)。"""
+    return _UMASK
 
 
 def _require_entry_list(data: dict, key: str, path: str | Path) -> list:
@@ -335,7 +358,9 @@ def load_portfolio(path: str | Path = PORTFOLIO_PATH) -> dict:
     """
     if not Path(path).exists():
         return {"base_currency": DEFAULT_BASE_CURRENCY, "holdings": []}
-    data = _read_json_or_recover(path)
+    data = _read_json_or_recover(
+        path, lambda d: _require_entry_list(d, "holdings", path)
+    )
     data["base_currency"] = _normalize_base_currency(data.get("base_currency"))
     data["holdings"] = _require_entry_list(data, "holdings", path)
     return data
@@ -390,7 +415,14 @@ def save_portfolio(data: dict, path: str | Path = PORTFOLIO_PATH) -> None:
             # 损坏/不可读的旧文件不能静默当 {} —— 同 _read_json_or_recover 注释:
             # 直接覆盖会把 _说明 等自定义字段连同原持仓一起清掉 (数据丢失),
             # 走 .bak 恢复, 仍失败则抛可读错误。
-            merged = _read_json_or_recover(p)
+            # 本次显式提供 holdings 时无需校验磁盘旧值 (马上整键覆盖); 否则
+            # 旧值结构畸形也要先恢复, 不能在下面的合并校验处才失败。
+            validator = (
+                None
+                if "holdings" in data
+                else lambda d: _require_entry_list(d, "holdings", p)
+            )
+            merged = _read_json_or_recover(p, validator)
         else:
             merged = {}
         merged.update(data)
@@ -416,25 +448,39 @@ def save_portfolio(data: dict, path: str | Path = PORTFOLIO_PATH) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _clean_list_name(value) -> str | None:
+    """单个归属列表名归一; None/NaN/±Inf/占位字符串返回 None.
+
+    列表分支与逗号字符串分支必须同口径: 手写/第三方导出把 ``nan`` 写进
+    watchlist 的 lists 字符串时, 这里若放过, 条目会归到名为 "nan" 的列表,
+    ``--list 默认`` 与 UI 都永远匹配不到。
+    """
+    if value is None or (isinstance(value, float) and not math.isfinite(value)):
+        return None
+    s = str(value).strip()
+    if s.lower() in ("nan", "inf", "-inf", "infinity", "-infinity", "none"):
+        return None
+    return s or None
+
+
 def parse_lists(v) -> list[str]:
     """把逗号分隔字符串/列表解析为归属列表; 空则回退默认。"""
     if v is None or (isinstance(v, float) and v != v):  # NaN
         return ["默认"]
     if isinstance(v, list):
-        # 元素里的 None / NaN / ±Inf 经 str() 会变成 "None"/"nan"/"inf" 成为
-        # 一个列表名 (自选股悄悄归到叫 "nan" 的列表, --list 默认 永远匹配不到),
-        # 与 rules._num 同口径剔除。
-        items = []
-        for x in v:
-            if x is None or (isinstance(x, float) and not math.isfinite(x)):
-                continue
-            s = str(x).strip()
-            if s.lower() in ("nan", "inf", "-inf", "infinity", "-infinity", "none"):
-                continue
-            items.append(s)
+        items = [
+            name for name in (_clean_list_name(x) for x in v) if name is not None
+        ]
     else:
-        items = [x.strip() for x in str(v).replace("，", ",").split(",")]
-    return [x for x in items if x] or ["默认"]
+        items = [
+            name
+            for name in (
+                _clean_list_name(x)
+                for x in str(v).replace("，", ",").split(",")
+            )
+            if name is not None
+        ]
+    return items or ["默认"]
 
 
 def normalize_watch_entry(e: dict) -> dict:
@@ -534,7 +580,23 @@ def load_watchlist(path: str | Path = WATCHLIST_PATH) -> dict:
     p = Path(path)
     if not p.exists():
         return {"watchlist": []}
-    raw = _read_json_or_recover(p)
+
+    def _validate(d: dict) -> None:
+        if "watchlist" in d:
+            _require_entry_list(d, "watchlist", path)
+            return
+        if "watchlists" not in d:
+            return
+        groups = d["watchlists"]
+        if not isinstance(groups, dict) or any(
+            not isinstance(v, list) or any(not isinstance(e, dict) for e in v)
+            for v in groups.values()
+        ):
+            raise CorruptDataError(
+                f"{path} 的 watchlists 结构畸形 (应为 对象→对象数组)"
+            )
+
+    raw = _read_json_or_recover(p, _validate)
     if "watchlist" in raw:
         entries = []
         for e in _require_entry_list(raw, "watchlist", path):
@@ -613,7 +675,26 @@ def save_watchlist(data: dict, path: str | Path = WATCHLIST_PATH) -> None:
     with _file_lock(p):
         if p.exists():
             # 与 save_portfolio 一致: 损坏文件不静默当 {} 覆盖掉已有数据。
-            merged = _read_json_or_recover(p)
+            # 本次显式提供 watchlist 时旧值会被整键覆盖, 无需校验。
+            def _validate(d: dict) -> None:
+                if "watchlist" in d:
+                    _require_entry_list(d, "watchlist", p)
+                    return
+                groups = d.get("watchlists")
+                if groups is None:
+                    return
+                if not isinstance(groups, dict) or any(
+                    not isinstance(v, list)
+                    or any(not isinstance(e, dict) for e in v)
+                    for v in groups.values()
+                ):
+                    raise CorruptDataError(
+                        f"{p} 的 watchlists 结构畸形 (应为 对象→对象数组)"
+                    )
+
+            merged = _read_json_or_recover(
+                p, None if "watchlist" in data else _validate
+            )
         else:
             merged = {}
         # 与 save_portfolio 的 holdings 同口径: 未提供 watchlist 键时保留

@@ -1447,7 +1447,9 @@ def render_portfolio_page() -> None:
             )
             st.metric(
                 "持仓 / 自选",
-                f"{len(view)} / {len(wview)}",
+                # view/wview 只含有行情的行, 缺行情持仓会从计数里消失;
+                # 计数应与明细表一致, 用原始条目数。
+                f"{len(holdings)} / {len(watch_entries)}",
                 border=True,
             )
 
@@ -1567,7 +1569,9 @@ def render_portfolio_page() -> None:
             dl_l, dl_mid, dl_r = st.columns([1, 1.1, 2])
             dl_l.download_button(
                 "导出 CSV",
-                view.to_csv(index=False).encode("utf-8-sig"),
+                # 与页面明细表同口径: 包含缺行情/无法估值但仍存在的持仓,
+                # 否则导出会静默少行, 用户以为持仓丢了。
+                detail.to_csv(index=False).encode("utf-8-sig"),
                 file_name=f"portfolio_{datetime.now():%Y%m%d}.csv",
                 mime="text/csv",
                 icon=":material/download:",

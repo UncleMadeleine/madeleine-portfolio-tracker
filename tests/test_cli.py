@@ -729,6 +729,17 @@ class TestImportCli:
         data = _load(pf)
         assert [h["symbol"] for h in data["holdings"]] == ["AAPL", "ETH-USD"]
 
+    def test_import_wallet_prunes_zero_balance(self, tmp_path, capsys, monkeypatch):
+        """统一 import wallet 也要像 import-wallet --add 一样清理已归零持仓."""
+        self._mock_rpc(monkeypatch, 2 * 10**18)
+        pf = self._portfolio(tmp_path)
+        _run(capsys, "import", "wallet", "eth", self.ADDR, "--portfolio", str(pf))
+        assert "ETH-USD" in [h["symbol"] for h in _load(pf)["holdings"]]
+
+        self._mock_rpc(monkeypatch, 0)
+        _run(capsys, "import", "wallet", "eth", self.ADDR, "--portfolio", str(pf))
+        assert [h["symbol"] for h in _load(pf)["holdings"]] == ["AAPL"]
+
     def test_import_wallet_dry_run(self, tmp_path, capsys, monkeypatch):
         self._mock_rpc(monkeypatch, 2 * 10**18)
         pf = self._portfolio(tmp_path)
@@ -1440,6 +1451,20 @@ class TestCliJsonFixes:
         text = json.dumps(_records(df))
         assert "NaN" not in text
         assert json.loads(text)[0]["open"] is None
+
+
+def test_cli_portfolio_add_rejects_non_finite_quantity(tmp_path):
+    """--quantity nan/inf 不能静默写入一条缺数量的持仓."""
+    from tracker import cli
+
+    p = tmp_path / "p.json"
+    for bad in ("nan", "inf"):
+        with pytest.raises(SystemExit) as exc:
+            cli.main(
+                ["portfolio", "add", "AAPL", "--quantity", bad, "--portfolio", str(p)]
+            )
+        assert exc.value.code == 2
+    assert not p.exists()
 
 
 def test_cli_watchlist_add_nan_threshold_does_not_crash(tmp_path, capsys):

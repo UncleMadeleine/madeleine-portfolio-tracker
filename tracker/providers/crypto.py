@@ -336,8 +336,11 @@ def _quote_ccy(p: ParsedSymbol, reported: str | None = None) -> str:
 
 def _yf_quote(p: ParsedSymbol) -> Quote:
     """yfinance 直连降级: fast_info 含 lastPrice."""
-    # _yf() (import yfinance) 在计时区外; 只有 fast_info 网络访问受硬超时约束
-    info = with_timeout(lambda: _yf().Ticker(p.yahoo).fast_info, _YF_QUOTE_TIMEOUT)
+    # _yf() (import yfinance) 在计时区外; 只有 fast_info 网络访问受硬超时约束。
+    # 不能把 _yf() 写进 lambda: 冷进程 import yfinance 可达数秒, 会吃掉整个
+    # 5s 报价预算, 让本可用的兜底源被误判超时。
+    yf = _yf()
+    info = with_timeout(lambda: yf.Ticker(p.yahoo).fast_info, _YF_QUOTE_TIMEOUT)
     price = info.get("lastPrice")
     try:
         price = float(price) if price is not None and pd.notna(price) else None

@@ -356,6 +356,33 @@ def test_save_watchlist_drops_non_finite_numbers(tmp_path):
     assert e["symbol"] == "AAPL"
 
 
+def test_structural_corruption_recovers_from_bak(tmp_path):
+    """合法 JSON 但 holdings 结构畸形时也要走 .bak 恢复.
+
+    修复前校验发生在 _read_json_or_recover 返回之后, 完好的 .bak 被忽略,
+    load/edit/save(不提供 holdings) 会永久失败。
+    """
+    p = tmp_path / "portfolio.json"
+    p.write_text(json.dumps({"holdings": "AAPL"}), encoding="utf-8")
+    Path(str(p) + ".bak").write_text(
+        json.dumps({"holdings": [{"symbol": "MSFT", "quantity": 2}]}),
+        encoding="utf-8",
+    )
+    assert storage.load_portfolio(p)["holdings"][0]["symbol"] == "MSFT"
+    # 只改 base_currency 的保存也应先恢复旧持仓, 不能因结构畸形失败
+    storage.save_portfolio({"base_currency": "USD"}, p)
+    saved = json.loads(p.read_text(encoding="utf-8"))
+    assert saved["base_currency"] == "USD"
+    assert saved["holdings"][0]["symbol"] == "MSFT"
+
+
+def test_parse_lists_string_sentinels_are_dropped():
+    """逗号字符串里的 nan/None 占位不能变成真实列表名."""
+    assert storage.parse_lists("nan") == ["默认"]
+    assert storage.parse_lists("科技, nan, 消费, inf") == ["科技", "消费"]
+    assert storage.parse_lists(["科技", None, float("nan"), "消费"]) == ["科技", "消费"]
+
+
 def test_load_rejects_non_object_top_level(tmp_path):
     """合法 JSON 但顶层非对象 (如把数组写进 portfolio.json) 不能静默返回 {}.
 

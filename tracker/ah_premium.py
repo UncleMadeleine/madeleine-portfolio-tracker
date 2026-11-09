@@ -101,12 +101,15 @@ def normalize_a_symbol(raw: object) -> str:
     code = _digits(s)
     if len(code) != 6:
         raise ValueError(f"{raw}: 无法识别的 A 股代码")
-    if code.startswith("6") or code.startswith("9"):
-        # 6 = 沪市 A 股; 9 = 沪市 B 股 (B 股没有对应 H 股, 但保留可查)
+    if code.startswith("6") or code.startswith("900"):
+        # 6 = 沪市 A 股; 900 = 沪市 B 股 (仅 900xxx, 不能把所有 9 开头
+        # 代码都归上海: 北交所新号段 920xxx 也以 9 开头)
         return f"{code}.SS"
-    if code.startswith(("0", "3")):
+    if code.startswith(("0", "2", "3")):
+        # 2xxxxx = 深市 B 股 (200xxx/201xxx); 0/3 = 深市 A 股
         return f"{code}.SZ"
-    if code.startswith(("4", "8")):
+    if code.startswith(("4", "8", "92")):
+        # 4/8 = 北交所老号段; 92xxxx = 北交所新号段
         return f"{code}.BJ"
     raise ValueError(f"{raw}: 无法识别的 A 股代码")
 
@@ -191,7 +194,10 @@ def list_pairs(refresh: bool = False) -> list[AHPair]:
 
     pairs: list[AHPair] = []
     try:
-        df = with_timeout(lambda: _ak().stock_zh_ah_spot_em(), _PAIR_TIMEOUT)
+        # import akshare 冷启动 ~10s, 必须在计时区外; 否则首次打开 AH 页
+        # 会被硬超时打断, 静默退回内置目录。
+        ak = _ak()
+        df = with_timeout(ak.stock_zh_ah_spot_em, _PAIR_TIMEOUT)
         pairs = _parse_pair_rows(df)
     except Exception:  # noqa: BLE001 - 目录失败不阻断页面, 用兜底
         pairs = []

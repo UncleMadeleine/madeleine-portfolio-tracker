@@ -37,11 +37,18 @@ def cmd_history(args) -> None:
     if df.empty:
         print(f"⚠ {args.symbol}: 无历史数据")
         return
-    close = df["close"].astype(float)
-    first = float(close.iloc[0])
+    close = pd.to_numeric(df["close"], errors="coerce")
+    # 只校验首根不够: provider 偶尔返回末根 close=NaN/inf, 会打印
+    # "收 10.000 → nan (+nan%)"。过滤掉无效收盘后再取首末有效值。
+    valid_close = close[close.notna() & close.map(math.isfinite) & (close > 0)]
+    if valid_close.empty:
+        print(f"⚠ {args.symbol}: 无有效收盘价")
+        return
+    first = float(valid_close.iloc[0])
+    last = float(valid_close.iloc[-1])
     change = (
-        (float(close.iloc[-1]) / first - 1) * 100
-        if len(close) >= 2 and first > 0 and math.isfinite(first)
+        (last / first - 1) * 100
+        if len(valid_close) >= 2 and first > 0
         else None
     )
     # 区间高/低取当日 high/low 的极值, 不能用收盘价: provider 返回的是完整
@@ -61,7 +68,7 @@ def cmd_history(args) -> None:
     )
     print(
         f"区间: {df['date'].iloc[0]:%Y-%m-%d} → {df['date'].iloc[-1]:%Y-%m-%d}"
-        f"  · 收 {close.iloc[0]:,.3f} → {close.iloc[-1]:,.3f}"
+        f"  · 收 {first:,.3f} → {last:,.3f}"
         + (f" ({change:+.2f}%)" if change is not None else "")
         + f"  · 区间高 {high:,.3f} / 低 {low:,.3f}"
     )

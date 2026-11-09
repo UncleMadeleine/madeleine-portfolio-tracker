@@ -7,6 +7,7 @@ import math
 import os
 import sqlite3
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from threading import Lock
 from typing import TYPE_CHECKING
@@ -21,11 +22,21 @@ if TYPE_CHECKING:
 
 # 行情缓存落在数据目录 var/ (安装位置无关); TRACKER_CACHE_DB 可显式指定
 # (测试隔离 / 只读挂载场景), 缺省 var/quotes_cache.db
-CACHE_DB = (
-    Path(os.environ["TRACKER_CACHE_DB"])
-    if os.environ.get("TRACKER_CACHE_DB")
-    else var_dir() / "quotes_cache.db"
-)
+def _cache_db_path() -> Path:
+    """TRACKER_CACHE_DB 覆盖路径; 相对路径按 paths 模块同口径忽略.
+
+    相对路径会随 CWD 变成不同的库, 用户会看到「缓存/净值历史消失」,
+    与 TRACKER_HOME 的绝对路径要求保持一致。
+    """
+    raw = os.environ.get("TRACKER_CACHE_DB")
+    if raw:
+        p = Path(raw).expanduser()
+        if p.is_absolute():
+            return p
+    return var_dir() / "quotes_cache.db"
+
+
+CACHE_DB = _cache_db_path()
 CACHE_TTL = 300  # 秒, 实时行情缓存有效期 (新鲜期)
 # 陈旧期: 超过新鲜期但未离谱的行情仍可先用后刷 (首屏 stale-while-revalidate)。
 # 首屏渲染用 STALE_TTL 读盘秒开, 后台线程再按 CACHE_TTL 的新鲜期重取;
@@ -63,6 +74,21 @@ def _db_identity() -> tuple[int, int] | None:
 def _connect() -> sqlite3.Connection:
     """统一连接参数: 5s 锁等待 (与 sqlite3 默认一致, 显式写清意图)."""
     return sqlite3.connect(CACHE_DB, timeout=5)
+
+
+@contextmanager
+def _connection():
+    """连接上下文: 退出时显式 close.
+
+    不能只用 ``with sqlite3.connect(...)`` —— 它只 commit/rollback, 不关闭
+    连接。异常回溯仍持有连接时, 后续纠错/重建会在同一文件上撞
+    "database is locked" (截断后重建表的场景实测会卡死)。
+    """
+    con = _connect()
+    try:
+        yield con
+    finally:
+        con.close()
 
 
 def _create_schema(con) -> None:
@@ -185,6 +211,24 @@ def _chunks(seq: list, size: int = _CHUNK):
         yield seq[i : i + size]
 
 
+def _is_missing_schema(exc: BaseException) -> bool:
+    """是否是「表不存在」(文件被就地截断/清空后仍保留 inode).
+
+    _db_ready 只按 (dev, ino) 判断是否需要建表: 截断成 0 字节的有效空库
+    inode 不变, 早期 _ensure_db 会直接短路, 之后每次读写都报 no such table
+    且永远不会自愈 (cache clear 也失败)。
+    """
+    return (
+        isinstance(exc, sqlite3.OperationalError)
+        and "no such table" in str(exc).lower()
+    )
+
+
+def _forget_ready() -> None:
+    with _db_ready_lock:
+        _db_ready.pop(str(CACHE_DB), None)
+
+
 def _forget_ready_on_corruption(exc: BaseException) -> None:
     """运行期发现库损坏时清掉「已建表」标记, 让下次 _ensure_db 走隔离重建。
 
@@ -192,8 +236,7 @@ def _forget_ready_on_corruption(exc: BaseException) -> None:
     标记, 会一直把 DatabaseError 吞成缓存 miss, cache clear 也无从自愈。
     """
     if isinstance(exc, sqlite3.DatabaseError) and _is_corruption(exc):
-        with _db_ready_lock:
-            _db_ready.pop(str(CACHE_DB), None)
+        _forget_ready()
 
 
 def _read_all(sql: str, params) -> list:
@@ -202,12 +245,19 @@ def _read_all(sql: str, params) -> list:
 
     并发场景真实存在: Streamlit 后台刷新线程写库的同时 CLI 或另一页面读库。
     """
-    try:
-        with _connect() as con:
-            return con.execute(sql, params).fetchall()
-    except (sqlite3.Error, OSError) as e:
-        _forget_ready_on_corruption(e)
-        return []
+    for attempt in range(2):
+        try:
+            with _connection() as con:
+                return con.execute(sql, params).fetchall()
+        except (sqlite3.Error, OSError) as e:
+            _forget_ready_on_corruption(e)
+            if _is_missing_schema(e) and attempt == 0:
+                # 截断/清空后表没了: 摘掉就绪标记并重建 schema, 再试一次。
+                _forget_ready()
+                _ensure_db()
+                continue
+            return []
+    return []
 
 
 def _execute_write(sql: str, params, *, many: bool = False) -> bool:
@@ -216,18 +266,24 @@ def _execute_write(sql: str, params, *, many: bool = False) -> bool:
     缓存目录只读 / 磁盘满 / 库被其它进程锁住时, 不能让一次成功的网络取数
     因为回写缓存失败而整体抛错 (调用方拿到的是行情, 不是缓存状态)。
     """
-    try:
-        _ensure_db()
-        with _lock, _connect() as con:
-            if many:
-                con.executemany(sql, params)
-            else:
-                con.execute(sql, params)
-            con.commit()
-        return True
-    except (sqlite3.Error, OSError) as e:
-        _forget_ready_on_corruption(e)
-        return False
+    for attempt in range(2):
+        try:
+            _ensure_db()
+            with _lock, _connection() as con:
+                if many:
+                    con.executemany(sql, params)
+                else:
+                    con.execute(sql, params)
+                con.commit()
+            return True
+        except (sqlite3.Error, OSError) as e:
+            _forget_ready_on_corruption(e)
+            if _is_missing_schema(e) and attempt == 0:
+                _forget_ready()
+                _ensure_db()
+                continue
+            return False
+    return False
 
 
 def _read_one(sql: str, params):
@@ -242,6 +298,9 @@ def _ensure_db() -> None:
     if ident is not None:
         with _db_ready_lock:
             if _db_ready.get(key) == ident:
+                # 注意不要用文件大小判断是否真空库: WAL 模式下新 schema 可能
+                # 还在 -wal 里, 主库文件仍是 0 字节。表缺失由读写路径捕获
+                # "no such table" 后摘标记重建 (见 _read_all/_execute_write)。
                 return
     try:
         CACHE_DB.parent.mkdir(parents=True, exist_ok=True)
@@ -249,9 +308,10 @@ def _ensure_db() -> None:
         # 只读挂载/无权限目录: 后续 connect 会失败, 读路径按无缓存处理,
         # 写路径由 _execute_write 吞掉, 不影响取数主流程。
         return
+    con = None
     try:
-        with _connect() as con:
-            _create_schema(con)
+        con = _connect()
+        _create_schema(con)
         ident = _db_identity()
         if ident is not None:
             with _db_ready_lock:
@@ -260,6 +320,9 @@ def _ensure_db() -> None:
         if not _is_corruption(exc):
             # 锁/IO 等瞬时错误: 不隔离正在使用的库, 交给本次读写自行解释
             # (读路径通常仍可继续, 写路径会抛出真实错误)
+            if con is not None:
+                con.close()
+                con = None
             return
         # 缓存库损坏 (写入中途断电/磁盘满/误写文本): 行情/K线/基本面缓存全是可再生
         # 的派生数据。若不处理, snapshot/quote/kline 与 cache info/clear 全链路都会
@@ -292,6 +355,11 @@ def _ensure_db() -> None:
                     sidecar.unlink()
                 except OSError:
                     pass
+        # 边车已搬走, 现在可以安全关闭仍指向坏库的旧连接; 否则它会锁住
+        # 路径, 下面的重建连接会撞 "database is locked"。
+        if con is not None:
+            con.close()
+            con = None
         try:
             with _connect() as con:
                 _create_schema(con)
@@ -308,6 +376,9 @@ def _ensure_db() -> None:
                     )
                 except OSError:
                     pass
+    finally:
+        if con is not None:
+            con.close()
 
 
 # ---------- K线 (OHLC) 缓存 ----------
@@ -605,28 +676,38 @@ def set_fx_cached(base: str, rates: dict[str, float]) -> None:
     )
 
 
+def _clear_table(table: str) -> int:
+    """清空单张缓存表; 失败统一转成可读 RuntimeError (设置页据此提示).
+
+    运行时损坏 (DatabaseError: file is not a database) 与截断后缺表
+    (no such table) 都必须摘掉 _db_ready 并尝试一次重建, 否则本次失败后
+    进程内会一直认为库已就绪, 自愈路径永远不触发。
+    """
+    for attempt in range(2):
+        _ensure_db()
+        try:
+            with _lock, _connection() as con:
+                n = con.execute(f"DELETE FROM {table}").rowcount
+                con.commit()
+                return n
+        except sqlite3.Error as e:
+            _forget_ready_on_corruption(e)
+            if _is_missing_schema(e) and attempt == 0:
+                _forget_ready()
+                _ensure_db()
+                continue
+            raise RuntimeError(f"缓存数据库忙或不可用 ({e}); 稍后重试") from e
+    raise RuntimeError("缓存数据库不可用; 稍后重试")
+
+
 def clear_fx() -> int:
     """清汇率磁盘缓存: 数据源偏好 (IBKR 开关) 变化后强制按新链路重取."""
-    _ensure_db()
-    try:
-        with _lock, _connect() as con:
-            n = con.execute("DELETE FROM fx_rates").rowcount
-            con.commit()
-            return n
-    except sqlite3.OperationalError as e:
-        raise RuntimeError(f"缓存数据库忙或不可用 ({e}); 稍后重试") from e
+    return _clear_table("fx_rates")
 
 
 def clear_quotes() -> int:
     """只清实时行情缓存 (保留 K线/基本面): 数据源偏好切换后强制按新源链重取."""
-    _ensure_db()
-    try:
-        with _lock, _connect() as con:
-            n = con.execute("DELETE FROM quotes").rowcount
-            con.commit()
-            return n
-    except sqlite3.OperationalError as e:
-        raise RuntimeError(f"缓存数据库忙或不可用 ({e}); 稍后重试") from e
+    return _clear_table("quotes")
 
 
 def clear_ohlc() -> int:
@@ -636,26 +717,12 @@ def clear_ohlc() -> int:
     IBKR / 长桥 / crypto_source 后不清会命中上一个源的旧K线。与 clear_quotes
     配套, 由设置页在源变化时调用 (clear 全清亦可, 但会连基本面一起清)。
     """
-    _ensure_db()
-    try:
-        with _lock, _connect() as con:
-            n = con.execute("DELETE FROM ohlc_cache").rowcount
-            con.commit()
-            return n
-    except sqlite3.OperationalError as e:
-        raise RuntimeError(f"缓存数据库忙或不可用 ({e}); 稍后重试") from e
+    return _clear_table("ohlc_cache")
 
 
 def clear_fundamentals() -> int:
     """只清基本面缓存 (PB/市值): EODHD fundamentals 角色切换后重取."""
-    _ensure_db()
-    try:
-        with _lock, _connect() as con:
-            n = con.execute("DELETE FROM fundamentals").rowcount
-            con.commit()
-            return n
-    except sqlite3.OperationalError as e:
-        raise RuntimeError(f"缓存数据库忙或不可用 ({e}); 稍后重试") from e
+    return _clear_table("fundamentals")
 
 
 # ---------- 财经日历 (财报/分红事件) 缓存 ----------
@@ -775,7 +842,7 @@ def info() -> dict:
     _ensure_db()
     now = time.time()
     try:
-        with _connect() as con:
+        with _connection() as con:
             total = con.execute("SELECT COUNT(*) FROM quotes").fetchone()[0]
             fresh = con.execute(
                 "SELECT COUNT(*) FROM quotes WHERE fetched_at > ?", (now - CACHE_TTL,)
@@ -838,7 +905,7 @@ def clear() -> int:
     """清空全部缓存 (行情 + K线 + 基本面 + 汇率), 返回删除条数."""
     _ensure_db()
     try:
-        with _lock, _connect() as con:
+        with _lock, _connection() as con:
             n_quotes = con.execute("DELETE FROM quotes").rowcount
             n_ohlc = con.execute("DELETE FROM ohlc_cache").rowcount
             n_fx = con.execute("DELETE FROM fx_rates").rowcount

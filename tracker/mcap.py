@@ -354,6 +354,11 @@ def _price_currency_for(p) -> str:
     # 英镑兜底 (与 parse 的市场静态币种一致, 维持既有行为)
     if ccy and not is_pence(ccy) and ccy.upper() not in ("GBP", "GBX"):
         return ccy.upper()
+    if not ccy and p.yahoo.endswith(".IL"):
+        # .IL 国际挂盘多为 USD/EUR 计价; providers._yahoo_history 对未知
+        # 币种保留原价不 ÷100, 这里必须同样按 USD 兜底, 否则同一份 USD
+        # 历史市值会被标成 GBP, 折算时多乘 ~30%。
+        return "USD"
     return "GBP"
 
 
@@ -432,6 +437,10 @@ def history_for(
     if mcap_pairs is not None:
         attached = _map_by_closest_date(price_df, mcap_pairs)
     if attached is not None and not attached.empty:
+        # 市值币种必须跟报价一致, source=="em" 也不例外: 东财总市值按
+        # 「收盘价 × 总股本」计算, B 股收盘价是 USD/HKD (实测 900901:
+        # f116 780,941,542.8 = 0.571 USD × 1,367,673,455 股), 不是 CNY。
+        # 不能把 em 分支统一改成 CNY, 那会把 B 股市值标错约 7 倍。
         return McapResult(symbol, ohlcv_shim(attached), source, price_ccy)
 
     # 到这里有两种情况: (a) em/shares 接口返回 None; (b) 返回了数据但与

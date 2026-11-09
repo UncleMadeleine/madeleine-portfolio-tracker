@@ -168,6 +168,15 @@ def test_lse_missing_currency_falls_back_to_pence(gb_symbol):
     assert q.prev_close == pytest.approx(86.84)
 
 
+def test_lse_empty_currency_falls_back_to_pence(gb_symbol):
+    """currency="" 与字段缺失同口径: 仍按 LSE 便士 ÷100, 且不产出空币种."""
+    d = {"symbol": "LSEG.L", "last_price": 8768.0, "prev_close": 8684.0, "currency": ""}
+    q = _quote_from_dump(gb_symbol, d)
+    assert q is not None
+    assert q.currency == "GBP"
+    assert q.price == pytest.approx(87.68)
+
+
 def test_lse_usd_quoted_etf_not_scaled():
     """.L 后缀 ≠ 一定便士: LSE 亦有美元计价的 UCITS ETF (HEAL.L, USD 10.935)。
 

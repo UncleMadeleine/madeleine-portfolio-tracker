@@ -19,15 +19,21 @@ from .. import importer
 from ._common import _finish_with_error, _print_json
 
 
-def _collect(args: argparse.Namespace) -> tuple[list[dict], list[str], str]:
-    """按来源采集持仓, 返回 (rows, skipped, 来源标签)."""
+def _collect(
+    args: argparse.Namespace,
+) -> tuple[list[dict], list[str], str, str | None]:
+    """按来源采集持仓, 返回 (rows, skipped, 来源标签, prune_source).
+
+    prune_source 只在钱包查询完整成功 (无单币失败) 时非空: 调用方据此
+    清理该地址已归零/下架的旧持仓, 与 ``import-wallet --add`` / UI 同口径。
+    """
     source = getattr(args, "source", None)
     if source == "ibkr":
         try:
             rows, skipped = importer.collect_ibkr(mode=args.mode)
         except Exception as e:
             _finish_with_error(f"{e} (请确认 IB Gateway 已登录运行, 且 API 连接已启用)")
-        return rows, skipped, "IBKR 账户持仓"
+        return rows, skipped, "IBKR 账户持仓", None
     if source == "longport":
         try:
             rows, skipped = importer.collect_longport()
@@ -36,7 +42,7 @@ def _collect(args: argparse.Namespace) -> tuple[list[dict], list[str], str]:
                 f"{e} (请先完成登录: 运行 tracker longport-login, 或在 UI 导入页长桥标签登录;"
                 " 或在 longport.json 配置 auth=apikey 与应用凭据)"
             )
-        return rows, skipped, "长桥账户持仓"
+        return rows, skipped, "长桥账户持仓", None
     if source == "wallet":
         try:
             rows, skipped, raw = importer.collect_wallet(
@@ -50,7 +56,8 @@ def _collect(args: argparse.Namespace) -> tuple[list[dict], list[str], str]:
         except (RuntimeError, FileNotFoundError) as e:
             _finish_with_error(f"钱包查询失败: {e}")
         label = f"{args.chain.lower()} 链上钱包 ({raw['address'][:10]}…)"
-        return rows, skipped, label
+        prune = importer.wallet_source(raw) if not skipped else None
+        return rows, skipped, label, prune
     try:
         rows, skipped = importer.collect_ashare_file(args.file)
     except (OSError, RuntimeError, ValueError) as e:
@@ -59,15 +66,19 @@ def _collect(args: argparse.Namespace) -> tuple[list[dict], list[str], str]:
         # EmptyDataError(空文件)/ParserError(坏 CSV)/"Excel file format cannot be
         # determined"(伪造 xlsx) —— 全是其子类, 漏捕会裸 traceback
         _finish_with_error(f"{args.file}: 解析失败 ({e})")
-    return rows, skipped, f"券商文件 {Path(args.file).name}"
+    return rows, skipped, f"券商文件 {Path(args.file).name}", None
 
 
 def cmd_import(args: argparse.Namespace) -> None:
     """import <来源> 统一入口: 采集 → 预览 → 按模式写入 portfolio.json."""
-    rows, skipped, label = _collect(args)
+    rows, skipped, label, prune_source = _collect(args)
     mode = importer.MODE_OVERWRITE if args.overwrite else importer.MODE_APPEND
     result = importer.apply_import(
-        rows, args.portfolio, mode=mode, dry_run=args.dry_run
+        rows,
+        args.portfolio,
+        mode=mode,
+        dry_run=args.dry_run,
+        prune_source=prune_source,
     )
 
     if args.json:

@@ -51,10 +51,14 @@ def cmd_longport_login(args) -> None:
             "try:\n"
             "    longport.oauth_login(cfg, on_open_url=lambda u: (\n"
             "        open(%r, 'w').write(u), os._exit(0)))\n"
+            "    # oauth_login 正常返回 = token 已缓存, 未触发 on_open_url。\n"
+            "    # 写哨兵让父进程区分「已登录」与「子进程崩溃没写 URL」。\n"
+            "    open(%r, 'w').write('OK:already-logged-in')\n"
+            "    os._exit(0)\n"
             "except Exception as e:\n"
             "    open(%r, 'w').write('ERROR:' + str(e))\n"
             "    os._exit(1)\n"
-        ) % (_ROOT, url_file, url_file)
+        ) % (_ROOT, url_file, url_file, url_file)
         proc = None
         url = None
         try:
@@ -89,6 +93,15 @@ def cmd_longport_login(args) -> None:
             _finish_with_error("获取授权 URL 超时 (30s), 请检查网络后重试")
         if url.startswith("ERROR:"):
             _finish_with_error(f"登录失败: {url[6:]}")
+        if url.startswith("OK:"):
+            # token 已缓存: oauth_login 直接返回, 没有授权 URL 可打印。
+            print(
+                _json.dumps(
+                    {"status": "ok", "already_logged_in": True},
+                    ensure_ascii=False,
+                )
+            )
+            return
         if args.output:
             from pathlib import Path
 

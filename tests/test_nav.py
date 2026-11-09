@@ -226,6 +226,42 @@ class TestNavBackfill:
         assert rows[0]["source"] == "backfill"
         assert rows[0]["holdings"] == 2
 
+    def test_backfill_mixed_long_short_coverage_uses_absolute_exposure(
+        self, monkeypatch
+    ):
+        """多空市值互相抵消时, 成本覆盖率仍应为 100% (不是 None/负数)."""
+        from tracker.prices import Quote
+
+        day = pd.Timestamp("2026-01-01")
+        prices = {"AAPL": 100.0, "TSLA": 200.0}
+
+        def _quotes(symbols, **kwargs):
+            return (
+                {
+                    s: Quote(s, s, prices[s], prices[s], 0.0, "USD")
+                    for s in symbols
+                },
+                {},
+                [],
+            )
+
+        def _ohlc(symbol, **kwargs):
+            return pd.DataFrame({"date": [day], "close": [prices[symbol]]})
+
+        monkeypatch.setattr("tracker.prices.get_quotes", _quotes)
+        monkeypatch.setattr("tracker.prices.get_ohlc", _ohlc)
+        portfolio = {
+            "holdings": [
+                {"symbol": "AAPL", "quantity": 10, "avg_cost": 100},
+                {"symbol": "TSLA", "quantity": -5, "avg_cost": 200},
+            ]
+        }
+        rows, issues = nav.backfill(
+            portfolio, "USD", days=1, today=date(2026, 1, 2)
+        )
+        assert issues == []
+        assert rows[0]["cost_coverage"] == pytest.approx(1.0)
+
     def test_backfill_falls_back_to_spot_fx(self, monkeypatch):
         self._mock(monkeypatch)
         monkeypatch.setattr("tracker.fx.get_fx_history", lambda *a, **k: None)

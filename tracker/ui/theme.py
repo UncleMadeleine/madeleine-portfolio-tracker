@@ -345,8 +345,9 @@ export default function (component) {
             );
           }
         });
-        if (tableKey === 'watchlist_detail_select' ||
-            tableKey === 'watchlist_editor') {
+        // 只对只读明细表提供删除: 编辑器的未保存行不在磁盘上, 右键删除
+        // 会清空整个编辑器状态却提示「已删除」, 还可能删错已保存的旧代码。
+        if (tableKey === 'watchlist_detail_select') {
           items.push({
             label: '从自选删除',
             icon: 'trash',
@@ -354,8 +355,7 @@ export default function (component) {
               sendContextAction('delete_watchlist', row.symbol);
             }
           });
-        } else if (tableKey === 'holdings_detail_select' ||
-                   tableKey === 'holdings_editor') {
+        } else if (tableKey === 'holdings_detail_select') {
           items.push({
             label: '从持仓删除',
             icon: 'trash',

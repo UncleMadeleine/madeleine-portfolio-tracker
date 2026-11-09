@@ -415,8 +415,10 @@ def _render_mcap_summary(
     meta: dict[str, dict],
     cmp_period: str,
     target_ccy: str,
+    original_currency_codes: set[str] | None = None,
 ) -> None:
     """市值对比摘要: 区间市值涨跌 + 最新市值排序 (含各代码口径标注)."""
+    kept_ccy = original_currency_codes or set()
     chg, rows = [], []
     for sym, d in frames.items():
         dd = charting.resample_ohlc(d, cmp_period) if cmp_period != "daily" else d
@@ -428,17 +430,32 @@ def _render_mcap_summary(
                 if pct >= 0
                 else f"{sym} :{down_tag}[{pct:+.2%}]"
             )
-        src = (meta.get(sym) or {}).get("source_label")
-        rows.append((sym, float(d["close"].iloc[-1]), src))
+        info = meta.get(sym) or {}
+        src = info.get("source_label")
+        # 汇率历史不可得时 to_common_currency 会保留原币; 摘要必须标实际
+        # 币种, 不能一律写 target (USD/HKD 数字标成 CNY)。
+        ccy = (
+            str(info.get("currency") or target_ccy).upper()
+            if sym in kept_ccy
+            else target_ccy
+        )
+        rows.append((sym, float(d["close"].iloc[-1]), src, ccy))
     if chg:
         st.markdown("区间市值涨跌: " + " · ".join(chg))
     rows.sort(key=lambda r: -r[1])
     mc_line = " · ".join(
-        f"{sym} {mcap.describe_amount(v)} {target_ccy}" + (f" ({src})" if src else "")
-        for sym, v, src in rows
+        f"{sym} {mcap.describe_amount(v)} {ccy}"
+        + (f" ({src})" if src else "")
+        for sym, v, src, ccy in rows
     )
-    st.markdown(f"最新市值 ({target_ccy}): {mc_line}")
-    st.caption("统一币种按历史汇率逐日折算; crypto/加密货币与指数无总市值语义。")
+    st.markdown(f"最新市值: {mc_line}")
+    if kept_ccy:
+        st.caption(
+            f"部分代码历史汇率不可得, 保持原币 (未统一折算为 {target_ccy}); "
+            "其余按历史汇率逐日折算。crypto/指数无总市值语义。"
+        )
+    else:
+        st.caption("统一币种按历史汇率逐日折算; crypto/加密货币与指数无总市值语义。")
 
 
 def render_compare_controls(
@@ -554,6 +571,7 @@ def render_compare_controls(
             ratio_cfg = (ratio_num, ratio_den, bool(fx_adjust and diff_ccy and not is_mcap))
     frames = {}
     mcap_meta: dict[str, dict] = {}
+    mcap_original_codes: set[str] = set()
     if is_mcap:
         from tracker import storage
 
@@ -580,6 +598,13 @@ def render_compare_controls(
                     crypto_source,
                     target_ccy,
                 )
+        # 汇率折算失败时 mcap 会保留原币 (warning 形如 "AAPL: USD→CNY ...,
+        # 保持原币"); 摘要/标题据此标注真实币种, 不再一律宣称已统一。
+        mcap_original_codes = {
+            w.split(":", 1)[0].strip()
+            for w in mcap_warnings
+            if "保持原币" in w and ":" in w
+        }
         render_issue_summary(
             mcap_warnings,
             noun="市值对比提示",
@@ -652,7 +677,12 @@ def render_compare_controls(
             green_up=settings.green_up(),
             ratio=ratio_payload,
             title=f"市值对比 · 近 {cmp_months} 个月 · "
-            + f"{charting.PERIOD_LABELS.get(cmp_period, '日K')} · 统一 {target_ccy}"
+            + f"{charting.PERIOD_LABELS.get(cmp_period, '日K')} · "
+            + (
+                f"部分原币 (目标 {target_ccy})"
+                if mcap_original_codes
+                else f"统一 {target_ccy}"
+            )
             + (" · 归一化" if norm else ""),
         )
         render_compare_chart(payload, height=560)
@@ -667,7 +697,9 @@ def render_compare_controls(
                 f" · 均值 {mean_v:.{prec}f} · 较均值 {dev:+.2f}%"
                 " · 使用左侧独立纵轴, 虚线为区间均值。"
             )
-        _render_mcap_summary(frames, mcap_meta, cmp_period, target_ccy)
+        _render_mcap_summary(
+            frames, mcap_meta, cmp_period, target_ccy, mcap_original_codes
+        )
         if norm:
             st.caption(
                 "市值按统一币种折算 (各代码较自身首日归一化); A股取东财历史总市值, "

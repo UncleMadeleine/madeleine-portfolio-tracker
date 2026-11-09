@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import pandas as pd
 
 from ..storage import edit_portfolio, load_portfolio
@@ -17,9 +19,13 @@ def portfolio_add(args) -> None:
         )
     if args.quantity is None:
         _finish_with_error("请指定持仓数量 --quantity")
-    if args.quantity <= 0:
+    # argparse(type=float) 会接受 "nan"/"inf": 与 <=0 比较均为 False, 会静默
+    # 通过然后在 storage._clean_rows 被剔除, 写出一条没有数量/成本的持仓。
+    if not math.isfinite(args.quantity) or args.quantity <= 0:
         _finish_with_error(f"持仓数量必须为正数, 得到: {args.quantity}")
-    if args.avg_cost is not None and args.avg_cost < 0:
+    if args.avg_cost is not None and (
+        not math.isfinite(args.avg_cost) or args.avg_cost < 0
+    ):
         _finish_with_error(f"成本价不能为负数, 得到: {args.avg_cost}")
     # 先解析再进锁: edit_portfolio 的 with 块正常退出时无条件保存, 校验若放在
     # 块内, 「没有可添加代码」也会在 --portfolio 指向的新路径创建空持仓文件。

@@ -345,10 +345,12 @@ def cmd_compare(args) -> None:
             f"compare_{'mcap_' if metric == 'mcap' else ''}{'-'.join(c[:6] for c in codes)}.html"
         )
     )
-    out.parent.mkdir(parents=True, exist_ok=True)
-    if out.is_dir():
-        _finish_with_error(f"输出路径是一个目录, 请指定文件: {out}")
     try:
+        # mkdir 也放进 try: 父路径是普通文件/不可穿越时会在 write_text 之前
+        # 抛 FileExistsError/NotADirectoryError, 不能裸 traceback。
+        out.parent.mkdir(parents=True, exist_ok=True)
+        if out.is_dir():
+            _finish_with_error(f"输出路径是一个目录, 请指定文件: {out}")
         out.write_text(charting.fig_to_html(fig), encoding="utf-8")
     except OSError as e:
         # 目录/坏父路径/只读: 与 report/export 同口径给可读错误 + 退出码,
@@ -383,7 +385,16 @@ def cmd_compare(args) -> None:
     print("区间涨跌: " + " · ".join(chg_parts))
     if metric == "mcap":
         print("最新市值: " + " · ".join(mc_parts))
-        print(f"市值已统一折算为 {target_ccy} (历史汇率按日折算; crypto/指数无市值语义)")
+        if mcap_fx_incomplete:
+            print(
+                f"⚠ 部分代码历史汇率不可得, 保持原币, 未统一折算为 {target_ccy}"
+                " (各代码实际币种见上方摘要; crypto/指数无市值语义)"
+            )
+        else:
+            print(
+                f"市值已统一折算为 {target_ccy} "
+                "(历史汇率按日折算; crypto/指数无市值语义)"
+            )
     if ratio_payload:
         last = ratio_payload["data"][-1]["value"]
         mean = ratio_payload["mean"]

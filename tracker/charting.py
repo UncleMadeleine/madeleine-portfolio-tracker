@@ -357,6 +357,9 @@ def build_candlestick_fig(
         (INTL_UP_COLOR, INTL_DOWN_COLOR) if green_up else (CN_UP_COLOR, CN_DOWN_COLOR)
     )
     dates = df["date"]
+    # 与 K线组件同一套精度规则: 固定 .2f 会把 SHIB/PEPE 这类低价币的
+    # 悬停 OHLC 和最新价都显示成 0.00。
+    fmt = f".{_price_precision(float(df['close'].median()))}f"
 
     if show_volume:
         fig = make_subplots(
@@ -383,8 +386,8 @@ def build_candlestick_fig(
         whiskerwidth=0.2,
         hovertemplate=(
             "<b>%{x|%Y-%m-%d}</b><br>"
-            "开 %{open:.2f}  高 %{high:.2f}<br>"
-            "低 %{low:.2f}  收 %{close:.2f}<extra></extra>"
+            f"开 %{{open:{fmt}}}  高 %{{high:{fmt}}}<br>"
+            f"低 %{{low:{fmt}}}  收 %{{close:{fmt}}}<extra></extra>"
         ),
     )
     fig.add_trace(candle, row=price_row, col=1)
@@ -399,7 +402,7 @@ def build_candlestick_fig(
                     color=MA_PALETTE[i % len(MA_PALETTE)], width=1.6, shape="spline"
                 ),
                 connectgaps=False,
-                hovertemplate=f"MA{n} %{{y:.2f}}<extra></extra>",
+                hovertemplate=f"MA{n} %{{y:{fmt}}}<extra></extra>",
             ),
             row=price_row,
             col=1,
@@ -488,7 +491,7 @@ def build_candlestick_fig(
                 yref="y",
                 xanchor="left",
                 yanchor="middle",
-                text=f"{up_marker} {last_close:.2f}",
+                text=f"{up_marker} {last_close:{fmt}}",
                 showarrow=False,
                 font=dict(size=11, color="#e8eaed"),
                 bgcolor="rgba(40,44,52,0.85)",

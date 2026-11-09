@@ -51,7 +51,11 @@ def nav_db_path() -> Path:
     """历史净值库路径 (每次调用解析, 便于测试/容器用 TRACKER_NAV_DB 隔离)."""
     raw = os.environ.get("TRACKER_NAV_DB")
     if raw:
-        return Path(raw).expanduser()
+        p = Path(raw).expanduser()
+        # 与 paths._abs_env 同口径: 相对路径随 CWD 漂移, 会让历史净值
+        # 「时有时无」; 忽略非法覆盖, 回落到数据目录。
+        if p.is_absolute():
+            return p
     return data_home() / "nav_history.db"
 
 
@@ -564,10 +568,18 @@ def backfill(
         covered_value = values[[c for c in cost_cols if c in values.columns]].sum(
             axis=1, min_count=1
         )
+        # 覆盖率分母用市值绝对值 (与 analytics.summarize 同口径): 多空混合时
+        # 带符号净额可能为 0/负数, 会让覆盖率变 None 或出现负值/超过 100%。
+        covered_abs_value = (
+            values[[c for c in cost_cols if c in values.columns]]
+            .abs()
+            .sum(axis=1, min_count=1)
+        )
     else:
         signed_costs = pd.Series(float("nan"), index=index)
         gross_costs = pd.Series(float("nan"), index=index)
         covered_value = pd.Series(float("nan"), index=index)
+        covered_abs_value = pd.Series(float("nan"), index=index)
     pnl = covered_value - signed_costs
 
     recorded_at = time.time()
@@ -576,12 +588,13 @@ def backfill(
         value = _num(total.get(ts))
         if value is None:
             continue
-        cov_value = _num(covered_value.get(ts))
+        covered_abs = _num(covered_abs_value.get(ts))
+        total_abs = float(values.loc[ts].abs().sum(min_count=1))
         cost = _num(gross_costs.get(ts))
         pnl_v = _num(pnl.get(ts))
         coverage = (
-            (cov_value / value)
-            if cov_value is not None and value not in (None, 0)
+            (covered_abs / total_abs)
+            if covered_abs is not None and math.isfinite(total_abs) and total_abs
             else None
         )
         rows.append(

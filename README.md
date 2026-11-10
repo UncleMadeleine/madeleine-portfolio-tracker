@@ -28,7 +28,7 @@ Madeleine Portfolio Tracker 是一款**本地优先**的投资组合追踪工具
 - **K 线蜡烛图** — 日K / 周K / 月K，MA 均线，成交量，MACD / RSI / KDJ / 布林带，滑动模式默认加载上市以来全量历史
 - **宏观/风险指数K线** — 独立 IX.<KEY> 代码规范（美元指数 / VIX / 沪深 300 / 商品期货主力连续（黄金·白银·鸡蛋·豆粕·豆一·豆二·生猪·碳酸锂）/ 铀现货与长协价（Cameco 月度 U3O8）/ 水泥网建材指数 / 恒生官网港股指数（恒生指数·国企·恒生科技·红筹·恒生综合·恒指波幅 等共 12 个）/ 恒生AH股溢价指数 等，共 51 个，`index-kline --list` 可查全部），独立页面与 `index-kline` 子命令，独立 provider 源链
 - **多股对比** — 任意代码同坐标系折线对比，归一化（起点=100）跨币种跨量级比较
-- **财经日历** — 持仓/自选的本月与下月财报、预约披露、除权除息/派息事件（yfinance 单票 + akshare 整批，长桥可选兜底），独立页面与 `calendar` 子命令；A股只请求窗口内可能命中的报表期、按范围跳过无关板块，取数并发执行；首屏先展示磁盘缓存并后台刷新，服务进程内置保温线程按默认范围周期预热缓存，冷启动带 A股整批/海外单票进度条
+- **财经日历** — 持仓/自选的本月与下月财报、预约披露、除权除息/派息事件（yfinance 单票 + akshare 整批，长桥可选兜底），独立页面与 `calendar` 子命令；支持导出 iCalendar (`.ics`) 到 Apple 日历 / Google Calendar / Outlook；A股只请求窗口内可能命中的报表期、按范围跳过无关板块，取数并发执行；首屏先展示磁盘缓存并后台刷新，服务进程内置保温线程按默认范围周期预热缓存，冷启动带 A股整批/海外单票进度条
 - **首屏性能** — 组合与日历均采用 stale-while-revalidate：先渲染 30 分钟 / 7 天内的旧缓存秒开，后台静默重取；仅在完全无缓存时阻塞取数（组合/日历均显示实时进度条）；行情/汇率/日历均有进程级保温线程周期刷新磁盘缓存
 - **历史净值曲线** — 每日组合快照落独立 SQLite（`nav_history.db`，与行情缓存分离），组合页画总市值 + 成本走势；支持 `nav --save` 手动存档、组合页每次渲染自动 upsert、`nav --backfill` 按当前持仓 × 历史收盘价回填近似历史（含历史汇率折算）
 - **基本面分析 (第一期)** — 单只 A+H 股票的 AH 溢价率曲线：A 股收盘 ÷ (H 股收盘 × 历史汇率) − 1，支持任意 A+H 股票对 / 范围切换，0% 同价参考线 + 区间高低点/均值/分位摘要（独立页面 `/fundamentals`）
@@ -88,7 +88,7 @@ tracker-ui                        # pip 安装后 (等价, 参数透传给 strea
 - **K线** (`/kline`) — 任意代码 K 线查询（支持按代码或名称模糊搜索）+ 多股走势对比 + 加密货币对比（K线页子功能）
 - **指数K线** (`/index`) — 宏观/风险指数查询（IX.<KEY> 分组下拉，分组随目录维护；CLI `index-kline --list` 可查全部已收录指数）
 - **基本面** (`/fundamentals`) — 第一期 AH 溢价率曲线：可选 A+H 股票对（东财目录，失败退回内置常见股票对，也可手动输入代码），按近 3/6/12/24/36/60 个月展示 A 股收盘 ÷ (H 股收盘 × 历史汇率) − 1，0% 为两地同价
-- **日历** (`/calendar`) — 持仓/自选的财报、预约披露、除权除息/派息事件月历（窗口与范围可切）
+- **日历** (`/calendar`) — 持仓/自选的财报、预约披露、除权除息/派息事件月历（窗口与范围可切），可一键导出 `.ics` 导入本地日历
 - **导入** (`/import`) — IBKR 账户 / 长桥账户 / 链上钱包 / A股券商文件导入
 - **设置** (`/settings`) — 涨跌配色（红涨绿跌/绿涨红跌）、数据源偏好（akshare / IBKR / 长桥）、基础货币
 
@@ -171,6 +171,11 @@ python -m tracker.cli report -f csv -w 科技
 # 导出组合快照报表（CSV / JSON / Markdown）
 python -m tracker.cli export -f md -o snapshot.md
 python -m tracker.cli export -f csv -o holdings.csv
+
+# 导出财经日历为 iCalendar（可导入 Apple 日历 / Google Calendar / Outlook）
+python -m tracker.cli calendar --ics -o calendar.ics
+python -m tracker.cli calendar --months 3 --ics | pbcopy   # macOS 可直接粘贴导入
+# 同一事件 UID 稳定: 重复导出/导入会更新原事件; 财报同季度内改期也不会新增重复条目
 
 # 从链上地址查询加密资产余额（只读，支持 eth/bsc/polygon/arbitrum/avalanche/tron/solana）
 python -m tracker.cli import wallet eth 0xd8dA...6045 --dry-run  # 仅查询
@@ -787,7 +792,7 @@ A **local-first** portfolio tracker supporting **A-shares / B-shares / Beijing S
 - **Macro/risk index K-lines** — dedicated `IX.<KEY>` symbol space (USD index, VIX, CSI 300, commodity main-continuous futures — gold, silver, eggs, soybean meal, soybeans, hogs, lithium carbonate — uranium spot/long-term (Cameco monthly), cement indices, ...), separate page & `index-kline` subcommand, dedicated provider source chain
 - **Multi-symbol comparison** — same-coordinate overlay normalized to 100, optional ratio line with history-FX adjustment; plus a crypto-only sub-tab on the K-line page (independent per-coin candle panes, raw prices, shared time axis)
 - **Fundamentals (phase 1)** — single A+H stock AH-premium curve: A-share close ÷ (H-share close × historical HKD/CNY FX) − 1, selectable pair/range, 0% parity reference line, range high/low/mean/percentile summary (dedicated `/fundamentals` page)
-- **Financial calendar** — earnings, scheduled disclosures, ex-dividend/record dates for holdings & watchlist over the current and next months (yfinance per-symbol + akshare bulk, optional LongPort fallback), dedicated page & `calendar` subcommand; only probabilistically relevant A-share report periods/boards are fetched, requests run concurrently, and a process-level warmer keeps the disk cache fresh for the default scope
+- **Financial calendar** — earnings, scheduled disclosures, ex-dividend/record dates for holdings & watchlist over the current and next months (yfinance per-symbol + akshare bulk, optional LongPort fallback), dedicated page & `calendar` subcommand; export to iCalendar (`.ics`) for Apple Calendar / Google Calendar / Outlook; only probabilistically relevant A-share report periods/boards are fetched, requests run concurrently, and a process-level warmer keeps the disk cache fresh for the default scope
 - **Historical NAV** — daily portfolio snapshots in an isolated SQLite DB (`nav_history.db`, separate from the quote cache), NAV + cost chart on the portfolio page, `nav --save` / auto-upsert on every successful portfolio render (same-day overwrite, corrected by background refreshes), and `nav --backfill` (current holdings × historical closes, historical FX converted; approximate, no historical position changes)
 - **Unified import pipeline** — IBKR account / LongPort account / on-chain wallet (5 EVM chains + TRON + Solana) / A-share broker CSV-Excel file, each with append-merge or overwrite mode; same logic drives the Streamlit「导入」page
 - **Unified CLI** — 21 subcommands (snapshot, nav, quote, watchlist, portfolio, report, export, fx, history, kline, calendar, search, compare, index-kline, import, longport-login, eodhd, cache, init; `sync` / `import-wallet` kept as compat aliases); all support machine-readable output (`--json`, or `-f json` for report/export)

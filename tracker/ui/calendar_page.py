@@ -29,6 +29,7 @@ import streamlit as st
 
 from tracker import events as events_mod
 from tracker import storage
+from tracker.ics import build_ics, ics_filename
 from tracker.services.watchlist import entries_for
 from tracker.symbols import parse
 from tracker.ui import theme
@@ -510,6 +511,14 @@ def render_calendar_page() -> None:
         st.info("窗口内无财报/分红事件。")
         return
 
+    st.download_button(
+        "导出 .ics 日历",
+        build_ics(evs).encode("utf-8"),
+        file_name=ics_filename(data.get("window")),
+        mime="text/calendar",
+        icon=":material/calendar_month:",
+        help="全天事件, 可导入 Apple 日历 / Google Calendar / Outlook",
+    )
     _render_month_grids(evs, w0, w1)
     _render_agenda(evs)
     _render_detail_table(evs)

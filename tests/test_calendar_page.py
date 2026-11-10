@@ -81,6 +81,16 @@ def test_calendar_page_renders(monkeypatch, fake_calendar_result):
     assert "窗口 2026-10-01 → 2026-11-30" in caps
 
 
+def test_calendar_page_ics_download(monkeypatch, fake_calendar_result):
+    """日历页提供 .ics 下载入口 (内容/文件名由 build_ics / ics_filename 单测覆盖)."""
+    at = _run_page(monkeypatch, fake_calendar_result)
+    assert not at.exception, at.exception
+    assert len(at.download_button) == 1, "应有 .ics 下载按钮"
+    dl = at.download_button[0]
+    assert "导出 .ics" in dl.label
+    assert "Apple 日历" in dl.help
+
+
 def test_calendar_page_detail_table(monkeypatch, fake_calendar_result):
     """明细表: dataframe 元素存在且含事件列 (行数 = 事件数)."""
     at = _run_page(monkeypatch, fake_calendar_result)

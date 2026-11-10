@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+import sys
 from datetime import date
 
 from .. import events as events_mod
+from ..ics import build_ics
 from ..services.watchlist import entries_for
 from ..storage import load_portfolio
-from ..watchlist import load_watchlist
-from ._common import _finish_with_error, _print_json, months_arg  # noqa: F401 - 兼容旧导入路径
 from ..symbols import parse
+from ..watchlist import load_watchlist
+from ._common import (  # noqa: F401 - months_arg 兼容旧导入路径
+    _finish_with_error,
+    _print_json,
+    atomic_write_text,
+    months_arg,
+)
 
 _WEEKDAY_CN = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 
@@ -71,10 +78,27 @@ def _progress_printer():
     return cb
 
 
+def _write_stdout(text: str) -> None:
+    """原样输出 UTF-8 文本 (ics 已含 CRLF, 避免 Windows 文本模式二次转换)."""
+    buf = getattr(sys.stdout, "buffer", None)
+    if buf is not None:
+        buf.write(text.encode("utf-8"))
+        buf.flush()
+    else:  # 测试/被替换的 stdout 没有 buffer 时走文本接口
+        sys.stdout.write(text)
+
+
 def cmd_calendar(args) -> None:
-    """组合/自选财报与重大事件日历; --json 输出机器可读结果."""
+    """组合/自选财报与重大事件日历; --json 输出机器可读结果, --ics 导出日历."""
+    ics = bool(getattr(args, "ics", False))
+    output = getattr(args, "output", None)
+    if ics and args.json:
+        _finish_with_error("--ics 与 --json 不能同时使用")
+    if output and not ics:
+        _finish_with_error("--output 需与 --ics 一起使用")
+
     symbols, names = _scope_symbols(args)
-    progress = None if args.json else _progress_printer()
+    progress = None if (args.json or ics) else _progress_printer()
     result = events_mod.fetch_calendar(
         symbols,
         months=args.months,
@@ -83,6 +107,21 @@ def cmd_calendar(args) -> None:
         names=names,
         progress=progress,
     )
+
+    if ics:
+        text = build_ics(result["events"])
+        if output:
+            try:
+                atomic_write_text(output, text)
+            except OSError as e:
+                _finish_with_error(f"日历导出失败: {output} ({e})")
+            print(
+                f"✅ 日历已导出: {output} · {len(result['events'])} 个事件"
+                f" (窗口 {result['window']['start']} → {result['window']['end']})"
+            )
+        else:
+            _write_stdout(text)
+        return
 
     if args.json:
         _print_json(result)

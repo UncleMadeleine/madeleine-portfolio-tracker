@@ -467,6 +467,8 @@ def _add_calendar_parser(sub: argparse.ArgumentParser) -> None:
             "  tracker calendar AAPL 0700.HK 600519.SS # 指定代码\n"
             "  tracker calendar --refresh             # 忽略 6h/24h 缓存强制刷新\n"
             "  tracker calendar --longport            # 开长桥兜底 (需已 longport-login)\n"
+            "  tracker calendar --ics -o cal.ics      # 导出 iCalendar, 导入本地日历\n"
+            "  tracker calendar --ics > cal.ics       # 也可直接重定向 stdout\n"
         ),
     )
     p_cal.add_argument(
@@ -494,6 +496,14 @@ def _add_calendar_parser(sub: argparse.ArgumentParser) -> None:
         "--longport",
         action="store_true",
         help="开启长桥日历兜底 (yfinance/akshare 拿不到时补; 需已 longport-login)"
+    )
+    p_cal.add_argument(
+        "--ics",
+        action="store_true",
+        help="输出 iCalendar (.ics) 文本, 可导入 Apple/Google/Outlook 日历",
+    )
+    p_cal.add_argument(
+        "-o", "--output", default=None, help="与 --ics 配合, 写入文件 (缺省打印到 stdout)"
     )
     p_cal.add_argument("--json", action="store_true", help="输出 JSON")
     p_cal.set_defaults(func=_cmd(".calendar", "cmd_calendar"))

@@ -229,10 +229,10 @@ def test_longport_history_pages_past_1000_bars(monkeypatch):
 
 def test_disk_refresh_plan_normalizes_symbols(monkeypatch):
     from tracker import cache as cache_mod
-    from tracker.ui import portfolio_page
+    from tracker.services import warm as warm_mod
 
     monkeypatch.setattr(
-        portfolio_page.storage,
+        warm_mod.storage,
         "load_settings",
         lambda: {
             "prefer_akshare": False,
@@ -242,7 +242,7 @@ def test_disk_refresh_plan_normalizes_symbols(monkeypatch):
         },
     )
     monkeypatch.setattr(
-        portfolio_page.storage,
+        warm_mod.storage,
         "load_portfolio",
         lambda *a, **k: {
             "base_currency": "CNY",
@@ -250,9 +250,9 @@ def test_disk_refresh_plan_normalizes_symbols(monkeypatch):
         },
     )
     monkeypatch.setattr(
-        portfolio_page.storage, "load_watchlist", lambda *a, **k: {"watchlist": []}
+        warm_mod.storage, "load_watchlist", lambda *a, **k: {"watchlist": []}
     )
-    monkeypatch.setattr(portfolio_page, "merge_entries", lambda w: [])
+    monkeypatch.setattr(warm_mod, "merge_entries", lambda w: [])
     quote = Quote(
         symbol="600519.SS",
         name="贵州茅台",
@@ -266,7 +266,7 @@ def test_disk_refresh_plan_normalizes_symbols(monkeypatch):
         "get_cached_with_age",
         lambda symbols, ttl=None: ({"600519.SS": quote}, {"600519.SS": 0.0}),
     )
-    plan = portfolio_page._disk_refresh_plan()
+    plan = warm_mod.disk_refresh_plan()
     assert plan is not None
     assert plan["quotes"][0] == ("600519.SS",)
 

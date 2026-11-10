@@ -1400,6 +1400,9 @@ class TestParser:
             ["report", "-f", "json", "-w", "科技", "-o", "x.md"],
             ["sync", "--dry-run"],
             ["cache", "info"],
+            ["warm"],
+            ["warm", "--once", "--quotes-only", "--symbols", "AAPL", "MSFT"],
+            ["warm", "--interval", "300", "--calendar-only", "--json"],
         ):
             args = cli.build_parser().parse_args(argv)
             assert callable(args.func)

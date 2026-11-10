@@ -8,17 +8,16 @@ longport 兜底), 缓存三层: st.cache_data (页面内存) + 磁盘 calendar_c
 键交给后台线程按正常缓存链补齐, 看门狗片段在完成后 rerun 换新; 完全没有
 缓存时才阻塞取数, 并显示 A股整批/海外单票的实时进度条。
 
-进程级缓存预热: app 入口调用 ensure_calendar_refresher(), 服务启动后按默认
-范围 (持仓+自选, 本月+下月) 每 30 分钟走一次正常缓存链, 让日历缓存常新;
-与页面刷新共用协调器, 同 key 不会重复发网络。
+进程级缓存预热: app 入口调用 tracker.services.warm.ensure_warmers(), 服务
+启动后按默认范围 (持仓+自选, 本月+下月) 每 30 分钟走一次正常缓存链, 让日历
+缓存常新; 与页面刷新共用协调器, 同 key 不会重复发网络。CLI `tracker warm`
+也可独立触发同一套预热逻辑, 不必启动 Streamlit。
 """
 
 from __future__ import annotations
 
 import calendar as _cal
 import html
-import logging
-import threading
 import time
 
 from datetime import date, timedelta
@@ -30,6 +29,7 @@ import streamlit as st
 from tracker import events as events_mod
 from tracker import storage
 from tracker.ics import build_ics, ics_filename
+from tracker.services import warm as warm_mod
 from tracker.services.watchlist import entries_for
 from tracker.symbols import parse
 from tracker.ui import theme
@@ -41,24 +41,15 @@ MAX_PER_CELL = 3
 # 首屏 stale-while-revalidate: 磁盘有旧日历 (7 天内) 时先渲染, 后台按正常
 # 缓存链重取过期/缺失的键, 完成后看门狗 rerun 换新。周期/节流与组合页同口径。
 CAL_REFRESH_POLL = 2.0
-CAL_REFRESH_MIN_INTERVAL = 60.0
-_CAL_REFRESH_HISTORY = 64
-_cal_refresh_lock = threading.Lock()
-_cal_refresh_inflight: set[tuple] = set()
-_cal_refresh_done_at: dict[tuple, float] = {}
+CAL_REFRESH_MIN_INTERVAL = warm_mod.CAL_REFRESH_MIN_INTERVAL
 _CAL_SEEN_KEY = "_cal_refresh_seen"
 
-# 进程级缓存预热: 服务启动后按默认范围 (持仓+自选, 本月+下月) 周期性走
-# 缓存链刷新磁盘日历。日历 TTL 6h, 30 分钟检查一次即可; 首次延迟避开启动
-# 风暴 (与组合页保温线程同思路, 但日历低频, 周期不需要更短)。
-CAL_WARM_PERIOD = 1800.0
-CAL_WARM_FIRST_DELAY = 60.0
-# 预热只覆盖页面默认窗口/默认兜底开关; 切到其它月份/长桥时按需取数,
-# 已缓存的单票/报表期数据仍然共享。
-CAL_WARM_MONTHS = 2
-CAL_WARM_USE_LONGPORT = False
-_cal_refresher_lock = threading.Lock()
-_cal_refresher_started = False
+# 进程级缓存预热实现见 tracker/services/warm.py (无 Streamlit 依赖, CLI
+# `tracker warm` 共用同一套协调器); 页面只保留默认窗口常量给文案/测试引用。
+CAL_WARM_PERIOD = warm_mod.CAL_WARM_PERIOD
+CAL_WARM_FIRST_DELAY = warm_mod.CAL_WARM_FIRST_DELAY
+CAL_WARM_MONTHS = warm_mod.CAL_WARM_MONTHS
+CAL_WARM_USE_LONGPORT = warm_mod.CAL_WARM_USE_LONGPORT
 
 # 事件类型 → 月历单元格单字标记 (与 events.EVENT_TYPE_LABELS 中文一一对应)
 TYPE_MARK = {
@@ -131,49 +122,14 @@ def _clear_calendar_cache() -> None:
 
 
 def _cal_key(symbols, months: int, use_longport: bool) -> tuple:
-    return (tuple(symbols), int(months), bool(use_longport))
+    return warm_mod.calendar_key(symbols, months, use_longport)
 
 
 def _start_calendar_refresh(
     key: tuple, symbols: tuple[str, ...], months: int, use_longport: bool
 ) -> bool:
-    """启动一次后台日历重取 (过期/缺失键才发网络); 返回是否真正发起.
-
-    与组合页同款协调器: 同 key 不并发 (多标签页只发一次), 失败后按最短
-    间隔节流。线程内只走 events → SQLite, 不碰任何 st.* API。
-    """
-    now = time.time()
-    with _cal_refresh_lock:
-        if key in _cal_refresh_inflight:
-            return False
-        if now - _cal_refresh_done_at.get(key, 0.0) < CAL_REFRESH_MIN_INTERVAL:
-            return False
-        _cal_refresh_inflight.add(key)
-        if len(_cal_refresh_done_at) > _CAL_REFRESH_HISTORY:
-            for old in sorted(
-                _cal_refresh_done_at, key=_cal_refresh_done_at.get
-            )[: len(_cal_refresh_done_at) - _CAL_REFRESH_HISTORY]:
-                _cal_refresh_done_at.pop(old, None)
-
-    def _run() -> None:
-        try:
-            # refresh=False: 新鲜键直接命中磁盘, 只对过期/缺失键回源
-            _fetch_calendar(
-                tuple(symbols), int(months), bool(use_longport), refresh=False
-            )
-        except Exception:  # noqa: BLE001 - 旧数据继续展示, 下轮再试
-            logging.getLogger(__name__).warning(
-                "日历后台刷新失败 (key=%s), 下轮重试", key, exc_info=True
-            )
-        finally:
-            with _cal_refresh_lock:
-                _cal_refresh_inflight.discard(key)
-                _cal_refresh_done_at[key] = time.time()
-
-    threading.Thread(
-        target=_run, name="calendar-refresh", daemon=True
-    ).start()
-    return True
+    """启动一次后台日历重取 (实现与进程级预热共用 services.warm)."""
+    return warm_mod.start_calendar_refresh(key, symbols, months, use_longport)
 
 
 @st.fragment(run_every=CAL_REFRESH_POLL)
@@ -186,9 +142,7 @@ def _calendar_watchdog(
     - 完成事件按 key 只消费一次 (防热循环), 之后若数据仍陈旧才按最短
       间隔补刷 (全部源失败/无数据时不会每 2s 重试)。
     """
-    with _cal_refresh_lock:
-        inflight = key in _cal_refresh_inflight
-        done = _cal_refresh_done_at.get(key)
+    inflight, done = warm_mod.calendar_refresh_state(key)
     seen = st.session_state.setdefault(_CAL_SEEN_KEY, {})
     if inflight:
         st.caption(":material/sync: 日历后台刷新中, 先展示缓存数据…")
@@ -330,75 +284,6 @@ def _resolve_scope() -> list[str]:
     return _rows_to_symbols(scope_rows)
 
 
-def _disk_scope_symbols() -> list[str]:
-    """磁盘上的默认预热范围: 持仓 + 全部自选 (与页面「持仓+自选」同口径).
-
-    预热线程没有 session_state, 只能从磁盘推导; 该范围是页面三个范围选项的
-    并集, 预热结果对所有选项都有用 (单票/报表期缓存按代码/期次共享)。
-    """
-    try:
-        holdings = [
-            h
-            for h in storage.load_portfolio().get("holdings", [])
-            if h.get("symbol")
-        ]
-    except Exception:  # noqa: BLE001 - 组合缺失时自选域照旧
-        holdings = []
-    try:
-        wentries = [
-            w for w in entries_for(load_watchlist(), None) if w.get("symbol")
-        ]
-    except Exception:  # noqa: BLE001
-        wentries = []
-    return _rows_to_symbols([*holdings, *wentries])
-
-
-def _calendar_warm_plan() -> tuple | None:
-    """预热任务参数 (与 _start_calendar_refresh 的签名对齐); 无代码返回 None."""
-    symbols = tuple(_disk_scope_symbols())
-    if not symbols:
-        return None
-    key = _cal_key(symbols, CAL_WARM_MONTHS, CAL_WARM_USE_LONGPORT)
-    return key, symbols, CAL_WARM_MONTHS, CAL_WARM_USE_LONGPORT
-
-
-def _calendar_warm_tick() -> None:
-    """执行一次预热检查: 缓存新鲜时只读盘, 过期/缺失才回源 (正常缓存链)."""
-    plan = _calendar_warm_plan()
-    if plan is not None:
-        _start_calendar_refresh(*plan)
-
-
-def _background_calendar_refresher_loop() -> None:
-    """进程级日历保温线程: 周期性按默认范围刷新磁盘缓存, 页面打开即命中.
-
-    线程内只走 events/akshare/yfinance + SQLite, 不碰任何 st.* API; 与页面
-    级刷新共用 _start_calendar_refresh 协调器, 同 key 不会重复发网络。
-    """
-    time.sleep(CAL_WARM_FIRST_DELAY)
-    logger = logging.getLogger(__name__)
-    while True:
-        try:
-            _calendar_warm_tick()
-        except Exception:  # noqa: BLE001 - 预热失败不影响服务, 下轮再试
-            logger.warning("日历缓存预热失败, 下轮重试", exc_info=True)
-        time.sleep(CAL_WARM_PERIOD)
-
-
-def ensure_calendar_refresher() -> None:
-    """启动进程级日历缓存预热线程 (每进程一条, 幂等)."""
-    global _cal_refresher_started
-    with _cal_refresher_lock:
-        if _cal_refresher_started:
-            return
-        _cal_refresher_started = True
-    threading.Thread(
-        target=_background_calendar_refresher_loop,
-        name="calendar-warm",
-        daemon=True,
-    ).start()
-
-
 def render_calendar_page() -> None:
     """日历页: 工具栏 → 概览 → 月历卡 → 按日日程 → 完整表格."""
     theme.page_header("财经日历", eyebrow="ECONOMIC CALENDAR")
@@ -458,8 +343,7 @@ def render_calendar_page() -> None:
             if data is None:
                 # 预热/其它标签页可能已在拉同一范围: 不重复阻塞取数,
                 # 交给看门狗在后台完成后 rerun。
-                with _cal_refresh_lock:
-                    warming = key in _cal_refresh_inflight
+                warming, _done = warm_mod.calendar_refresh_state(key)
                 if warming:
                     st.info(
                         "日历缓存正在后台预热/刷新, 完成后自动显示; "

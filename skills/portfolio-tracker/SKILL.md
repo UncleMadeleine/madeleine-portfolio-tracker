@@ -56,6 +56,7 @@ tracker-ui          # pip 安装后起 Streamlit 页面 (等价 streamlit run tr
 | `sync` | IBKR 同步 (兼容入口→import ibkr; 缺省追加合并, 与 import 一致, `--overwrite` 才覆盖) | `sync --dry-run` |
 | `import-wallet` | 链上钱包导入 (兼容入口→import wallet; 缺省只查询, `--add`/`--overwrite` 才写盘) | `import-wallet eth 0x... --add` |
 | `cache` | 行情磁盘缓存 | `cache info`, `cache clear` |
+| `warm` | 主动预热/保温行情、汇率、日历 (不依赖前端进程) | `warm`, `warm --symbols AAPL TSLA`, `warm --calendar-only --json`, `warm --interval 300` (常驻) |
 | `init` | 首次使用: 模板落地到数据目录 | `init`, `init --force` |
 
 `--help` 查看每个子命令的完整参数: `python -m tracker.cli snapshot --help`; `-v/--version` 看版本。

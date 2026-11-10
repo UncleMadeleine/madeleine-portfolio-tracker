@@ -30,6 +30,7 @@ import tracker.storage as storage
 import tracker.ui.app as app_mod
 import tracker.ui.portfolio_page as portfolio_page
 from tracker.prices import Quote
+from tracker.services import warm as warm_mod
 
 
 def _wait_for(pred, timeout: float = 10.0, sleep_fn=None) -> bool:
@@ -61,15 +62,15 @@ def _clean_quote_state():
     """跨测试隔离: st.cache_data 行情条目 + 模块级刷新协调器状态."""
     portfolio_page.cached_quotes.clear()
     portfolio_page.cached_fx.clear()
-    with portfolio_page._refresh_lock:
-        portfolio_page._refresh_inflight.clear()
-        portfolio_page._refresh_done_at.clear()
+    with warm_mod._refresh_lock:
+        warm_mod._refresh_inflight.clear()
+        warm_mod._refresh_done_at.clear()
     yield
     portfolio_page.cached_quotes.clear()
     portfolio_page.cached_fx.clear()
-    with portfolio_page._refresh_lock:
-        portfolio_page._refresh_inflight.clear()
-        portfolio_page._refresh_done_at.clear()
+    with warm_mod._refresh_lock:
+        warm_mod._refresh_inflight.clear()
+        warm_mod._refresh_done_at.clear()
 
 
 def _seed_quotes(
@@ -120,15 +121,15 @@ def _seed_fx(base: str, rates: dict[str, float], age_seconds: float) -> None:
 
 def _reset_coordinator() -> None:
     """清空刷新协调器状态 (同一测试内多场景间隔离, 避开最短重试间隔)."""
-    with portfolio_page._refresh_lock:
-        portfolio_page._refresh_inflight.clear()
-        portfolio_page._refresh_done_at.clear()
+    with warm_mod._refresh_lock:
+        warm_mod._refresh_inflight.clear()
+        warm_mod._refresh_done_at.clear()
 
 
 def _wait_coordinator_idle(sleep_fn) -> bool:
     """等所有后台刷新线程跑完 (done_at 落账), 避免场景间状态竞争."""
     return _wait_for(
-        lambda: not portfolio_page._refresh_inflight,
+        lambda: not warm_mod._refresh_inflight,
         sleep_fn=sleep_fn,
     )
 
@@ -194,10 +195,14 @@ def _boot(monkeypatch, tmp_path, holdings=None, get_quotes=None, get_fx=None):
     monkeypatch.setattr(storage, "PORTFOLIO_PATH", pf)
     if get_fx is not None:
         monkeypatch.setattr(portfolio_page, "get_fx_rates", get_fx)
+        monkeypatch.setattr(warm_mod, "get_fx_rates", get_fx)
     else:
         # 冷启动汇率兜底: 秒回不落库 (fx 相关的测试自行打桩)
         monkeypatch.setattr(
             portfolio_page, "get_fx_rates", lambda base, curs, **kw: ({"USD": 7.1}, [])
+        )
+        monkeypatch.setattr(
+            warm_mod, "get_fx_rates", lambda base, curs, **kw: ({"USD": 7.1}, [])
         )
     if get_quotes is not None:
         monkeypatch.setattr(prices, "get_quotes", get_quotes)
@@ -525,8 +530,8 @@ class TestFirstScreenStaleWhileRevalidate:
         # 间隔未到不再发起 → 无「刷新中」caption, 也不会持续 rerun
         key_plan = at.session_state[portfolio_page._PLAN_KEY]
         assert _wait_for(
-            lambda: portfolio_page._refresh_state(
-                portfolio_page._plan_key(
+            lambda: warm_mod.refresh_state(
+                warm_mod.refresh_key(
                     {"quotes": key_plan["quotes"], "fx": key_plan["fx"]}
                 )
             )[1]
@@ -548,16 +553,14 @@ class TestPeriodicKeepWarm:
 
     def test_period_scales_with_symbol_count(self):
         # 基准周期 = 行情新鲜期: 早于过期触发只会空转 (get_quotes 仍命中磁盘)
-        assert portfolio_page._REFRESH_PERIOD == cache_mod.CACHE_TTL
+        assert warm_mod.REFRESH_PERIOD == cache_mod.CACHE_TTL
         # 100 个代码: 100*2=200 < 基准 300 → 仍为基准
-        assert portfolio_page._refresh_period(100) == 300.0
+        assert warm_mod.refresh_period(100) == 300.0
         # 685 个代码: 685*2=1370, 介于基准与上限之间
-        assert portfolio_page._refresh_period(685) == 1370.0
+        assert warm_mod.refresh_period(685) == 1370.0
         # 超大组合封顶在上限 (= 陈旧期)
-        assert portfolio_page._refresh_period(10**6) == (
-            portfolio_page._REFRESH_PERIOD_MAX
-        )
-        assert portfolio_page._refresh_period(1) == portfolio_page._REFRESH_PERIOD
+        assert warm_mod.refresh_period(10**6) == warm_mod.REFRESH_PERIOD_MAX
+        assert warm_mod.refresh_period(1) == warm_mod.REFRESH_PERIOD
 
     def test_plan_age_advances_while_page_is_idle(self, monkeypatch):
         """页面静置时看门狗不重跑整页: 年龄必须按流逝时间继续增长.
@@ -574,16 +577,18 @@ class TestPeriodicKeepWarm:
         assert portfolio_page._plan_data_age(plan) == float("inf")
 
     def test_cache_age_missing_means_inf(self):
-        assert portfolio_page._cache_age() == 0.0
-        assert portfolio_page._cache_age(symbols=["AAPL"]) == float("inf")
+        assert warm_mod.cache_age() == 0.0
+        assert warm_mod.cache_age(symbols=["AAPL"]) == float("inf")
         _seed_quotes({"AAPL": 100.0}, age_seconds=120)
-        assert 100 <= portfolio_page._cache_age(symbols=["AAPL"]) <= 180
+        assert 100 <= warm_mod.cache_age(symbols=["AAPL"]) <= 180
         # 行情在、汇率缺 → inf (必须刷)
-        assert portfolio_page._cache_age(
+        assert warm_mod.cache_age(
             symbols=["AAPL"], fx=("CNY", ("USD",), False)
         ) == float("inf")
         _seed_fx("CNY", {"USD": 7.1}, age_seconds=60)
-        age = portfolio_page._cache_age(symbols=["AAPL"], fx=("CNY", ("USD",), False))
+        age = warm_mod.cache_age(
+            symbols=["AAPL"], fx=("CNY", ("USD",), False)
+        )
         assert 100 <= age <= 180  # 取两者最旧
 
     def test_disk_refresh_plan_derives_from_storage(self, monkeypatch, tmp_path):
@@ -600,14 +605,14 @@ class TestPeriodicKeepWarm:
         storage.save_watchlist(
             {"watchlist": [{"symbol": "600519.SS", "lists": ["测试"]}]}, wl
         )
-        monkeypatch.setattr(portfolio_page, "WATCHLIST_PATH", wl)
+        monkeypatch.setattr(storage, "WATCHLIST_PATH", wl)
         monkeypatch.setattr(storage, "PORTFOLIO_PATH", pf)
         _seed_quotes(
             {"AAPL": 100.0, "600519.SS": 1500.0},
             age_seconds=60,
             currencies={"AAPL": "USD", "600519.SS": "CNY"},
         )
-        plan = portfolio_page._disk_refresh_plan()
+        plan = warm_mod.disk_refresh_plan()
         symbols, prefer, ibkr, lp, crypto = plan["quotes"]
         assert symbols == ("AAPL", "600519.SS")
         # load_settings() 默认参数定义时绑定, 读的是真实 settings.json;
@@ -628,9 +633,9 @@ class TestPeriodicKeepWarm:
         pf = tmp_path / "portfolio.json"
         storage.save_portfolio({"base_currency": "CNY", "holdings": []}, pf)
         storage.save_watchlist({"watchlist": []}, wl)
-        monkeypatch.setattr(portfolio_page, "WATCHLIST_PATH", wl)
+        monkeypatch.setattr(storage, "WATCHLIST_PATH", wl)
         monkeypatch.setattr(storage, "PORTFOLIO_PATH", pf)
-        assert portfolio_page._disk_refresh_plan() is None
+        assert warm_mod.disk_refresh_plan() is None
 
     def test_background_loop_refreshes_only_when_data_old(
         self, monkeypatch, tmp_path, _clean_quote_state
@@ -646,14 +651,14 @@ class TestPeriodicKeepWarm:
             pf,
         )
         storage.save_watchlist({"watchlist": []}, wl)
-        monkeypatch.setattr(portfolio_page, "WATCHLIST_PATH", wl)
+        monkeypatch.setattr(storage, "WATCHLIST_PATH", wl)
         monkeypatch.setattr(storage, "PORTFOLIO_PATH", pf)
         fake = _recording_quotes(200.0)
         monkeypatch.setattr(prices, "get_quotes", fake)
         # 汇率也要 mock: 否则合并任务会真去跑 CFETS/IBKR (仓库 settings 里
         # IBKR 开着, 连接拒绝 + akshare 兜底要 10s+)
         monkeypatch.setattr(
-            portfolio_page,
+            warm_mod,
             "get_fx_rates",
             lambda base, curs, **kw: ({c: 7.1 for c in curs if c != base}, []),
         )
@@ -674,7 +679,7 @@ class TestPeriodicKeepWarm:
         _seed_fx("CNY", {"USD": 7.1}, age_seconds=60)
         sleeps["n"] = 0  # 每次调用只允许跑完一个周期 body
         with pytest.raises(_StopLoop):
-            portfolio_page._background_refresher_loop()
+            warm_mod.background_refresher_loop()
         assert fake.calls == [], "数据还新不该刷新"
 
         # 行情旧了 (600s > 240s 周期): 第一周期即刷新
@@ -684,7 +689,7 @@ class TestPeriodicKeepWarm:
         _seed_fx("CNY", {"USD": 7.1}, age_seconds=60)
         sleeps["n"] = 0
         with pytest.raises(_StopLoop):
-            portfolio_page._background_refresher_loop()
+            warm_mod.background_refresher_loop()
         assert _wait_for(lambda: fake.calls, sleep_fn=real_sleep), "数据旧了应刷新"
         assert _wait_coordinator_idle(real_sleep), "后台线程未跑完"
 
@@ -697,7 +702,7 @@ class TestPeriodicKeepWarm:
             con.commit()
         sleeps["n"] = 0
         with pytest.raises(_StopLoop):
-            portfolio_page._background_refresher_loop()
+            warm_mod.background_refresher_loop()
         assert _wait_for(lambda: fake.calls, sleep_fn=real_sleep), "汇率缺失应刷新"
         assert _wait_coordinator_idle(real_sleep), "后台线程未跑完"
 
@@ -711,11 +716,11 @@ class TestPeriodicKeepWarm:
 
         # 同一进程里前面的用例可能已启动过 (app.py main 会调), 重置标志位
         # 回到"未启动"态, 才能确定性地验证"起一条 + 不新增"
-        portfolio_page._refresher_started = False
+        warm_mod._refresher_started = False
         before = _count()
-        portfolio_page.ensure_background_refresher()
-        portfolio_page.ensure_background_refresher()
-        portfolio_page.ensure_background_refresher()
+        warm_mod.ensure_background_refresher()
+        warm_mod.ensure_background_refresher()
+        warm_mod.ensure_background_refresher()
         assert _count() == before + 1
         for t in threading.enumerate():
             if t.name == "quote-refresher":
@@ -736,9 +741,9 @@ class TestRefreshCoordinator:
         }
 
     def test_key_changes_with_either_side(self):
-        k_q = portfolio_page._plan_key(self._plan(quotes=self.Q_ARGS))
-        k_q2 = portfolio_page._plan_key(self._plan(quotes=self.Q_ARGS, fx=self.F_ARGS))
-        k_q3 = portfolio_page._plan_key(
+        k_q = warm_mod.refresh_key(self._plan(quotes=self.Q_ARGS))
+        k_q2 = warm_mod.refresh_key(self._plan(quotes=self.Q_ARGS, fx=self.F_ARGS))
+        k_q3 = warm_mod.refresh_key(
             self._plan(quotes=(("MSFT",), False, False, False, "auto"))
         )
         assert len({k_q, k_q2, k_q3}) == 3
@@ -753,13 +758,13 @@ class TestRefreshCoordinator:
             lambda symbols, **kw: (q_calls.append(tuple(symbols)), ({}, {}, []))[1],
         )
         monkeypatch.setattr(
-            portfolio_page,
+            warm_mod,
             "get_fx_rates",
             lambda base, curs, **kw: (f_calls.append((base, tuple(curs))), ({}, []))[1],
         )
         plan = self._plan(quotes=self.Q_ARGS, fx=self.F_ARGS)
-        key = portfolio_page._plan_key(plan)
-        assert portfolio_page._start_refresh(key, plan) is True
+        key = warm_mod.refresh_key(plan)
+        assert warm_mod.start_refresh(key, plan) is True
         assert _wait_for(lambda: q_calls and f_calls), "任务未同时刷行情和汇率"
         assert q_calls == [("AAPL",)]
         assert f_calls == [("CNY", ("USD",))]
@@ -777,26 +782,26 @@ class TestRefreshCoordinator:
 
         monkeypatch.setattr(prices, "get_quotes", slow)
         plan = self._plan(quotes=self.Q_ARGS)
-        key = portfolio_page._plan_key(plan)
+        key = warm_mod.refresh_key(plan)
 
-        assert portfolio_page._start_refresh(key, plan) is True
+        assert warm_mod.start_refresh(key, plan) is True
         assert entered.wait(10), "后台线程未启动"
         # 进行中: 同 key 再发起被去重 (多标签页/连续 rerun 只发一次网络)
-        assert portfolio_page._start_refresh(key, plan) is False
-        inflight, done = portfolio_page._refresh_state(key)
+        assert warm_mod.start_refresh(key, plan) is False
+        inflight, done = warm_mod.refresh_state(key)
         assert inflight and done is None
 
         release.set()
-        assert _wait_for(lambda: key in portfolio_page._refresh_done_at)
+        assert _wait_for(lambda: key in warm_mod._refresh_done_at)
         # 刚完成: 最短重试间隔内不再发起
-        assert portfolio_page._start_refresh(key, plan) is False
+        assert warm_mod.start_refresh(key, plan) is False
         # 完成时间拨到间隔之外 → 允许再次发起
-        with portfolio_page._refresh_lock:
-            portfolio_page._refresh_done_at[key] = (
-                time.time() - portfolio_page._REFRESH_MIN_INTERVAL - 1
+        with warm_mod._refresh_lock:
+            warm_mod._refresh_done_at[key] = (
+                time.time() - warm_mod.REFRESH_MIN_INTERVAL - 1
             )
-        assert portfolio_page._start_refresh(key, plan) is True
-        assert _wait_for(lambda: not portfolio_page._refresh_state(key)[0])
+        assert warm_mod.start_refresh(key, plan) is True
+        assert _wait_for(lambda: not warm_mod.refresh_state(key)[0])
 
     def test_failure_swallowed_and_recorded(
         self, monkeypatch, _clean_quote_state
@@ -808,8 +813,8 @@ class TestRefreshCoordinator:
 
         monkeypatch.setattr(prices, "get_quotes", boom)
         plan = self._plan(quotes=self.Q_ARGS)
-        key = portfolio_page._plan_key(plan)
-        assert portfolio_page._start_refresh(key, plan) is True
-        assert _wait_for(lambda: key in portfolio_page._refresh_done_at)
-        inflight, _done = portfolio_page._refresh_state(key)
+        key = warm_mod.refresh_key(plan)
+        assert warm_mod.start_refresh(key, plan) is True
+        assert _wait_for(lambda: key in warm_mod._refresh_done_at)
+        inflight, _done = warm_mod.refresh_state(key)
         assert not inflight

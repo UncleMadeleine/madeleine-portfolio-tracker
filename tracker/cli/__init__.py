@@ -19,6 +19,7 @@
   sync      从 IB Gateway 账户同步持仓 (已并入 import ibkr, 保留兼容)
   index-kline 宏观/风险指数K线 (IX.<KEY>, 独立于股票 kline)
   calendar  财报/重大事件日历 (组合+自选, 默认本月+下月)
+  warm      主动预热/保温行情、汇率与财经日历缓存 (可 --interval 常驻)
   init      首次使用: 把包内配置模板复制到数据目录 (pip 安装后必走一步)
 
 所有子命令均支持 --json 输出机器可读结果, 便于脚本与 AI 消费。

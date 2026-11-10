@@ -25,18 +25,15 @@ if (_ROOT / "tracker" / "__init__.py").exists() and str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from tracker import storage  # noqa: E402
+from tracker.services.warm import ensure_warmers  # noqa: E402
 from tracker.ui import theme  # noqa: E402
-from tracker.ui.calendar_page import (  # noqa: E402
-    ensure_calendar_refresher,
-    render_calendar_page,
-)
+from tracker.ui.calendar_page import render_calendar_page  # noqa: E402
 from tracker.ui.fundamentals_page import render_fundamentals_page  # noqa: E402
 from tracker.ui.import_page import render_import_page  # noqa: E402
 from tracker.ui.index_page import render_index_page  # noqa: E402
 from tracker.ui.kline_page import render_kline_page  # noqa: E402
 from tracker.ui.portfolio_page import (  # noqa: E402
     _post_import,
-    ensure_background_refresher,
     render_portfolio_page,
 )
 from tracker.ui.settings_page import render_settings_page  # noqa: E402
@@ -47,10 +44,9 @@ def main() -> None:
     # 全站视觉层 (深色玻璃主题): 每次 rerun 重新注入, 只做样式不影响功能
     theme.inject()
     # 进程级后台保温: 服务长期运行时持续刷新行情/汇率/日历磁盘缓存 (没有
-    # 任何页面打开也更新, 后来者打开即是新鲜数据)。幂等, 每次 rerun 重复
-    # 调用无副作用
-    ensure_background_refresher()
-    ensure_calendar_refresher()
+    # 任何页面打开也更新, 后来者打开即是新鲜数据)。实现无 Streamlit 依赖,
+    # 与 CLI `tracker warm` 共用同一套服务。幂等, 每次 rerun 重复调用无副作用
+    ensure_warmers()
 
     def _run_kline() -> None:
         settings = storage.load_settings()
@@ -145,8 +141,7 @@ def cli_main() -> None:
     # 浏览器会话触发脚本执行。否则容器/服务空跑时 main() 从未运行, 磁盘
     # 缓存只会越来越旧 ——「常驻服务」场景下自动刷新实际从未开始。
     # 两条线程都只做取数 + SQLite, 不碰 st.* API, 可在 server 就绪前安全启动。
-    ensure_background_refresher()
-    ensure_calendar_refresher()
+    ensure_warmers()
 
     with as_file(files(__package__).joinpath("app.py")) as app_path:
         sys.argv = ["streamlit", "run", str(app_path), *sys.argv[1:]]

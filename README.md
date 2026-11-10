@@ -29,7 +29,7 @@ Madeleine Portfolio Tracker 是一款**本地优先**的投资组合追踪工具
 - **宏观/风险指数K线** — 独立 IX.<KEY> 代码规范（美元指数 / VIX / 沪深 300 / 商品期货主力连续（黄金·白银·鸡蛋·豆粕·豆一·豆二·生猪·碳酸锂）/ 铀现货与长协价（Cameco 月度 U3O8）/ 水泥网建材指数 / 恒生官网港股指数（恒生指数·国企·恒生科技·红筹·恒生综合·恒指波幅 等共 12 个）/ 恒生AH股溢价指数 等，共 51 个，`index-kline --list` 可查全部），独立页面与 `index-kline` 子命令，独立 provider 源链
 - **多股对比** — 任意代码同坐标系折线对比，归一化（起点=100）跨币种跨量级比较
 - **财经日历** — 持仓/自选的本月与下月财报、预约披露、除权除息/派息事件（yfinance 单票 + akshare 整批，长桥可选兜底），独立页面与 `calendar` 子命令；支持导出 iCalendar (`.ics`) 到 Apple 日历 / Google Calendar / Outlook；A股只请求窗口内可能命中的报表期、按范围跳过无关板块，取数并发执行；首屏先展示磁盘缓存并后台刷新，服务进程内置保温线程按默认范围周期预热缓存，冷启动带 A股整批/海外单票进度条
-- **首屏性能** — 组合与日历均采用 stale-while-revalidate：先渲染 30 分钟 / 7 天内的旧缓存秒开，后台静默重取；仅在完全无缓存时阻塞取数（组合/日历均显示实时进度条）；行情/汇率/日历均有进程级保温线程周期刷新磁盘缓存
+- **首屏性能** — 组合与日历均采用 stale-while-revalidate：先渲染 30 分钟 / 7 天内的旧缓存秒开，后台静默重取；仅在完全无缓存时阻塞取数（组合/日历均显示实时进度条）；行情/汇率/日历均有进程级保温线程周期刷新磁盘缓存，且保温服务已抽成无 Streamlit 依赖的 `tracker/services/warm.py`，CLI 可用 `tracker warm` 一次性预热或 `--interval` 常驻保温
 - **历史净值曲线** — 每日组合快照落独立 SQLite（`nav_history.db`，与行情缓存分离），组合页画总市值 + 成本走势；支持 `nav --save` 手动存档、组合页每次渲染自动 upsert、`nav --backfill` 按当前持仓 × 历史收盘价回填近似历史（含历史汇率折算）
 - **基本面分析 (第一期)** — 单只 A+H 股票的 AH 溢价率曲线：A 股收盘 ÷ (H 股收盘 × 历史汇率) − 1，支持任意 A+H 股票对 / 范围切换，0% 同价参考线 + 区间高低点/均值/分位摘要（独立页面 `/fundamentals`）
 - **Streamlit 可视化页面** — 组合明细 / 资产配置 / 自选提醒 / K线查询（含多股走势对比）/ 指数K线 / 基本面分析 / 日历 / 设置
@@ -186,6 +186,12 @@ python -m tracker.cli import wallet solana Hxxxx...            # Solana 链 (bas
 python -m tracker.cli cache info
 python -m tracker.cli cache clear
 
+# 主动预热 / 常驻保温 (不依赖 Streamlit 前端进程; 与页面共用同一磁盘缓存)
+python -m tracker.cli warm                          # 预热一次 (持仓+自选)
+python -m tracker.cli warm --symbols AAPL TSLA      # 额外代码也预热
+python -m tracker.cli warm --calendar-only --json   # 只预热财经日历
+python -m tracker.cli warm --interval 300           # 常驻, 每 5 分钟检查一次
+
 # 统一导入（追加合并为默认，--overwrite 覆盖全部持仓）
 python -m tracker.cli import ibkr --dry-run            # 预览 IBKR 账户持仓（需 Gateway 已登录）
 python -m tracker.cli import ibkr --mode live --overwrite
@@ -229,6 +235,7 @@ python -m tracker.cli export -f json           # 完整快照 JSON
 python -m tracker.cli longport-login --json    # 长桥 OAuth 授权 URL（脚本消费，不自动开浏览器）
 python -m tracker.cli eodhd status --json      # EODHD BYOK 是否可用（token 掩码，不泄露明文）
 python -m tracker.cli eodhd test AAPL --json   # EODHD 连通性自检（行情 + 最近 7 天历史 + 基本面）
+python -m tracker.cli warm --json              # 预热缓存（可 --interval 常驻，供后续命令秒回）
 ```
 
 - 无交互、无 TUI 依赖，纯 stdout；错误走 stderr 并以非零码退出
@@ -689,6 +696,10 @@ python -m tracker.cli import wallet polygon 0x... --tokenlist my_tokens.json
 本仓库的双前端设计：Streamlit 给人看，CLI 给 Agent 用。hermes / openclaw 等手机 Agent 只需执行
 `python -m tracker.cli <子命令> --json` 即可获取与页面完全一致的数据（持仓/自选/行情/K线/汇率/导出），
 无需打开浏览器。建议 Agent 默认使用 `snapshot --json` 作为「现在怎么样了」的一站式入口。
+
+CLI 不再依赖前端进程做缓存保温：`python -m tracker.cli warm` 可按磁盘持仓/自选预热一次，
+`warm --interval 300` 可常驻周期刷新；两者都和页面共用 `var/quotes_cache.db`，也可在启动
+`tracker-ui` 后直接受益于前端保温线程写入的缓存。
 
 **给 AI 的完整操作手册**（子命令速查、代码规范、数据源优先级、配置文件字段、常见操作流程、
 注意事项）随仓库分发在 [`skills/portfolio-tracker/SKILL.md`](skills/portfolio-tracker/SKILL.md)，

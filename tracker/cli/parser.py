@@ -953,6 +953,55 @@ def _add_cache_parser(sub: argparse.ArgumentParser) -> None:
     p_c.add_argument("--json", action="store_true")
     p_c.set_defaults(func=_cmd(".cache", "cmd_cache"))
 
+
+def _add_warm_parser(sub: argparse.ArgumentParser) -> None:
+    # ---- warm ----
+    p_w = sub.add_parser(
+        "warm",
+        help="主动预热/保温行情、汇率与财经日历缓存",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "示例:\n"
+            "  tracker warm                         # 预热一次 (持仓+自选)\n"
+            "  tracker warm --symbols AAPL TSLA     # 额外代码也预热\n"
+            "  tracker warm --interval 300          # 常驻, 每 5 分钟检查一次\n"
+            "  tracker warm --calendar-only --json  # 只预热日历, JSON 输出\n"
+        ),
+    )
+    mode = p_w.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--once", action="store_true", help="只预热一次 (默认行为)"
+    )
+    mode.add_argument(
+        "--interval",
+        type=positive_int,
+        default=None,
+        metavar="SECONDS",
+        help="常驻保温间隔秒数 (启动先预热一次, 之后按间隔重复)",
+    )
+    scope = p_w.add_mutually_exclusive_group()
+    scope.add_argument(
+        "--quotes-only", action="store_true", help="只预热行情 + 汇率"
+    )
+    scope.add_argument(
+        "--calendar-only", action="store_true", help="只预热财经日历"
+    )
+    p_w.add_argument(
+        "--symbols",
+        nargs="+",
+        default=None,
+        metavar="SYMBOL",
+        help="额外预热代码 (可多个; 默认只覆盖持仓 + 自选)",
+    )
+    p_w.add_argument(
+        "--refresh",
+        action="store_true",
+        help="忽略行情 5min 磁盘缓存强制刷新",
+    )
+    p_w.add_argument("--json", action="store_true", help="输出 JSON")
+    p_w.set_defaults(func=_cmd(".warm", "cmd_warm"))
+
+
 def _add_init_parser(sub: argparse.ArgumentParser) -> None:
     # ---- init (首次使用: 模板落地到数据目录) ----
     p_init = sub.add_parser(
@@ -994,6 +1043,7 @@ _SUBCOMMAND_REGISTRARS = (
     _add_eodhd_parser,
     _add_import_wallet_parser,
     _add_cache_parser,
+    _add_warm_parser,
     _add_init_parser,
 )
 

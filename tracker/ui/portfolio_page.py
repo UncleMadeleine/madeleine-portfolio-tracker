@@ -9,15 +9,15 @@
 同理 (见 _load_fx): akshare/CFETS 冷启 ~10s 的即期查询同样落盘先用后刷。
 
 数据持续更新由两路互补: 看门狗片段 (页面开着) 在磁盘数据临近过期时主动
-重取, 用户看到的数据滚动更新; 进程级保温线程 (ensure_background_refresher,
-app.py 入口启动) 在没有任何页面打开时照常刷磁盘缓存, 后来者打开即是新鲜
-数据。两路共用刷新协调器 (_start_refresh), 同数据面不并发、失败有节流。
+重取, 用户看到的数据滚动更新; 进程级保温线程 (tracker.services.warm,
+app.py 入口调用 ensure_warmers 启动) 在没有任何页面打开时照常刷磁盘缓存,
+后来者打开即是新鲜数据。两路共用刷新协调器 (services.warm.start_refresh),
+同数据面不并发、失败有节流; CLI `tracker warm` 也复用同一套服务。
 """
 
 from __future__ import annotations
 
 import logging
-import threading
 import time
 from datetime import datetime
 
@@ -31,6 +31,7 @@ from tracker.analytics import build_view, by_symbol, summarize
 from tracker.fx import get_fx_rates
 from tracker.storage import CorruptDataError, DataFileLocked
 from tracker.symbols import parse
+from tracker.services import warm as warm_mod
 from tracker.services.watchlist import (
     build_watchlist_view,
     entries_for,
@@ -87,13 +88,8 @@ def cached_fx(base: str, currencies: tuple[str, ...], use_ibkr: bool = False):
 # 数据, 等是唯一选择。
 QUOTE_FRESH_TTL = cache_mod.CACHE_TTL
 QUOTE_STALE_TTL = cache_mod.STALE_TTL
-# 同一数据面两次后台刷新的最短间隔: 刷新失败 (网络中断/代码失效) 时避免看门狗
-# 高频重试 (失败项在 providers 层另有 5min 负缓存兜底)
-_REFRESH_MIN_INTERVAL = 60.0
 # 看门狗片段轮询间隔 (秒): 后台刷新完成后尽快 rerun 换新数据
 _REFRESH_POLL = 2.0
-# _refresh_done_at 保留的最近完成记录数 (超出按时间戳淘汰, 防长驻服务内存增长)
-_REFRESH_HISTORY = 64
 # session_state 里的首屏刷新计划 (每次渲染重建, 看门狗据此调度)
 _PLAN_KEY = "_first_screen_plan"
 # 本会话最近一次写入历史净值的记录指纹: 用户每次交互都会 rerun, 数值没变时
@@ -103,33 +99,20 @@ _NAV_SNAPSHOT_KEY = "_nav_snapshot_written"
 # ---------- 周期保温: 服务长期运行时数据持续更新 ----------
 # 页面开着 → 看门狗片段按周期主动重取 (用户看到的数据滚动更新);
 # 页面全关 → 进程级保温线程照常刷磁盘缓存 (后来者打开即是新鲜数据)。
-# 基准周期等于行情新鲜期 (300s): 早于它触发时 get_quotes 仍会命中磁盘缓存,
-# 只是空转一轮并把「完成」记账, 真正回源反而被推迟到下一个周期。符号集越
-# 大周期越长 (大组合一轮刷新就要数分钟, 周期不拉长会把刷新器拖到常驻满
-# 负荷, Yahoo 限流是 IP 级的, 连累 K线页), 上限 = 陈旧期。
-_REFRESH_PERIOD = float(cache_mod.CACHE_TTL)
-_REFRESH_PERIOD_PER_SYMBOL = 2.0
-_REFRESH_PERIOD_MAX = 1800.0
-# 保温线程的检查粒度: 磁盘年龄才是刷新依据, 每 60s 查一次才能让实际回源
-# 贴近缓存过期时刻 (而不是睡满一个周期后才刚好看一眼)。
-_REFRESH_TICK = 60.0
-
-_refresh_lock = threading.Lock()
-# key → 是否正在刷新 (进程内跨会话共享: 同数据面多个标签页只发一次网络)
-_refresh_inflight: set[tuple] = set()
-# key → 最近一次刷新完成时间戳 (看门狗据此 rerun / 节流重试 / 周期保温)
-_refresh_done_at: dict[tuple, float] = {}
-# 进程级保温线程只启一次 (模块级标志 + 锁; importlib.reload 会重置, 无害)
-_refresher_lock = threading.Lock()
-_refresher_started = False
+# 具体实现已抽到 tracker/services/warm.py (无 Streamlit 依赖, CLI
+# `tracker warm` 复用同一套协调器); 这里保留页面常量别名与薄封装。
+_REFRESH_POLL = 2.0
+_REFRESH_MIN_INTERVAL = warm_mod.REFRESH_MIN_INTERVAL
+_REFRESH_PERIOD = warm_mod.REFRESH_PERIOD
+_REFRESH_PERIOD_PER_SYMBOL = warm_mod.REFRESH_PERIOD_PER_SYMBOL
+_REFRESH_PERIOD_MAX = warm_mod.REFRESH_PERIOD_MAX
+_REFRESH_TICK = warm_mod.REFRESH_TICK
+_REFRESH_HISTORY = warm_mod.REFRESH_HISTORY
 
 
 def _refresh_period(n_symbols: int) -> float:
-    """保温周期 (秒): 基准 240s 起, 按符号集规模拉长, 上限 30min."""
-    return min(
-        max(_REFRESH_PERIOD, n_symbols * _REFRESH_PERIOD_PER_SYMBOL),
-        _REFRESH_PERIOD_MAX,
-    )
+    """保温周期 (秒): 基准 300s 起, 按符号集规模拉长, 上限 30min."""
+    return warm_mod.refresh_period(n_symbols)
 
 
 def _plan() -> dict:
@@ -183,66 +166,20 @@ def _plan_set(kind: str, args, dirty: bool = False) -> None:
 
 def _plan_key(plan: dict) -> tuple:
     """刷新任务键: 行情参数 + 汇率参数 (任一变化都是新任务)."""
-    return (plan.get("quotes"), plan.get("fx"))
+    return warm_mod.refresh_key(plan)
 
 
 def _refresh_state(key: tuple) -> tuple[bool, float | None]:
-    with _refresh_lock:
-        return key in _refresh_inflight, _refresh_done_at.get(key)
+    return warm_mod.refresh_state(key)
 
 
 def _start_refresh(key: tuple, plan: dict) -> bool:
     """启动一次后台刷新 (行情 + 汇率); 返回是否真正发起.
 
-    同 key 不并发 (多标签页/连续 rerun 只发一次网络) + 最短重试间隔 (刷新
-    失败后避免看门狗高频重试)。线程内只跑纯取数链路 (providers/akshare +
-    SQLite, 不碰任何 st.* API): st.cache_data 依赖 ScriptRunner 上下文, 后台
-    线程调用会炸; 磁盘缓存的读取在 get_quotes/get_fx_rates 内部, 新鲜项
-    仍秒回不发网络。
+    实现与进程级保温线程共用 tracker.services.warm: 同 key 不并发、失败
+    节流、线程内只跑取数链路 (不碰 st.* API)。
     """
-    q_args = plan.get("quotes")
-    f_args = plan.get("fx")
-    now = time.time()
-    with _refresh_lock:
-        if key in _refresh_inflight:
-            return False
-        if now - _refresh_done_at.get(key, 0.0) < _REFRESH_MIN_INTERVAL:
-            return False
-        _refresh_inflight.add(key)
-        # 长驻服务里键会随切范围/改持仓无限累积: 只留最近 _REFRESH_HISTORY 个
-        if len(_refresh_done_at) > _REFRESH_HISTORY:
-            for old in sorted(_refresh_done_at, key=_refresh_done_at.get)[
-                : len(_refresh_done_at) - _REFRESH_HISTORY
-            ]:
-                _refresh_done_at.pop(old, None)
-
-    def _run() -> None:
-        try:
-            if q_args:
-                symbols, prefer_akshare, use_ibkr, use_longport, crypto_source = q_args
-                prices.get_quotes(
-                    list(symbols),
-                    prefer_akshare=prefer_akshare,
-                    use_ibkr=use_ibkr,
-                    use_longport=use_longport,
-                    crypto_source=crypto_source,
-                )
-            if f_args:
-                base, currencies, use_ibkr = f_args
-                get_fx_rates(base, list(currencies), use_ibkr=use_ibkr)
-        except Exception:  # noqa: BLE001 - 刷新失败: 陈旧数据继续展示, 下轮重试
-            # 静默 pass 会让持续失败退化成无诊断的热循环 (每轮重试都视为
-            # "完成"), 至少留下日志痕迹定位是哪个数据面刷不动
-            logging.getLogger(__name__).warning(
-                "首屏后台刷新失败 (key=%s), 下轮重试", key, exc_info=True
-            )
-        finally:
-            with _refresh_lock:
-                _refresh_inflight.discard(key)
-                _refresh_done_at[key] = time.time()
-
-    threading.Thread(target=_run, name="first-screen-refresh", daemon=True).start()
-    return True
+    return warm_mod.start_refresh(key, plan)
 
 
 def _merged_issue_lines(errors: dict[str, str], issues: list[str]) -> list[str]:
@@ -492,117 +429,22 @@ def _cache_age(symbols=(), fx=None) -> float:
 
     后台保温线程用 (没有 session 计划可读), 与页面 _plan_data_age 同口径。
     """
-    worst = 0.0
-    if symbols:
-        hits, ages = cache_mod.get_cached_with_age(list(symbols), ttl=10**9)
-        if len(hits) < len(symbols):
-            return float("inf")
-        if ages:
-            worst = max(worst, max(ages.values()))
-    if fx:
-        base, currencies, _use_ibkr = fx
-        need = [c for c in currencies if c != base]
-        if need:
-            rates, f_ages = cache_mod.get_fx_cached(base, need, ttl=10**9)
-            if len(rates) < len(need):
-                return float("inf")
-            if f_ages:
-                worst = max(worst, max(f_ages.values()))
-    return worst
-
-
-def ensure_background_refresher() -> None:
-    """启动进程级后台保温线程 (每个服务进程一条, 惰性启动, 重复调用无副作用).
-
-    看门狗片段只在组合页开着时轮询; 这条线程让服务在没有任何页面打开时也
-    持续刷新磁盘缓存 —— 之后任何人打开都是新鲜数据秒开, 保存了新持仓的
-    下一个周期也会自动补取 (无需等页面渲染)。与页面级刷新共用协调器
-    (_start_refresh 的 inflight/间隔去重), 不会重复发网络。
-    """
-    global _refresher_started
-    with _refresher_lock:
-        if _refresher_started:
-            return
-        _refresher_started = True
-    threading.Thread(
-        target=_background_refresher_loop, name="quote-refresher", daemon=True
-    ).start()
+    return warm_mod.cache_age(symbols, fx)
 
 
 def _disk_refresh_plan() -> dict | None:
-    """从磁盘数据 (持仓/自选/设置) 推导刷新参数; 无代码时返回 None.
+    """从磁盘数据 (持仓/自选/设置) 推导刷新参数; 无代码时返回 None."""
+    return warm_mod.disk_refresh_plan(watchlist_path=WATCHLIST_PATH)
 
-    不读 session_state: 后台线程跨会话共享, 且页面可能一个都没开。币种从
-    磁盘行情缓存推导 (与页面 _load_fx 同源, 保证 key 一致可被协调器去重)。
-    """
-    try:
-        settings = storage.load_settings()
-        portfolio = storage.load_portfolio(storage.PORTFOLIO_PATH)
-        watch = storage.load_watchlist(WATCHLIST_PATH)
-    except Exception:  # noqa: BLE001 - 读盘失败: 下个周期再试
-        return None
-    raw_symbols = [
-        str(h.get("symbol", "")).strip() for h in portfolio.get("holdings", [])
-    ]
-    raw_symbols += [str(e["symbol"]) for e in merge_entries(watch)]
-    # 与页面 _load_quotes 同口径: 归一成 parse().yahoo 再查缓存。否则磁盘里
-    # 的别名 (600519.SH) 与缓存键 (600519.SS) 永远对不上, _cache_age 判成
-    # inf → 后台保温线程每个周期都重取同批代码, 永不收敛。
-    symbols_list: list[str] = []
-    for s in raw_symbols:
-        if not s:
-            continue
-        try:
-            yahoo = parse(s).yahoo
-        except ValueError:
-            continue  # 无法识别的代码取不到数, 不进保温计划
-        if yahoo not in symbols_list:
-            symbols_list.append(yahoo)
-    symbols = tuple(symbols_list)
-    if not symbols:
-        return None
-    q_args = (
-        symbols,
-        settings["prefer_akshare"],
-        settings["use_ibkr"],
-        bool(settings.get("use_longport")),
-        settings["crypto_source"],
-    )
-    base = portfolio.get("base_currency", "CNY")
-    hits, _ages = cache_mod.get_cached_with_age(list(symbols), ttl=10**9)
-    # 币种排除 base (与页面 _load_fx 的 need 同口径, 保证刷新 key 一致可去重)
-    currencies = tuple(
-        sorted({q.currency for q in hits.values() if q.currency != base})
-    )
-    f_args = (base, currencies, settings["use_ibkr"]) if currencies else None
-    return {"quotes": q_args, "fx": f_args}
+
+def ensure_background_refresher() -> None:
+    """启动进程级后台保温线程 (每个服务进程一条, 惰性启动, 重复调用无副作用)."""
+    warm_mod.ensure_background_refresher(_disk_refresh_plan)
 
 
 def _background_refresher_loop() -> None:
-    """保温线程主循环: 每 60s 检查磁盘数据年龄, 到周期才刷新.
-
-    检查粒度固定 60s, 刷新周期按符号集规模缩放 (见 _refresh_period):
-    这样实际回源贴近缓存过期时刻, 而不用睡满整个周期才看一次年龄。
-    年龄判定与页面看门狗同口径 (_cache_age): 页面刚刷新的数据这里会跳过,
-    不重复发网络。任何异常都吞掉续命 —— 保温失败不该影响服务本身。
-    """
-    logger = logging.getLogger(__name__)
-    while True:
-        time.sleep(_REFRESH_TICK)
-        try:
-            plan = _disk_refresh_plan()
-            if not plan or not (plan.get("quotes") or plan.get("fx")):
-                continue
-            q_args = plan.get("quotes") or ()
-            symbols = q_args[0] if q_args else ()
-            period = _refresh_period(len(symbols))
-            # 年龄判定与页面看门狗同口径: 页面刚刷新的数据这里会跳过
-            if _cache_age(symbols, plan.get("fx")) < period:
-                continue
-            _start_refresh(_plan_key(plan), plan)
-        except Exception:  # noqa: BLE001 - 保温失败不影响服务
-            # 吞掉续命但留日志: 持续失败 (如缓存库损坏) 不能完全无痕迹
-            logger.warning("保温线程刷新失败", exc_info=True)
+    """保温线程主循环 (实现见 tracker.services.warm)."""
+    warm_mod.background_refresher_loop(_disk_refresh_plan)
 
 
 def _post_import() -> None:

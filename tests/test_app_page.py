@@ -151,15 +151,10 @@ def test_cli_main_starts_background_warmers(monkeypatch, tmp_path):
 
     events: list[str] = []
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setattr(
-        app_mod, "ensure_background_refresher", lambda: events.append("quotes")
-    )
-    monkeypatch.setattr(
-        app_mod, "ensure_calendar_refresher", lambda: events.append("calendar")
-    )
+    monkeypatch.setattr(app_mod, "ensure_warmers", lambda: events.append("warmers"))
     monkeypatch.setattr(st_cli, "main", lambda: events.append("streamlit"))
     app_mod.cli_main()
-    assert events == ["quotes", "calendar", "streamlit"]
+    assert events == ["warmers", "streamlit"]
 
 
 def test_navigation_registers_independent_urls(app_boot):

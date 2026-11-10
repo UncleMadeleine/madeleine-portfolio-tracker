@@ -33,7 +33,7 @@ Madeleine Portfolio Tracker 是一款**本地优先**的投资组合追踪工具
 - **历史净值曲线** — 每日组合快照落独立 SQLite（`nav_history.db`，与行情缓存分离），组合页画总市值 + 成本走势；支持 `nav --save` 手动存档、组合页每次渲染自动 upsert、`nav --backfill` 按当前持仓 × 历史收盘价回填近似历史（含历史汇率折算）
 - **基本面分析 (第一期)** — 单只 A+H 股票的 AH 溢价率曲线：A 股收盘 ÷ (H 股收盘 × 历史汇率) − 1，支持任意 A+H 股票对 / 范围切换，0% 同价参考线 + 区间高低点/均值/分位摘要（独立页面 `/fundamentals`）
 - **Streamlit 可视化页面** — 组合明细 / 资产配置 / 自选提醒 / K线查询（含多股走势对比）/ 指数K线 / 基本面分析 / 日历 / 设置
-- **统一 CLI** — 21 个子命令（快照、净值、报价、持仓、自选、监控报告、导出、汇率、历史、K线、日历、搜索、对比、指数K线、导入、长桥登录、EODHD 自检、同步、钱包导入、缓存、初始化），全部支持机器可读输出（`--json`，`report`/`export` 为 `-f json`）
+- **统一 CLI** — 22 个子命令（快照、净值、报价、持仓、自选、监控报告、导出、汇率、历史、K线、日历、搜索、对比、指数K线、导入、长桥登录、EODHD 自检、同步、钱包导入、缓存管理、缓存保温 `warm`、初始化），全部支持机器可读输出（`--json`，`report`/`export` 为 `-f json`）；`warm` 可一次性预热或 `--interval` 常驻，不依赖 Streamlit 进程
 - **链上钱包导入** — EVM 五链 + TRON + Solana 共七条链地址余额只读查询，一键写入持仓
 - **A股券商持仓导入** — 解析券商客户端导出的 CSV/Excel 持仓文件
 
@@ -398,7 +398,7 @@ tracker/ui/           Streamlit 页面包（streamlit run tracker/ui/app.py / �
 tracker/
 ├── __main__.py         python -m tracker 入口（转发到 cli）
 ├── paths.py            数据目录解析（TRACKER_HOME > 仓库根 > 平台用户目录）+ 包内资源定位
-├── cli/                CLI 包（python -m tracker.cli，21 个子命令各一个模块）
+├── cli/                CLI 包（python -m tracker.cli，22 个子命令各一个模块）
 │   ├── __init__.py       argparse 注册与分发
 │   ├── _common.py        JSON 序列化 / 代码归一化 / 原子写 / 错误退出
 │   ├── __main__.py       python -m tracker.cli 入口
@@ -421,7 +421,8 @@ tracker/
 │   ├── sync.py           IBKR 持仓同步（兼容入口 → import ibkr, 缺省覆盖全部持仓）
 │   ├── wallet.py         链上钱包导入（兼容入口 → import wallet, 缺省只查询不写盘）
 │   ├── longport_login.py 长桥 OAuth 登录（浏览器授权, token 自动缓存与刷新）
-│   └── cache.py          磁盘缓存管理
+│   ├── cache.py          磁盘缓存管理（info / clear）
+│   └── warm.py           缓存保温/预热 CLI（一次预热 / --interval 常驻）
 ├── storage.py          所有 JSON 配置唯一读写口（portfolio/watchlist/settings, 原子写 + 损坏时尝试历史 .bak 恢复）
 ├── nav.py              历史净值存储（独立 SQLite nav_history.db）+ 按当前持仓回填
 ├── symbols.py          自有代码规范、市场域识别、type_for_symbol() 权威域推导（唯一入口）
@@ -446,7 +447,8 @@ tracker/
 ├── services/           **独立用例层**（用例 = 取数 providers/fx + 纯函数计算 + 组装视图）
 │   ├── rules.py          阈值规则（纯函数：两级上下限状态判定 + 距离）
 │   ├── watchlist.py      自选视图组装 + 取数用例（watchlist list / report 复用）
-│   └── snapshot.py       快照用例（take_snapshot / snapshot_json, 存储剥离）
+│   ├── snapshot.py       快照用例（take_snapshot / snapshot_json, 存储剥离）
+│   └── warm.py           缓存保温/预热服务（无 Streamlit 依赖；UI 与 CLI `warm` 共用）
 ├── fundamentals.py     基本面取数门面（每股净资产/总市值, 6h 磁盘缓存）— PB/市值提醒数据源
 ├── mcap.py             历史市值序列（A股东财历史总市值 / 全球历史股本×收盘价 / 当前市值近似; 市值对比用）
 ├── ibkr.py             IBKR 行情接入 + 持仓读取（可选依赖 ib_async，失败静默回退）
@@ -803,10 +805,10 @@ A **local-first** portfolio tracker supporting **A-shares / B-shares / Beijing S
 - **Macro/risk index K-lines** — dedicated `IX.<KEY>` symbol space (USD index, VIX, CSI 300, commodity main-continuous futures — gold, silver, eggs, soybean meal, soybeans, hogs, lithium carbonate — uranium spot/long-term (Cameco monthly), cement indices, ...), separate page & `index-kline` subcommand, dedicated provider source chain
 - **Multi-symbol comparison** — same-coordinate overlay normalized to 100, optional ratio line with history-FX adjustment; plus a crypto-only sub-tab on the K-line page (independent per-coin candle panes, raw prices, shared time axis)
 - **Fundamentals (phase 1)** — single A+H stock AH-premium curve: A-share close ÷ (H-share close × historical HKD/CNY FX) − 1, selectable pair/range, 0% parity reference line, range high/low/mean/percentile summary (dedicated `/fundamentals` page)
-- **Financial calendar** — earnings, scheduled disclosures, ex-dividend/record dates for holdings & watchlist over the current and next months (yfinance per-symbol + akshare bulk, optional LongPort fallback), dedicated page & `calendar` subcommand; export to iCalendar (`.ics`) for Apple Calendar / Google Calendar / Outlook; only probabilistically relevant A-share report periods/boards are fetched, requests run concurrently, and a process-level warmer keeps the disk cache fresh for the default scope
+- **Financial calendar** — earnings, scheduled disclosures, ex-dividend/record dates for holdings & watchlist over the current and next months (yfinance per-symbol + akshare bulk, optional LongPort fallback), dedicated page & `calendar` subcommand; export to iCalendar (`.ics`) for Apple Calendar / Google Calendar / Outlook; only probabilistically relevant A-share report periods/boards are fetched, requests run concurrently, and a process-level warmer (also exposed as `tracker warm`) keeps the disk cache fresh for the default scope
 - **Historical NAV** — daily portfolio snapshots in an isolated SQLite DB (`nav_history.db`, separate from the quote cache), NAV + cost chart on the portfolio page, `nav --save` / auto-upsert on every successful portfolio render (same-day overwrite, corrected by background refreshes), and `nav --backfill` (current holdings × historical closes, historical FX converted; approximate, no historical position changes)
 - **Unified import pipeline** — IBKR account / LongPort account / on-chain wallet (5 EVM chains + TRON + Solana) / A-share broker CSV-Excel file, each with append-merge or overwrite mode; same logic drives the Streamlit「导入」page
-- **Unified CLI** — 21 subcommands (snapshot, nav, quote, watchlist, portfolio, report, export, fx, history, kline, calendar, search, compare, index-kline, import, longport-login, eodhd, cache, init; `sync` / `import-wallet` kept as compat aliases); all support machine-readable output (`--json`, or `-f json` for report/export)
+- **Unified CLI** — 22 subcommands (snapshot, nav, quote, watchlist, portfolio, report, export, fx, history, kline, calendar, search, compare, index-kline, import, longport-login, eodhd, cache, warm, init; `sync` / `import-wallet` kept as compat aliases); all support machine-readable output (`--json`, or `-f json` for report/export). `warm` preheats/keeps the quote, FX and calendar caches fresh without requiring the Streamlit process (`--interval` for a resident warmer)
 
 ### Quick Start
 
@@ -859,10 +861,10 @@ IBKR/LongPort disconnects silently fall back to the next source; the page contin
 
 ```
 tracker/ui/        Streamlit dashboard (app.py + cli_main() console entry + kline/index/fundamentals/calendar/import/settings pages + longport login + settings)
-tracker/           Core package: paths.py (data-dir resolution), cli/ subcommands (incl. init),
+tracker/           Core package: paths.py (data-dir resolution), cli/ subcommands (incl. init, warm),
                    providers/, symbols, symbol_migrations, storage, prices, fx, search,
-                   cache, charting, analytics, watchlist, services/, importer, ibkr,
-                   longport, longport_oauth, eodhd, ibkr_sync, ashare_sync, wallet
+                   cache, charting, analytics, watchlist, services/ (incl. warm.py),
+                   importer, ibkr, longport, longport_oauth, eodhd, ibkr_sync, ashare_sync, wallet
 tracker/templates/ Packaged config templates + streamlit theme (shipped in the wheel; `tracker init` copies them into the data dir)
 tracker/assets/    Vendored lightweight-charts standalone JS (offline, no extra dependency)
 pyproject.toml     Packaging metadata (dependency extras, console scripts, package-data)

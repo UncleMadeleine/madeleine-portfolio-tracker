@@ -1,6 +1,6 @@
 ---
 name: portfolio-tracker
-description: Use when the user asks to check or manage their investment portfolio, holdings, watchlist, stock prices, price-threshold alerts, exchange rates, historical NAV, IBKR sync, Longport (长桥) quotes/positions/login, EODHD (BYOK) status/config, or quote cache in this repo (madeleine-portfolio-tracker). Trigger keywords: 持仓, 组合, 自选, watchlist, 股票, 行情, 报价, quote, 汇率, fx, IBKR, 长桥, longport, EODHD, BYOK, 快照, snapshot, 净值, nav, 历史净值, 缓存, K线, kline, 指数, index, 导入, import, 搜索, search, 对比, compare. Operate it through the CLI `python -m tracker.cli <子命令>` (alias `python -m tracker`). Also covers editing portfolio.json / watchlist.json / ibkr.json / longport.json / eodhd.json and the Yahoo symbol conventions.
+description: Use when the user asks to check or manage their investment portfolio, holdings, watchlist, stock prices, price-threshold alerts, exchange rates, historical NAV, IBKR sync, Longport (长桥) quotes/positions/login, EODHD (BYOK) status/config, or quote cache in this repo (madeleine-portfolio-tracker). Trigger keywords: 持仓, 组合, 自选, watchlist, 股票, 行情, 报价, quote, 汇率, fx, IBKR, 长桥, longport, EODHD, BYOK, 快照, snapshot, 净值, nav, 历史净值, 缓存, 缓存保温, 预热, warm, K线, kline, 指数, index, 导入, import, 搜索, search, 对比, compare. Operate it through the CLI `python -m tracker.cli <子命令>` (alias `python -m tracker`). Also covers editing portfolio.json / watchlist.json / ibkr.json / longport.json / eodhd.json and the Yahoo symbol conventions.
 ---
 
 # Madeleine Portfolio Tracker CLI
@@ -232,6 +232,15 @@ Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致);
    口径为当前持仓数量 × 历史收盘价
    (跨币种按历史汇率折算), **不含历史调仓**, 不能当作真实历史业绩。
 
+1c. **预热缓存 (可选, 让后续命令秒回)**:
+   ```
+   .venv/bin/python -m tracker.cli warm                       # 按持仓+自选预热一次
+   .venv/bin/python -m tracker.cli warm --symbols AAPL TSLA   # 额外代码也预热
+   .venv/bin/python -m tracker.cli warm --interval 300        # 常驻保温 (Ctrl+C 停止)
+   ```
+   `warm` 不依赖 Streamlit 进程, 与页面共用同一个 `var/quotes_cache.db`;
+   默认覆盖行情+汇率+财经日历, 可用 `--quotes-only` / `--calendar-only` 缩小范围。
+
 2. **查某只股票行情**:
    ```
    .venv/bin/python -m tracker.cli quote AAPL 0700.HK --json
@@ -369,6 +378,7 @@ Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致);
 11. **清缓存** (数据源限流/数据过期时):
     ```
     .venv/bin/python -m tracker.cli cache clear
+    .venv/bin/python -m tracker.cli warm          # 清完立即回填, 避免后续命令逐个阻塞
     ```
 
 ## 注意事项

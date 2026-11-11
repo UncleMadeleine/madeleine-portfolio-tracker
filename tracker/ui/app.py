@@ -102,7 +102,16 @@ def main() -> None:
         ),
     ]
     page = st.navigation(pages, position="sidebar")
-    page.run()
+    try:
+        page.run()
+    except (storage.CorruptDataError, storage.DataFileLocked) as e:
+        # portfolio/watchlist 损坏或被长期占用是可预期的用户状态, CLI 已有
+        # 可读错误; 页面入口不能直接抛整页 traceback, 否则用户连设置页都
+        # 打不开, 也无法按提示修复文件。
+        st.error(f"数据文件不可用: {e}")
+        st.info(
+            "请修复或删除提示的数据文件后重试; 文件旁若有同名 .bak 会自动用于恢复。"
+        )
 
 
 def cli_main() -> None:

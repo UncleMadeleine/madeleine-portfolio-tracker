@@ -12,7 +12,13 @@ from ..services.watchlist import (
     triggered_entries,
 )
 from ..watchlist import edit_watchlist, load_watchlist, parse_lists
-from ._common import _finish_with_error, _print_json, _records, _sym
+from ._common import (
+    _finish_with_error,
+    _print_json,
+    _records,
+    _source_strict,
+    _sym,
+)
 
 
 def watchlist_add(args) -> None:
@@ -139,13 +145,15 @@ def _load_watch_view(args):
     data = load_watchlist(args.file)
     entries = entries_for(data, args.wl_list)
     symbols = [str(e["symbol"]) for e in entries]
-    quotes, errors, notes = prices.get_quotes(
-        symbols,
+    quote_kwargs = dict(
         prefer_akshare=args.akshare,
         use_ibkr=args.ibkr,
         use_longport=getattr(args, "longport", False),
         crypto_source=getattr(args, "crypto_source", "auto"),
     )
+    if _source_strict(args):
+        quote_kwargs["source_strict"] = True
+    quotes, errors, notes = prices.get_quotes(symbols, **quote_kwargs)
     wview, wissues = build_watchlist_view(entries, quotes)
     trig = triggered_entries(wview)
     # 与 fetch_watchlist_view 一致: 取数层与视图层可能对同一无法解析的代码

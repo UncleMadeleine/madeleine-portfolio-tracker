@@ -389,15 +389,26 @@ def _cached_source_ok(
                     continue
                 required = "ibkr"
             elif source_id == "longport":
+                if not use_longport:
+                    continue
+                # 与 get_quotes_longport 的能力过滤保持完全一致: B 股/SG 虽能
+                # 拼出 ticker, 长桥实际不提供行情; 日韩德英加澳/北交所则连
+                # 映射都没有。不跳过会让 yfinance 缓存永远「来源不符」而反复回源。
+                from .. import longport as lp_mod
+
                 if (
-                    not use_longport
-                    or parsed.is_b_share
+                    parsed.is_b_share
                     or parsed.market is Market.SG
+                    or lp_mod.yahoo_to_longport(parsed.yahoo) is None
                 ):
                     continue
                 required = "longport"
             elif source_id == "eodhd":
-                if parsed.type != "global" or not eod_ok:
+                if (
+                    parsed.type != "global"
+                    or not eod_ok
+                    or eodhd_mod.yahoo_to_eodhd(parsed.yahoo) is None
+                ):
                     continue
                 required = "eodhd"
             elif source_id == "yfinance":
@@ -508,6 +519,7 @@ def get_quotes(
         p
         for p in by_yahoo.values()
         if p.type in ("global", "cn")
+        and p.yahoo not in quotes  # 新鲜缓存命中的代码不再打长桥/IBKR 配额
         and not (p.type == "global" and global_order is not None)
         and not (p.type == "cn" and cn_order is not None)
     ]

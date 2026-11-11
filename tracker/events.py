@@ -923,7 +923,13 @@ def _fetch_cn_events(
 
     def take(rows: list[dict]) -> None:
         for ev in rows:
-            sym = ev["symbol"]
+            # 缓存载荷只校验顶层 events 是 list; 旧版本/手工改库/半截写入
+            # 可能混进缺 symbol 的行。单条脏数据不能打断整批日历渲染。
+            if not isinstance(ev, dict):
+                continue
+            sym = ev.get("symbol")
+            if not isinstance(sym, str) or not sym:
+                continue
             d = _pd_date(ev.get("date"))
             if sym in symbols and _in_window(d, start, end):
                 events.append({**ev, "date": d})

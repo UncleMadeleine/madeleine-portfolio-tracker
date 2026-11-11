@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 from pathlib import Path
 
 import pandas as pd
@@ -166,6 +167,12 @@ def _to_float(v) -> float | None:
     neg = False
     if s.startswith("(") and s.endswith(")"):
         neg, s = True, s[1:-1]
+    # 负号可能写在货币符号前 ("-¥1,000"): 先从最外层剥正负号, 再剥货币
+    # 符号。否则 strip("¥…") 只处理首尾, 中间夹着负号的成本会被静默丢成 None。
+    sign = 1.0
+    if s[:1] in ("+", "-"):
+        sign = -1.0 if s[0] == "-" else 1.0
+        s = s[1:]
     # 货币符号与百分号: 只剥前后缀, 不动中间
     s = s.strip("¥￥$€£%")
     if not s:
@@ -174,9 +181,9 @@ def _to_float(v) -> float | None:
         f = float(s)
     except (TypeError, ValueError):
         return None
-    if pd.isna(f):
+    if pd.isna(f) or not math.isfinite(f):
         return None
-    return -f if neg else float(f)
+    return -f * sign if neg else f * sign
 
 
 def parse_positions_file(path: str | Path) -> tuple[list[dict], list[str]]:

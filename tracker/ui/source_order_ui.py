@@ -132,53 +132,56 @@ def _legacy_default(domain: str, channel: str, settings: dict) -> list[str]:
 
 def _store_order(domain: str, channel: str, order: list[str]) -> None:
     """把一条源链写进 settings.json; 只复位该域相关的历史偏好键."""
-    settings = storage.load_settings(storage.SETTINGS_PATH)
-    raw = settings.get("source_order")
-    raw = copy.deepcopy(raw) if isinstance(raw, dict) else {}
-    domain_cfg = raw.get(domain)
-    if not isinstance(domain_cfg, dict):
-        domain_cfg = {}
-    domain_cfg[channel] = list(order)
+    # 读-改-写全程持 settings.json 的跨进程锁: save_settings 只合并顶层键,
+    # 锁外读到的整份 source_order 快照会在并发拖动 (两个标签页/CLI) 时覆盖
+    # 对方刚保存的另一个域/通道。
+    with storage.edit_settings(storage.SETTINGS_PATH) as settings:
+        raw = settings.get("source_order")
+        raw = copy.deepcopy(raw) if isinstance(raw, dict) else {}
+        domain_cfg = raw.get(domain)
+        if not isinstance(domain_cfg, dict):
+            domain_cfg = {}
+        domain_cfg[channel] = list(order)
 
-    payload: dict = {}
-    # 旧版快捷开关 (prefer_akshare / crypto_source) 影响同一域的行情与历史
-    # 两条链。保存其中一条时, 若另一条还没显式配置, 先把「当前生效的默认链」
-    # 固化下来, 再复位开关 —— 否则编辑行情会把未编辑的历史链悄悄改回默认。
-    if domain == "global":
-        if settings.get("prefer_akshare"):
-            other = "history" if channel == "quote" else "quote"
-            if so.configured("global", other) is None:
-                domain_cfg[other] = _legacy_default("global", other, settings)
-        payload["prefer_akshare"] = False
-    elif domain == "crypto":
-        if str(settings.get("crypto_source") or "auto") != "auto":
-            other = "history" if channel == "quote" else "quote"
-            if so.configured("crypto", other) is None:
-                domain_cfg[other] = _legacy_default("crypto", other, settings)
-        payload["crypto_source"] = "auto"
+        # 旧版快捷开关 (prefer_akshare / crypto_source) 影响同一域的行情与历史
+        # 两条链。保存其中一条时, 若另一条还没显式配置, 先把「当前生效的默认链」
+        # 固化下来, 再复位开关 —— 否则编辑行情会把未编辑的历史链悄悄改回默认。
+        if domain == "global":
+            if settings.get("prefer_akshare"):
+                other = "history" if channel == "quote" else "quote"
+                if so.configured("global", other) is None:
+                    domain_cfg[other] = _legacy_default("global", other, settings)
+            settings["prefer_akshare"] = False
+        elif domain == "crypto":
+            if str(settings.get("crypto_source") or "auto") != "auto":
+                other = "history" if channel == "quote" else "quote"
+                if so.configured("crypto", other) is None:
+                    domain_cfg[other] = _legacy_default("crypto", other, settings)
+            settings["crypto_source"] = "auto"
 
-    raw[domain] = domain_cfg
-    payload["source_order"] = raw
-    storage.save_settings(payload, storage.SETTINGS_PATH)
+        raw[domain] = domain_cfg
+        settings["source_order"] = raw
     so.clear_cache()
     _clear_source_caches()
 
 
 def _reset_order(domain: str, channel: str) -> None:
-    settings = storage.load_settings(storage.SETTINGS_PATH)
-    raw = settings.get("source_order")
-    if not isinstance(raw, dict):
+    changed = False
+    with storage.edit_settings(storage.SETTINGS_PATH) as settings:
+        raw = settings.get("source_order")
+        if isinstance(raw, dict):
+            raw = copy.deepcopy(raw)
+            domain_cfg = raw.get(domain)
+            if isinstance(domain_cfg, dict) and channel in domain_cfg:
+                domain_cfg.pop(channel, None)
+                if domain_cfg:
+                    raw[domain] = domain_cfg
+                else:
+                    raw.pop(domain, None)
+                settings["source_order"] = raw
+                changed = True
+    if not changed:
         return
-    raw = copy.deepcopy(raw)
-    domain_cfg = raw.get(domain)
-    if not isinstance(domain_cfg, dict) or channel not in domain_cfg:
-        return
-    domain_cfg.pop(channel, None)
-    if domain_cfg:
-        raw[domain] = domain_cfg
-    else:
-        raw.pop(domain, None)
-    storage.save_settings({"source_order": raw}, storage.SETTINGS_PATH)
     so.clear_cache()
     _clear_source_caches()
     st.toast("已恢复默认数据源顺序")

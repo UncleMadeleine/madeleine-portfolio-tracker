@@ -18,6 +18,7 @@ app.py 入口调用 ensure_warmers 启动) 在没有任何页面打开时照常�
 from __future__ import annotations
 
 import logging
+import math
 import time
 from datetime import datetime
 
@@ -95,6 +96,42 @@ _PLAN_KEY = "_first_screen_plan"
 # 本会话最近一次写入历史净值的记录指纹: 用户每次交互都会 rerun, 数值没变时
 # 不必反复 upsert 同一个 (day, base) 行 (每次都是磁盘写 + schema 检查)。
 _NAV_SNAPSHOT_KEY = "_nav_snapshot_written"
+
+
+def _editor_holdings_signature(rows) -> list[tuple[str, float | None, float | None]]:
+    """持仓编辑器/磁盘持仓的可比较签名 (代码归一 + 数值归一).
+
+    历史净值只能由已落盘的持仓驱动: data_editor 每次渲染都返回用户正在
+    编辑的内容, 未点保存的数量若被 upsert 进 nav_history.db, 会留下一条
+    组合文件里根本不存在的净值记录 (且次日无法被同日覆盖修正)。
+    """
+    sig: list[tuple[str, float | None, float | None]] = []
+
+    def _num(v):
+        if v is None:
+            return None
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None
+        return f if math.isfinite(f) else None
+
+    for h in rows or []:
+        if not isinstance(h, dict):
+            continue
+        raw = str(h.get("symbol") or "").strip()
+        if not raw:
+            continue
+        try:
+            sym = parse(raw).yahoo
+        except ValueError:
+            sym = raw.upper()
+        sig.append((sym, _num(h.get("quantity")), _num(h.get("avg_cost"))))
+    return sorted(sig, key=lambda x: (x[0], x[1] or 0.0, x[2] or 0.0))
+
+
+def _holdings_unchanged(rows, saved_rows) -> bool:
+    return _editor_holdings_signature(rows) == _editor_holdings_signature(saved_rows)
 
 # ---------- 周期保温: 服务长期运行时数据持续更新 ----------
 # 页面开着 → 看门狗片段按周期主动重取 (用户看到的数据滚动更新);
@@ -1220,7 +1257,12 @@ def render_portfolio_page() -> None:
     # 每次成功渲染都 upsert 当天快照 (主键 日期+币种, 同日覆盖): 比只在
     # 「当天首次」写一次更稳 —— 冷启动行情不全时先写的偏低值, 会在后台
     # 刷新完成后的 rerun 被修正。写失败只记日志, 不能拖垮组合页。
-    if not view.empty:
+    # 只有编辑器内容与已落盘持仓一致时才写历史净值。用户在侧栏改了数量但
+    # 没点「保存」时, 页面仍用编辑值预览, 但持久化净值不能跟着未确认的输入
+    # 走 (否则 portfolio.json 还是旧持仓, nav_history.db 却记了新市值)。
+    if not view.empty and _holdings_unchanged(
+        holdings.to_dict("records"), portfolio.get("holdings", [])
+    ):
         row = nav.record_from_summary(
             datetime.now().date().isoformat(), base, summary, view
         )

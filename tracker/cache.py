@@ -146,7 +146,9 @@ def _create_schema(con) -> None:
             symbol TEXT PRIMARY KEY,
             book_value REAL,
             market_cap REAL,
-            fetched_at REAL
+            fetched_at REAL,
+            book_value_checked INTEGER NOT NULL DEFAULT 0,
+            market_cap_checked INTEGER NOT NULL DEFAULT 0
         )
         """
     )
@@ -183,6 +185,21 @@ def _create_schema(con) -> None:
     )
     try:
         con.execute("ALTER TABLE fundamentals ADD COLUMN market_cap REAL")
+    except sqlite3.OperationalError:
+        pass
+    # 指标级「已确认」标记: NULL 既可能是「本次没取到」也可能是「取到了但没有」,
+    # 只凭值无法区分。没有标记时, 只缓存到 BVPS 的旧行会挡住后续市值取数
+    # (反之亦然), 6 小时内一直返回 None。
+    try:
+        con.execute(
+            "ALTER TABLE fundamentals ADD COLUMN book_value_checked INTEGER NOT NULL DEFAULT 0"
+        )
+    except sqlite3.OperationalError:
+        pass
+    try:
+        con.execute(
+            "ALTER TABLE fundamentals ADD COLUMN market_cap_checked INTEGER NOT NULL DEFAULT 0"
+        )
     except sqlite3.OperationalError:
         pass
     con.commit()
@@ -449,14 +466,15 @@ def _valid_fundamental(v) -> float | None:
     return None
 
 
-def get_fundamentals_cached(
+def get_fundamentals_meta(
     symbols: list[str], ttl: int = 21600
 ) -> dict[str, dict]:
-    """批量读取基本面缓存; 只返回未过期项 (未命中/过期不在结果里).
+    """批量读取基本面缓存及「指标已确认」标记 (内部使用).
 
-    与逐条 get_fundamental_cached 语义一致, 但一次查询覆盖全部代码 ——
-    自选 600+ 时逐条调用要付 600 次连接/建表检查 (~0.2s)。
-    负缓存行 (两个指标均为 None) 同样返回, 调用方据此避免 TTL 内重试。
+    返回 ``{symbol: {book_value, market_cap, book_value_checked,
+    market_cap_checked}}``。``*_checked`` 表示该指标已由数据源确认 (包括
+    确认缺失), 用于区分「没取过」和「取过但没有」。驱动层据此只补本次真正
+    需要的指标, 又不会把已确认的负缓存当成未命中反复重试。
     """
     unique = list(dict.fromkeys(symbols))
     if not unique:
@@ -466,16 +484,37 @@ def get_fundamentals_cached(
     out: dict[str, dict] = {}
     for chunk in _chunks(unique):
         rows = _read_all(
-            f"SELECT symbol, book_value, market_cap FROM fundamentals "
+            f"SELECT symbol, book_value, market_cap, "
+            f"book_value_checked, market_cap_checked FROM fundamentals "
             f"WHERE symbol IN ({','.join('?' * len(chunk))}) AND fetched_at > ?",
             [*chunk, now - ttl],
         )
-        for sym, bv, mc in rows:
+        for sym, bv, mc, bv_checked, mc_checked in rows:
             out[sym] = {
                 "book_value": _valid_fundamental(bv),
                 "market_cap": _valid_fundamental(mc),
+                "book_value_checked": bool(bv_checked),
+                "market_cap_checked": bool(mc_checked),
             }
     return out
+
+
+def get_fundamentals_cached(
+    symbols: list[str], ttl: int = 21600
+) -> dict[str, dict]:
+    """批量读取基本面缓存; 只返回未过期项 (未命中/过期不在结果里).
+
+    与逐条 get_fundamental_cached 语义一致, 但一次查询覆盖全部代码 ——
+    自选 600+ 时逐条调用要付 600 次连接/建表检查 (~0.2s)。
+    负缓存行 (两个指标均为 None) 同样返回, 调用方据此避免 TTL 内重试。
+    """
+    return {
+        sym: {
+            "book_value": meta["book_value"],
+            "market_cap": meta["market_cap"],
+        }
+        for sym, meta in get_fundamentals_meta(symbols, ttl=ttl).items()
+    }
 
 
 def get_fundamental_cached(symbol: str, ttl: int = 21600) -> dict | None:
@@ -489,7 +528,12 @@ def get_fundamental_cached(symbol: str, ttl: int = 21600) -> dict | None:
 
 
 def set_fundamental_cached(
-    symbol: str, book_value: float | None, market_cap: float | None = None
+    symbol: str,
+    book_value: float | None,
+    market_cap: float | None = None,
+    *,
+    book_value_checked: bool | None = None,
+    market_cap_checked: bool | None = None,
 ) -> None:
     """写入基本面缓存; 指标无效 (≤0/NaN) 时也落库 (负缓存, 6h 不重试).
 
@@ -497,6 +541,11 @@ def set_fundamental_cached(
     两个指标各自独立 COALESCE: 本次为 None 的字段保留库中旧值, 不被冲成
     NULL —— 否则 yfinance 只回 marketCap 的那次会把已缓存的 BVPS 抹掉,
     之后 6 小时 PB 提醒全部误报「PB 缺失」(且负缓存阻止重试)。
+
+    ``book_value_checked`` / ``market_cap_checked`` 区分「本次没提供该字段」
+    (False, 保留旧值) 与「数据源确认没有该字段」 (True, 写入 NULL 并标记
+    已确认)。取数管线拿到完整结果时显式传 True, 手动只补一个指标的旧调用
+    方保持默认 (值非 None 时视为已确认, None 时保留旧值)。
     fetched_at 刷新即整行 TTL 重新计期 (负缓存语义保留)。
     """
     _ensure_db()
@@ -511,16 +560,42 @@ def set_fundamental_cached(
 
     bv = _valid(book_value)
     mc = _valid(market_cap)
+    bv_checked = (
+        book_value is not None if book_value_checked is None else book_value_checked
+    )
+    mc_checked = (
+        market_cap is not None
+        if market_cap_checked is None
+        else market_cap_checked
+    )
     _execute_write(
         """
-        INSERT INTO fundamentals (symbol, book_value, market_cap, fetched_at)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO fundamentals
+            (symbol, book_value, market_cap, fetched_at,
+             book_value_checked, market_cap_checked)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(symbol) DO UPDATE SET
-            book_value=COALESCE(excluded.book_value, fundamentals.book_value),
-            market_cap=COALESCE(excluded.market_cap, fundamentals.market_cap),
+            book_value=CASE
+                WHEN excluded.book_value_checked
+                THEN excluded.book_value
+                ELSE COALESCE(excluded.book_value, fundamentals.book_value)
+            END,
+            market_cap=CASE
+                WHEN excluded.market_cap_checked
+                THEN excluded.market_cap
+                ELSE COALESCE(excluded.market_cap, fundamentals.market_cap)
+            END,
+            book_value_checked=CASE
+                WHEN excluded.book_value_checked THEN 1
+                ELSE fundamentals.book_value_checked
+            END,
+            market_cap_checked=CASE
+                WHEN excluded.market_cap_checked THEN 1
+                ELSE fundamentals.market_cap_checked
+            END,
             fetched_at=excluded.fetched_at
         """,
-        (symbol, bv, mc, now),
+        (symbol, bv, mc, now, int(bool(bv_checked)), int(bool(mc_checked))),
     )
 
 
@@ -538,6 +613,22 @@ def _normalize_quote_currency(symbol: str, currency) -> str | None:
         return parse(symbol).currency
     except ValueError:
         return None
+
+
+def _finite_opt(value) -> float | None:
+    """可选数值归一: None/不可解析/±Inf/NaN → None, 其余 float.
+
+    行情缓存的 price 一直有校验, 但 prev_close/change_pct 曾直接 float():
+    历史脏行里的 ``inf`` 会让 analytics 的今日盈亏变成「全部市值」,
+    并在 ``--json`` 输出非标准 JSON。
+    """
+    if value is None:
+        return None
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
 
 
 def get_cached_with_age(
@@ -574,8 +665,8 @@ def get_cached_with_age(
                     symbol=sym,
                     name=name,
                     price=price,
-                    prev_close=float(prev) if prev is not None else None,
-                    change_pct=float(chg) if chg is not None else None,
+                    prev_close=_finite_opt(prev),
+                    change_pct=_finite_opt(chg),
                     currency=quote_ccy,
                     book_value=float(bv) if bv is not None else None,
                     market_cap=float(mc) if mc is not None else None,
@@ -616,8 +707,8 @@ def set_cached(quotes: dict[str, "Quote"]) -> None:
                 q.symbol,
                 q.name,
                 q.price,
-                q.prev_close,
-                q.change_pct,
+                _finite_opt(q.prev_close),
+                _finite_opt(q.change_pct),
                 quote_ccy,
                 q.book_value,
                 getattr(q, "market_cap", None),
@@ -875,10 +966,12 @@ def info() -> dict:
 
     库被其它进程独占 (OperationalError) 时抛 RuntimeError 可读错误, 而不是
     裸 traceback —— 否则用户连 `cache info` 这条自检路径都用不了。
+    截断/清空后缺表 (no such table) 与 _clear_table 同口径自动重建一次:
+    这是用户自查/修复缓存的入口, 不能永久卡在「no such table」。
     """
-    _ensure_db()
     now = time.time()
-    try:
+
+    def _counts():
         with _connection() as con:
             total = con.execute("SELECT COUNT(*) FROM quotes").fetchone()[0]
             fresh = con.execute(
@@ -908,10 +1001,49 @@ def info() -> dict:
                 "SELECT COUNT(*) FROM series_cache WHERE fetched_at > ?",
                 (now - OHLC_TTL,),
             ).fetchone()[0]
-            cal_total = con.execute("SELECT COUNT(*) FROM calendar_cache").fetchone()[0]
-    except sqlite3.Error as e:
-        _forget_ready_on_corruption(e)
-        raise RuntimeError(f"缓存数据库忙或不可用 ({e}); 稍后重试") from e
+            cal_total = con.execute(
+                "SELECT COUNT(*) FROM calendar_cache"
+            ).fetchone()[0]
+        return (
+            total,
+            fresh,
+            usable,
+            ohlc_total,
+            ohlc_fresh,
+            fx_total,
+            fx_fresh,
+            oldest,
+            newest,
+            series_total,
+            series_fresh,
+            cal_total,
+        )
+
+    for attempt in range(2):
+        _ensure_db()
+        try:
+            (
+                total,
+                fresh,
+                usable,
+                ohlc_total,
+                ohlc_fresh,
+                fx_total,
+                fx_fresh,
+                oldest,
+                newest,
+                series_total,
+                series_fresh,
+                cal_total,
+            ) = _counts()
+            break
+        except sqlite3.Error as e:
+            _forget_ready_on_corruption(e)
+            if _is_missing_schema(e) and attempt == 0:
+                _forget_ready()
+                _ensure_db()
+                continue
+            raise RuntimeError(f"缓存数据库忙或不可用 ({e}); 稍后重试") from e
     size = CACHE_DB.stat().st_size if CACHE_DB.exists() else 0
     return {
         "db": str(CACHE_DB),
@@ -940,18 +1072,24 @@ def info() -> dict:
 
 def clear() -> int:
     """清空全部缓存 (行情 + K线 + 基本面 + 汇率), 返回删除条数."""
-    _ensure_db()
-    try:
-        with _lock, _connection() as con:
-            n_quotes = con.execute("DELETE FROM quotes").rowcount
-            n_ohlc = con.execute("DELETE FROM ohlc_cache").rowcount
-            n_fx = con.execute("DELETE FROM fx_rates").rowcount
-            n_series = con.execute("DELETE FROM series_cache").rowcount
-            n_cal = con.execute("DELETE FROM calendar_cache").rowcount
-            con.commit()
-            n_fund = con.execute("DELETE FROM fundamentals").rowcount
-            con.commit()
-            return n_quotes + n_ohlc + n_fund + n_fx + n_series + n_cal
-    except sqlite3.Error as e:
-        _forget_ready_on_corruption(e)
-        raise RuntimeError(f"缓存数据库忙或不可用 ({e}); 稍后重试") from e
+    for attempt in range(2):
+        _ensure_db()
+        try:
+            with _lock, _connection() as con:
+                n_quotes = con.execute("DELETE FROM quotes").rowcount
+                n_ohlc = con.execute("DELETE FROM ohlc_cache").rowcount
+                n_fx = con.execute("DELETE FROM fx_rates").rowcount
+                n_series = con.execute("DELETE FROM series_cache").rowcount
+                n_cal = con.execute("DELETE FROM calendar_cache").rowcount
+                con.commit()
+                n_fund = con.execute("DELETE FROM fundamentals").rowcount
+                con.commit()
+                return n_quotes + n_ohlc + n_fund + n_fx + n_series + n_cal
+        except sqlite3.Error as e:
+            _forget_ready_on_corruption(e)
+            if _is_missing_schema(e) and attempt == 0:
+                _forget_ready()
+                _ensure_db()
+                continue
+            raise RuntimeError(f"缓存数据库忙或不可用 ({e}); 稍后重试") from e
+    raise RuntimeError("缓存数据库不可用; 稍后重试")

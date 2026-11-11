@@ -333,14 +333,14 @@ class TestERC20Balance:
     @pytest.mark.parametrize(
         "payload", [{"result": "not-hex"}, {"result": None}, {"result": ""}]
     )
-    def test_malformed_result_returns_none(self, monkeypatch, payload):
-        """节点返回非 hex / 空载荷时按无余额处理, 不得抛 ValueError 给调用方."""
+    def test_malformed_result_raises_runtime_error(self, monkeypatch, payload):
+        """非 hex / 空载荷是查询失败, 不能当成零余额 (否则 prune 会删旧持仓)."""
         monkeypatch.setattr(
             wallet_mod,
             "_requests",
             lambda: _make_fake_requests([payload]),
         )
-        assert (
+        with pytest.raises(RuntimeError, match="非法代币余额"):
             wallet_mod._erc20_balance(
                 "0xd8da6bf26964af9d7eed9e03e53415d37aaa96045",
                 self.USDT_CONTRACT,
@@ -348,8 +348,6 @@ class TestERC20Balance:
                 6,
                 10.0,
             )
-            is None
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -395,7 +393,7 @@ class TestImportWallet:
         assert result["holdings"] == []
 
     def test_malformed_payload_does_not_abort_import(self, monkeypatch):
-        """节点返回非 hex 载荷时跳过该代币, 整个导入不得崩掉 (曾抛 ValueError 逃出 except)."""
+        """非 hex 载荷按查询失败记 errors, 整个导入仍返回且不会 prune 旧持仓."""
         monkeypatch.setattr(
             wallet_mod,
             "_try_rpc_hosts",
@@ -406,7 +404,8 @@ class TestImportWallet:
             "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
         )
         assert result["holdings"] == []
-        assert result["errors"] == []
+        assert result["errors"]
+        assert any("非法" in e for e in result["errors"])
 
     def test_unsupported_chain_raises(self):
         with pytest.raises(ValueError, match="不支持的链"):

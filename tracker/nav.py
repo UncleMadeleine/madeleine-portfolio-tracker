@@ -383,6 +383,17 @@ def _holdings_by_symbol(portfolio: dict) -> tuple[dict[str, dict], list[str]]:
             item["has_cost"] = False
         else:
             item["cost"] += qty * avg
+    # 同一代码可能有多空对冲腿 (10 股多 + 10 股空): 单行 qty 都不为 0, 但
+    # 聚合净额为 0。此时 signed cost 可能非 0, 继续回填会凭空生成成本与
+    # 盈亏, 必须整体剔除。
+    flat = [
+        sym
+        for sym, item in agg.items()
+        if math.isclose(item["quantity"], 0.0, abs_tol=1e-12)
+    ]
+    for sym in flat:
+        issues.append(f"{sym}: 多空数量抵消 (净持仓为 0), 回填跳过")
+        agg.pop(sym, None)
     return agg, issues
 
 
@@ -432,6 +443,7 @@ def backfill(
     use_longport: bool = False,
     crypto_source: str = "auto",
     today: date | None = None,
+    source_strict: bool = False,
 ) -> tuple[list[dict], list[str]]:
     """按当前持仓 × 历史收盘价回填净值序列.
 
@@ -460,13 +472,15 @@ def backfill(
 
     symbols = list(agg)
     try:
-        quotes, errors, _notes = prices.get_quotes(
-            symbols,
+        quote_kwargs = dict(
             prefer_akshare=prefer_akshare,
             use_ibkr=use_ibkr,
             use_longport=use_longport,
             crypto_source=crypto_source,
         )
+        if source_strict:
+            quote_kwargs["source_strict"] = True
+        quotes, errors, _notes = prices.get_quotes(symbols, **quote_kwargs)
     except Exception as e:  # noqa: BLE001 - 行情失败仍可按代码后缀推断币种
         quotes, errors = {}, {s: str(e) for s in symbols}
     for sym, reason in errors.items():

@@ -53,25 +53,47 @@ def _fund_metrics(symbols: list[str]) -> dict[str, dict[str, float | None]]:
 
 
 def _load_cached(
-    symbols: list[str], refresh: bool = False
+    symbols: list[str], refresh: bool = False, field: str = "book_value"
 ) -> tuple[dict[str, dict], list[str]]:
     """按 symbol 顺序读缓存; 返回 (命中项, 未命中列表).
 
     refresh=True: 跳过缓存读取, 全部视为未命中 —— 供用户显式「强制刷新」
     穿透 6h 负缓存 (失败结果同样落库, 但手动刷新不应被上一次失败锁住)。
+
+    ``field`` 是本次真正要取的指标: 缓存行只有另一个指标时不能算命中,
+    否则只写过 BVPS 的旧条目会挡住后续市值取数 (反之亦然)。已确认缺失
+    (``*_checked``) 仍然命中, 负缓存语义不变。
     """
     unique = list(dict.fromkeys(symbols))
     if refresh:
         return {}, unique
     # 批量查: 逐条 get_fundamental_cached 在自选 600+ 时要付 600 次
     # 连接/建表检查, 一次 IN 查询即可。
-    cached = cache_mod.get_fundamentals_cached(unique, ttl=_METRICS_TTL)
+    cached = cache_mod.get_fundamentals_meta(unique, ttl=_METRICS_TTL)
+    other = "market_cap" if field == "book_value" else "book_value"
     out: dict[str, dict] = {}
     missing: list[str] = []
     for s in unique:
         hit = cached.get(s)
-        if hit is not None:
-            out[s] = hit
+        if hit is None:
+            missing.append(s)
+            continue
+        usable = (
+            hit.get(field) is not None
+            or hit.get(f"{field}_checked")
+            # 旧库行没有 checked 标记: 两个指标都为空按历史负缓存处理;
+            # 另一个指标有值则说明这一行只补过一半, 本次指标仍需补齐。
+            or (
+                not hit.get("book_value_checked")
+                and not hit.get("market_cap_checked")
+                and hit.get(other) is None
+            )
+        )
+        if usable:
+            out[s] = {
+                "book_value": hit["book_value"],
+                "market_cap": hit["market_cap"],
+            }
         else:
             missing.append(s)
     return out, missing
@@ -175,6 +197,10 @@ def _fill_fundamentals(out: dict[str, dict], missing: list[str]) -> None:
                 s,
                 vals.get("book_value"),
                 market_cap=vals.get("market_cap"),
+                # 本轮已合并全部配置源: None 是「确认没有」, 不只是「没取到」。
+                # 显式标记后, 刷新才能清掉旧值, 另一个指标也不会被半行缓存挡住。
+                book_value_checked=True,
+                market_cap_checked=True,
             )
             out[s] = (
                 cache_mod.get_fundamental_cached(s, ttl=_METRICS_TTL)
@@ -194,7 +220,7 @@ def fetch_book_values(
     失败静默返回 None (调用方按「PB 缺失」降级, 不抛异常)。
     refresh=True 跳过缓存读取 (显式强制刷新, 穿透负缓存)。
     """
-    out, missing = _load_cached(symbols, refresh=refresh)
+    out, missing = _load_cached(symbols, refresh=refresh, field="book_value")
     _fill_fundamentals(out, missing)
     return {s: out.get(s, {}).get("book_value") for s in dict.fromkeys(symbols)}
 
@@ -208,7 +234,7 @@ def fetch_market_caps(
     crypto 与无数据源标的静默返回 None (调用方按「市值缺失」降级)。
     refresh=True 跳过缓存读取 (显式强制刷新, 穿透负缓存)。
     """
-    out, missing = _load_cached(symbols, refresh=refresh)
+    out, missing = _load_cached(symbols, refresh=refresh, field="market_cap")
     _fill_fundamentals(out, missing)
     return {s: out.get(s, {}).get("market_cap") for s in dict.fromkeys(symbols)}
 

@@ -703,6 +703,26 @@ class TestBatchCacheTTL:
         assert issues == []
         assert any(e["symbol"] == "600519.SS" for e in data["events"])
 
+    def test_cn_dirty_cache_row_without_symbol_is_skipped(self, no_network_calendar):
+        """缓存载荷里缺 symbol 的脏行只跳过, 不能让日历首屏 KeyError."""
+        from tracker import cache as cache_mod
+
+        start, end = window_from_months(2)
+        periods = cn_periods_for_window(start, end)
+        for period in periods:
+            cache_mod.set_calendar_row(f"cn:yysj:{period}:沪深A股", [])
+            cache_mod.set_calendar_row(f"cn:fhps:{period}", [])
+        for period in cn_dividend_periods_for_window(start, end):
+            cache_mod.set_calendar_row(f"cn:fhps:{period}", [])
+        cache_mod.set_calendar_row(
+            f"cn:yysj:{periods[-1]}:沪深A股",
+            [{"type": "earnings", "date": (start + timedelta(days=10)).isoformat()}],
+        )
+        evs, _issues, _names, _meta = events._fetch_cn_events(
+            {"600519.SS"}, start, end, False, cache_only=True
+        )
+        assert evs == []
+
     def test_cn_period_fresh_cache_hits(self, no_network_calendar):
         """TTL 内的板块缓存仍应零请求命中 (回归不把 TTL 做成永远回源)."""
         from tracker import cache as cache_mod

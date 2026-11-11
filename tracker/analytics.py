@@ -33,10 +33,14 @@ def _as_float(v):
             "-infinity",
         ):
             return None
-        v = float(s)  # 不可解析 → ValueError, 由调用方记 issue
-    if isinstance(v, float) and not math.isfinite(v):
-        return None
-    return float(v)
+        v = s
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        # list/dict 等非标量会抛 TypeError; 统一转成 ValueError, 让调用方
+        # 现有的「记 issue 跳过该行」路径接住, 而不是整页 traceback。
+        raise ValueError(f"不是有效数值: {v!r}") from None
+    return f if math.isfinite(f) else None
 
 
 def build_view(

@@ -12,7 +12,7 @@ import pandas as pd
 from ..services.snapshot import snapshot_json, take_snapshot
 from ..storage import load_portfolio
 from ..watchlist import load_watchlist
-from ._common import _finish_with_error, _sanitize
+from ._common import _finish_with_error, _sanitize, _source_strict
 
 # 持仓 CSV 导出列 (按出现顺序)
 _CSV_COLS = [
@@ -160,7 +160,15 @@ def cmd_export(args) -> None:
         use_ibkr=args.ibkr,
         use_longport=getattr(args, "longport", False),
         crypto_source=getattr(args, "crypto_source", "auto"),
+        source_strict=_source_strict(args),
     )
+    if args.watchlist and args.format != "json":
+        import sys
+
+        print(
+            "⚠ -w/--watchlist 仅对 -f json 生效; CSV/Markdown 会包含全部自选",
+            file=sys.stderr,
+        )
     if args.format == "json":
         payload = snapshot_json(base, view, summary, wview, issues)
         text = json.dumps(payload, ensure_ascii=False, indent=2)

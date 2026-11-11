@@ -97,12 +97,21 @@ def render_settings_page() -> None:
             if not so.CATALOG[_domain].get(_channel):
                 continue
             ids = _order_for(_domain, _channel)
-            # 生效链路只展示本次真正会执行的源: 开关关闭的 IBKR/长桥跳过。
+            # 生效链路只展示本次真正会执行的源: 开关关闭的 IBKR/长桥跳过;
+            # EODHD 未配置 token / 行情 quotes=off 时实际也会被 continue,
+            # 不能显示成会执行的源 (否则用户会误以为切换没生效)。
+            eodhd_quote_ok = eodhd_ok and quotes_mode != "off"
             ids = [
                 s
                 for s in ids
                 if not (s == "ibkr" and not settings["use_ibkr"])
                 and not (s == "longport" and not settings["use_longport"])
+                and not (s == "eodhd" and not eodhd_ok)
+                and not (
+                    s == "eodhd"
+                    and _channel == "quote"
+                    and not eodhd_quote_ok
+                )
             ]
             chain_lines.append(
                 f"**{so.DOMAIN_META[_domain][0]} · {so.CHANNEL_LABELS[_channel]}**: "
@@ -254,11 +263,15 @@ def _clear_source_caches() -> None:
     from tracker.providers.orchestration import neg_clear_all
 
     _try("负缓存", neg_clear_all)
+    from tracker.ui.fundamentals_page import clear_ah_caches
     from tracker.ui.index_page import cached_index_kline
     from tracker.ui.kline_page import clear_kline_caches
     from tracker.ui.portfolio_page import cached_fx, cached_quotes
 
     _try("K线内存", clear_kline_caches)
+    # 基本面页的 AH 溢价曲线同样走历史源链 (A/H K线 + 汇率), 源顺序/开关
+    # 变化后 30 分钟缓存不清会继续显示旧源结果; 目录缓存 1h 一并清。
+    _try("基本面页", clear_ah_caches)
     # 指数页的 st.cache_data 不经过 clear_kline_caches: source_order.index
     # 调整后 30 分钟内仍会显示旧源结果, 必须单独清
     _try("指数K线内存", cached_index_kline.clear)

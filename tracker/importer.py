@@ -85,6 +85,11 @@ def _aggregate_rows(rows: list[dict]) -> list[dict]:
         add_cost = r.get("avg_cost")
         if cur_cost is None or add_cost is None:
             cur["avg_cost"] = None
+        elif (prev_qty < 0) != (add_qty < 0):
+            # 多空腿混合时不能用签名数量做加权: 10@100 + (-5)@200 会算出
+            # 净 5 股、成本 0, 后续把全部市值当盈利。方向不一致时成本未知
+            # 比一个确定错误的值更安全。
+            cur["avg_cost"] = None
         else:
             total_qty = cur["quantity"]
             cur["avg_cost"] = (
@@ -254,6 +259,11 @@ def merge_holdings(
         )
         if same is not None:
             target = merged[same]
+            # 跨来源合并时保留已有成本; 原条目完全没有成本时才用新来源的
+            # 成本补全。直接覆盖会把另一来源的成本口径套到合并后的总量上,
+            # 完全不处理则会让新来源带的成本静默丢失。
+            if target.get("avg_cost") in (None, "") and r.get("avg_cost") is not None:
+                target["avg_cost"] = r["avg_cost"]
             sq = _source_quantities(target)
             sq[src] = float(r["quantity"] or 0)
             target["source_quantities"] = sq

@@ -52,6 +52,21 @@ def _print_json(payload) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
+def _source_strict(args) -> bool:
+    """命令行是否显式指定了数据源偏好.
+
+    显式指定时不能让 5 分钟磁盘缓存里的其它源结果短路 (与 ``quote`` 的
+    ``--ibkr`` 语义一致): 否则 ``snapshot --ibkr`` 在 TTL 内仍输出上次
+    yfinance 的价格。未指定时保持缓存优先, 首屏/CLI 才不会被拖慢。
+    """
+    return bool(
+        getattr(args, "akshare", False)
+        or getattr(args, "ibkr", False)
+        or getattr(args, "longport", False)
+        or getattr(args, "crypto_source", "auto") != "auto"
+    )
+
+
 def _finish_with_error(msg: str, code: int = 2) -> None:
     """打印错误到 stderr 并以指定退出码结束."""
     print(f"❌ {msg}", file=sys.stderr)

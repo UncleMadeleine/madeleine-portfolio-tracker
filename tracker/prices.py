@@ -126,19 +126,21 @@ def get_ohlc(
         cached = cache_mod.get_ohlc_cached(cache_key, months)
         if cached is not None:
             return cached
-    df = clean_ohlc(
-        get_history(
-            symbol,
-            months=months,
-            start_date=start_date,
-            end_date=end_date,
-            prefer_akshare=prefer_akshare,
-            use_ibkr=use_ibkr,
-            use_longport=use_longport,
-            crypto_source=crypto_source,
-        )
+    raw = get_history(
+        symbol,
+        months=months,
+        start_date=start_date,
+        end_date=end_date,
+        prefer_akshare=prefer_akshare,
+        use_ibkr=use_ibkr,
+        use_longport=use_longport,
+        crypto_source=crypto_source,
     )
-    if not df.empty and not is_range:
+    # 长桥翻页中途失败的截断序列带 partial 标记: 只用于本次展示, 不写成
+    # 完整 months 窗口的缓存, 否则下次会命中缺去年数据的「完整」K线。
+    partial = bool(getattr(raw, "attrs", {}).get("partial"))
+    df = clean_ohlc(raw)
+    if not df.empty and not is_range and not partial:
         cache_mod.set_ohlc_cached(cache_key, months, df)
     return df
 

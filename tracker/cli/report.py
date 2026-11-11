@@ -16,7 +16,15 @@ from ..services.watchlist import (
     triggered_entries,
 )
 from ..watchlist import load_watchlist, parse_lists
-from ._common import _finish_with_error, _fmt_num, _fmt_pct, _records, _sanitize, _sym
+from ._common import (
+    _finish_with_error,
+    _fmt_num,
+    _fmt_pct,
+    _records,
+    _sanitize,
+    _source_strict,
+    _sym,
+)
 
 # 指标基准 → 中文标签 (md 表 / 触发汇总)
 _METRIC_LABELS = {"price": "现价", "pb": "市净率", "mcap": "市值"}
@@ -101,6 +109,7 @@ def _build_report(
         use_ibkr=args.ibkr,
         use_longport=getattr(args, "longport", False),
         crypto_source=getattr(args, "crypto_source", "auto"),
+        source_strict=_source_strict(args),
     )
     wview = sort_watchlist(wview, args.sort)
     trig = triggered_entries(wview)

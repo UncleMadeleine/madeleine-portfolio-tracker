@@ -278,12 +278,19 @@ def _rpc_post(url: str, payload: dict, timeout: float = 10.0) -> Any:
         )
         if r.status_code == 200:
             body = r.json()
-            if "result" in body:
+            # JSON-RPC 可能同时带 result: null 与 error 对象 (部分节点/网关)。
+            # 先判 error, 否则会把失败当成「余额 0」, 配合 prune_source 还会
+            # 把该来源旧持仓删掉。
+            if isinstance(body, dict) and body.get("error"):
+                err = body.get("error") or {}
+                if isinstance(err, dict):
+                    detail = f"[{err.get('code')}]: {err.get('message', body)}"
+                else:
+                    detail = str(err)
+                raise RuntimeError(f"RPC 错误 {detail}")
+            if isinstance(body, dict) and "result" in body:
                 return body["result"]
-            err = body.get("error", {})
-            raise RuntimeError(
-                f"RPC 错误 [{err.get('code')}]: {err.get('message', body)}"
-            )
+            raise RuntimeError(f"RPC 响应缺少 result: {str(body)[:200]}")
         last_err = RuntimeError(f"HTTP {r.status_code}: {r.text[:200]}")
     except Exception as e:
         last_err = e
@@ -395,12 +402,16 @@ def _native_balance(
         "params": [address, "latest"],
     }
     raw_hex = _try_rpc_hosts(chain_cfg["rpc"], payload, timeout)
-    if raw_hex in (None, "0x0", "0x00"):
+    if raw_hex in ("0x0", "0x00"):
         return None
+    # 空/None/非 hex 是「查询失败」而不是「余额为 0」: 若静默当成 0, 调用方
+    # 会把结果当作完整成功并 prune 掉该地址的旧持仓 (余额仍存在却消失)。
+    if not isinstance(raw_hex, str) or not raw_hex.startswith("0x"):
+        raise RuntimeError(f"RPC 返回非法余额结果: {raw_hex!r}")
     try:
         raw_wei = int(raw_hex, 16)
-    except (ValueError, TypeError):
-        return None
+    except (ValueError, TypeError) as e:
+        raise RuntimeError(f"RPC 返回非法余额结果: {raw_hex!r}") from e
     decimals = chain_cfg["native_decimals"]
     amount = raw_wei / (10**decimals)
     return {
@@ -425,12 +436,17 @@ def _erc20_balance(
         "params": [{"to": contract, "data": data_topic}, "latest"],
     }
     raw_hex = _try_rpc_hosts(_CHAIN_CONFIG[chain]["rpc"], payload, timeout)
-    # 节点可能返回空串 / 非 hex 载荷 (畸形响应): 一律按无余额处理,
-    # 不能把 ValueError 抛给调用方 (import_wallet 只兜 RuntimeError)
+    # 节点返回空串/None/非 hex 载荷 (畸形响应) 属查询失败, 不是零余额:
+    # 必须抛 RuntimeError 让 import_wallet 记入 errors, 从而阻止调用方
+    # prune_source 把该代币的旧持仓当作「已归零」删除。
+    if not isinstance(raw_hex, str) or not raw_hex.startswith("0x"):
+        raise RuntimeError(f"{chain} RPC 返回非法代币余额: {raw_hex!r}"[:200])
     try:
         raw = int(raw_hex, 16)
-    except (TypeError, ValueError):
-        return None
+    except (TypeError, ValueError) as e:
+        raise RuntimeError(
+            f"{chain} RPC 返回非法代币余额: {raw_hex!r}"
+        ) from e
     if raw == 0:
         return None
     amount = raw / (10**decimals)
@@ -474,8 +490,10 @@ def _validate_token_entry(info: Any, where: str) -> dict[str, Any]:
         raise ValueError(f"tokenlist {where}: 缺少有效 symbol")
     decimals = info.get("decimals")
     try:
+        # JSON 里的 1e999 会被解析成 inf, int(inf) 抛 OverflowError; 与普通
+        # 非数字一样转成可读 ValueError, 不能让单条坏 tokenlist 条目炸页面。
         decimals = int(decimals)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         raise ValueError(
             f"tokenlist {where}: decimals 必须是整数 (得到 {decimals!r})"
         ) from None
@@ -862,8 +880,10 @@ def _import_solana(
         # 裸 traceback (与 _tron_account 的 isinstance 守卫同口径)
         if not isinstance(res, dict):
             raise RuntimeError(f"RPC 返回结构异常 ({type(res).__name__})")
+        # value 可能是对象/字符串等畸形结构: int() 的 TypeError/ValueError/
+        # OverflowError 同样转成可读错误, 不能让整次导入裸 traceback。
         sol_lamports = int(res.get("value") or 0)
-    except RuntimeError as e:
+    except (RuntimeError, TypeError, ValueError, OverflowError) as e:
         errors.append(f"SOL 余额查询失败: {e}")
 
     # 2. SPL 代币: 同一 owner 可能有多个 token account, 按 mint 累加

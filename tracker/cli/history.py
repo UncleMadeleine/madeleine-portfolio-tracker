@@ -34,6 +34,12 @@ def cmd_history(args) -> None:
         # _records 把 NaN/NaT 转 None: json.dumps 默认会输出裸 NaN, 不是合法 JSON
         _print_json(_records(recs))
         return
+    # 摘要/区间高低与 kline/compare 共用同一道清洗: 数据源偶尔返回
+    # high<close / NaN / inf 的脏行, 不清理会让「区间高」低于收盘价。
+    # JSON 分支保持逐行原样 (缺失值转 null), 供下游自行决定是否过滤。
+    from ..charting import clean_ohlc
+
+    df = clean_ohlc(df)
     if df.empty:
         print(f"⚠ {args.symbol}: 无历史数据")
         return

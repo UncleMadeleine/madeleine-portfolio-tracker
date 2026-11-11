@@ -150,8 +150,24 @@ def build_config(cfg: dict | None = None):
         raise RuntimeError(
             "longport.json 的 client_id 仍是模板占位值, 请填入真实 client_id"
         )
+    if not oauth_token_cached(client_id):
+        # 取数路径 (页面/CLI/保温线程) 不能触发阻塞式 OAuth: SDK build()
+        # 会等浏览器回调并持有 GIL, 在没有 token 的机器上会把整个服务挂死。
+        # 首次授权必须走独立子进程 (tracker longport-login / 设置页登录)。
+        raise RuntimeError(
+            "长桥尚未登录 (未找到本地 token); 请先运行 "
+            "`tracker longport-login` 或在设置页完成 OAuth 授权"
+        )
     oauth = oauth_login(cfg)
     return api.Config.from_oauth(oauth, **kwargs)
+
+
+def oauth_token_cached(client_id: str) -> bool:
+    """SDK 是否已有该 client_id 的本地 token 缓存 (OAuth 已授权)."""
+    cid = str(client_id or "").strip()
+    if not cid:
+        return False
+    return (Path.home() / ".longport" / "openapi" / "tokens" / cid).exists()
 
 
 def oauth_login(cfg: dict | None = None, on_open_url=None):
@@ -601,6 +617,7 @@ def get_history_longport(
     rows: list[dict] = []
     seen_dates: set[date] = set()
     cursor_end = end
+    partial = False
     while True:
         try:
             candles = _ctx_call(
@@ -610,9 +627,12 @@ def get_history_longport(
                 cfg=cfg,
             )
         except Exception:  # noqa: BLE001 - 历史数据不可用即回退默认源
-            # 已经翻过页时保留已取到的部分, 不让一次远端失败丢掉整段历史
+            # 已经翻过页时保留已取到的部分, 不让一次远端失败丢掉整段历史;
+            # 但必须标记 partial, 让上层不要按完整 months 窗口写磁盘缓存
+            # (否则接下来 30 分钟都会缺少更早的数据)。
             if not rows:
                 return None
+            partial = True
             break
         if not candles:
             break
@@ -651,7 +671,12 @@ def get_history_longport(
     df = pd.DataFrame(rows)
     if df.empty:
         return None
-    return df.sort_values("date").reset_index(drop=True)
+    out = df.sort_values("date").reset_index(drop=True)
+    if partial:
+        # pandas attrs 会随 get_history 原样传回 prices.get_ohlc; 用它阻止
+        # 「截断的历史」按完整窗口落库, 而不是让缓存把缺口固化 30 分钟。
+        out.attrs["partial"] = True
+    return out
 
 
 # ---------------------------------------------------------------------------

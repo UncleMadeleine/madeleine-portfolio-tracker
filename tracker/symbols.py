@@ -511,6 +511,19 @@ def normalize(symbol: str) -> str:
         # 只报「行情缺失」而不提示代码形态不对
         if head.isdigit():
             head = head.lstrip("0").zfill(6)
+    elif (
+        head.upper() != "IX"  # IX.A / IX.B 等指数代码, 单字母是目录 key
+        and suffix not in _SUFFIX_MARKET
+        and (
+            (len(suffix) == 1 and suffix.isalpha() and suffix.isupper())
+            or _is_us_preferred(suffix)
+        )
+    ):
+        # 美股类别股/优先股的 Yahoo 点号写法 (BRK.B / WFC.PL) 与连字符写法
+        # (BRK-B / WFC-PL) 等价。此前 normalize 把点号原样保留, parse 会因
+        # ".B" 不是交易所后缀直接报错, 但 type_for_symbol 又把它标成 global,
+        # 结果持仓被保存却在组合汇总里静默消失。
+        return f"{head}-{suffix}"
     return f"{head}.{suffix}"
 
 

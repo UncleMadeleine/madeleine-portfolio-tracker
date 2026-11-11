@@ -15,7 +15,7 @@ import pandas as pd
 from .. import nav
 from ..services.snapshot import take_snapshot
 from ..storage import PORTFOLIO_PATH as DEFAULT_PORTFOLIO, load_portfolio
-from ._common import _finish_with_error
+from ._common import _finish_with_error, _source_strict
 
 
 def _read_and_print(base: str, days: int | None, as_json: bool) -> None:
@@ -93,6 +93,7 @@ def cmd_nav(args) -> None:
             use_ibkr=args.ibkr,
             use_longport=getattr(args, "longport", False),
             crypto_source=getattr(args, "crypto_source", "auto"),
+            source_strict=_source_strict(args),
         )
         record = nav.record_from_summary(
             date.today().isoformat(), base, summary, view, source="snapshot"
@@ -137,6 +138,7 @@ def cmd_nav(args) -> None:
             use_ibkr=args.ibkr,
             use_longport=getattr(args, "longport", False),
             crypto_source=getattr(args, "crypto_source", "auto"),
+            source_strict=_source_strict(args),
         )
         inserted = 0
         if rows and not args.dry_run:

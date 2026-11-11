@@ -98,6 +98,39 @@ def test_build_config_oauth_placeholder_fast_fails(tmp_path):
         lp.build_config(cfg)
 
 
+def test_build_config_oauth_without_token_fails_fast(tmp_path, monkeypatch):
+    """取数路径缺 token 时必须立即报未登录, 不能启动阻塞式浏览器授权."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    real = tmp_path / "longport.json"
+    real.write_text('{"auth": "oauth", "client_id": "cid-123"}', encoding="utf-8")
+    called = {"oauth": False}
+    monkeypatch.setattr(
+        lp, "oauth_login", lambda cfg: called.__setitem__("oauth", True)
+    )
+    with pytest.raises(RuntimeError, match="尚未登录"):
+        lp.build_config(lp.load_config(real))
+    assert called["oauth"] is False
+
+
+def test_build_config_oauth_uses_cached_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    token = tmp_path / ".longport" / "openapi" / "tokens" / "cid-123"
+    token.parent.mkdir(parents=True)
+    token.write_text("{}", encoding="utf-8")
+    real = tmp_path / "longport.json"
+    real.write_text('{"auth": "oauth", "client_id": "cid-123"}', encoding="utf-8")
+    monkeypatch.setattr(lp, "oauth_login", lambda cfg: "oauth-token")
+    monkeypatch.setattr(
+        lp,
+        "_sdk",
+        lambda: SimpleNamespace(
+            Config=SimpleNamespace(from_oauth=lambda oauth, **kw: ("cfg", oauth)),
+            Language=SimpleNamespace(ZH_CN=1, ZH_HK=2, EN=3),
+        ),
+    )
+    assert lp.build_config(lp.load_config(real)) == ("cfg", "oauth-token")
+
+
 def test_build_config_unknown_auth(tmp_path):
     real = tmp_path / "longport.json"
     real.write_text('{"auth": "basic"}')

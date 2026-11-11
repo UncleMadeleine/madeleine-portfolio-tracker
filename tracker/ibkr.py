@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import math
 import os
+import threading
 import time
 from datetime import date, datetime, timedelta
 from dataclasses import dataclass
@@ -59,6 +60,10 @@ def _mode_port(cfg: dict) -> int:
 _UNAVAILABLE_TTL = 60.0
 _client = None
 _unavailable: tuple[str, float] | None = None
+# ib_async 连接不是线程安全的, 且 Gateway 对同一 clientId 只允许一条连接:
+# 页面主线程 + 保温线程 + 汇率/搜索并发首次访问时会各自 connect, 多余连接
+# 直接报 "client id already in use", 旧连接也被覆盖泄漏。整个建连过程串行化。
+_client_lock = threading.RLock()
 
 # IBKR 批量分块: 账户并发行情线有限额 (典型 100), 一次性 reqTickers 全部
 # 合约 (自选 600+ 时) 超量的请求会被 IBKR 静默忽略 → ib_async 的 gather
@@ -111,9 +116,15 @@ def load_config(path: str | Path | None = None) -> dict:
 
 def reset() -> None:
     global _client, _unavailable, _no_data_until
-    _client = None
-    _unavailable = None
-    _no_data_until = 0.0
+    with _client_lock:
+        old, _client = _client, None
+        _unavailable = None
+        _no_data_until = 0.0
+        if old is not None:
+            try:
+                old.disconnect()
+            except Exception:  # noqa: BLE001 - 关闭失败不影响重置状态
+                pass
 
 
 def _ib_module():
@@ -132,6 +143,11 @@ def _ib_module():
 
 
 def _get_client(cfg: dict):
+    with _client_lock:
+        return _get_client_locked(cfg)
+
+
+def _get_client_locked(cfg: dict):
     global _client, _unavailable
     if _client is not None and _client.isConnected():
         return _client
@@ -169,7 +185,14 @@ def _get_client(cfg: dict):
         # 会永久挂起并拖死页面。统一给所有阻塞请求上硬超时。
         ib.RequestTimeout = _IBKR_CHUNK_TIMEOUT
         ib.reqMarketDataType(int(cfg["market_data_type"]))
-        _client = ib
+        stale, _client = _client, ib
+        if stale is not None:
+            # 旧连接已断但仍持有 socket/后台线程: 覆盖前显式关闭, 否则每次
+            # 重连都泄漏一条连接和一个 ib_async 事件循环线程。
+            try:
+                stale.disconnect()
+            except Exception:  # noqa: BLE001 - 关闭旧连接失败不应否定新连接
+                pass
         return ib
     except Exception as e:
         _unavailable = (_conn_fail_reason(e, cfg), time.time())

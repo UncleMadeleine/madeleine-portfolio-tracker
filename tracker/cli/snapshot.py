@@ -22,7 +22,7 @@ from ..storage import (
     load_portfolio,
 )
 from ..watchlist import DEFAULT_WATCHLIST, load_watchlist
-from ._common import _finish_with_error
+from ._common import _finish_with_error, _source_strict
 
 WATCH_COLS = [
     "symbol",
@@ -64,6 +64,7 @@ def run_snapshot(args) -> None:
         use_ibkr=args.ibkr,
         use_longport=getattr(args, "longport", False),
         crypto_source=getattr(args, "crypto_source", "auto"),
+        source_strict=_source_strict(args),
     )
 
     saved_nav = None

@@ -76,6 +76,10 @@ def _fold_line(line: str, limit: int = _FOLD_LIMIT) -> list[str]:
 
 def _as_date(value: object) -> date | None:
     """事件日期 → date; 支持 date/datetime/ISO 字符串, 非法值静默跳过."""
+    # pd.NaT 是 datetime 子类, 但 .date() 仍返回 NaT, 后续 strftime 会抛
+    # "NaTType does not support strftime"; NaN 同样按缺失处理。
+    if value != value:
+        return None
     if isinstance(value, datetime):
         return value.date()
     if isinstance(value, date):

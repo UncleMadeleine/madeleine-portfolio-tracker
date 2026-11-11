@@ -749,9 +749,10 @@ def clear_quotes() -> int:
 def clear_ohlc() -> int:
     """只清 K线(OHLC) 磁盘缓存: 数据源偏好切换后强制按新源链重取K线.
 
-    OHLC 缓存键只有 (symbol, months), 不含数据源偏好; 切换 prefer_akshare /
-    IBKR / 长桥 / crypto_source 后不清会命中上一个源的旧K线。与 clear_quotes
-    配套, 由设置页在源变化时调用 (clear 全清亦可, 但会连基本面一起清)。
+    缓存键含 symbol + 窗口 + 源偏好/EODHD/source_order 签名, 但设置页切换
+    开关或拖动顺序后仍主动全清: 既要清跨版本/旧键的历史数据, 也要让页面的
+    数据来源标记随新链路刷新。与 clear_quotes 配套, 由设置页在源变化时调用
+    (clear 全清亦可, 但会连基本面一起清)。
     """
     return _clear_table("ohlc_cache")
 

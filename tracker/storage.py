@@ -733,6 +733,9 @@ DEFAULT_SETTINGS = {
     "use_ibkr": False,
     "use_longport": False,
     "crypto_source": "auto",
+    # 各 provider 的逐代码回退顺序 (设置页可拖动编辑, 也可手改);
+    # 空 = 沿用历史默认链, 见 tracker.source_order。
+    "source_order": {},
 }
 
 
@@ -754,6 +757,9 @@ def _as_bool(value, default: bool = False) -> bool:
 def load_settings(path: str | Path = SETTINGS_PATH) -> dict:
     """读取设置; 文件缺失/损坏时回退默认值, 未知键与非法值忽略。"""
     data = dict(DEFAULT_SETTINGS)
+    # 嵌套默认值必须深拷贝/重建: dict(DEFAULT_SETTINGS) 是浅拷贝, 调用方
+    # 修改 data["source_order"] 会污染模块级默认值。
+    data["source_order"] = {}
     p = Path(path)
     if p.exists():
         try:
@@ -779,6 +785,10 @@ def load_settings(path: str | Path = SETTINGS_PATH) -> dict:
     if crypto_source not in CRYPTO_SOURCES:
         crypto_source = "auto"
     data["crypto_source"] = crypto_source
+    # source_order 允许手写; 结构合法性由 tracker.source_order 在读取时
+    # 按域/通道校验 (这里只保证顶层是对象, 避免 load_settings 返回非 dict)。
+    if not isinstance(data.get("source_order"), dict):
+        data["source_order"] = {}
     return data
 
 

@@ -93,8 +93,14 @@ def get_ohlc(
     # EODHD (BYOK) 的角色/复权口径也必须进缓存键: 同一代码从 yfinance 切到
     # EODHD (或反之) 后, TTL 内继续命中旧源的K线会让开关看起来没生效。
     from . import eodhd as eodhd_mod
+    from . import source_order as source_order_mod
 
     src_sig += eodhd_mod.cache_signature()
+    # 设置页拖动 / 手改 source_order 后, 同一代码换源取回的历史K线不能命中
+    # 旧缓存 (磁盘缓存键只含代码+窗口, 不含源顺序)。
+    order_sig = source_order_mod.signature()
+    if order_sig:
+        src_sig += f"|o{order_sig}"
     cache_key = f"{p.yahoo}{src_sig}"
     if not refresh and not is_range:
         cached = cache_mod.get_ohlc_cached(cache_key, months)
@@ -129,15 +135,20 @@ def get_index_history(
     返回数据的**原生粒度**由数据源决定 (水泥网 CEMPI 端点为周K, 其余日K),
     调用方用 charting.infer_native_period / resolve_period 兜底判定,
     不得假设恒为日K。指数域不参与 IBKR 批量行情, 故无 use_ibkr /
-    prefer_akshare 参数; 中国指数固定 akshare 优先, 其余 yfinance 主源
-    (源链见 providers/index.py)。
+    prefer_akshare 参数; 默认中国指数 akshare 优先, 其余 yfinance 主源,
+    也可在设置页拖动排序 (source_order.index.history)。
     """
     from .charting import clean_ohlc
 
     p = parse(symbol)
     if p.type != "index":
         raise ValueError(f"{p.yahoo}: 不是指数代码 (指数代码规范 IX.<KEY>, 如 IX.DXY)")
+    from . import source_order as source_order_mod
+
     key = f"index:{p.yahoo}"
+    order_sig = source_order_mod.signature()
+    if order_sig:
+        key += f"|o{order_sig}"
     is_range = start_date is not None or end_date is not None
     if not refresh and not is_range:
         cached = cache_mod.get_ohlc_cached(key, months)

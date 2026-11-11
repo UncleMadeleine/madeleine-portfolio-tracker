@@ -110,6 +110,11 @@ tracker-ui          # pip 安装后起 Streamlit 页面 (等价 streamlit run tr
 | crypto | **Binance API** → Gate.io 现货 → Hyperliquid 永续(仅USD系) → yfinance (偏好 `crypto_source`/`--crypto-source`) | **Binance klines** → Gate.io → Hyperliquid → yfinance |
 | index | — (指数无实时行情, 不参与持仓聚合) | 中国指数 **akshare 优先** → yfinance; 美股 SPX/NDX/DJI 有新浪兜底; 水泥网 (CEMPI 等) / 商品期货主力连续 (`IX.AU` 黄金 `IX.AG` 白银 `IX.JD` 鸡蛋 `IX.M` 豆粕 `IX.A` 豆一 `IX.B` 豆二 `IX.LH` 生猪 `IX.LC` 碳酸锂) / Cameco 铀价 (`IX.URANIUM` 现货 `IX.URANIUM_LT` 长协, 月K) / 恒生官网 (IX.HSAHP) 为专属源无兜底 |
 
+逐代码源链可在设置页「数据源 → 回退顺序」按 provider / 行情或历史拖动编辑
+（自动保存到 `settings.json` 的 `source_order`，也支持 ↑/↓ 与 Alt/Ctrl+↑/↓）。
+列表从上到下即优先级，手写配置里未列出的源自动补到末尾；空 `{}` = 沿用上表默认链。
+IBKR / 长桥是批量前置源，仍由 `use_ibkr` / `use_longport` 开关控制。
+
 **A股/港股实时行情 (akshare 源) 的实现细节**: 走东财 push2 `stock/get` **单代码**接口
 (secid 市场段: `.SS`=1 / `.SZ`/`.BJ`=0 / `.HK`=116+5位码), 一个请求拿齐
 最新价/昨收/涨跌幅/名称/总市值/市净率, 实测 0.4-0.8s。不用 akshare 的全市场
@@ -166,9 +171,12 @@ Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致);
   未展示的字段 (含 `name` 与自定义键)。
   `type` 由系统自动维护 (读取/保存时均会补写覆写), 手改无效。
 - `settings.json`: 页面显示与数据源偏好 (已 gitignore, 模板 `tracker/templates/settings.example.json`):
-  `color_scheme` (cn 红涨绿跌 / intl 绿涨红跌, 默认 cn) · `prefer_akshare` (默认 false) ·
+  `color_scheme` (cn 红涨绿跌 / intl 绿涨红跌, 默认 cn) ·
   `use_ibkr` (默认 false) · `use_longport` (默认 false) ·
-  `crypto_source` (auto/binance/gate/hyperliquid/yfinance, 默认 auto; 指定源前置, 失败回落链上其余源)。
+  `source_order`: 各 provider 的逐代码回退顺序，例如
+  `{"global": {"quote": ["akshare", "yfinance", "eodhd"]}}`；未配置/空对象 = 默认链，
+  未列出的源自动补到末尾。设置页可直接拖动排序并自动保存。
+  旧 `prefer_akshare` / `crypto_source` 仍兼容，作为未配置 `source_order` 时的快捷偏好。
   设置页切换数据源即时生效 (连进程内负缓存一起清); 直接改文件则重启 streamlit 生效。
 - `ibkr.json`: IBKR 连接参数 + 交易所映射 (数据目录下)。**从配置文件读取, 不写死在代码里**：
   - 模板随包分发 `tracker/templates/ibkr.example.json`; `tracker init` 可生成数据目录下的

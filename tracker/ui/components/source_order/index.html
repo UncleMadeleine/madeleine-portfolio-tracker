@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    font-family: "Source Sans Pro", -apple-system, BlinkMacSystemFont, "Segoe UI",
+      Roboto, "Helvetica Neue", Arial, sans-serif;
+    color: var(--fg, #31333f);
+  }
+  .list { display: flex; flex-direction: column; gap: 6px; }
+  .item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border: 1px solid var(--border, rgba(49, 51, 63, .18));
+    border-radius: 8px;
+    background: var(--bg, transparent);
+    cursor: grab;
+    user-select: none;
+    transition: border-color .12s ease, box-shadow .12s ease, opacity .12s ease;
+  }
+  .item:focus-visible { outline: 2px solid var(--accent, #ff4b4b); outline-offset: 1px; }
+  .item.dragging { opacity: .4; cursor: grabbing; }
+  .item.drop-before { box-shadow: 0 -2px 0 var(--accent, #ff4b4b); }
+  .item.drop-after { box-shadow: 0 2px 0 var(--accent, #ff4b4b); }
+  .handle { color: var(--muted, #808495); font-size: 16px; line-height: 1; }
+  .meta { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+  .label { font-size: .92rem; font-weight: 600; }
+  .note { font-size: .76rem; color: var(--muted, #808495); margin-top: 1px; }
+  .badge {
+    flex: none;
+    font-size: .7rem;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: var(--badge-bg, rgba(49, 51, 63, .06));
+    color: var(--muted, #808495);
+    white-space: nowrap;
+  }
+  .actions { display: flex; gap: 4px; flex: none; }
+  button {
+    border: 1px solid var(--border, rgba(49, 51, 63, .18));
+    background: transparent;
+    color: var(--fg, #31333f);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    line-height: 18px;
+    padding: 1px 7px;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent, #ff4b4b); }
+  button:disabled { opacity: .35; cursor: default; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+(function () {
+  function post(type, payload) {
+    window.parent.postMessage(
+      Object.assign({ isStreamlitMessage: true, type: type }, payload || {}),
+      "*"
+    );
+  }
+  function setValue(value) {
+    post("streamlit:setComponentValue", { value: value, dataType: "json" });
+  }
+  function setHeight() {
+    post("streamlit:setFrameHeight", {
+      height: Math.max(document.documentElement.scrollHeight, document.body.scrollHeight) + 2
+    });
+  }
+
+  var items = [];
+  var order = [];
+  var disabled = false;
+  var lastCommitted = null;
+  var draggingId = null;
+
+  function itemMap() {
+    var map = {};
+    items.forEach(function (it) { map[it.id] = it; });
+    return map;
+  }
+
+  function normalizeOrder(incoming) {
+    var ids = items.map(function (it) { return it.id; });
+    var seen = {};
+    var out = [];
+    if (Array.isArray(incoming)) {
+      incoming.forEach(function (id) {
+        if (ids.indexOf(id) >= 0 && !seen[id]) { seen[id] = true; out.push(id); }
+      });
+    }
+    ids.forEach(function (id) {
+      if (!seen[id]) { out.push(id); }
+    });
+    return out;
+  }
+
+  function cleanupMarks() {
+    var nodes = document.querySelectorAll(".item");
+    for (var i = 0; i < nodes.length; i++) {
+      nodes[i].classList.remove("drop-before", "drop-after");
+    }
+  }
+
+  function commit() {
+    // 只有用户操作才回传。渲染阶段绝不自动提交, 否则 rerun → render → commit
+    // 会形成循环。
+    var value = order.slice();
+    var sig = JSON.stringify(value);
+    if (sig === lastCommitted) { return; }
+    lastCommitted = sig;
+    setValue(value);
+  }
+
+  function move(id, delta) {
+    var from = order.indexOf(id);
+    var to = from + delta;
+    if (from < 0 || to < 0 || to >= order.length) { return; }
+    order.splice(from, 1);
+    order.splice(to, 0, id);
+    commit();
+    render();
+  }
+
+  function moveTo(sourceId, targetId, after) {
+    var from = order.indexOf(sourceId);
+    if (from < 0) { return; }
+    order.splice(from, 1);
+    var to = order.indexOf(targetId);
+    if (to < 0) { to = order.length; }
+    if (after) { to += 1; }
+    order.splice(to, 0, sourceId);
+    commit();
+    render();
+  }
+
+  function render() {
+    var app = document.getElementById("app");
+    app.innerHTML = "";
+    var map = itemMap();
+    var list = document.createElement("div");
+    list.className = "list";
+    list.setAttribute("role", "listbox");
+    list.setAttribute("aria-label", "数据源顺序，可拖动排序");
+
+    order.forEach(function (id, index) {
+      var meta = map[id] || { id: id, label: id, note: "" };
+      var row = document.createElement("div");
+      row.className = "item";
+      row.draggable = !disabled;
+      row.dataset.id = id;
+      row.tabIndex = 0;
+      row.setAttribute("role", "option");
+      row.setAttribute("aria-posinset", String(index + 1));
+      row.setAttribute("aria-setsize", String(order.length));
+
+      var handle = document.createElement("span");
+      handle.className = "handle";
+      handle.textContent = "⠿";
+      handle.setAttribute("aria-hidden", "true");
+      row.appendChild(handle);
+
+      var metaWrap = document.createElement("div");
+      metaWrap.className = "meta";
+      var label = document.createElement("span");
+      label.className = "label";
+      label.textContent = meta.label || id;
+      metaWrap.appendChild(label);
+      if (meta.note) {
+        var note = document.createElement("span");
+        note.className = "note";
+        note.textContent = meta.note;
+        metaWrap.appendChild(note);
+      }
+      row.appendChild(metaWrap);
+
+      if (meta.badge) {
+        var badge = document.createElement("span");
+        badge.className = "badge";
+        badge.textContent = meta.badge;
+        row.appendChild(badge);
+      }
+
+      var actions = document.createElement("div");
+      actions.className = "actions";
+      var up = document.createElement("button");
+      up.type = "button";
+      up.textContent = "↑";
+      up.title = "上移";
+      up.setAttribute("aria-label", "上移 " + (meta.label || id));
+      up.disabled = disabled || index === 0;
+      up.addEventListener("click", function (e) {
+        e.stopPropagation();
+        move(id, -1);
+      });
+      var down = document.createElement("button");
+      down.type = "button";
+      down.textContent = "↓";
+      down.title = "下移";
+      down.setAttribute("aria-label", "下移 " + (meta.label || id));
+      down.disabled = disabled || index === order.length - 1;
+      down.addEventListener("click", function (e) {
+        e.stopPropagation();
+        move(id, 1);
+      });
+      actions.appendChild(up);
+      actions.appendChild(down);
+      row.appendChild(actions);
+
+      row.addEventListener("dragstart", function (e) {
+        if (disabled) { e.preventDefault(); return; }
+        draggingId = id;
+        row.classList.add("dragging");
+        try {
+          e.dataTransfer.effectAllowed = "move";
+          e.dataTransfer.setData("text/plain", id);
+        } catch (_) {}
+      });
+      row.addEventListener("dragend", function () {
+        draggingId = null;
+        row.classList.remove("dragging");
+        cleanupMarks();
+      });
+      row.addEventListener("dragover", function (e) {
+        if (disabled || !draggingId || draggingId === id) { return; }
+        e.preventDefault();
+        try { e.dataTransfer.dropEffect = "move"; } catch (_) {}
+        var rect = row.getBoundingClientRect();
+        var after = (e.clientY - rect.top) > rect.height / 2;
+        cleanupMarks();
+        row.classList.add(after ? "drop-after" : "drop-before");
+      });
+      row.addEventListener("dragleave", function () {
+        row.classList.remove("drop-before", "drop-after");
+      });
+      row.addEventListener("drop", function (e) {
+        if (disabled || !draggingId || draggingId === id) { return; }
+        e.preventDefault();
+        var rect = row.getBoundingClientRect();
+        var after = (e.clientY - rect.top) > rect.height / 2;
+        moveTo(draggingId, id, after);
+        draggingId = null;
+      });
+      row.addEventListener("keydown", function (e) {
+        if (disabled) { return; }
+        if (e.key === "ArrowUp" && (e.altKey || e.ctrlKey || e.metaKey)) {
+          e.preventDefault();
+          move(id, -1);
+        } else if (e.key === "ArrowDown" && (e.altKey || e.ctrlKey || e.metaKey)) {
+          e.preventDefault();
+          move(id, 1);
+        }
+      });
+      list.appendChild(row);
+    });
+    app.appendChild(list);
+    setHeight();
+  }
+
+  window.addEventListener("message", function (event) {
+    if (!event.data || event.data.type !== "streamlit:render") { return; }
+    var args = event.data.args || {};
+    items = Array.isArray(args.items) ? args.items : [];
+    disabled = !!args.disabled;
+    order = normalizeOrder(Array.isArray(args.order) ? args.order : []);
+    var theme = event.data.theme || {};
+    var root = document.documentElement;
+    if (theme.backgroundColor) { root.style.setProperty("--bg", theme.backgroundColor); }
+    if (theme.textColor) {
+      root.style.setProperty("--fg", theme.textColor);
+      root.style.setProperty("--muted", theme.textColor + "99");
+    }
+    if (theme.borderColor) { root.style.setProperty("--border", theme.borderColor); }
+    if (theme.primaryColor) { root.style.setProperty("--accent", theme.primaryColor); }
+    if (theme.secondaryBackgroundColor) {
+      root.style.setProperty("--badge-bg", theme.secondaryBackgroundColor);
+    }
+    render();
+  });
+
+  post("streamlit:componentReady", { apiVersion: 1 });
+})();
+</script>
+</body>
+</html>

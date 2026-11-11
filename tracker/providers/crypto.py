@@ -519,6 +519,18 @@ class CryptoProvider(Provider):
 
         bool (True/False) 走其它域 prefer_akshare 语义, 本域忽略 → 默认链。
         """
+        from .. import source_order as so
+
+        order = so.configured("crypto", "quote")
+        if order is not None:
+            order = so.prefer_source(order, prefer_first)
+            funcs = {
+                "binance": _binance_quote,
+                "gate": _gate_quote,
+                "hyperliquid": _hl_quote,
+                "yfinance": _yf_quote,
+            }
+            return [funcs[s] for s in order if s in funcs]
         chain = [_binance_quote, _gate_quote, _hl_quote, _yf_quote]
         if isinstance(prefer_first, bool) or not prefer_first:
             return chain
@@ -535,6 +547,18 @@ class CryptoProvider(Provider):
         prefer_first: str | bool = False,
     ) -> list:
         """历史源链; prefer_first 语义同 quote_sources (str=偏好, bool=忽略)."""
+        from .. import source_order as so
+
+        order = so.configured("crypto", "history")
+        if order is not None:
+            order = so.prefer_source(order, prefer_first)
+            funcs = {
+                "binance": lambda: _binance_history(p, start_date, end_date),
+                "gate": lambda: _gate_history(p, start_date, end_date),
+                "hyperliquid": lambda: _hl_history(p, start_date, end_date),
+                "yfinance": lambda: _yf_history(p, start_date, end_date),
+            }
+            return [funcs[s] for s in order if s in funcs]
         chain = [
             lambda: _binance_history(p, start_date, end_date),
             lambda: _gate_history(p, start_date, end_date),

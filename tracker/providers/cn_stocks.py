@@ -28,7 +28,13 @@ class CNStocksProvider(Provider):
     name = "cn"
 
     def quote_sources(self, p: ParsedSymbol, prefer_first: bool = False) -> list:
-        # 本域 akshare 永远在前 (prefer_first 仅影响全球域的港股顺序)
+        from .. import source_order as so
+
+        order = so.configured("cn", "quote")
+        if order is not None:
+            funcs = {"akshare": _akshare_quote, "yfinance": _yahoo_quote}
+            return [funcs[s] for s in order if s in funcs]
+        # 未配置顺序: akshare 永远在前 (prefer_first 仅影响全球域的港股顺序)
         return [_akshare_quote, _yahoo_quote]
 
     def history_sources(
@@ -38,6 +44,15 @@ class CNStocksProvider(Provider):
         end_date: str | None,
         prefer_first: bool = False,
     ) -> list:
+        from .. import source_order as so
+
+        order = so.configured("cn", "history")
+        if order is not None:
+            funcs = {
+                "akshare": lambda: _akshare_history(p, start_date, end_date),
+                "yfinance": lambda: _yahoo_history(p, start_date, end_date),
+            }
+            return [funcs[s] for s in order if s in funcs]
         return [
             lambda: _akshare_history(p, start_date, end_date),
             lambda: _yahoo_history(p, start_date, end_date),

@@ -84,6 +84,7 @@ tracker = [
     "templates/*.json",
     "templates/*.toml",
     "assets/*.js",
+    "ui/components/*/*.html",
 ]
 
 [tool.ruff]

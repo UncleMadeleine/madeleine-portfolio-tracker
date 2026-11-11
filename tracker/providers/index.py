@@ -458,7 +458,14 @@ class IndexProvider(Provider):
             return [ft]
         ak_supported = bool(_catalog(p).get("ak")) or index_key(p.yahoo) in _AK_US_SINA
         if not ak_supported:
+            # 只有 yfinance 可用: 显式顺序里即使写了 akshare 也无法执行
             return [yf]
+        from .. import source_order as so
+
+        order = so.configured("index", "history")
+        if order is not None:
+            funcs = {"akshare": ak, "yfinance": yf}
+            return [funcs[s] for s in order if s in funcs]
         # 中国指数: akshare 优先 (与 A 股域惯例一致); 其余 yfinance 主源
         if prefer_first or _catalog(p).get("ak"):
             return [ak, yf]

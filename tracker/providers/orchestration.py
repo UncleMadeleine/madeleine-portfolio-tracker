@@ -341,13 +341,52 @@ def get_quotes(
             # 批量未命中的代码再回落 yfinance 批量/逐代码源链。EODHD 未启用或
             # 仅 fallback 时保持原有 yfinance 批量优化 (自选 600+ 必需)。
             from .. import eodhd as eodhd_mod
+            from .. import source_order as so
 
-            if eodhd_mod.quote_primary():
-                # 与 GlobalStocksProvider.quote_sources 保持一致: 显式开启
-                # prefer_akshare 时港股必须 akshare 先跑, 否则 EODHD 批量
-                # 会抢先命中港股, 逐代码源链里的 akshare 永远没有机会执行。
-                eod_plist = global_plist
+            order = so.configured("global", "quote")
+
+            def _order_pos(source_id: str) -> int | None:
+                if order is None or source_id not in order:
+                    return None
+                return order.index(source_id)
+
+            # 显式顺序是权威: 只有 EODHD 排在 yfinance 之前才做批量前置;
+            # 排在后面时交给逐代码源链兜底, 不能抢先命中。
+            eod_pos = _order_pos("eodhd")
+            yf_pos = _order_pos("yfinance")
+            if order is None:
+                # 沿用旧行为 (含测试对 quote_primary 的 monkeypatch)
+                eod_ready = eod_batch_mode = eodhd_mod.quote_primary()
+            else:
+                eod_cfg = eodhd_mod.load_config()
+                eod_ready = (
+                    eodhd_mod.available(eod_cfg)
+                    and eod_cfg["quotes"] != "off"
+                    and eod_pos is not None
+                    and (yf_pos is None or eod_pos < yf_pos)
+                )
+                eod_batch_mode = eod_ready
+
+            def _akshare_precedes(source_id: str) -> bool:
+                """该批量源之前是否还有逐代码 akshare (港股必须让它先跑)."""
+                # --akshare 是本次调用的显式偏好: 即使配置里 akshare 排在后面,
+                # 也要让港股先走 akshare (与 provider 内临时前置保持一致)。
                 if prefer_akshare:
+                    return True
+                if order is None:
+                    return False
+                ak_pos = _order_pos("akshare")
+                if ak_pos is None:
+                    return False
+                pos = _order_pos(source_id)
+                return pos is None or ak_pos < pos
+
+            if eod_ready and eod_batch_mode:
+                # 与 GlobalStocksProvider.quote_sources 保持一致: akshare 在
+                # EODHD 之前时港股必须 akshare 先跑, 否则 EODHD 批量会抢先
+                # 命中港股, 逐代码源链里的 akshare 永远没有机会执行。
+                eod_plist = global_plist
+                if _akshare_precedes("eodhd"):
                     eod_plist = [
                         p for p in global_plist if p.market is not Market.HK
                     ]
@@ -366,26 +405,30 @@ def get_quotes(
                         p for p in global_plist if p.yahoo not in quotes
                     ]
 
-            # 港股 akshare 优先 (prefer_akshare) 时不能让 yfinance 批量抢先:
-            # 批量的结果会直接进 quotes, 逐代码源链就不再执行, 港股永远走
-            # yfinance (与设置页/CLI 声明的"港股源顺序翻转"矛盾)。
-            batch_plist = global_plist
-            if prefer_akshare:
-                batch_plist = [
-                    p for p in global_plist if p.market is not Market.HK
-                ]
-            if batch_plist:
-                _emit("yfinance 批量行情")
-                try:
-                    batch = _yahoo_batch(batch_plist)
-                    quotes.update(batch)
-                    settled.update(batch)
-                except Exception as e:  # noqa: BLE001 - 批量失败不能让整个域崩
-                    # 批量是优化不是必需: 失败则全部代码落逐代码源链 (那里每源
-                    # 单独 try)。逐代码阶段异常也会被 _fetch_domain 收敛成单码错误。
-                    notes.append(f"yfinance 批量行情异常: {e} (已回退逐代码取数)")
-                _emit("yfinance 批量行情")
-                global_plist = [p for p in global_plist if p.yahoo not in quotes]
+            # 港股 akshare 排在 yfinance 之前时不能让批量抢先: 批量的结果会
+            # 直接进 quotes, 逐代码源链就不再执行, 港股永远走 yfinance。
+            if order is None or "yfinance" in order:
+                batch_plist = global_plist
+                if _akshare_precedes("yfinance"):
+                    batch_plist = [
+                        p for p in global_plist if p.market is not Market.HK
+                    ]
+                if batch_plist:
+                    _emit("yfinance 批量行情")
+                    try:
+                        batch = _yahoo_batch(batch_plist)
+                        quotes.update(batch)
+                        settled.update(batch)
+                    except Exception as e:  # noqa: BLE001 - 批量失败不能让整个域崩
+                        # 批量是优化不是必需: 失败则全部代码落逐代码源链 (那里每源
+                        # 单独 try)。逐代码阶段异常也会被 _fetch_domain 收敛成单码错误。
+                        notes.append(
+                            f"yfinance 批量行情异常: {e} (已回退逐代码取数)"
+                        )
+                    _emit("yfinance 批量行情")
+                    global_plist = [
+                        p for p in global_plist if p.yahoo not in quotes
+                    ]
 
             if global_plist:
                 if progress is not None:

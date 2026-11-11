@@ -100,6 +100,12 @@ class Provider:
                 return fn(p)
             except Exception as e:  # noqa: BLE001 - 降级到下一数据源
                 last_err = e
+        if last_err is None:
+            # 防御性提示: 显式源顺序/未来新增源可能让某个代码没有适用源,
+            # 给出可操作信息, 而不是 "未知错误"。
+            raise RuntimeError(
+                f"{p.yahoo}: 无适用数据源 (请检查设置页的数据源顺序)"
+            )
         # TimeoutError() 等无消息异常会让 str() 渲染成空串, 用户只看到
         # "cn 行情获取失败 ()" 无从诊断; 回退到类型名/repr。
         raise RuntimeError(f"{self.name} 行情获取失败 ({_err_repr(last_err)})")
@@ -113,13 +119,18 @@ class Provider:
     ):
         """返回 DataFrame (date/open/high/low/close/volume); 全部源失败抛 RuntimeError."""
         last_err: Exception | None = None
-        for fn in self.history_sources(p, start_date, end_date, prefer_first):
+        sources = self.history_sources(p, start_date, end_date, prefer_first)
+        for fn in sources:
             try:
                 df = fn()
                 if not df.empty:
                     return df
             except Exception as e:  # noqa: BLE001 - 降级到下一数据源
                 last_err = e
+        if last_err is None and not sources:
+            raise RuntimeError(
+                f"{p.yahoo}: 无适用历史数据源 (请检查设置页的数据源顺序)"
+            )
         raise RuntimeError(f"{p.yahoo}: 历史数据获取失败 ({_err_repr(last_err)})")
 
 

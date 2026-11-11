@@ -173,6 +173,8 @@ class TestVersionSingleSource:
         pkg_data = data["tool"]["setuptools"]["package-data"]["tracker"]
         assert "templates/*.json" in pkg_data
         assert "assets/*.js" in pkg_data
+        # 设置页数据源顺序编辑器是本地自定义组件, 必须随 wheel 分发
+        assert "ui/components/*/*.html" in pkg_data
 
 
 class TestChartingWithoutPlotly:

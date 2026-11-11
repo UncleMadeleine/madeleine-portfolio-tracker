@@ -572,10 +572,31 @@ class GlobalStocksProvider(Provider):
 
     def quote_sources(self, p: ParsedSymbol, prefer_first: bool = False) -> list:
         from .. import eodhd as eodhd_mod
+        from .. import source_order as so
 
         cfg = eodhd_mod.load_config()
         eod = eodhd_mod.available(cfg)
         mode = cfg["quotes"] if eod else "off"
+
+        # 设置页/手写配置的显式顺序优先: 列表顺序即优先级, 未列出的源由
+        # source_order.normalize 补到末尾。显式 --akshare 仍可把 akshare 临时
+        # 前置; 非港股会跳过 akshare。
+        order = so.configured("global", "quote")
+        if order is not None:
+            if prefer_first and "akshare" in order:
+                order = ["akshare"] + [s for s in order if s != "akshare"]
+            chain: list = []
+            for source_id in order:
+                if source_id == "eodhd":
+                    if eod and mode != "off":
+                        chain.append(eodhd_mod.quote)
+                elif source_id == "akshare":
+                    if p.market is Market.HK:
+                        chain.append(_akshare_quote)
+                elif source_id == "yfinance":
+                    chain.append(_yahoo_quote)
+            return chain
+
         if p.market is Market.HK:
             # prefer_first=True (--akshare / 国内网络): akshare 在前
             base = (
@@ -602,6 +623,7 @@ class GlobalStocksProvider(Provider):
         prefer_first: bool = False,
     ) -> list:
         from .. import eodhd as eodhd_mod
+        from .. import source_order as so
 
         cfg = eodhd_mod.load_config()
         eod = eodhd_mod.available(cfg)
@@ -609,6 +631,24 @@ class GlobalStocksProvider(Provider):
         eod_src = lambda: eodhd_mod.history(p, start_date, end_date)  # noqa: E731
         yahoo_src = lambda: _yahoo_history(p, start_date, end_date)  # noqa: E731
         ak_src = lambda: _akshare_history(p, start_date, end_date)  # noqa: E731
+
+        order = so.configured("global", "history")
+        if order is not None:
+            if prefer_first and "akshare" in order:
+                order = ["akshare"] + [s for s in order if s != "akshare"]
+            funcs = {
+                "eodhd": eod_src,
+                "yfinance": yahoo_src,
+                "akshare": ak_src,
+            }
+            return [
+                funcs[source_id]
+                for source_id in order
+                if source_id in funcs
+                and (source_id != "eodhd" or eod)
+                and (source_id != "akshare" or p.market is Market.HK)
+            ]
+
         if p.market is Market.HK:
             if prefer_first:
                 chain = [ak_src, yahoo_src]

@@ -1,8 +1,27 @@
 {
-  "_说明": "示例配置: 复制为 settings.json 后修改。color_scheme: cn(红涨绿跌) / intl(绿涨红跌); prefer_akshare: A股/港股数据源优先级; use_ibkr: 启用 IBKR 行情; use_longport: 启用长桥行情 (需先 longport-login 登录); crypto_source: 加密货币数据源优先 (auto/binance/gate/hyperliquid/yfinance, 指定源前置, 失败自动落到链上其余源)",
+  "_说明": "示例配置: 复制为 settings.json 后修改。color_scheme: cn(红涨绿跌) / intl(绿涨红跌); prefer_akshare/use_ibkr/use_longport/crypto_source 为旧版快捷偏好; source_order: 各 provider 逐代码回退顺序 (留空 {} = 沿用默认链; 设置页可拖动编辑)",
+  "_source_order示例": {
+    "global": {
+      "quote": ["eodhd", "yfinance", "akshare"],
+      "history": ["eodhd", "yfinance", "akshare"]
+    },
+    "cn": {
+      "quote": ["akshare", "yfinance"],
+      "history": ["akshare", "yfinance"]
+    },
+    "crypto": {
+      "quote": ["binance", "gate", "hyperliquid", "yfinance"],
+      "history": ["binance", "gate", "hyperliquid", "yfinance"]
+    },
+    "index": {
+      "history": ["akshare", "yfinance"]
+    }
+  },
+  "_source_order说明": "列表从上到下即优先级; 手写配置里未列出的源自动补到末尾。可选别名: yahoo→yfinance, gate.io→gate。IBKR/长桥为批量前置, 不在此列表, 由 use_ibkr/use_longport 开关控制。",
   "color_scheme": "cn",
   "prefer_akshare": false,
   "use_ibkr": false,
   "use_longport": false,
-  "crypto_source": "auto"
+  "crypto_source": "auto",
+  "source_order": {}
 }

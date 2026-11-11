@@ -394,7 +394,7 @@ tracker/ui/           Streamlit 页面包（streamlit run tracker/ui/app.py / �
 ├── import_page.py      「导入」页面（IBKR 账户 / 长桥账户 / 链上钱包 / 券商文件, 追加合并或覆盖）
 ├── settings_page.py    「设置」页面（配色 / 数据源 / EODHD BYOK / 基础货币）
 ├── longport_login.py   长桥 OAuth 登录引导（独立子进程, 状态文件 <数据目录>/var/longport_oauth_state.json）
-└── settings.py         settings.json 读写（涨跌配色 / prefer_akshare / use_ibkr / use_longport / crypto_source）+ portfolio 读写助手
+└── settings.py         settings.json 读写（涨跌配色 / prefer_akshare / use_ibkr / use_longport / crypto_source / source_order）+ portfolio 读写助手
 tracker/
 ├── __main__.py         python -m tracker 入口（转发到 cli）
 ├── paths.py            数据目录解析（TRACKER_HOME > 仓库根 > 平台用户目录）+ 包内资源定位
@@ -465,8 +465,9 @@ portfolio.json          持仓配置（页面可直接编辑保存; type 字段�
                          用户本地数据, 已 gitignore, 模板 tracker/templates/portfolio.example.json）
 watchlist.json          自选股配置（页面可直接编辑保存; type 字段由系统自动维护, 手改无效;
                          用户本地数据, 已 gitignore, 模板 tracker/templates/watchlist.example.json）
-settings.json           显示与数据源设置（配色 / prefer_akshare / use_ibkr / use_longport /
-                         crypto_source; 已 gitignore, 模板 tracker/templates/settings.example.json）
+settings.json           显示与数据源设置（配色 / use_ibkr / use_longport / source_order;
+                         旧 prefer_akshare / crypto_source 仍兼容; 已 gitignore,
+                         模板 tracker/templates/settings.example.json）
 ibkr.json               IBKR 真实配置（已 gitignore; 模板 tracker/templates/ibkr.example.json,
                          env IBKR_CONFIG 可指定其他路径）
 longport.json           长桥真实配置（已 gitignore; 模板 tracker/templates/longport.example.json,
@@ -479,6 +480,7 @@ var/                    运行时生成产物（行情缓存 quotes_cache.db、k
                          可随时整目录删除（重建即自动再生成）
 tracker/templates/      包内配置模板 + streamlit 主题（随 wheel 分发; tracker init 的来源）
 tracker/assets/         vendored lightweight-charts standalone JS（离线内嵌, 随 wheel 分发）
+tracker/ui/components/  本地自定义 Streamlit 组件（数据源顺序拖动编辑器, 零新增前端依赖）
 pyproject.toml           打包元数据（依赖 extras / console scripts / package-data）
 Dockerfile / docker-compose.yml   UI 容器镜像（数据落 /data 卷, 一键起）
 docs/                   研究笔记（A股券商导入方案调研 / IBKR 只读 API 笔记，后者为改 IBKR 前必读）
@@ -502,6 +504,12 @@ tests/                  单元测试（离线, mock）
 | **crypto** | `BASE-QUOTE`（`BTC-USD`） | **Binance API** → Gate.io 现货 → Hyperliquid 永续（仅USD系） → yfinance | **Binance klines** → Gate.io → Hyperliquid → yfinance |
 | **index** | `IX.<KEY>`（`IX.DXY` 美元指数 / `IX.VIX` 恐慌指数 / `IX.CSI300` 沪深 300 / `IX.AU` 黄金 · `IX.AG` 白银 · `IX.JD` 鸡蛋 · `IX.M` 豆粕 · `IX.A` 豆一 · `IX.B` 豆二 · `IX.LH` 生猪 · `IX.LC` 碳酸锂主力连续 / `IX.URANIUM` 铀现货价 · `IX.URANIUM_LT` 铀长协价 / `IX.CEMPI` 水泥价格指数 / `IX.HSI` 恒生指数 · `IX.HSTECH` 恒生科技指数 等恒生官网港股指数 / `IX.HSAHP` AH股溢价指数 …） | —（指数无实时行情, 不参与持仓聚合） | 中国指数 **akshare 优先** → yfinance；美股 SPX/NDX/DJI 有新浪兜底；水泥网/商品期货/恒生官网/Cameco 铀价为专属源（无兜底） |
 
+- **回退顺序可视化编辑**：设置页「数据源 → 回退顺序」按 provider 分别拖动调整
+  **实时行情** / **历史K线** 的逐代码源链（自动保存，也支持 ↑/↓ 与 Alt/Ctrl+↑/↓），
+  配置写在 `settings.json` 的 `source_order`。顺序从上到下即优先级，手写配置里未列出的源自动补到末尾；
+  手改 JSON 同样生效，空对象 `{}` = 沿用上表默认链。
+  例：`{"global": {"quote": ["akshare", "yfinance", "eodhd"]}}`。
+  IBKR / 长桥是批量前置源，不参与该列表，仍由 `use_ibkr` / `use_longport` 开关控制。
 - **type 即域**：`type` 字段由系统在保存/导入时按 `symbols.type_for_symbol()` 自动推导覆写，
   手改 JSON 无效。点后缀/裸代码永远是股票，连字符+计价货币永远是加密货币，同一代码不会映射两个域。
   测试用例、搜索结果、导入产出的代码均符合该规范。
@@ -509,10 +517,11 @@ tests/                  单元测试（离线, mock）
 - **IBKR 历史K线按 ≤365 天窗口分块拼接**（IBKR 单次日K请求上限 365 D，超限拒单）：60 个月（5 年）区间在 IBKR 源同样可用；标的上市晚于区间起点时连续空窗即停，任一分块失败该代码整体回退默认源（不返回半截区间）
 - 汇率：CFETS 一次拿全 XXX/CNY；直对/逆对/USD 桥接兜底
 - A股/港股实时行情（akshare 源）走东财 push2 **单代码**接口（`.SS`=市场段 1、`.SZ`/`.BJ`=0、`.HK`=116+5位码），一个请求拿齐 最新价/昨收/涨跌幅/名称/总市值/市净率，实测 0.4-0.8s；不用 akshare 全市场 spot（内部分 60 页拉全 A 股、页间 sleep，单次 42-102s，秒级超时必然失败——改之前「A股 akshare 优先 / 港股 akshare 兜底」实际从未生效）。单代码接口还比全市场表多给港股的总市值/市净率（全市场 spot 最终列丢了这两列），港股 PB/市值阈值提醒因此有了东财实时口径；带 5s 进程内缓存 + per-key 单飞 + 失败 15s 占位
-- `--akshare` 开关仅影响港股数据源顺序（A股域固定 akshare 优先）；设置页同名开关全局生效
-- 加密货币域数据源可自选：`settings.json` `"crypto_source": "auto|binance|gate|hyperliquid|yfinance"`
-  或子命令 `--crypto-source <值>`；默认 `auto` = Binance → Gate.io → Hyperliquid(USD系) → yfinance，
-  指定源前置、失败自动落到链上其余源（Hyperliquid 为永续合约价，与现货有基差，仅 USD 系计价代码）
+- `--akshare` 开关仅影响港股数据源顺序（A股域固定 akshare 优先）；设置页已改为直接拖动排序，
+  旧 `"prefer_akshare": true` 仍作为未配置 `source_order` 时的默认链兼容偏好
+- 加密货币域默认链 Binance → Gate.io → Hyperliquid(USD系) → yfinance；可直接在设置页拖动排序，
+  也可用 `settings.json` `"crypto_source": "auto|binance|gate|hyperliquid|yfinance"`
+  或子命令 `--crypto-source <值>` 作为临时前置偏好（Hyperliquid 为永续合约价，与现货有基差，仅 USD 系计价代码）
 - IBKR 行情可选叠加于任何域（需订阅）；英股 GBp 便士报价自动换算为 GBP；汇率缓存 10 分钟，行情缓存 5 分钟
 - IBKR 连接参数**从配置文件读取**（不写死在代码里）：优先数据目录下的 `ibkr.json`，其次包内模板 `tracker/templates/ibkr.example.json` 兜底（`tracker init` 生成后修改），也可用环境变量 `IBKR_CONFIG=/path/to/xxx.json` 指定；交易所映射在同一文件（A股经沪深港通通道：沪 `SEHKNTL`、深 `SEHKSZSE`、科创 `SEHKSTAR`，计价 CNH；B股走 `SHSE`/`SZSE` 并配 `tradingClass`；模板 `exchanges` 键名与代码读取一致，删键即用内置默认路由）
 - IBKR 断开时自动静默回退下一级数据源，不影响页面运行；持仓同步见下方
@@ -521,7 +530,9 @@ tests/                  单元测试（离线, mock）
 - EODHD 可选付费源 (BYOK)：`eodhd.json` 填 token（或 env `TRACKER_EODHD_TOKEN`）后生效，未配置时
   完全不影响免费链路。默认历史K线 `priority=primary`（在 yfinance 之前，IBKR/长桥之后），
   实时行情 `quotes=fallback`（仅在默认源失败时兜底）、`quotes=primary` 时走 `s=` 批量
-  （每批 15 个代码，仍按 ticker 计费）并回落 yfinance；PB/市值 `fundamentals=fallback`
+  （每批 15 个代码，仍按 ticker 计费）并回落 yfinance；一旦在设置页拖动过顺序，
+  显式 `source_order` 优先于 `priority` / `quotes` 的角色（`quotes=off` 仍禁用行情）；
+  PB/市值 `fundamentals=fallback`
   只补 yfinance 缺失字段（`primary` 可改为 EODHD 优先）。EODHD 行情不带币种与 PB/市值字段：
   行情币种按本项目代码规范推导（`.IL`/港股美元柜台等可用 `currency_overrides` 覆盖）。
   LSE `.L/.AL` 默认按便士 ÷100，英镑计价标的用 `lse_gbp_symbols` 豁免。详见「配置 EODHD (BYOK)」
@@ -854,6 +865,11 @@ Quotes are fetched with a priority chain:
 6. **FX** — CFETS for full XXX/CNY table, direct/inverse/USD bridge fallback
 7. **Indices** — `IX.<KEY>` historical only: CN indices via akshare (Sina), US SPX/NDX/DJI via yfinance with Sina fallback, cement / commodity-futures / Cameco uranium indices on dedicated sources (no fallback)
 8. **Crypto** — Binance → Gate.io → Hyperliquid perpetuals (USD-quoted only) → yfinance; reorder with `settings.json` `crypto_source` or `--crypto-source`
+
+The per-domain quote/history fallback order is editable by drag-and-drop on the Settings page
+(quotes and history are separate lists for global / CN / crypto / index), or directly under
+`settings.json` → `source_order`. The list is authoritative: sources omitted from a list are
+disabled. IBKR and LongPort remain batch prefetch steps controlled by `use_ibkr` / `use_longport`.
 
 IBKR/LongPort disconnects silently fall back to the next source; the page continues running without interruption.
 

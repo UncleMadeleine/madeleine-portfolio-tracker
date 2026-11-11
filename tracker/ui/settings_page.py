@@ -1,11 +1,17 @@
-"""「设置」页面: 基础货币 / 涨跌配色 / 数据源偏好, 全局生效并持久化到 settings.json."""
+"""「设置」页面: 基础货币 / 涨跌配色 / 数据源偏好与回退顺序.
+
+顺序编辑器见 ``tracker/ui/source_order_ui.py``; 本页只负责把当前设置
+(EODHD 角色 / 旧版快捷偏好) 传给编辑器并展示生效链路。
+"""
 
 from __future__ import annotations
 
 import streamlit as st
 
 from . import settings as S, theme
+from .source_order_ui import render_source_order_editor
 from tracker import eodhd as eodhd_mod
+from tracker import source_order as so
 from tracker import storage
 from tracker.storage import CorruptDataError, DataFileLocked
 
@@ -14,7 +20,7 @@ _COLOR_SAMPLE_PCT = "+2.35%"
 
 def render_settings_page() -> None:
     """设置页: 即改即存 (on_change 回调落盘), 其余页面每次 rerun 读 settings.json."""
-    settings = storage.load_settings()
+    settings = storage.load_settings(storage.SETTINGS_PATH)
     eodhd_cfg = eodhd_mod.load_config()
     eodhd_ok = eodhd_mod.available(eodhd_cfg)
     # 带 key 的 widget 一旦进入 session_state, 之后每次渲染都忽略 value=/index=,
@@ -25,11 +31,9 @@ def render_settings_page() -> None:
     # 一致 (同步为 no-op); 只有外部改动才会触发校正, 不会回退用户正在做的修改。
     for _k, _v in (
         ("set_color_scheme", settings["color_scheme"]),
-        ("set_prefer_akshare", settings["prefer_akshare"]),
         ("set_use_ibkr", settings["use_ibkr"]),
         ("set_use_longport", bool(settings.get("use_longport"))),
         ("set_use_eodhd", bool(eodhd_cfg.get("enabled"))),
-        ("set_crypto_source", settings["crypto_source"]),
     ):
         if st.session_state.get(_k) != _v:
             st.session_state[_k] = _v
@@ -40,10 +44,8 @@ def render_settings_page() -> None:
         k: st.session_state.get(k)
         for k in (
             "set_color_scheme",
-            "set_prefer_akshare",
             "set_use_ibkr",
             "set_use_longport",
-            "set_crypto_source",
         )
     }
     theme.page_header("设置", eyebrow="SETTINGS")
@@ -72,52 +74,57 @@ def render_settings_page() -> None:
     # ---- 数据源 ----
     st.markdown("#### 数据源")
 
-    def _chain(domain: str, main: str, fallback: str = "") -> str:
-        parts = [main] + ([fallback] if fallback else [])
-        return f"**{domain}**: " + " → ".join(parts)
+    quotes_mode = str(eodhd_cfg.get("quotes") or "fallback")
+    if quotes_mode not in ("primary", "fallback"):
+        quotes_mode = "fallback"
+    history_mode = str(eodhd_cfg.get("priority") or "primary")
+    if history_mode not in ("primary", "fallback"):
+        history_mode = "primary"
 
-    if settings["use_longport"] or settings["use_ibkr"]:
-        front = []
+    def _order_for(domain: str, channel: str) -> list[str]:
+        return so.display_order(
+            domain,
+            channel,
+            prefer_akshare=bool(settings["prefer_akshare"]),
+            crypto_source=str(settings["crypto_source"]),
+            eodhd_quotes=quotes_mode,
+            eodhd_priority=history_mode,
+        )
+
+    def _prefetch_for(domain: str, channel: str) -> list[str]:
+        """批量前置源 (IBKR/长桥) 的固定展示顺序."""
+        if domain not in ("global", "cn"):
+            return []
+        ids: list[str] = []
+        # 与 orchestration 的实际执行顺序一致: 行情先长桥后 IBKR (IBKR 覆盖);
+        # 历史先 IBKR 后长桥。CN 域只有长桥批量前置。
+        if domain == "global" and settings["use_ibkr"] and channel == "history":
+            ids.append("ibkr")
         if settings["use_longport"]:
-            front.append("长桥")
-        if settings["use_ibkr"]:
-            front.append("IBKR")
-        front_txt = " → ".join(front) + " → "
-    else:
-        front_txt = ""
-    hk_order = (
-        "akshare → yfinance" if settings["prefer_akshare"] else "yfinance → akshare"
+            ids.append("longport")
+        if domain == "global" and settings["use_ibkr"] and channel == "quote":
+            ids.append("ibkr")
+        return ids
+
+    chain_lines = []
+    for _domain in so.DOMAIN_ORDER:
+        for _channel in so.CHANNEL_ORDER:
+            if not so.CATALOG[_domain].get(_channel):
+                continue
+            ids = _prefetch_for(_domain, _channel) + _order_for(_domain, _channel)
+            chain_lines.append(
+                f"**{so.DOMAIN_META[_domain][0]} · {so.CHANNEL_LABELS[_channel]}**: "
+                + so.chain_text(ids)
+            )
+    chain_lines.append(
+        "**汇率**: " + ("IBKR → CFETS → yfinance" if settings["use_ibkr"] else "CFETS → yfinance")
     )
-    crypto_order = S.CRYPTO_SOURCE_CHAINS[settings["crypto_source"]]
-    eod_hist_primary = eodhd_ok and eodhd_cfg["priority"] == "primary"
-    eod_quote_primary = eodhd_ok and eodhd_cfg["quotes"] == "primary"
-    eod_quote_fallback = eodhd_ok and eodhd_cfg["quotes"] == "fallback"
-    if eod_quote_primary:
-        global_main = front_txt + "EODHD → yfinance"
-        global_fb = "港股 " + hk_order
-    else:
-        global_main = front_txt + ("EODHD → " if eod_hist_primary else "") + "yfinance"
-        global_fb = "港股 " + hk_order + (" → EODHD" if eod_quote_fallback else "")
     st.caption(
-        "当前生效链路 (失败自动落到下一源):  \n"
-        + _chain("美股/港股/全球", global_main, global_fb)
-        + "  \n"
-        + _chain("A股/北交所", "akshare (东财)", "yfinance")
-        + "  \n"
-        + _chain("加密货币", crypto_order)
-        + "  \n"
-        + _chain("汇率", "IBKR" if settings["use_ibkr"] else "CFETS", "yfinance")
+        "当前生效链路 (失败自动落到下一源):  \n" + "  \n".join(chain_lines)
     )
     st.caption(
         "每个代码实际命中的源见「组合」页持仓/自选表的**数据来源**列; "
-        "实时行情缓存 5 分钟, 下方开关切换时自动清空以立即生效。"
-    )
-    st.toggle(
-        "A股/港股优先 akshare (国内网络)",
-        value=settings["prefer_akshare"],
-        key="set_prefer_akshare",
-        on_change=_save_display,
-        help="开启后港股数据源顺序翻转 (A股域本就固定 akshare 优先); 关闭时港股走 Yahoo",
+        "实时行情缓存 5 分钟, 下方开关或顺序调整后自动清空以立即生效。"
     )
     st.toggle(
         "IBKR 行情 (需本机 IB Gateway)",
@@ -141,14 +148,14 @@ def render_settings_page() -> None:
         key="set_use_eodhd",
         on_change=_save_eodhd,
         help="需自备 EODHD API token (写入 eodhd.json 或 env TRACKER_EODHD_TOKEN)。"
-        "默认用其历史K线 (在 yfinance 之前, IBKR/长桥之后), 实时行情仅在默认源失败时兜底;"
-        "角色可在 eodhd.json 的 priority / quotes 中调整。未配置 token 时开关无效。",
+        "具体位置由下方「回退顺序」决定, 显式顺序优先于 eodhd.json 的 priority / quotes 角色;"
+        "quotes=off 仍会禁用实时行情。未配置 token 时开关无效。",
     )
     if eodhd_ok:
         st.caption(
             f"EODHD 已就绪 (token {eodhd_mod.status().get('token_masked') or '已配置'}): "
-            f"历史 {eodhd_cfg['priority']} / 行情 {eodhd_cfg['quotes']}; "
-            "可用 `tracker eodhd test AAPL` 自检。"
+            f"默认链角色 历史 {eodhd_cfg['priority']} / 行情 {eodhd_cfg['quotes']}"
+            " (下方显式顺序优先); 可用 `tracker eodhd test AAPL` 自检。"
         )
     else:
         st.caption(
@@ -189,16 +196,13 @@ def render_settings_page() -> None:
                 _clear_source_caches()
                 st.toast("EODHD token 已清除")
                 st.rerun()
-    st.selectbox(
-        "加密货币数据源优先",
-        list(S.CRYPTO_SOURCE_LABELS),
-        format_func=lambda v: S.CRYPTO_SOURCE_LABELS[v],
-        index=list(S.CRYPTO_SOURCE_LABELS).index(settings["crypto_source"]),
-        key="set_crypto_source",
-        on_change=_save_display,
-        help="只影响加密货币代码 (BTC-USD / ETH-USDT): 指定源前置, 失败自动落到链上其余源。"
-        "Hyperliquid 为永续合约价 (仅 USD 系计价, 与现货有基差)。",
+    st.markdown("#### 回退顺序")
+    st.caption(
+        "拖动调整每个 provider 的逐代码数据源顺序（自动保存）；也可用每行的 "
+        "↑/↓ 按钮或 Alt/Ctrl + ↑/↓ 键盘操作。列表从上到下即取数优先级，"
+        "失败的源自动落到下一项。"
     )
+    render_source_order_editor(settings, eodhd_cfg, eodhd_ok)
     with st.expander(
         "长桥账户登录",
         expanded=bool(settings.get("use_longport")) and not settings.get("use_ibkr"),
@@ -258,10 +262,14 @@ def _clear_source_caches() -> None:
     from tracker.providers.orchestration import neg_clear_all
 
     _try("负缓存", neg_clear_all)
+    from tracker.ui.index_page import cached_index_kline
     from tracker.ui.kline_page import clear_kline_caches
     from tracker.ui.portfolio_page import cached_fx, cached_quotes
 
     _try("K线内存", clear_kline_caches)
+    # 指数页的 st.cache_data 不经过 clear_kline_caches: source_order.index
+    # 调整后 30 分钟内仍会显示旧源结果, 必须单独清
+    _try("指数K线内存", cached_index_kline.clear)
     # 汇率页面缓存 (st.cache_data) 同样要清: 磁盘汇率缓存已清, 不清这个
     # 的话 IBKR 开关切换后 10 分钟内仍返回旧源 (CFETS/yfinance) 汇率
     _try("行情内存", cached_quotes.clear)
@@ -292,7 +300,7 @@ def _save_display() -> None:
     刚改的值静默回滚。这里以磁盘最新值为底, 只覆盖相对本轮渲染基线发生变化
     的键 (即用户刚刚操作的那个控件)。
     """
-    old = storage.load_settings()
+    old = storage.load_settings(storage.SETTINGS_PATH)
     payload = dict(old)
     synced = st.session_state.get("_settings_synced") or {}
     changed_keys = [
@@ -304,22 +312,13 @@ def _save_display() -> None:
             if scheme not in (storage.SCHEME_CN, storage.SCHEME_INTL):
                 scheme = storage.SCHEME_CN
             payload["color_scheme"] = scheme
-        elif key == "set_prefer_akshare":
-            payload["prefer_akshare"] = bool(st.session_state.get(key))
         elif key == "set_use_ibkr":
             payload["use_ibkr"] = bool(st.session_state.get(key))
         elif key == "set_use_longport":
             payload["use_longport"] = bool(st.session_state.get(key))
-        elif key == "set_crypto_source":
-            crypto_source = str(st.session_state.get(key) or "auto")
-            payload["crypto_source"] = (
-                crypto_source
-                if crypto_source in storage.CRYPTO_SOURCES
-                else "auto"
-            )
-    source_keys = ("prefer_akshare", "use_ibkr", "use_longport", "crypto_source")
+    source_keys = ("use_ibkr", "use_longport")
     try:
-        storage.save_settings(payload)
+        storage.save_settings(payload, storage.SETTINGS_PATH)
     except (DataFileLocked, CorruptDataError, OSError) as e:
         st.error(f"设置保存失败: {e}")
         return

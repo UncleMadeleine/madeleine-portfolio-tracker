@@ -1,0 +1,331 @@
+"""数据源回退顺序: 配置归一 / provider 源链 / 批量前置 / UI 默认展示."""
+
+from __future__ import annotations
+
+import pandas as pd
+import pytest
+
+from tracker import eodhd
+from tracker import source_order as so
+from tracker import storage
+from tracker.providers import orchestration as orch
+from tracker.providers import global_stocks as gs
+from tracker.providers.base import Quote
+from tracker.providers.cn_stocks import CNStocksProvider
+from tracker.providers.crypto import CryptoProvider
+from tracker.providers.index import IndexProvider
+from tracker.symbols import parse
+
+
+@pytest.fixture(autouse=True)
+def _clear_order_cache():
+    so.clear_cache()
+    yield
+    so.clear_cache()
+
+
+def _save_order(order=None, **domains):
+    storage.save_settings(
+        {"source_order": order if order is not None else domains},
+        storage.SETTINGS_PATH,
+    )
+    so.clear_cache()
+
+
+def _patch_eodhd(monkeypatch, *, available=True, quotes="fallback", priority="primary"):
+    cfg = dict(eodhd.DEFAULTS)
+    cfg.update(
+        {
+            "enabled": available,
+            "token": "t" if available else "",
+            "quotes": quotes,
+            "priority": priority,
+            "_path": "/tmp/eodhd.json",
+        }
+    )
+    monkeypatch.setattr(eodhd, "load_config", lambda path=None: dict(cfg))
+    monkeypatch.setattr(eodhd, "available", lambda c=None: available)
+    return cfg
+
+
+# ---------------------------------------------------------------------------
+# 配置归一
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_aliases_dedupes_and_appends_missing():
+    assert so.normalize(
+        "global", "quote", ["Yahoo", "gate.io", "AKSHARE", "yfinance", "bogus"]
+    ) == ["yfinance", "akshare", "eodhd"]
+    # crypto 只接受本域源; global 的 akshare 不能被塞进 crypto
+    assert so.normalize("crypto", "quote", ["gate.io", "GATE", "binance"]) == [
+        "gate",
+        "binance",
+        "hyperliquid",
+        "yfinance",
+    ]
+    assert so.normalize("crypto", "quote", ["akshare"]) is None
+    assert so.normalize("global", "quote", []) is None
+    assert so.normalize("global", "quote", "yfinance") is None
+
+
+def test_settings_roundtrip_and_invalid_shape(tmp_path):
+    p = tmp_path / "settings.json"
+    order = {"global": {"quote": ["yfinance", "eodhd"]}}
+    storage.save_settings({"source_order": order}, p)
+    assert storage.load_settings(p)["source_order"] == order
+
+    p.write_text('{"source_order": ["not", "a", "dict"]}', encoding="utf-8")
+    assert storage.load_settings(p)["source_order"] == {}
+
+
+def test_configured_reads_settings_and_invalidates_on_rewrite():
+    _save_order(order={"global": {"quote": ["yfinance", "eodhd"]}})
+    # 未列出的 akshare 自动补到末尾
+    assert so.configured("global", "quote") == ["yfinance", "eodhd", "akshare"]
+    assert so.configured("global", "history") is None
+
+    _save_order(order={"global": {"quote": ["akshare", "yfinance"]}})
+    assert so.configured("global", "quote") == ["akshare", "yfinance", "eodhd"]
+
+
+def test_signature_changes_with_order():
+    assert so.signature() == ""
+    _save_order(crypto={"quote": ["binance", "yfinance"]})
+    first = so.signature()
+    assert first
+    _save_order(crypto={"quote": ["yfinance", "binance"]})
+    assert so.signature() != first
+
+
+def test_display_order_keeps_legacy_prefer_consistent_with_provider():
+    _save_order(order={"global": {"quote": ["yfinance", "eodhd"]}})
+    assert so.display_order("global", "quote", prefer_akshare=True)[0] == "akshare"
+    _save_order(order={"crypto": {"quote": ["binance", "hyperliquid"]}})
+    assert so.display_order("crypto", "quote", crypto_source="gate")[0] == "gate"
+
+
+def test_display_order_defaults_follow_legacy_flags():
+    assert so.default_order("global", "quote", eodhd_quotes="fallback") == [
+        "yfinance",
+        "akshare",
+        "eodhd",
+    ]
+    assert so.default_order(
+        "global", "history", prefer_akshare=True, eodhd_priority="primary"
+    ) == ["akshare", "eodhd", "yfinance"]
+    assert so.default_order("crypto", "quote", crypto_source="gate")[0] == "gate"
+    assert so.default_order("index", "history", akshare_supported=False) == ["yfinance"]
+
+
+# ---------------------------------------------------------------------------
+# provider 源链
+# ---------------------------------------------------------------------------
+
+
+def test_global_quote_chain_honours_configured_order(monkeypatch):
+    _patch_eodhd(monkeypatch, available=True, quotes="fallback")
+    _save_order(
+        **{"global": {"quote": ["akshare", "yfinance", "eodhd"]}}
+    )
+    provider = gs.GlobalStocksProvider()
+
+    us = provider.quote_sources(parse("AAPL"))
+    assert us == [gs._yahoo_quote, eodhd.quote]  # akshare 仅港股
+
+    hk = provider.quote_sources(parse("0700.HK"))
+    assert hk == [gs._akshare_quote, gs._yahoo_quote, eodhd.quote]
+
+
+def test_global_quote_chain_appends_unlisted_sources(monkeypatch):
+    _patch_eodhd(monkeypatch, available=True, quotes="primary")
+    _save_order(**{"global": {"quote": ["yfinance"]}})
+    chain = gs.GlobalStocksProvider().quote_sources(parse("AAPL"))
+    # 手写只列 yfinance 时, 未列出的 eodhd/akshare 补到末尾 (akshare 仅港股)
+    assert chain == [gs._yahoo_quote, eodhd.quote]
+
+
+def test_global_quote_chain_skips_unavailable_eodhd(monkeypatch):
+    _patch_eodhd(monkeypatch, available=False)
+    _save_order(**{"global": {"quote": ["eodhd", "yfinance"]}})
+    chain = gs.GlobalStocksProvider().quote_sources(parse("AAPL"))
+    assert chain == [gs._yahoo_quote]
+
+
+def test_global_history_chain_order(monkeypatch):
+    _patch_eodhd(monkeypatch, available=True, priority="primary")
+    calls: list[str] = []
+    monkeypatch.setattr(
+        eodhd, "history", lambda *a, **k: calls.append("eodhd") or pd.DataFrame()
+    )
+    monkeypatch.setattr(
+        gs, "_yahoo_history", lambda *a, **k: calls.append("yfinance") or pd.DataFrame()
+    )
+    _save_order(**{"global": {"history": ["yfinance", "eodhd"]}})
+
+    chain = gs.GlobalStocksProvider().history_sources(
+        parse("AAPL"), "2025-01-01", None
+    )
+    for fn in chain:
+        fn()
+    assert calls == ["yfinance", "eodhd"]
+
+
+def test_cn_and_crypto_chains_honour_order():
+    _save_order(cn={"quote": ["yfinance", "akshare"]})
+    assert CNStocksProvider().quote_sources(parse("600519.SS")) == [
+        gs._yahoo_quote,
+        gs._akshare_quote,
+    ]
+
+    _save_order(
+        crypto={"quote": ["yfinance", "binance", "gate", "hyperliquid"]}
+    )
+    crypto = CryptoProvider()
+    from tracker.providers import crypto as crypto_mod
+
+    assert crypto.quote_sources(parse("BTC-USD")) == [
+        crypto_mod._yf_quote,
+        crypto_mod._binance_quote,
+        crypto_mod._gate_quote,
+        crypto_mod._hl_quote,
+    ]
+
+
+def test_index_history_chain_honours_order():
+    _save_order(index={"history": ["yfinance", "akshare"]})
+    chain = IndexProvider().history_sources(parse("IX.SSE"), "2025-01-01", None)
+    assert [fn.__name__ for fn in chain] == ["yf", "ak"]
+    # 没有 akshare 源的指数不能因为配置里写了 akshare 就拿到空链
+    assert [
+        fn.__name__
+        for fn in IndexProvider().history_sources(parse("IX.VIX"), "2025-01-01", None)
+    ] == ["yf"]
+
+
+# ---------------------------------------------------------------------------
+# 批量前置层
+# ---------------------------------------------------------------------------
+
+
+def _q(symbol: str, source: str) -> Quote:
+    return Quote(
+        symbol=symbol,
+        name=symbol,
+        price=1.0,
+        prev_close=1.0,
+        change_pct=0.0,
+        currency="USD",
+        source=source,
+    )
+
+
+def test_eodhd_after_yfinance_is_not_batched(monkeypatch):
+    _patch_eodhd(monkeypatch, available=True, quotes="primary")
+    _save_order(**{"global": {"quote": ["yfinance", "eodhd"]}})
+    called = {"eod": False, "yahoo": False}
+
+    monkeypatch.setattr(
+        eodhd,
+        "quotes_batch",
+        lambda parsed: called.__setitem__("eod", True) or ({}, []),
+    )
+
+    def fake_yahoo(parsed):
+        called["yahoo"] = True
+        return {}
+
+    monkeypatch.setattr(orch, "_yahoo_batch", fake_yahoo)
+    monkeypatch.setattr(orch, "_fetch_domain", lambda *a, **k: {})
+    monkeypatch.setattr(orch.cache_mod, "get_cached", lambda *a, **k: {})
+    monkeypatch.setattr(orch.cache_mod, "set_cached", lambda *a, **k: None)
+
+    orch.get_quotes(["AAPL"], refresh=True)
+    assert called == {"eod": False, "yahoo": True}
+
+
+def test_eodhd_before_yfinance_is_batched(monkeypatch):
+    _patch_eodhd(monkeypatch, available=True, quotes="fallback")
+    _save_order(**{"global": {"quote": ["eodhd", "yfinance"]}})
+    called = {"eod": False}
+
+    monkeypatch.setattr(
+        eodhd,
+        "quotes_batch",
+        lambda parsed: called.__setitem__("eod", True)
+        or ({"AAPL": _q("AAPL", "eodhd")}, []),
+    )
+    monkeypatch.setattr(orch, "_yahoo_batch", lambda parsed: {})
+    monkeypatch.setattr(orch, "_fetch_domain", lambda *a, **k: {})
+    monkeypatch.setattr(orch.cache_mod, "get_cached", lambda *a, **k: {})
+    monkeypatch.setattr(orch.cache_mod, "set_cached", lambda *a, **k: None)
+
+    quotes, _errors, _notes = orch.get_quotes(["AAPL"], refresh=True)
+    assert called["eod"] is True
+    assert quotes["AAPL"].source == "eodhd"
+
+
+def test_akshare_before_yfinance_keeps_hk_out_of_batch(monkeypatch):
+    _patch_eodhd(monkeypatch, available=False)
+    _save_order(**{"global": {"quote": ["akshare", "yfinance"]}})
+    batched: list[str] = []
+
+    def fake_yahoo(parsed):
+        batched.extend(p.yahoo for p in parsed)
+        return {}
+
+    monkeypatch.setattr(orch, "_yahoo_batch", fake_yahoo)
+    monkeypatch.setattr(orch, "_fetch_domain", lambda *a, **k: {})
+    monkeypatch.setattr(orch.cache_mod, "get_cached", lambda *a, **k: {})
+    monkeypatch.setattr(orch.cache_mod, "set_cached", lambda *a, **k: None)
+
+    orch.get_quotes(["0700.HK", "AAPL"], refresh=True)
+    assert batched == ["AAPL"]
+
+
+# ---------------------------------------------------------------------------
+# 设置写入
+# ---------------------------------------------------------------------------
+
+
+def test_drag_component_asset_is_present():
+    from tracker.ui import source_order_ui as ui
+
+    html = (ui._COMPONENT_DIR / "index.html").read_text(encoding="utf-8")
+    assert "dragstart" in html
+    assert "streamlit:setComponentValue" in html
+    assert "streamlit:componentReady" in html
+
+
+def test_store_order_resets_only_relevant_legacy_preference(monkeypatch):
+    from tracker.ui import source_order_ui as ui
+
+    monkeypatch.setattr(ui, "_clear_source_caches", lambda: None)
+    storage.save_settings(
+        {"prefer_akshare": True, "crypto_source": "gate"}, storage.SETTINGS_PATH
+    )
+
+    ui._store_order("crypto", "quote", ["yfinance", "binance"])
+    settings = storage.load_settings(storage.SETTINGS_PATH)
+    assert settings["source_order"]["crypto"]["quote"] == ["yfinance", "binance"]
+    # 未编辑的 crypto 历史链按旧偏好固化 (gate 前置), 不能因复位开关而丢失
+    assert settings["source_order"]["crypto"]["history"][0] == "gate"
+    assert settings["crypto_source"] == "auto"
+    # 只编辑 crypto, 不能顺手把 global 的 akshare 偏好重置
+    assert settings["prefer_akshare"] is True
+
+    ui._store_order("global", "quote", ["yfinance", "eodhd"])
+    settings = storage.load_settings(storage.SETTINGS_PATH)
+    assert settings["prefer_akshare"] is False
+    # 未编辑的 global 历史链保留 akshare 前置的旧偏好
+    assert settings["source_order"]["global"]["history"][0] == "akshare"
+
+    # 没有旧偏好时不要冻结另一条链, 否则之后改 eodhd.json 角色不会生效
+    storage.save_settings(
+        {"source_order": {}, "prefer_akshare": False, "crypto_source": "auto"},
+        storage.SETTINGS_PATH,
+    )
+    so.clear_cache()
+    ui._store_order("global", "history", ["eodhd", "yfinance"])
+    saved = storage.load_settings(storage.SETTINGS_PATH)["source_order"]
+    assert "quote" not in saved["global"]

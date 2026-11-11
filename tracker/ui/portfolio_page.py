@@ -18,7 +18,6 @@ app.py 入口调用 ensure_warmers 启动) 在没有任何页面打开时照常�
 from __future__ import annotations
 
 import logging
-import math
 import time
 from datetime import datetime
 
@@ -32,6 +31,7 @@ from tracker.analytics import build_view, by_symbol, summarize
 from tracker.fx import get_fx_rates
 from tracker.storage import CorruptDataError, DataFileLocked
 from tracker.symbols import parse
+from tracker.util import finite_float
 from tracker.services import warm as warm_mod
 from tracker.services.watchlist import (
     build_watchlist_view,
@@ -107,15 +107,6 @@ def _editor_holdings_signature(rows) -> list[tuple[str, float | None, float | No
     """
     sig: list[tuple[str, float | None, float | None]] = []
 
-    def _num(v):
-        if v is None:
-            return None
-        try:
-            f = float(v)
-        except (TypeError, ValueError):
-            return None
-        return f if math.isfinite(f) else None
-
     for h in rows or []:
         if not isinstance(h, dict):
             continue
@@ -126,7 +117,13 @@ def _editor_holdings_signature(rows) -> list[tuple[str, float | None, float | No
             sym = parse(raw).yahoo
         except ValueError:
             sym = raw.upper()
-        sig.append((sym, _num(h.get("quantity")), _num(h.get("avg_cost"))))
+        sig.append(
+            (
+                sym,
+                finite_float(h.get("quantity")),
+                finite_float(h.get("avg_cost")),
+            )
+        )
     return sorted(sig, key=lambda x: (x[0], x[1] or 0.0, x[2] or 0.0))
 
 

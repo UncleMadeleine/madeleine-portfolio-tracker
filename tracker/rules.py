@@ -10,6 +10,8 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping
 
+from .util import finite_float as _num
+
 __all__ = [
     "METRIC_MCAP",
     "METRIC_PB",
@@ -95,17 +97,6 @@ def entry_market_cap(entry: dict) -> float | None:
         if v is not None:
             return v
     return None
-
-
-def _num(v) -> float | None:
-    """阈值字段归一: 空/非有限数值 → None, 其余转 float."""
-    if v in (None, ""):
-        return None
-    try:
-        f = float(v)
-        return f if math.isfinite(f) else None
-    except (TypeError, ValueError):
-        return None
 
 
 def parse_thresholds(entry: dict) -> dict[str, float | None]:

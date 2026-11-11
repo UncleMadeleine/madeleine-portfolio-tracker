@@ -2,8 +2,25 @@
 
 from __future__ import annotations
 
+import math
 import threading
 from concurrent.futures import Future
+
+
+def finite_float(value: object) -> float | None:
+    """可选数值归一: None/空串/不可解析/NaN/±Inf → None, 其余转 float.
+
+    配置、缓存、数据源响应和持仓文件都会出现 ``"nan"``/``inf``/``None`` 等
+    非有限字面量。各模块曾各写一份同样的归一函数, 口径容易漂移 (例如只挡
+    NaN 不挡 Inf), 统一收敛到这里。
+    """
+    if value is None:
+        return None
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
 
 
 def records(df) -> list[dict]:

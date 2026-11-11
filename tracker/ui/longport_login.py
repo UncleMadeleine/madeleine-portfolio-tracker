@@ -9,42 +9,25 @@ SDK 的 OAuthBuilder.build() 会持有 GIL 阻塞整个解释器, 不能在 UI �
 
 from __future__ import annotations
 
-import json
 import subprocess
 import sys
-import time
 
 import streamlit as st
 
 from tracker import longport
+from tracker.oauth_state import STATE_FILENAME, read_state, write_state
 from tracker.paths import var_dir
 
-_STATE_PATH = var_dir() / "longport_oauth_state.json"
+_STATE_PATH = var_dir() / STATE_FILENAME
 _STALE_SECONDS = 600.0  # 状态文件超过 10 分钟视为过期流程
 
 
 def _read_state() -> dict | None:
-    try:
-        data = json.loads(_STATE_PATH.read_text(encoding="utf-8"))
-        if isinstance(data, dict) and time.time() - data.get("ts", 0) < _STALE_SECONDS:
-            return data
-    except (OSError, json.JSONDecodeError):
-        pass
-    return None
+    return read_state(_STATE_PATH, max_age=_STALE_SECONDS)
 
 
 def _write_state(payload: dict) -> None:
-    try:
-        _STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        # 原子写 (与子进程侧一致): tmp + os.replace, 避免读侧读到半截 JSON
-        tmp = _STATE_PATH.with_suffix(".json.tmp")
-        tmp.write_text(
-            json.dumps({**payload, "ts": time.time()}, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        tmp.replace(_STATE_PATH)
-    except OSError:
-        pass
+    write_state(_STATE_PATH, payload)
 
 
 def _popens() -> subprocess.Popen | None:

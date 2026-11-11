@@ -16,6 +16,7 @@ import pandas as pd
 
 from .paths import var_dir
 from .symbols import is_currency_code, parse
+from .util import finite_float as _finite_opt
 
 if TYPE_CHECKING:
     from .providers.base import Quote
@@ -283,19 +284,15 @@ def _read_all(sql: str, params) -> list:
 
     并发场景真实存在: Streamlit 后台刷新线程写库的同时 CLI 或另一页面读库。
     """
-    for attempt in range(2):
-        try:
-            with _connection() as con:
-                return con.execute(sql, params).fetchall()
-        except (sqlite3.Error, OSError) as e:
-            _forget_ready_on_corruption(e)
-            if _is_missing_schema(e) and attempt == 0:
-                # 截断/清空后表没了: 摘掉就绪标记并重建 schema, 再试一次。
-                _forget_ready()
-                _ensure_db()
-                continue
-            return []
-    return []
+
+    def _fetch():
+        with _connection() as con:
+            return con.execute(sql, params).fetchall()
+
+    try:
+        return _with_schema_retry(_fetch)
+    except (sqlite3.Error, OSError):
+        return []
 
 
 def _execute_write(sql: str, params, *, many: bool = False) -> bool:
@@ -304,24 +301,21 @@ def _execute_write(sql: str, params, *, many: bool = False) -> bool:
     缓存目录只读 / 磁盘满 / 库被其它进程锁住时, 不能让一次成功的网络取数
     因为回写缓存失败而整体抛错 (调用方拿到的是行情, 不是缓存状态)。
     """
-    for attempt in range(2):
-        try:
-            _ensure_db()
-            with _lock, _connection() as con:
-                if many:
-                    con.executemany(sql, params)
-                else:
-                    con.execute(sql, params)
-                con.commit()
-            return True
-        except (sqlite3.Error, OSError) as e:
-            _forget_ready_on_corruption(e)
-            if _is_missing_schema(e) and attempt == 0:
-                _forget_ready()
-                _ensure_db()
-                continue
-            return False
-    return False
+
+    def _write():
+        with _lock, _connection() as con:
+            if many:
+                con.executemany(sql, params)
+            else:
+                con.execute(sql, params)
+            con.commit()
+        return True
+
+    try:
+        return _with_schema_retry(_write)
+    except (sqlite3.Error, OSError) as e:
+        _forget_ready_on_corruption(e)
+        return False
 
 
 def _read_one(sql: str, params):
@@ -481,9 +475,8 @@ def set_ohlc_cached(symbol: str, months: int, df: pd.DataFrame) -> None:
 
 def _valid_fundamental(v) -> float | None:
     """基本面数值归一: None/非有限/≤0 → None (与写入侧 _valid 同口径)."""
-    if isinstance(v, (int, float)) and math.isfinite(v) and v > 0:
-        return float(v)
-    return None
+    f = _finite_opt(v)
+    return f if f is not None and f > 0 else None
 
 
 def get_fundamentals_meta(
@@ -574,9 +567,8 @@ def set_fundamental_cached(
     def _valid(v) -> float | None:
         # 与 storage._clean_rows 同口径: ±Infinity 同样不落库 (json 不认, 且
         # 6h 负缓存期内会在视图/snapshot --json 里炸出非法 JSON)
-        if v is None or not math.isfinite(v) or v <= 0:
-            return None
-        return float(v)
+        f = _finite_opt(v)
+        return f if f is not None and f > 0 else None
 
     bv = _valid(book_value)
     mc = _valid(market_cap)
@@ -633,22 +625,6 @@ def _normalize_quote_currency(symbol: str, currency) -> str | None:
         return parse(symbol).currency
     except ValueError:
         return None
-
-
-def _finite_opt(value) -> float | None:
-    """可选数值归一: None/不可解析/±Inf/NaN → None, 其余 float.
-
-    行情缓存的 price 一直有校验, 但 prev_close/change_pct 曾直接 float():
-    历史脏行里的 ``inf`` 会让 analytics 的今日盈亏变成「全部市值」,
-    并在 ``--json`` 输出非标准 JSON。
-    """
-    if value is None:
-        return None
-    try:
-        f = float(value)
-    except (TypeError, ValueError):
-        return None
-    return f if math.isfinite(f) else None
 
 
 def get_cached_with_age(

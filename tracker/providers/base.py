@@ -183,6 +183,7 @@ def get_quotes(
     use_ibkr: bool = False,
     use_longport: bool = False,
     crypto_source: str = "auto",
+    source_strict: bool = False,
 ) -> tuple[dict[str, Quote], dict[str, str], list[str]]:
     """多代码批量行情 (按 provider 分域聚合). 见 orchestration.get_quotes."""
     from .orchestration import get_quotes as _impl
@@ -193,6 +194,7 @@ def get_quotes(
         use_ibkr=use_ibkr,
         use_longport=use_longport,
         crypto_source=crypto_source,
+        source_strict=source_strict,
     )
 
 

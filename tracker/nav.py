@@ -26,6 +26,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from .paths import data_home
+from .util import finite_float as _num
 
 _LOCK = threading.Lock()
 
@@ -95,17 +96,6 @@ def _ensure_db() -> None:
     except sqlite3.Error:
         # 读路径由调用方解释为空; 写路径会再次连接并抛出真实错误
         return
-
-
-def _num(v) -> float | None:
-    """有限浮点归一: None/NaN/Inf/不可解析 → None."""
-    if v is None:
-        return None
-    try:
-        f = float(v)
-    except (TypeError, ValueError):
-        return None
-    return f if math.isfinite(f) else None
 
 
 def _text(v) -> str | None:

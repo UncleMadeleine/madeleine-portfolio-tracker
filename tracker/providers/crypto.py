@@ -17,7 +17,7 @@ import time
 import pandas as pd
 
 from ..symbols import ParsedSymbol
-from ..util import with_timeout
+from ..util import finite_float as _finite_opt, with_timeout
 from .base import Provider, Quote, SymbolEntry
 
 _BINANCE_HOSTS = ("https://api.binance.com", "https://data-api.binance.vision")
@@ -52,20 +52,6 @@ _HL_URL = "https://api.hyperliquid.xyz/info"
 # Gate.io 现货 (第三数据源): 公开 REST 免 key, 交易对 BASE_QUOTE (OKB_USDT),
 # 覆盖 Binance 未上线的币种 (如 OKB/平台币); 境内网络可达性好于 OKX/CMC 等。
 _GATE_HOST = "https://api.gateio.ws"
-
-
-def _finite_opt(value) -> float | None:
-    """可选数值字段归一: None/空串/非数字/NaN/Infinity 一律 None.
-
-    数据源偶发返回 ``"inf"``/``"nan"`` 字面量; 不做有限性校验时,
-    ``change_pct=inf`` 会让今日盈亏等于整个市值, 非有限值还会污染
-    Quote 缓存与 CLI --json 输出。
-    """
-    try:
-        f = float(value)
-    except (TypeError, ValueError):
-        return None
-    return f if math.isfinite(f) else None
 
 
 def _hl_usd_quote(quote: str) -> bool:

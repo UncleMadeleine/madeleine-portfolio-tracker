@@ -217,6 +217,18 @@ def test_dotted_us_class_and_preferred_symbols_are_normalized():
     assert parse("BRK.B").type == "global"
 
 
+def test_finite_float_shared_helper():
+    from tracker.util import finite_float
+
+    assert finite_float(None) is None
+    assert finite_float("") is None
+    assert finite_float("nan") is None
+    assert finite_float("inf") is None
+    assert finite_float(object()) is None
+    assert finite_float("12.5") == 12.5
+    assert finite_float(0) == 0.0
+
+
 def test_build_view_non_scalar_quantity_is_issue_not_crash():
     from tracker.analytics import build_view
 

@@ -11,27 +11,17 @@ token 由 SDK 持久化到 ~/.longport/openapi/tokens/<client_id> 并自动刷�
 
 from __future__ import annotations
 
-import json
 import sys
-import time
 
 from . import longport
+from .oauth_state import STATE_FILENAME, write_state
 from .paths import var_dir
 
-_STATE_PATH = var_dir() / "longport_oauth_state.json"
+_STATE_PATH = var_dir() / STATE_FILENAME
 
 
 def _write_state(payload: dict) -> None:
-    try:
-        _STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        tmp = _STATE_PATH.with_suffix(".tmp")
-        tmp.write_text(
-            json.dumps({**payload, "ts": time.time()}, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        tmp.replace(_STATE_PATH)  # 原子替换
-    except OSError:
-        pass
+    write_state(_STATE_PATH, payload)
 
 
 def main() -> int:

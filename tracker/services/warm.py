@@ -138,6 +138,7 @@ def cache_age(symbols=(), fx=None) -> float:
     """
     from .. import cache as cache_mod
 
+    symbols = tuple(dict.fromkeys(symbols))
     worst = 0.0
     if symbols:
         hits, ages = cache_mod.get_cached_with_age(list(symbols), ttl=10**9)
@@ -478,7 +479,7 @@ def warm_quotes_once(
         crypto_source=crypto_source,
         refresh=refresh,
     )
-    base = str(plan.get("base") or "CNY")
+    base = str(plan.get("base") or "CNY").strip().upper() or "CNY"
     currencies = sorted(
         {
             str(q.currency).upper()

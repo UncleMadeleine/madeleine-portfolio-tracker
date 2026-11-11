@@ -177,6 +177,23 @@ def test_lse_empty_currency_falls_back_to_pence(gb_symbol):
     assert q.price == pytest.approx(87.68)
 
 
+def test_placeholder_currency_falls_back_to_symbol_currency():
+    """"-"/"NONE" 等占位币种必须回退代码推导的权威币种.
+
+    东财 A 股 f172 返回 "-"; 旧实现把 "-" 当成币种写进缓存, 汇率链随后
+    拼出 "-CNY=X" 伪货币对并查到 USD/CNY 汇率 (约 6.67), A 股市值被放大数倍。
+    """
+    cny_q = _quote_from_dump(
+        parse("600519.SS"), {"last_price": 1500.0, "currency": "-"}
+    )
+    assert cny_q is not None and cny_q.currency == "CNY"
+
+    hkd_q = _quote_from_dump(
+        parse("0700.HK"), {"last_price": 400.0, "currency": "NONE"}
+    )
+    assert hkd_q is not None and hkd_q.currency == "HKD"
+
+
 def test_lse_usd_quoted_etf_not_scaled():
     """.L 后缀 ≠ 一定便士: LSE 亦有美元计价的 UCITS ETF (HEAL.L, USD 10.935)。
 

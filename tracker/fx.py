@@ -6,7 +6,7 @@ import math
 import time
 from datetime import date, timedelta
 
-from .symbols import valuation_currency
+from .symbols import is_currency_code, valuation_currency
 from .util import with_timeout
 
 _PAIR_TTL = 600
@@ -131,6 +131,11 @@ def get_rate(src: str, dst: str, use_ibkr: bool = False) -> float | None:
     # 不归一的后果: CFETS/Yahoo 法币对都没有 USDT→X 通道, 持仓/自选整行
     # 拿不到汇率被排除出视图; portfolio 的 base_currency 是稳定币时同样中招。
     src, dst = valuation_currency(src), valuation_currency(dst)
+    # "-"/"NONE"/空串等数据源占位符不是货币代码: 若放行, 下面会把
+    # "-CNY=X" 之类的伪货币对发给 Yahoo, 可能拿回 USD/CNY 汇率 (实测),
+    # 把本币资产按美元汇率放大数倍。身份汇率也要先过校验 (("-","-") 不是 1)。
+    if not is_currency_code(src) or not is_currency_code(dst):
+        return None
     if src == dst:
         return 1.0
     if use_ibkr:

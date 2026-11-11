@@ -13,7 +13,7 @@ import time
 
 import pandas as pd
 
-from ..symbols import Market, ParsedSymbol, is_pence
+from ..symbols import Market, ParsedSymbol, is_currency_code, is_pence
 from ..util import with_timeout
 from .base import Provider, Quote, SymbolEntry
 from .em_suggest import parse_symbol_safe
@@ -149,7 +149,10 @@ def _quote_from_dump(p: ParsedSymbol, d: dict) -> Quote | None:
     raw_ccy = _pick(d, "currency")
     # 空字符串与缺失同口径: 只判 None 会让 currency="" 绕过 .L 便士兜底
     # (VOD.L 报 109.5 便士, 不 ÷100 就成了 £109.5), 且空币种查不到汇率。
-    if raw_ccy is None or not str(raw_ccy).strip():
+    # 数据源还可能给 "-"/"NONE" 等无币种占位符 (东财 A 股 f172 就是 "-"):
+    # 放行会让汇率链查到伪货币对, 必须与缺失同口径回退。
+    raw_ccy = "" if raw_ccy is None else str(raw_ccy).strip()
+    if not is_currency_code(raw_ccy):
         # .IL (LSE 国际挂盘) 证券以 USD/EUR 计价 (KAP.IL=USD): 币种缺失时不能按
         # LSE 主板惯例兜底 GBp, 便士兜底会把价格再缩小 100 倍
         if p.yahoo.endswith(".IL"):
@@ -158,7 +161,6 @@ def _quote_from_dump(p: ParsedSymbol, d: dict) -> Quote | None:
             raw_ccy = "GBp"
         else:
             raw_ccy = p.currency
-    raw_ccy = str(raw_ccy).strip()
     # B 股计价币种以本地规范为准 (沪B=USD / 深B=HKD): yfinance 对沪深 B 股
     # 常误报 currency=CNY, 按其转换会把美元/港币市值按 CNY 记账 (汇率差 7 倍)。
     # p.currency 由 symbols.parse 按 B 股代码段权威推导, 优先于数据源自报。
@@ -478,9 +480,15 @@ def _akshare_quote(p: ParsedSymbol) -> Quote:
         raise RuntimeError(f"{p.yahoo}: akshare 无有效最新价 ({d.get('f43')!r})")
     pb = _ak_num(d.get("f167"))
     market_cap = _ak_num(d.get("f116"))
-    # 东财自报币种 (f172): 港股 USD/CNY 柜台不能按后缀推断成 HKD
+    # 东财自报币种 (f172): 港股 USD/CNY 柜台不能按后缀推断成 HKD。
+    # 但 A股/B股/北交所的 f172 是 "-" (币种由代码推导, B 股还可能被泛化),
+    # 必须用 parse 的权威币种; 不校验会把 "-" 写进行情缓存, 汇率链随后把
+    # 它拼成 "-CNY=X" 查到 USD/CNY 汇率, A 股市值被放大数倍。
     reported_ccy = str(d.get("f172") or "").strip().upper()
-    currency = reported_ccy if reported_ccy and reported_ccy != "NONE" else p.currency
+    if p.market in (Market.CN, Market.BJ):
+        currency = p.currency
+    else:
+        currency = reported_ccy if is_currency_code(reported_ccy) else p.currency
     return Quote(
         symbol=p.yahoo,
         name=str(d.get("f58") or "").strip() or None,

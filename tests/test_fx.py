@@ -21,6 +21,28 @@ def test_get_rate_identity():
     assert fx.get_rate("USD", "USD") == 1.0
 
 
+def test_get_rate_rejects_placeholder_currency(monkeypatch):
+    """'-'/'NONE' 等占位币种不能进入伪货币对查询 (会取回 USD/CNY 汇率)."""
+    called: list[tuple[str, str]] = []
+    monkeypatch.setattr(fx, "_cfets_rate", lambda s, d: 1.0)
+    monkeypatch.setattr(
+        fx, "_pair_rate", lambda a, b: called.append((a, b)) or 6.67
+    )
+    for bad in ("-", "", "NONE", "N/A"):
+        assert fx.get_rate(bad, "CNY") is None
+        assert fx.get_rate("CNY", bad) is None
+    assert fx.get_rate("-", "-") is None
+    assert called == []
+
+
+def test_get_fx_rates_reports_placeholder_as_missing(monkeypatch):
+    monkeypatch.setattr(fx, "_cfets_rate", lambda s, d: None)
+    monkeypatch.setattr(fx, "_pair_rate", lambda a, b: 6.67)
+    rates, missing = fx.get_fx_rates("CNY", ["-", "NONE"])
+    assert rates == {}
+    assert missing == ["-", "NONE"]
+
+
 def test_cfets_nan_rejected(monkeypatch):
     monkeypatch.setattr(fx, "_cfets_rate", lambda s, d: float("nan"))
     monkeypatch.setattr(fx, "_pair_rate", lambda a, b: 7.5)

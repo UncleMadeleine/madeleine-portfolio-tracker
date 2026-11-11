@@ -203,6 +203,21 @@ def test_akshare_quote_uses_reported_currency(monkeypatch):
     assert gs._akshare_quote(parse("09188.HK")).currency == "HKD"
 
 
+def test_akshare_quote_a_share_ignores_placeholder_currency(monkeypatch):
+    """东财 A 股 f172="-": 必须用代码权威币种, 不能污染行情缓存与汇率链."""
+    import tracker.providers.global_stocks as gs
+
+    monkeypatch.setattr(
+        gs,
+        "_ak_quote_raw",
+        lambda p: {"f43": 1500.0, "f58": "贵州茅台", "f172": "-"},
+    )
+    assert gs._akshare_quote(parse("600519.SS")).currency == "CNY"
+    # B 股同理: 沪 B 美元 / 深 B 港币, 不能被 f172 的占位符打回 CNY。
+    assert gs._akshare_quote(parse("900901.SS")).currency == "USD"
+    assert gs._akshare_quote(parse("200012.SZ")).currency == "HKD"
+
+
 # ---------- 代码规范 ----------
 
 

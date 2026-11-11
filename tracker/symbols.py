@@ -428,6 +428,20 @@ def valuation_currency(ccy: str) -> str:
     return "USD" if c in STABLE_USD_QUOTES else c
 
 
+def is_currency_code(value: object) -> bool:
+    """是否为形态合法的货币代码 (3~5 位字母, 如 CNY/USD/GBp/USDT/FDUSD).
+
+    数据源会用 ``"-"``/``"NONE"``/空串表示「无币种」(东财 A 股 f172 即 ``"-"``)。
+    这类占位符不是货币代码: 若放行, 汇率链会拼出 ``-CNY=X`` 之类的伪货币对,
+    Yahoo 可能把它当美元兑人民币返回, 最终把本币市值放大数倍。所有「数据源自
+    报币种」的落点都应先过这里, 非法值回退代码推导的权威币种。
+    """
+    s = str(value or "").strip()
+    if s.upper() in ("NONE", "NULL", "NAN"):
+        return False
+    return 3 <= len(s) <= 5 and s.isalpha()
+
+
 def _is_us_preferred(quote: str) -> bool:
     """美股优先股系列后缀: Yahoo 惯例 BASE-P<系列字母> (WFC-PL / BAC-PL / GS-PA).
 

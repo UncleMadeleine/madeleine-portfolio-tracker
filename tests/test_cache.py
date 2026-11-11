@@ -48,6 +48,45 @@ class TestCache:
         assert hits["600519.SS"].price == 1500.0
         assert "MISSING" not in hits
 
+    def test_invalid_currency_normalized_on_write(self):
+        """数据源占位币种 "-" 落库前回退代码权威币种 (A股 → CNY)."""
+        set_cached(
+            {
+                "600519.SS": Quote(
+                    symbol="600519.SS",
+                    name="茅台",
+                    price=1500.0,
+                    prev_close=None,
+                    change_pct=None,
+                    currency="-",
+                )
+            }
+        )
+        hits, _ = cache_mod.get_cached_with_age(["600519.SS"])
+        assert hits["600519.SS"].currency == "CNY"
+
+    def test_legacy_invalid_currency_normalized_on_read(self):
+        """旧版本已写入的 currency='-' 行读取时也要纠正, 不能交给汇率链."""
+        set_cached(
+            {
+                "600519.SS": Quote(
+                    symbol="600519.SS",
+                    name="茅台",
+                    price=1500.0,
+                    prev_close=None,
+                    change_pct=None,
+                    currency="CNY",
+                )
+            }
+        )
+        with sqlite3.connect(cache_mod.CACHE_DB) as con:
+            con.execute(
+                "UPDATE quotes SET currency='-' WHERE symbol='600519.SS'"
+            )
+            con.commit()
+        hits, _ = cache_mod.get_cached_with_age(["600519.SS"])
+        assert hits["600519.SS"].currency == "CNY"
+
     def test_cache_miss(self):
         hits = get_cached(["AAPL"])
         assert hits == {}

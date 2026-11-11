@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from .paths import var_dir
+from .symbols import is_currency_code, parse
 
 if TYPE_CHECKING:
     from .providers.base import Quote
@@ -523,6 +524,22 @@ def set_fundamental_cached(
     )
 
 
+def _normalize_quote_currency(symbol: str, currency) -> str | None:
+    """行情币种归一: 非法占位符回退代码推导的权威币种.
+
+    东财 A 股 f172 返回 "-", 旧版本把 "-" 写进了行情缓存。这里读取时兜底,
+    既修复历史脏数据, 也避免把 "-" 交给汇率链 (会拼出 -CNY=X 伪货币对)。
+    无法从代码推导币种时返回 None, 调用方按脏数据跳过 (下次回源覆盖)。
+    """
+    ccy = str(currency or "").strip().upper()
+    if is_currency_code(ccy):
+        return ccy
+    try:
+        return parse(symbol).currency
+    except ValueError:
+        return None
+
+
 def get_cached_with_age(
     symbols: list[str], ttl: int = STALE_TTL
 ) -> tuple[dict[str, "Quote"], dict[str, float]]:
@@ -550,13 +567,16 @@ def get_cached_with_age(
         )
         for sym, name, price, prev, chg, ccy, bv, mc, src, fetched_at in rows:
             if price is not None and math.isfinite(price) and price > 0:
+                quote_ccy = _normalize_quote_currency(sym, ccy)
+                if quote_ccy is None:
+                    continue
                 hits[sym] = Quote(
                     symbol=sym,
                     name=name,
                     price=price,
                     prev_close=float(prev) if prev is not None else None,
                     change_pct=float(chg) if chg is not None else None,
-                    currency=str(ccy),
+                    currency=quote_ccy,
                     book_value=float(bv) if bv is not None else None,
                     market_cap=float(mc) if mc is not None else None,
                     source=str(src) if src else None,
@@ -587,6 +607,10 @@ def set_cached(quotes: dict[str, "Quote"]) -> None:
     for q in quotes.values():
         if q.price is None or not math.isfinite(q.price) or q.price <= 0:
             continue
+        quote_ccy = _normalize_quote_currency(q.symbol, q.currency)
+        if quote_ccy is None:
+            # 币种无法识别/推导: 不落库, 避免污染下一轮缓存读取与汇率链
+            continue
         rows.append(
             (
                 q.symbol,
@@ -594,7 +618,7 @@ def set_cached(quotes: dict[str, "Quote"]) -> None:
                 q.price,
                 q.prev_close,
                 q.change_pct,
-                q.currency,
+                quote_ccy,
                 q.book_value,
                 getattr(q, "market_cap", None),
                 getattr(q, "source", None),
@@ -632,7 +656,11 @@ def get_fx_cached(
     与 get_cached_with_age 同构: 首屏按 age 分新鲜/陈旧两档处理。
     """
     base = str(base).upper()
-    curs = [c for c in dict.fromkeys(str(x).upper() for x in currencies) if c != base]
+    curs = [
+        c
+        for c in dict.fromkeys(str(x).upper() for x in currencies)
+        if c != base and is_currency_code(c)
+    ]
     if not curs:
         return {}, {}
 
@@ -657,11 +685,19 @@ def get_fx_cached(
 def set_fx_cached(base: str, rates: dict[str, float]) -> None:
     """写入汇率缓存 (base→currency), 刷新 fetched_at; 无效值 (<=0) 与 base 跳过."""
     base = str(base).upper()
-    rows = [
-        (base, str(c).upper(), float(r), time.time())
-        for c, r in rates.items()
-        if r and math.isfinite(float(r)) and float(r) > 0 and str(c).upper() != base
-    ]
+    rows = []
+    for c, r in rates.items():
+        ccy = str(c).upper()
+        # 非法币种占位符 ("-" / "NONE" / 空串) 不是货币代码, 落库后会被
+        # get_fx_cached 当成真实汇率复用 (旧版本曾把 "-" 写成 CNY 汇率)。
+        if not is_currency_code(ccy) or ccy == base:
+            continue
+        try:
+            rate = float(r)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(rate) and rate > 0:
+            rows.append((base, ccy, rate, time.time()))
     if not rows:
         return
     _execute_write(

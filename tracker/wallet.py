@@ -391,6 +391,20 @@ def _validate_address(address: str, chain: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _parse_hex_quantity(raw: Any, message: str) -> int:
+    """JSON-RPC 十六进制数量 → int; 畸形响应抛 RuntimeError.
+
+    空/None/非 hex 是查询失败而不是「余额为 0」。统一在这里收口, 原生币与
+    ERC-20 两条路径就不会各自漏判 (漏判会配合 prune_source 误删旧持仓)。
+    """
+    if not isinstance(raw, str) or not raw.startswith("0x"):
+        raise RuntimeError(f"{message}: {raw!r}"[:200])
+    try:
+        return int(raw, 16)
+    except (TypeError, ValueError) as e:
+        raise RuntimeError(f"{message}: {raw!r}"[:200]) from e
+
+
 def _native_balance(
     address: str, chain: str, chain_cfg: dict[str, Any], timeout: float
 ) -> dict[str, Any] | None:
@@ -404,14 +418,7 @@ def _native_balance(
     raw_hex = _try_rpc_hosts(chain_cfg["rpc"], payload, timeout)
     if raw_hex in ("0x0", "0x00"):
         return None
-    # 空/None/非 hex 是「查询失败」而不是「余额为 0」: 若静默当成 0, 调用方
-    # 会把结果当作完整成功并 prune 掉该地址的旧持仓 (余额仍存在却消失)。
-    if not isinstance(raw_hex, str) or not raw_hex.startswith("0x"):
-        raise RuntimeError(f"RPC 返回非法余额结果: {raw_hex!r}")
-    try:
-        raw_wei = int(raw_hex, 16)
-    except (ValueError, TypeError) as e:
-        raise RuntimeError(f"RPC 返回非法余额结果: {raw_hex!r}") from e
+    raw_wei = _parse_hex_quantity(raw_hex, "RPC 返回非法余额结果")
     decimals = chain_cfg["native_decimals"]
     amount = raw_wei / (10**decimals)
     return {
@@ -436,17 +443,8 @@ def _erc20_balance(
         "params": [{"to": contract, "data": data_topic}, "latest"],
     }
     raw_hex = _try_rpc_hosts(_CHAIN_CONFIG[chain]["rpc"], payload, timeout)
-    # 节点返回空串/None/非 hex 载荷 (畸形响应) 属查询失败, 不是零余额:
-    # 必须抛 RuntimeError 让 import_wallet 记入 errors, 从而阻止调用方
-    # prune_source 把该代币的旧持仓当作「已归零」删除。
-    if not isinstance(raw_hex, str) or not raw_hex.startswith("0x"):
-        raise RuntimeError(f"{chain} RPC 返回非法代币余额: {raw_hex!r}"[:200])
-    try:
-        raw = int(raw_hex, 16)
-    except (TypeError, ValueError) as e:
-        raise RuntimeError(
-            f"{chain} RPC 返回非法代币余额: {raw_hex!r}"
-        ) from e
+    # 畸形响应必须记入查询失败 (RuntimeError), 从而阻止调用方 prune 旧持仓。
+    raw = _parse_hex_quantity(raw_hex, f"{chain} RPC 返回非法代币余额")
     if raw == 0:
         return None
     amount = raw / (10**decimals)

@@ -78,8 +78,6 @@ def neg_clear_all() -> None:
         _neg_cache.clear()
 
 
-
-
 def _neg_filtered(
     plist: list[ParsedSymbol], errors: dict[str, str]
 ) -> list[ParsedSymbol]:
@@ -355,6 +353,94 @@ def _route_provider(p: ParsedSymbol):
     return resolve(p.type)
 
 
+def _configured_quote_order(
+    parsed: ParsedSymbol, prefer_akshare: bool, crypto_source: str
+) -> list[str] | None:
+    """本次代码对应的显式 source_order (未配置返回 None)."""
+    from .. import source_order as so
+
+    if parsed.type in ("global", "cn"):
+        order = so.configured(parsed.type, "quote")
+        if order is not None and parsed.type == "global" and prefer_akshare:
+            order = so.prefer_akshare_order(order)
+        return order
+    if parsed.type == "crypto":
+        order = so.configured("crypto", "quote")
+        if order is not None:
+            order = so.prefer_source(order, crypto_source)
+        return order
+    return None
+
+
+def _first_configured_quote_source(
+    parsed: ParsedSymbol,
+    order: list[str],
+    *,
+    use_ibkr: bool,
+    use_longport: bool,
+    eod_ok: bool,
+) -> str | None:
+    """顺序里第一个「启用且适用于该代码」的源 (Quote.source 名称)."""
+    from .. import eodhd as eodhd_mod
+
+    for source_id in order:
+        if source_id == "ibkr":
+            if parsed.type == "global" and use_ibkr:
+                return "ibkr"
+        elif source_id == "longport":
+            if not use_longport:
+                continue
+            # 与 get_quotes_longport 的能力过滤保持完全一致: B 股/SG 虽能
+            # 拼出 ticker, 长桥实际不提供行情; 日韩德英加澳/北交所则连
+            # 映射都没有。不跳过会让 yfinance 缓存永远「来源不符」而反复回源。
+            from .. import longport as lp_mod
+
+            if (
+                parsed.is_b_share
+                or parsed.market is Market.SG
+                or lp_mod.yahoo_to_longport(parsed.yahoo) is None
+            ):
+                continue
+            return "longport"
+        elif source_id == "eodhd":
+            if (
+                parsed.type == "global"
+                and eod_ok
+                and eodhd_mod.yahoo_to_eodhd(parsed.yahoo) is not None
+            ):
+                return "eodhd"
+        elif source_id == "yfinance":
+            return "yfinance"
+        elif source_id == "akshare":
+            if parsed.type != "global" or parsed.market is Market.HK:
+                return "akshare"
+        elif source_id == "gate":
+            return "gate.io"
+        elif source_id in ("hyperliquid", "binance"):
+            return source_id
+    return None
+
+
+def _legacy_required_quote_source(
+    parsed: ParsedSymbol,
+    prefer_akshare: bool,
+    use_ibkr: bool,
+    use_longport: bool,
+    crypto_source: str,
+) -> str | None:
+    """未配置 source_order 时, 旧版优先级最高源所对应的 Quote.source."""
+    if use_ibkr and parsed.type == "global":
+        return "ibkr"
+    if use_longport and parsed.type in ("global", "cn") and not parsed.is_b_share:
+        return "longport"
+    if prefer_akshare and parsed.market is Market.HK:
+        return "akshare"
+    if parsed.type == "crypto" and crypto_source != "auto":
+        # settings/CLI 用 gate 指 Gate.io, Quote.source 是 "gate.io"
+        return "gate.io" if crypto_source == "gate" else crypto_source
+    return None
+
+
 def _cached_source_ok(
     quote: Quote,
     parsed: ParsedSymbol,
@@ -366,80 +452,25 @@ def _cached_source_ok(
     """缓存行情是否满足本次显式数据源偏好 (未指定偏好时任何源都接受)."""
     # 显式 source_order: 缓存必须来自顺序里第一个「启用且适用」的源,
     # 否则 CLI `quote AAPL` 会命中 TTL 内其它源的缓存, 看起来顺序无效。
-    from .. import source_order as so
-
-    order = None
-    if parsed.type in ("global", "cn"):
-        order = so.configured(parsed.type, "quote")
-        if order is not None and parsed.type == "global" and prefer_akshare:
-            order = so.prefer_akshare_order(order)
-    elif parsed.type == "crypto":
-        order = so.configured("crypto", "quote")
-        if order is not None:
-            order = so.prefer_source(order, crypto_source)
+    order = _configured_quote_order(parsed, prefer_akshare, crypto_source)
     if order is not None:
         from .. import eodhd as eodhd_mod
 
         cfg = eodhd_mod.load_config()
-        eod_ok = eodhd_mod.available(cfg) and cfg["quotes"] != "off"
-        required = None
-        for source_id in order:
-            if source_id == "ibkr":
-                if parsed.type != "global" or not use_ibkr:
-                    continue
-                required = "ibkr"
-            elif source_id == "longport":
-                if not use_longport:
-                    continue
-                # 与 get_quotes_longport 的能力过滤保持完全一致: B 股/SG 虽能
-                # 拼出 ticker, 长桥实际不提供行情; 日韩德英加澳/北交所则连
-                # 映射都没有。不跳过会让 yfinance 缓存永远「来源不符」而反复回源。
-                from .. import longport as lp_mod
-
-                if (
-                    parsed.is_b_share
-                    or parsed.market is Market.SG
-                    or lp_mod.yahoo_to_longport(parsed.yahoo) is None
-                ):
-                    continue
-                required = "longport"
-            elif source_id == "eodhd":
-                if (
-                    parsed.type != "global"
-                    or not eod_ok
-                    or eodhd_mod.yahoo_to_eodhd(parsed.yahoo) is None
-                ):
-                    continue
-                required = "eodhd"
-            elif source_id == "yfinance":
-                required = "yfinance"
-            elif source_id == "akshare":
-                if parsed.type == "global" and parsed.market is not Market.HK:
-                    continue
-                required = "akshare"
-            elif source_id == "gate":
-                required = "gate.io"
-            elif source_id == "hyperliquid":
-                required = "hyperliquid"
-            elif source_id == "binance":
-                required = "binance"
-            if required is not None:
-                break
-        return required is None or getattr(quote, "source", None) == required
-
-    # 同时开启多个显式源时, 缓存必须来自优先级最高的那个来源, 而不是
-    # 「集合里任意一个」。否则 `--ibkr --longport` 只要缓存里是长桥数据
-    # 就会在批量取数前提前返回, IBKR 根本没执行 (执行顺序是 IBKR 覆盖长桥)。
-    required: str | None = None
-    if use_ibkr and parsed.type == "global":
-        required = "ibkr"
-    elif use_longport and parsed.type in ("global", "cn") and not parsed.is_b_share:
-        required = "longport"
-    elif prefer_akshare and parsed.market is Market.HK:
-        required = "akshare"
-    elif parsed.type == "crypto" and crypto_source != "auto":
-        # settings/CLI 用 gate 指 Gate.io, Quote.source 是 "gate.io"
-        required = "gate.io" if crypto_source == "gate" else crypto_source
+        required = _first_configured_quote_source(
+            parsed,
+            order,
+            use_ibkr=use_ibkr,
+            use_longport=use_longport,
+            eod_ok=eodhd_mod.available(cfg) and cfg["quotes"] != "off",
+        )
+    else:
+        # 同时开启多个显式源时, 缓存必须来自优先级最高的那个来源, 而不是
+        # 「集合里任意一个」。否则 `--ibkr --longport` 只要缓存里是长桥数据
+        # 就会在批量取数前提前返回, IBKR 根本没执行 (执行顺序是 IBKR 覆盖长桥)。
+        required = _legacy_required_quote_source(
+            parsed, prefer_akshare, use_ibkr, use_longport, crypto_source
+        )
     return required is None or getattr(quote, "source", None) == required
 
 

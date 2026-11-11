@@ -257,6 +257,26 @@ def _forget_ready_on_corruption(exc: BaseException) -> None:
         _forget_ready()
 
 
+def _with_schema_retry(operation):
+    """执行一个 SQLite 操作; 缺表时重建 schema 后重试一次.
+
+    截断/清空后 inode 不变, _db_ready 会误以为表已建好; 所有会直接抛错的
+    入口 (info / clear / 单表清理) 都走这里, 避免各处重复同一段重试逻辑。
+    """
+    for attempt in range(2):
+        _ensure_db()
+        try:
+            return operation()
+        except sqlite3.Error as e:
+            _forget_ready_on_corruption(e)
+            if _is_missing_schema(e) and attempt == 0:
+                _forget_ready()
+                _ensure_db()
+                continue
+            raise
+    raise RuntimeError("缓存数据库不可用; 稍后重试")
+
+
 def _read_all(sql: str, params) -> list:
     """只读查询; 锁竞争 (OperationalError, busy timeout 5s 后仍拿不到锁)
     视为「无缓存」返回空列表, 不让裸 traceback 打死 CLI/页面。
@@ -810,21 +830,17 @@ def _clear_table(table: str) -> int:
     (no such table) 都必须摘掉 _db_ready 并尝试一次重建, 否则本次失败后
     进程内会一直认为库已就绪, 自愈路径永远不触发。
     """
-    for attempt in range(2):
-        _ensure_db()
-        try:
-            with _lock, _connection() as con:
-                n = con.execute(f"DELETE FROM {table}").rowcount
-                con.commit()
-                return n
-        except sqlite3.Error as e:
-            _forget_ready_on_corruption(e)
-            if _is_missing_schema(e) and attempt == 0:
-                _forget_ready()
-                _ensure_db()
-                continue
-            raise RuntimeError(f"缓存数据库忙或不可用 ({e}); 稍后重试") from e
-    raise RuntimeError("缓存数据库不可用; 稍后重试")
+
+    def _delete():
+        with _lock, _connection() as con:
+            n = con.execute(f"DELETE FROM {table}").rowcount
+            con.commit()
+            return n
+
+    try:
+        return _with_schema_retry(_delete)
+    except sqlite3.Error as e:
+        raise RuntimeError(f"缓存数据库忙或不可用 ({e}); 稍后重试") from e
 
 
 def clear_fx() -> int:
@@ -1019,31 +1035,23 @@ def info() -> dict:
             cal_total,
         )
 
-    for attempt in range(2):
-        _ensure_db()
-        try:
-            (
-                total,
-                fresh,
-                usable,
-                ohlc_total,
-                ohlc_fresh,
-                fx_total,
-                fx_fresh,
-                oldest,
-                newest,
-                series_total,
-                series_fresh,
-                cal_total,
-            ) = _counts()
-            break
-        except sqlite3.Error as e:
-            _forget_ready_on_corruption(e)
-            if _is_missing_schema(e) and attempt == 0:
-                _forget_ready()
-                _ensure_db()
-                continue
-            raise RuntimeError(f"缓存数据库忙或不可用 ({e}); 稍后重试") from e
+    try:
+        (
+            total,
+            fresh,
+            usable,
+            ohlc_total,
+            ohlc_fresh,
+            fx_total,
+            fx_fresh,
+            oldest,
+            newest,
+            series_total,
+            series_fresh,
+            cal_total,
+        ) = _with_schema_retry(_counts)
+    except sqlite3.Error as e:
+        raise RuntimeError(f"缓存数据库忙或不可用 ({e}); 稍后重试") from e
     size = CACHE_DB.stat().st_size if CACHE_DB.exists() else 0
     return {
         "db": str(CACHE_DB),
@@ -1072,24 +1080,20 @@ def info() -> dict:
 
 def clear() -> int:
     """清空全部缓存 (行情 + K线 + 基本面 + 汇率), 返回删除条数."""
-    for attempt in range(2):
-        _ensure_db()
-        try:
-            with _lock, _connection() as con:
-                n_quotes = con.execute("DELETE FROM quotes").rowcount
-                n_ohlc = con.execute("DELETE FROM ohlc_cache").rowcount
-                n_fx = con.execute("DELETE FROM fx_rates").rowcount
-                n_series = con.execute("DELETE FROM series_cache").rowcount
-                n_cal = con.execute("DELETE FROM calendar_cache").rowcount
-                con.commit()
-                n_fund = con.execute("DELETE FROM fundamentals").rowcount
-                con.commit()
-                return n_quotes + n_ohlc + n_fund + n_fx + n_series + n_cal
-        except sqlite3.Error as e:
-            _forget_ready_on_corruption(e)
-            if _is_missing_schema(e) and attempt == 0:
-                _forget_ready()
-                _ensure_db()
-                continue
-            raise RuntimeError(f"缓存数据库忙或不可用 ({e}); 稍后重试") from e
-    raise RuntimeError("缓存数据库不可用; 稍后重试")
+
+    def _delete_all():
+        with _lock, _connection() as con:
+            n_quotes = con.execute("DELETE FROM quotes").rowcount
+            n_ohlc = con.execute("DELETE FROM ohlc_cache").rowcount
+            n_fx = con.execute("DELETE FROM fx_rates").rowcount
+            n_series = con.execute("DELETE FROM series_cache").rowcount
+            n_cal = con.execute("DELETE FROM calendar_cache").rowcount
+            con.commit()
+            n_fund = con.execute("DELETE FROM fundamentals").rowcount
+            con.commit()
+            return n_quotes + n_ohlc + n_fund + n_fx + n_series + n_cal
+
+    try:
+        return _with_schema_retry(_delete_all)
+    except sqlite3.Error as e:
+        raise RuntimeError(f"缓存数据库忙或不可用 ({e}); 稍后重试") from e

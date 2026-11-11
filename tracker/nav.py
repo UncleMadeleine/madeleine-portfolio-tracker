@@ -472,15 +472,14 @@ def backfill(
 
     symbols = list(agg)
     try:
-        quote_kwargs = dict(
+        quotes, errors, _notes = prices.get_quotes(
+            symbols,
             prefer_akshare=prefer_akshare,
             use_ibkr=use_ibkr,
             use_longport=use_longport,
             crypto_source=crypto_source,
+            source_strict=source_strict,
         )
-        if source_strict:
-            quote_kwargs["source_strict"] = True
-        quotes, errors, _notes = prices.get_quotes(symbols, **quote_kwargs)
     except Exception as e:  # noqa: BLE001 - 行情失败仍可按代码后缀推断币种
         quotes, errors = {}, {s: str(e) for s in symbols}
     for sym, reason in errors.items():

@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import sys
 from datetime import datetime
 
 import pandas as pd
@@ -163,8 +164,6 @@ def cmd_export(args) -> None:
         source_strict=_source_strict(args),
     )
     if args.watchlist and args.format != "json":
-        import sys
-
         print(
             "⚠ -w/--watchlist 仅对 -f json 生效; CSV/Markdown 会包含全部自选",
             file=sys.stderr,

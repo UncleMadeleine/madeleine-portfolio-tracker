@@ -322,15 +322,14 @@ def fetch_watchlist_view(
 ) -> tuple[pd.DataFrame, list[str]]:
     """用例: 取数 (providers) → 阈值规则 → 视图. watchlist list / report 复用."""
     symbols = [str(e["symbol"]) for e in entries]
-    quote_kwargs = dict(
+    quotes, errors, notes = prices.get_quotes(
+        symbols,
         prefer_akshare=prefer_akshare,
         use_ibkr=use_ibkr,
         use_longport=use_longport,
         crypto_source=crypto_source,
+        source_strict=source_strict,
     )
-    if source_strict:
-        quote_kwargs["source_strict"] = True
-    quotes, errors, notes = prices.get_quotes(symbols, **quote_kwargs)
     wview, wissues = build_watchlist_view(entries, quotes)
     # 无法解析的代码会在取数层 (errors) 与视图层 (wissues) 各记一次,
     # 拼接前按出现顺序去重, 避免同一问题重复打扰

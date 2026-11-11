@@ -242,6 +242,7 @@ class TestWatchlistTriggeredCli:
         use_ibkr=False,
         use_longport=False,
         crypto_source="auto",
+        source_strict=False,
     ):
         data = {
             "TSLA": Quote("TSLA", "Tesla", 500.0, 480.0, 4.17, "USD"),
@@ -818,6 +819,7 @@ class TestReportCli:
         use_ibkr=False,
         use_longport=False,
         crypto_source="auto",
+        source_strict=False,
     ):
         data = {
             "TSLA": Quote("TSLA", "Tesla", 500.0, 480.0, 4.17, "USD"),
@@ -996,6 +998,7 @@ class TestExportCli:
         use_ibkr=False,
         use_longport=False,
         crypto_source="auto",
+        source_strict=False,
     ):
         data = {
             "AAPL": Quote("AAPL", "Apple", 200.0, 195.0, 2.56, "USD"),
@@ -1145,6 +1148,7 @@ class TestSnapshotCryptoMixed:
         use_ibkr=False,
         use_longport=False,
         crypto_source="auto",
+        source_strict=False,
     ):
         data = {
             "AAPL": Quote("AAPL", "Apple", 200.0, 195.0, 2.56, "USD"),

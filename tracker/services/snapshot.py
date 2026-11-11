@@ -59,17 +59,14 @@ def take_snapshot(
     wentries = [w for w in entries_for(watchlist or {}, watch_name) if w.get("symbol")]
     base = str(portfolio.get("base_currency") or "CNY").upper()
     symbols = [h["symbol"] for h in holdings] + [w["symbol"] for w in wentries]
-    quote_kwargs = dict(
+    quotes, errors, notes = prices.get_quotes(
+        symbols,
         prefer_akshare=prefer_akshare,
         use_ibkr=use_ibkr,
         use_longport=use_longport,
         crypto_source=crypto_source,
+        source_strict=source_strict,
     )
-    # 只在显式指定源时传: 保持对旧调用方/测试替身 (不接受该 kwarg) 的兼容,
-    # 默认缓存优先路径行为不变。
-    if source_strict:
-        quote_kwargs["source_strict"] = True
-    quotes, errors, notes = prices.get_quotes(symbols, **quote_kwargs)
     if holdings:
         # 只对持仓实际涉及的币种取汇率; 自选股不做换算,
         # 把自选币种混进来会造成虚假的「汇率缺失」告警

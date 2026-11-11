@@ -343,7 +343,7 @@ def test_partial_longport_history_is_not_disk_cached(monkeypatch):
     assert writes == []
 
 
-def test_snapshot_forwards_source_strict_only_when_requested(monkeypatch):
+def test_snapshot_forwards_source_strict(monkeypatch):
     from tracker.services import snapshot as snap
 
     q = Quote("AAPL", "Apple", 100.0, 99.0, 1.0, "USD", source="ibkr")
@@ -356,7 +356,7 @@ def test_snapshot_forwards_source_strict_only_when_requested(monkeypatch):
     monkeypatch.setattr(snap.prices, "get_quotes", fake_quotes)
     monkeypatch.setattr(snap, "get_fx_rates", lambda *a, **k: ({"USD": 1.0}, []))
     snap.take_snapshot({"holdings": [{"symbol": "AAPL", "quantity": 1}]})
-    assert "source_strict" not in seen
+    assert seen["source_strict"] is False
     snap.take_snapshot(
         {"holdings": [{"symbol": "AAPL", "quantity": 1}]}, source_strict=True
     )

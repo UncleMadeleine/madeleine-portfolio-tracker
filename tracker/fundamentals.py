@@ -52,6 +52,23 @@ def _fund_metrics(symbols: list[str]) -> dict[str, dict[str, float | None]]:
     return out
 
 
+def _cache_covers_field(hit: dict, field: str, other: str) -> bool:
+    """缓存行是否已覆盖本次请求的指标.
+
+    已确认缺失 (*_checked) 算覆盖 (负缓存); 另一个指标有值而本指标为空,
+    说明是旧调用方只写过一半, 需要补齐。旧库行没有 checked 标记时, 两个
+    指标都为空按历史负缓存处理。
+    """
+    if hit.get(field) is not None or hit.get(f"{field}_checked"):
+        return True
+    legacy_both_empty = (
+        not hit.get("book_value_checked")
+        and not hit.get("market_cap_checked")
+        and hit.get(other) is None
+    )
+    return legacy_both_empty
+
+
 def _load_cached(
     symbols: list[str], refresh: bool = False, field: str = "book_value"
 ) -> tuple[dict[str, dict], list[str]]:
@@ -75,21 +92,7 @@ def _load_cached(
     missing: list[str] = []
     for s in unique:
         hit = cached.get(s)
-        if hit is None:
-            missing.append(s)
-            continue
-        usable = (
-            hit.get(field) is not None
-            or hit.get(f"{field}_checked")
-            # 旧库行没有 checked 标记: 两个指标都为空按历史负缓存处理;
-            # 另一个指标有值则说明这一行只补过一半, 本次指标仍需补齐。
-            or (
-                not hit.get("book_value_checked")
-                and not hit.get("market_cap_checked")
-                and hit.get(other) is None
-            )
-        )
-        if usable:
+        if hit is not None and _cache_covers_field(hit, field, other):
             out[s] = {
                 "book_value": hit["book_value"],
                 "market_cap": hit["market_cap"],

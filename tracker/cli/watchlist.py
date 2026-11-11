@@ -145,15 +145,14 @@ def _load_watch_view(args):
     data = load_watchlist(args.file)
     entries = entries_for(data, args.wl_list)
     symbols = [str(e["symbol"]) for e in entries]
-    quote_kwargs = dict(
+    quotes, errors, notes = prices.get_quotes(
+        symbols,
         prefer_akshare=args.akshare,
         use_ibkr=args.ibkr,
         use_longport=getattr(args, "longport", False),
         crypto_source=getattr(args, "crypto_source", "auto"),
+        source_strict=_source_strict(args),
     )
-    if _source_strict(args):
-        quote_kwargs["source_strict"] = True
-    quotes, errors, notes = prices.get_quotes(symbols, **quote_kwargs)
     wview, wissues = build_watchlist_view(entries, quotes)
     trig = triggered_entries(wview)
     # 与 fetch_watchlist_view 一致: 取数层与视图层可能对同一无法解析的代码

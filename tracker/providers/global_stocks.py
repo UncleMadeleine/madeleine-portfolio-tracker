@@ -583,8 +583,8 @@ class GlobalStocksProvider(Provider):
         # 前置; 非港股会跳过 akshare。
         order = so.configured("global", "quote")
         if order is not None:
-            if prefer_first and "akshare" in order:
-                order = ["akshare"] + [s for s in order if s != "akshare"]
+            if prefer_first:
+                order = so.prefer_akshare_order(order)
             chain: list = []
             for source_id in order:
                 if source_id == "eodhd":
@@ -634,8 +634,8 @@ class GlobalStocksProvider(Provider):
 
         order = so.configured("global", "history")
         if order is not None:
-            if prefer_first and "akshare" in order:
-                order = ["akshare"] + [s for s in order if s != "akshare"]
+            if prefer_first:
+                order = so.prefer_akshare_order(order)
             funcs = {
                 "eodhd": eod_src,
                 "yfinance": yahoo_src,

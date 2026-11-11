@@ -7,17 +7,19 @@
 
     "source_order": {
       "global": {
-        "quote":   ["eodhd", "yfinance", "akshare"],
-        "history": ["eodhd", "yfinance", "akshare"]
+        "quote":   ["ibkr", "longport", "eodhd", "yfinance", "akshare"],
+        "history": ["ibkr", "longport", "eodhd", "yfinance", "akshare"]
       },
-      "cn":      {"quote": ["akshare", "yfinance"], "history": ["akshare", "yfinance"]},
+      "cn":      {"quote": ["longport", "akshare", "yfinance"], ...},
       "crypto":  {"quote": ["binance", "gate", "hyperliquid", "yfinance"], ...},
       "index":   {"history": ["akshare", "yfinance"]}
     }
 
 约定:
 - 列表按优先级排列; 手写配置里未列出的源会自动补到末尾 (按目录顺序),
-  避免新增数据源后旧配置永远用不到它。可选源仍受 IBKR/长桥/EODHD 开关约束。
+  避免新增数据源后旧配置永远用不到它。
+- IBKR/长桥也参与排序; ``use_ibkr`` / ``use_longport`` 开关只决定是否启用,
+  EODHD 还受 ``quotes=off`` / token 约束。
 - 空/缺失 = 沿用历史默认链, 保证老配置零改动.
 - 大小写、``gate.io``/``yahoo`` 等别名在读取时归一.
 - 显式顺序优先于 EODHD 的 ``priority`` / ``quotes`` 角色, 但 ``quotes=off``
@@ -48,20 +50,21 @@ __all__ = [
     "label",
     "chain_text",
     "prefer_source",
+    "prefer_akshare_order",
 ]
 
 DOMAIN_ORDER = ("global", "cn", "crypto", "index")
 CHANNEL_ORDER = ("quote", "history")
 
-#: 每个域、每个通道可排序的逐代码数据源 (批量前置的 IBKR/长桥不在此列)
+#: 每个域、每个通道可排序的数据源 (IBKR/长桥按位置批量或单码执行)
 CATALOG: dict[str, dict[str, tuple[str, ...]]] = {
     "global": {
-        "quote": ("eodhd", "yfinance", "akshare"),
-        "history": ("eodhd", "yfinance", "akshare"),
+        "quote": ("ibkr", "longport", "eodhd", "yfinance", "akshare"),
+        "history": ("ibkr", "longport", "eodhd", "yfinance", "akshare"),
     },
     "cn": {
-        "quote": ("akshare", "yfinance"),
-        "history": ("akshare", "yfinance"),
+        "quote": ("longport", "akshare", "yfinance"),
+        "history": ("longport", "akshare", "yfinance"),
     },
     "crypto": {
         "quote": ("binance", "gate", "hyperliquid", "yfinance"),
@@ -78,7 +81,7 @@ DOMAIN_META = {
         "全球股票",
         "美股 / 港股 / 德英加澳 / 日韩。akshare 仅用于港股，非港股代码会自动跳过。",
     ),
-    "cn": ("A股 / 北交所", "沪深北股票与 B 股。长桥批量前置由上方开关控制。"),
+    "cn": ("A股 / 北交所", "沪深北股票与 B 股。长桥开关控制是否启用，位置决定优先级。"),
     "crypto": (
         "加密货币",
         "BASE-QUOTE 币对（BTC-USD）。Hyperliquid 为永续价，仅 USD 系计价。",
@@ -110,8 +113,8 @@ SOURCE_META: dict[str, SourceMeta] = {
     "hyperliquid": SourceMeta(
         "Hyperliquid", "永续 markPx；仅 USD 系计价，与现货有基差"
     ),
-    "longport": SourceMeta("长桥 LongPort", "批量前置；需登录，见上方开关"),
-    "ibkr": SourceMeta("IBKR", "批量前置；需 IB Gateway，见上方开关"),
+    "longport": SourceMeta("长桥 LongPort", "需登录；未启用时自动跳过"),
+    "ibkr": SourceMeta("IBKR", "需 IB Gateway；未启用时自动跳过"),
 }
 
 # 手写配置的常见别名 → 内部 id (Quote.source 的 gate.io 也映射到 gate)
@@ -228,13 +231,32 @@ def _move_front(order: list[str], source_id: str | None) -> list[str]:
 
 
 def prefer_source(order: list[str], prefer) -> list[str]:
-    """把显式偏好源 (--akshare / --crypto-source) 临时前置.
+    """把显式偏好源 (--crypto-source) 临时前置.
 
     bool 是其它域 ``prefer_first`` 的旧语义, 本函数不处理 (由调用方映射)。
     """
     if isinstance(prefer, bool) or not prefer:
         return order
     return _move_front(order, _canonical(prefer))
+
+
+def prefer_akshare_order(order: list[str]) -> list[str]:
+    """把 akshare 提前, 但保留原本排在它前面的 IBKR/长桥.
+
+    ``--akshare`` 的旧语义是「港股优先走 akshare」, 不是「关掉 IBKR/长桥」:
+    在默认链路里 IBKR/长桥仍然先执行。显式顺序下同理, 只把 akshare 提到
+    eodhd/yfinance 之前, 不越过已经排在前面的批量源。
+    """
+    if "akshare" not in order:
+        return order
+    leading: list[str] = []
+    for source_id in order:
+        if source_id in ("ibkr", "longport"):
+            leading.append(source_id)
+        else:
+            break
+    rest = [s for s in order if s != "akshare" and s not in leading]
+    return leading + ["akshare"] + rest
 
 
 def default_order(
@@ -249,24 +271,27 @@ def default_order(
 ) -> list[str]:
     """未配置 source_order 时, 当前设置对应的默认链 (供 UI 展示/恢复默认)."""
     if domain == "global":
-        # 港股 akshare 是唯一需要翻转的; 非港股在 provider 里会跳过该源。
+        # IBKR 在前表示「两源都启用时 IBKR 结果胜出」, 与旧版
+        # 「长桥先拉、IBKR 覆盖」的最终数据一致。港股 akshare 是唯一需要
+        # 翻转的; 非港股在执行时会跳过该源。
+        prefix = ["ibkr", "longport"]
         if channel == "quote":
-            base = (
+            base = prefix + (
                 ["eodhd", "yfinance", "akshare"]
                 if eodhd_quotes == "primary"
                 else ["yfinance", "akshare", "eodhd"]
             )
         else:
-            base = (
+            base = prefix + (
                 ["eodhd", "yfinance", "akshare"]
                 if eodhd_priority == "primary"
                 else ["yfinance", "akshare", "eodhd"]
             )
         if prefer_akshare:
-            base = _move_front(base, "akshare")
+            base = prefer_akshare_order(base)
         return base
     if domain == "cn":
-        return ["akshare", "yfinance"]
+        return ["longport", "akshare", "yfinance"]
     if domain == "crypto":
         base = ["binance", "gate", "hyperliquid", "yfinance"]
         if crypto_source != "auto":
@@ -295,8 +320,8 @@ def display_order(
         # 与 provider 一致: 旧版快捷偏好仍可临时前置 (设置页保存顺序时会把
         # 该域的快捷偏好复位, 因此正常 UI 路径下这里不会改写用户拖好的顺序)。
         order = list(configured_order)
-        if domain == "global" and prefer_akshare and "akshare" in order:
-            order = ["akshare"] + [s for s in order if s != "akshare"]
+        if domain == "global" and prefer_akshare:
+            order = prefer_akshare_order(order)
         elif domain == "crypto":
             order = prefer_source(order, crypto_source)
         return order

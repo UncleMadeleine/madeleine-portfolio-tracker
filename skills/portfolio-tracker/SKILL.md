@@ -105,7 +105,7 @@ tracker-ui          # pip 安装后起 Streamlit 页面 (等价 streamlit run tr
 ### 数据源优先级 (provider 层)
 
 | type | 实时行情 | 历史K线 |
-| global | 长桥(可选)→ IBKR(可选)→ EODHD(可选, quotes=primary)→ yfinance 批量 → 港股 akshare → EODHD(可选, quotes=fallback) (两源同开时 IBKR 结果覆盖长桥) | IBKR(可选)→ 长桥(可选)→ EODHD(可选, priority=primary)→ yfinance (港股可 `--akshare` 翻转) → EODHD(可选, fallback) |
+| global | IBKR(可选, 优先)→ 长桥(可选)→ EODHD(可选, quotes=primary)→ yfinance 批量 → 港股 akshare → EODHD(可选, quotes=fallback) | IBKR(可选)→ 长桥(可选)→ EODHD(可选, priority=primary)→ yfinance (港股可 `--akshare` 翻转) → EODHD(可选, fallback) |
 | cn | **akshare 优先** → yfinance (长桥可选前置, 沪深代码 .SH/.SZ) | **akshare 优先** → yfinance (长桥可选前置) |
 | crypto | **Binance API** → Gate.io 现货 → Hyperliquid 永续(仅USD系) → yfinance (偏好 `crypto_source`/`--crypto-source`) | **Binance klines** → Gate.io → Hyperliquid → yfinance |
 | index | — (指数无实时行情, 不参与持仓聚合) | 中国指数 **akshare 优先** → yfinance; 美股 SPX/NDX/DJI 有新浪兜底; 水泥网 (CEMPI 等) / 商品期货主力连续 (`IX.AU` 黄金 `IX.AG` 白银 `IX.JD` 鸡蛋 `IX.M` 豆粕 `IX.A` 豆一 `IX.B` 豆二 `IX.LH` 生猪 `IX.LC` 碳酸锂) / Cameco 铀价 (`IX.URANIUM` 现货 `IX.URANIUM_LT` 长协, 月K) / 恒生官网 (IX.HSAHP) 为专属源无兜底 |
@@ -113,7 +113,8 @@ tracker-ui          # pip 安装后起 Streamlit 页面 (等价 streamlit run tr
 逐代码源链可在设置页「数据源 → 回退顺序」按 provider / 行情或历史拖动编辑
 （自动保存到 `settings.json` 的 `source_order`，也支持 ↑/↓ 与 Alt/Ctrl+↑/↓）。
 列表从上到下即优先级，手写配置里未列出的源自动补到末尾；空 `{}` = 沿用上表默认链。
-IBKR / 长桥是批量前置源，仍由 `use_ibkr` / `use_longport` 开关控制。
+IBKR / 长桥也在列表里参与排序；`use_ibkr` / `use_longport` 开关只控制是否启用，
+位置决定优先级（排在前面先命中，排在 yfinance 后面只为 leftovers 兜底）。
 
 **A股/港股实时行情 (akshare 源) 的实现细节**: 走东财 push2 `stock/get` **单代码**接口
 (secid 市场段: `.SS`=1 / `.SZ`/`.BJ`=0 / `.HK`=116+5位码), 一个请求拿齐
@@ -173,8 +174,8 @@ Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致);
 - `settings.json`: 页面显示与数据源偏好 (已 gitignore, 模板 `tracker/templates/settings.example.json`):
   `color_scheme` (cn 红涨绿跌 / intl 绿涨红跌, 默认 cn) ·
   `use_ibkr` (默认 false) · `use_longport` (默认 false) ·
-  `source_order`: 各 provider 的逐代码回退顺序，例如
-  `{"global": {"quote": ["akshare", "yfinance", "eodhd"]}}`；未配置/空对象 = 默认链，
+  `source_order`: 各 provider 的回退顺序（含 IBKR / 长桥），例如
+  `{"global": {"quote": ["longport", "akshare", "yfinance", "eodhd"]}}`；未配置/空对象 = 默认链，
   未列出的源自动补到末尾。设置页可直接拖动排序并自动保存。
   旧 `prefer_akshare` / `crypto_source` 仍兼容，作为未配置 `source_order` 时的快捷偏好。
   设置页切换数据源即时生效 (连进程内负缓存一起清); 直接改文件则重启 streamlit 生效。

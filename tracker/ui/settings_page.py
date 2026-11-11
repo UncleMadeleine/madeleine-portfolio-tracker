@@ -91,27 +91,19 @@ def render_settings_page() -> None:
             eodhd_priority=history_mode,
         )
 
-    def _prefetch_for(domain: str, channel: str) -> list[str]:
-        """批量前置源 (IBKR/长桥) 的固定展示顺序."""
-        if domain not in ("global", "cn"):
-            return []
-        ids: list[str] = []
-        # 与 orchestration 的实际执行顺序一致: 行情先长桥后 IBKR (IBKR 覆盖);
-        # 历史先 IBKR 后长桥。CN 域只有长桥批量前置。
-        if domain == "global" and settings["use_ibkr"] and channel == "history":
-            ids.append("ibkr")
-        if settings["use_longport"]:
-            ids.append("longport")
-        if domain == "global" and settings["use_ibkr"] and channel == "quote":
-            ids.append("ibkr")
-        return ids
-
     chain_lines = []
     for _domain in so.DOMAIN_ORDER:
         for _channel in so.CHANNEL_ORDER:
             if not so.CATALOG[_domain].get(_channel):
                 continue
-            ids = _prefetch_for(_domain, _channel) + _order_for(_domain, _channel)
+            ids = _order_for(_domain, _channel)
+            # 生效链路只展示本次真正会执行的源: 开关关闭的 IBKR/长桥跳过。
+            ids = [
+                s
+                for s in ids
+                if not (s == "ibkr" and not settings["use_ibkr"])
+                and not (s == "longport" and not settings["use_longport"])
+            ]
             chain_lines.append(
                 f"**{so.DOMAIN_META[_domain][0]} · {so.CHANNEL_LABELS[_channel]}**: "
                 + so.chain_text(ids)
@@ -131,15 +123,15 @@ def render_settings_page() -> None:
         value=settings["use_ibkr"],
         key="set_use_ibkr",
         on_change=_save_display,
-        help="启用后优先从 IBKR 获取行情 (有订阅则为实时), 失败自动回退 Yahoo/akshare。"
-        "连接参数见 ibkr.json (mode: paper=4002 / live=4001)",
+        help="启用后按下方「回退顺序」中的位置执行 (拖到最前才优先), 失败自动落到下一源。"
+        "有订阅则为实时。连接参数见 ibkr.json (mode: paper=4002 / live=4001)",
     )
     st.toggle(
         "长桥行情 (需长桥账户)",
         value=bool(settings.get("use_longport")),
         key="set_use_longport",
         on_change=_save_display,
-        help="启用后优先从长桥 OpenAPI 获取美股/港股/沪深行情与历史K线, 失败自动回退默认源。"
+        help="启用后按下方「回退顺序」中的位置执行 (拖到最前才优先), 失败自动落到下一源。"
         "需先登录: 在「导入」页长桥标签完成 OAuth 授权; 连接配置见 longport.json。",
     )
     st.toggle(
@@ -198,9 +190,9 @@ def render_settings_page() -> None:
                 st.rerun()
     st.markdown("#### 回退顺序")
     st.caption(
-        "拖动调整每个 provider 的逐代码数据源顺序（自动保存）；也可用每行的 "
+        "拖动调整每个 provider 的数据源顺序（自动保存）；也可用每行的 "
         "↑/↓ 按钮或 Alt/Ctrl + ↑/↓ 键盘操作。列表从上到下即取数优先级，"
-        "失败的源自动落到下一项。"
+        "IBKR / 长桥也在其中，失败的源自动落到下一项。"
     )
     render_source_order_editor(settings, eodhd_cfg, eodhd_ok)
     with st.expander(

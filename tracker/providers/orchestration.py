@@ -145,6 +145,211 @@ def _fetch_domain(
     return out
 
 
+def _run_single_source(plist: list[ParsedSymbol], fn) -> tuple[dict[str, Quote], dict[str, str]]:
+    """并发执行单个逐代码源; 返回成功行情与单码错误 (不写负缓存)."""
+    out: dict[str, Quote] = {}
+    errs: dict[str, str] = {}
+
+    def _one(p: ParsedSymbol):
+        try:
+            return p.yahoo, fn(p)
+        except BaseException as e:  # noqa: BLE001 - 单码失败交给下一源
+            return p.yahoo, e
+
+    with ThreadPoolExecutor(max_workers=_FALLBACK_WORKERS) as pool:
+        for _p, (yahoo, result) in zip(
+            plist, pool.map(_one, plist), strict=False
+        ):
+            if isinstance(result, BaseException):
+                errs[yahoo] = str(result) or repr(result)
+            else:
+                out[yahoo] = result
+    return out, errs
+
+
+def _fetch_ordered_quotes(
+    domain: str,
+    plist: list[ParsedSymbol],
+    order: list[str],
+    *,
+    use_ibkr: bool,
+    use_longport: bool,
+    prefer_akshare: bool,
+    errors: dict[str, str],
+    on_done=None,
+) -> tuple[dict[str, Quote], list[str]]:
+    """严格按 source_order 顺序取一个域的行情.
+
+    与默认链路不同, 这里把 IBKR/长桥也当成普通源: 排在前面就先用, 排在
+    yfinance/akshare 后面时只为前面未命中的代码兜底。批量源 (IBKR/长桥/
+    EODHD/yfinance) 批量调用, akshare 逐代码并发。
+    """
+    from .. import eodhd as eodhd_mod
+    from .. import source_order as so
+    from .global_stocks import _akshare_quote, _yahoo_quote
+
+    if domain == "global" and prefer_akshare:
+        order = so.prefer_akshare_order(order)
+
+    quotes: dict[str, Quote] = {}
+    notes: list[str] = []
+    last_err: dict[str, str] = {}
+    pending = list(plist)
+    pending_ids = {p.yahoo for p in pending}
+
+    def _settle(batch: dict[str, Quote] | None) -> None:
+        nonlocal pending
+        if not batch:
+            return
+        for yahoo, quote in batch.items():
+            if yahoo in pending_ids and yahoo not in quotes:
+                quotes[yahoo] = quote
+                if on_done is not None:
+                    on_done(yahoo)
+        pending = [p for p in pending if p.yahoo not in quotes]
+        pending_ids.difference_update(quotes)
+
+    for source_id in order:
+        if not pending:
+            break
+        if source_id == "ibkr":
+            if domain != "global" or not use_ibkr:
+                continue
+            try:
+                from .. import ibkr as ibkr_mod
+
+                batch, reason = ibkr_mod.get_quotes_ibkr(pending)
+                _settle(batch)
+                if reason:
+                    notes.append(f"IBKR 不可用: {reason} (已按顺序尝试下一源)")
+            except Exception as e:  # noqa: BLE001 - 可选增强
+                notes.append(f"IBKR 接入异常: {e}")
+        elif source_id == "longport":
+            if not use_longport:
+                continue
+            try:
+                from .. import longport as lp_mod
+
+                batch, reason = lp_mod.get_quotes_longport(pending)
+                _settle(batch)
+                if reason:
+                    notes.append(f"长桥不可用: {reason} (已按顺序尝试下一源)")
+            except Exception as e:  # noqa: BLE001 - 可选增强
+                notes.append(f"长桥接入异常: {e}")
+        elif source_id == "eodhd":
+            cfg = eodhd_mod.load_config()
+            if not eodhd_mod.available(cfg) or cfg["quotes"] == "off":
+                continue
+            try:
+                batch, batch_errors = eodhd_mod.quotes_batch(pending)
+                _settle(batch)
+                for err in batch_errors[:3]:
+                    notes.append(f"EODHD 批量行情: {err}")
+            except Exception as e:  # noqa: BLE001 - 批量失败落到下一源
+                notes.append(f"EODHD 批量行情异常: {e} (已按顺序尝试下一源)")
+        elif source_id == "yfinance":
+            if domain == "global":
+                try:
+                    _settle(_yahoo_batch(pending))
+                except Exception as e:  # noqa: BLE001 - 批量失败落到下一源
+                    notes.append(f"yfinance 批量行情异常: {e} (已按顺序尝试下一源)")
+            else:
+                out, errs = _run_single_source(pending, _yahoo_quote)
+                last_err.update(errs)
+                _settle(out)
+        elif source_id == "akshare":
+            targets = (
+                pending
+                if domain == "cn"
+                else [p for p in pending if p.market is Market.HK]
+            )
+            out, errs = _run_single_source(targets, _akshare_quote)
+            last_err.update(errs)
+            _settle(out)
+
+    for p in pending:
+        errors[p.yahoo] = last_err.get(p.yahoo) or "所有数据源均未返回行情"
+        neg_mark(p.yahoo)
+        if on_done is not None:
+            on_done(p.yahoo)
+    for yahoo in quotes:
+        neg_clear(yahoo)
+    return quotes, notes
+
+
+def _fetch_ordered_history(
+    p: ParsedSymbol,
+    order: list[str],
+    *,
+    months: int,
+    start_date: str,
+    end_date: str,
+    use_ibkr: bool,
+    use_longport: bool,
+    prefer_akshare: bool,
+) -> pd.DataFrame:
+    """严格按 source_order 顺序取单代码历史K线 (IBKR/长桥也参与排序)."""
+    import warnings
+
+    from .. import eodhd as eodhd_mod
+    from .. import source_order as so
+    from .global_stocks import _akshare_history, _yahoo_history
+
+    if p.type == "global" and prefer_akshare:
+        order = so.prefer_akshare_order(order)
+
+    last_err: Exception | None = None
+    for source_id in order:
+        try:
+            if source_id == "ibkr":
+                if not use_ibkr or p.type != "global":
+                    continue
+                from .. import ibkr as ibkr_mod
+
+                hist, reason = ibkr_mod.get_history_ibkr(
+                    [p], months, start_date=start_date, end_date=end_date
+                )
+                if p.yahoo in hist and not hist[p.yahoo].empty:
+                    return hist[p.yahoo]
+                if reason:
+                    warnings.warn(f"IBKR 历史数据不可用: {reason} (已按顺序尝试下一源)")
+            elif source_id == "longport":
+                if not use_longport:
+                    continue
+                from .. import longport as lp_mod
+
+                df = lp_mod.get_history_longport(p, start_date, end_date)
+                if df is not None and not df.empty:
+                    return df
+            elif source_id == "eodhd":
+                cfg = eodhd_mod.load_config()
+                if not eodhd_mod.available(cfg):
+                    continue
+                df = eodhd_mod.history(p, start_date, end_date)
+                if df is not None and not df.empty:
+                    return df
+            elif source_id == "yfinance":
+                df = _yahoo_history(p, start_date, end_date)
+                if df is not None and not df.empty:
+                    return df
+            elif source_id == "akshare":
+                if p.market not in (Market.HK, Market.CN, Market.BJ):
+                    continue
+                df = _akshare_history(p, start_date, end_date)
+                if df is not None and not df.empty:
+                    return df
+        except Exception as e:  # noqa: BLE001 - 降级到下一源
+            last_err = e
+            if source_id == "ibkr":
+                warnings.warn(f"IBKR 历史数据异常: {e}")
+            elif source_id == "longport":
+                warnings.warn(f"长桥历史数据异常: {e}")
+    raise RuntimeError(
+        f"{p.yahoo}: 历史数据获取失败 "
+        f"({str(last_err).strip() if last_err else '所有数据源均未返回数据'})"
+    )
+
+
 def _route_provider(p: ParsedSymbol):
     """ParsedSymbol → provider 实例 (按权威 type 字段路由)."""
     return resolve(p.type)
@@ -159,6 +364,58 @@ def _cached_source_ok(
     crypto_source: str,
 ) -> bool:
     """缓存行情是否满足本次显式数据源偏好 (未指定偏好时任何源都接受)."""
+    # 显式 source_order: 缓存必须来自顺序里第一个「启用且适用」的源,
+    # 否则 CLI `quote AAPL` 会命中 TTL 内其它源的缓存, 看起来顺序无效。
+    from .. import source_order as so
+
+    order = None
+    if parsed.type in ("global", "cn"):
+        order = so.configured(parsed.type, "quote")
+        if order is not None and parsed.type == "global" and prefer_akshare:
+            order = so.prefer_akshare_order(order)
+    elif parsed.type == "crypto":
+        order = so.configured("crypto", "quote")
+        if order is not None:
+            order = so.prefer_source(order, crypto_source)
+    if order is not None:
+        from .. import eodhd as eodhd_mod
+
+        cfg = eodhd_mod.load_config()
+        eod_ok = eodhd_mod.available(cfg) and cfg["quotes"] != "off"
+        required = None
+        for source_id in order:
+            if source_id == "ibkr":
+                if parsed.type != "global" or not use_ibkr:
+                    continue
+                required = "ibkr"
+            elif source_id == "longport":
+                if (
+                    not use_longport
+                    or parsed.is_b_share
+                    or parsed.market is Market.SG
+                ):
+                    continue
+                required = "longport"
+            elif source_id == "eodhd":
+                if parsed.type != "global" or not eod_ok:
+                    continue
+                required = "eodhd"
+            elif source_id == "yfinance":
+                required = "yfinance"
+            elif source_id == "akshare":
+                if parsed.type == "global" and parsed.market is not Market.HK:
+                    continue
+                required = "akshare"
+            elif source_id == "gate":
+                required = "gate.io"
+            elif source_id == "hyperliquid":
+                required = "hyperliquid"
+            elif source_id == "binance":
+                required = "binance"
+            if required is not None:
+                break
+        return required is None or getattr(quote, "source", None) == required
+
     # 同时开启多个显式源时, 缓存必须来自优先级最高的那个来源, 而不是
     # 「集合里任意一个」。否则 `--ibkr --longport` 只要缓存里是长桥数据
     # 就会在批量取数前提前返回, IBKR 根本没执行 (执行顺序是 IBKR 覆盖长桥)。
@@ -185,7 +442,8 @@ def get_quotes(
     refresh: bool = False,
     source_strict: bool = False,
 ) -> tuple[dict[str, Quote], dict[str, str], list[str]]:
-    """多代码实时行情: 缓存 → 长桥/IBKR 批量 (可选, IBKR 优先) → 按域 provider 取数 → 回写缓存.
+    """多代码实时行情: 缓存 → 显式 source_order 严格顺序 (含 IBKR/长桥)
+    或默认的 长桥/IBKR 批量 → provider 源链 → 回写缓存.
 
     progress(done, total, label) 可选: 按已结算代码数推进, 供首屏冷启动
     进度条使用 (缓存命中/批量返回/逐代码成功或失败都计入 settled)。
@@ -199,6 +457,13 @@ def get_quotes(
         return quotes, errors, notes
     total = len(by_yahoo)
     settled = set(quotes)
+
+    from .. import source_order as so
+
+    # 显式顺序存在时, 该域走严格顺序执行器 (IBKR/长桥也参与排序);
+    # 未配置时保留原来的批量前置 + provider 源链, 老行为零改动。
+    global_order = so.configured("global", "quote")
+    cn_order = so.configured("cn", "quote")
 
     def _emit(label: str | None = None) -> None:
         if progress is not None:
@@ -236,13 +501,22 @@ def get_quotes(
         _emit(None)
         return quotes, errors, notes
 
-    # 可选批量前置: 长桥先取, IBKR 后取并覆盖 —— 两源都启用时 IBKR 优先级更高
-    if use_longport:
+    # 未配置显式顺序的域仍走旧的批量前置: 长桥先取, IBKR 后取并覆盖。
+    # 已配置顺序的域交给 _fetch_ordered_quotes, 不能在前面偷偷预取, 否则
+    # 排在 yfinance 后面的 IBKR/长桥会抢先命中, 顺序失效。
+    legacy_prefetch = [
+        p
+        for p in by_yahoo.values()
+        if p.type in ("global", "cn")
+        and not (p.type == "global" and global_order is not None)
+        and not (p.type == "cn" and cn_order is not None)
+    ]
+    if use_longport and legacy_prefetch:
         _emit("长桥批量行情")
         try:
             from .. import longport as lp_mod
 
-            lp_quotes, reason = lp_mod.get_quotes_longport(list(by_yahoo.values()))
+            lp_quotes, reason = lp_mod.get_quotes_longport(legacy_prefetch)
             quotes.update(lp_quotes)
             settled.update(lp_quotes)
             if reason:
@@ -250,19 +524,21 @@ def get_quotes(
         except Exception as e:  # noqa: BLE001 - 长桥属可选增强
             notes.append(f"长桥接入异常: {e}")
         _emit("长桥批量行情")
-    if use_ibkr:
-        _emit("IBKR 批量行情")
-        try:
-            from .. import ibkr as ibkr_mod
+    if use_ibkr and global_order is None:
+        ib_plist = [p for p in by_yahoo.values() if p.type == "global"]
+        if ib_plist:
+            _emit("IBKR 批量行情")
+            try:
+                from .. import ibkr as ibkr_mod
 
-            ib_quotes, reason = ibkr_mod.get_quotes_ibkr(list(by_yahoo.values()))
-            quotes.update(ib_quotes)
-            settled.update(ib_quotes)
-            if reason:
-                notes.append(f"IBKR 不可用: {reason} (已回退默认数据源)")
-        except Exception as e:  # noqa: BLE001 - IBKR 属可选增强
-            notes.append(f"IBKR 接入异常: {e}")
-        _emit("IBKR 批量行情")
+                ib_quotes, reason = ibkr_mod.get_quotes_ibkr(ib_plist)
+                quotes.update(ib_quotes)
+                settled.update(ib_quotes)
+                if reason:
+                    notes.append(f"IBKR 不可用: {reason} (已回退默认数据源)")
+            except Exception as e:  # noqa: BLE001 - IBKR 属可选增强
+                notes.append(f"IBKR 接入异常: {e}")
+            _emit("IBKR 批量行情")
     groups: dict[str, list[ParsedSymbol]] = {}
     for p in by_yahoo.values():
         if p.yahoo in quotes:
@@ -306,6 +582,18 @@ def get_quotes(
     def _run_side(domain: str, plist: list[ParsedSymbol]):
         """侧域 (cn/crypto) 取数: 自己的 errors, 不碰共享状态."""
         errs: dict[str, str] = {}
+        if domain == "cn" and cn_order is not None:
+            out, side_notes = _fetch_ordered_quotes(
+                "cn",
+                plist,
+                cn_order,
+                use_ibkr=False,
+                use_longport=use_longport,
+                prefer_akshare=prefer_akshare,
+                errors=errs,
+                on_done=side_done.put,
+            )
+            return out, errs, side_notes
         out = _fetch_domain(
             domain,
             plist,
@@ -314,7 +602,7 @@ def get_quotes(
             crypto_source,
             on_done=side_done.put,
         )
-        return out, errs
+        return out, errs, []
 
     def _drain_side_progress() -> None:
         while True:
@@ -337,79 +625,58 @@ def get_quotes(
         }
 
         if global_plist:
-            # EODHD quotes=primary: 先走 EODHD 批量 (s= 参数, 每批 15 个),
-            # 批量未命中的代码再回落 yfinance 批量/逐代码源链。EODHD 未启用或
-            # 仅 fallback 时保持原有 yfinance 批量优化 (自选 600+ 必需)。
-            from .. import eodhd as eodhd_mod
-            from .. import source_order as so
+            if global_order is not None:
+                def _on_done_ordered(yahoo: str) -> None:
+                    settled.add(yahoo)
+                    _emit(yahoo)
 
-            order = so.configured("global", "quote")
-
-            def _order_pos(source_id: str) -> int | None:
-                if order is None or source_id not in order:
-                    return None
-                return order.index(source_id)
-
-            # 显式顺序是权威: 只有 EODHD 排在 yfinance 之前才做批量前置;
-            # 排在后面时交给逐代码源链兜底, 不能抢先命中。
-            eod_pos = _order_pos("eodhd")
-            yf_pos = _order_pos("yfinance")
-            if order is None:
-                # 沿用旧行为 (含测试对 quote_primary 的 monkeypatch)
-                eod_ready = eod_batch_mode = eodhd_mod.quote_primary()
-            else:
-                eod_cfg = eodhd_mod.load_config()
-                eod_ready = (
-                    eodhd_mod.available(eod_cfg)
-                    and eod_cfg["quotes"] != "off"
-                    and eod_pos is not None
-                    and (yf_pos is None or eod_pos < yf_pos)
+                ordered, ordered_notes = _fetch_ordered_quotes(
+                    "global",
+                    global_plist,
+                    global_order,
+                    use_ibkr=use_ibkr,
+                    use_longport=use_longport,
+                    prefer_akshare=prefer_akshare,
+                    errors=errors,
+                    on_done=_on_done_ordered if progress is not None else None,
                 )
-                eod_batch_mode = eod_ready
+                quotes.update(ordered)
+                notes.extend(ordered_notes)
+            else:
+                # 未配置顺序: 保留原有批量优化。
+                # EODHD quotes=primary: 先走 EODHD 批量 (s= 参数, 每批 15 个),
+                # 批量未命中的代码再回落 yfinance 批量/逐代码源链。
+                from .. import eodhd as eodhd_mod
 
-            def _akshare_precedes(source_id: str) -> bool:
-                """该批量源之前是否还有逐代码 akshare (港股必须让它先跑)."""
-                # --akshare 是本次调用的显式偏好: 即使配置里 akshare 排在后面,
-                # 也要让港股先走 akshare (与 provider 内临时前置保持一致)。
-                if prefer_akshare:
-                    return True
-                if order is None:
-                    return False
-                ak_pos = _order_pos("akshare")
-                if ak_pos is None:
-                    return False
-                pos = _order_pos(source_id)
-                return pos is None or ak_pos < pos
+                if eodhd_mod.quote_primary():
+                    # 与 GlobalStocksProvider.quote_sources 保持一致: 显式开启
+                    # prefer_akshare 时港股必须 akshare 先跑, 否则 EODHD 批量
+                    # 会抢先命中港股, 逐代码源链里的 akshare 永远没有机会执行。
+                    eod_plist = global_plist
+                    if prefer_akshare:
+                        eod_plist = [
+                            p for p in global_plist if p.market is not Market.HK
+                        ]
+                    if eod_plist:
+                        _emit("EODHD 批量行情")
+                        try:
+                            eod_batch, eod_errors = eodhd_mod.quotes_batch(eod_plist)
+                            quotes.update(eod_batch)
+                            settled.update(eod_batch)
+                            for err in eod_errors[:3]:
+                                notes.append(f"EODHD 批量行情: {err}")
+                        except Exception as e:  # noqa: BLE001 - 批量失败回落 yfinance
+                            notes.append(f"EODHD 批量行情异常: {e} (已回退默认源)")
+                        _emit("EODHD 批量行情")
+                        global_plist = [
+                            p for p in global_plist if p.yahoo not in quotes
+                        ]
 
-            if eod_ready and eod_batch_mode:
-                # 与 GlobalStocksProvider.quote_sources 保持一致: akshare 在
-                # EODHD 之前时港股必须 akshare 先跑, 否则 EODHD 批量会抢先
-                # 命中港股, 逐代码源链里的 akshare 永远没有机会执行。
-                eod_plist = global_plist
-                if _akshare_precedes("eodhd"):
-                    eod_plist = [
-                        p for p in global_plist if p.market is not Market.HK
-                    ]
-                if eod_plist:
-                    _emit("EODHD 批量行情")
-                    try:
-                        eod_batch, eod_errors = eodhd_mod.quotes_batch(eod_plist)
-                        quotes.update(eod_batch)
-                        settled.update(eod_batch)
-                        for err in eod_errors[:3]:
-                            notes.append(f"EODHD 批量行情: {err}")
-                    except Exception as e:  # noqa: BLE001 - 批量失败回落 yfinance
-                        notes.append(f"EODHD 批量行情异常: {e} (已回退默认源)")
-                    _emit("EODHD 批量行情")
-                    global_plist = [
-                        p for p in global_plist if p.yahoo not in quotes
-                    ]
-
-            # 港股 akshare 排在 yfinance 之前时不能让批量抢先: 批量的结果会
-            # 直接进 quotes, 逐代码源链就不再执行, 港股永远走 yfinance。
-            if order is None or "yfinance" in order:
+                # 港股 akshare 优先 (prefer_akshare) 时不能让 yfinance 批量
+                # 抢先: 批量的结果会直接进 quotes, 逐代码源链就不再执行,
+                # 港股永远走 yfinance (与声明的"港股源顺序翻转"矛盾)。
                 batch_plist = global_plist
-                if _akshare_precedes("yfinance"):
+                if prefer_akshare:
                     batch_plist = [
                         p for p in global_plist if p.market is not Market.HK
                     ]
@@ -430,33 +697,33 @@ def get_quotes(
                         p for p in global_plist if p.yahoo not in quotes
                     ]
 
-            if global_plist:
-                if progress is not None:
+                if global_plist:
+                    if progress is not None:
 
-                    def _on_done(yahoo: str) -> None:
-                        settled.add(yahoo)
-                        _emit(yahoo)
+                        def _on_done(yahoo: str) -> None:
+                            settled.add(yahoo)
+                            _emit(yahoo)
 
-                    quotes.update(
-                        _fetch_domain(
-                            "global",
-                            global_plist,
-                            prefer_akshare,
-                            errors,
-                            crypto_source,
-                            on_done=_on_done,
+                        quotes.update(
+                            _fetch_domain(
+                                "global",
+                                global_plist,
+                                prefer_akshare,
+                                errors,
+                                crypto_source,
+                                on_done=_on_done,
+                            )
                         )
-                    )
-                else:
-                    quotes.update(
-                        _fetch_domain(
-                            "global",
-                            global_plist,
-                            prefer_akshare,
-                            errors,
-                            crypto_source,
+                    else:
+                        quotes.update(
+                            _fetch_domain(
+                                "global",
+                                global_plist,
+                                prefer_akshare,
+                                errors,
+                                crypto_source,
+                            )
                         )
-                    )
 
         # 侧域此时多半已完成 (global 批量/回退是主耗时); 边等边把完成事件
         # 转成进度 (global 缺失时也能逐只推进), 异常不拖垮其它域。
@@ -469,12 +736,13 @@ def get_quotes(
             for fut in done_futs:
                 domain = pending.pop(fut)
                 try:
-                    out, errs = fut.result()
+                    out, errs, side_notes = fut.result()
                 except Exception as e:  # noqa: BLE001 - 单域异常不影响其它域
                     notes.append(f"{domain} 行情取数异常: {e}")
                     continue
                 quotes.update(out)
                 errors.update(errs)
+                notes.extend(side_notes)
         _drain_side_progress()
 
     # 只回写本次真正取到的新鲜行情 (IBKR/akshare/yahoo), 缓存命中项不重写,
@@ -501,14 +769,29 @@ def get_history(
     use_longport: bool = False,
     crypto_source: str = "auto",
 ) -> pd.DataFrame:
-    """单代码历史K线: 长桥/IBKR (可选) → 所属 provider 源链."""
+    """单代码历史K线: 显式 source_order (含 IBKR/长桥) 或原默认链."""
     from datetime import date, timedelta
+
+    from .. import source_order as so
 
     p = _parse_symbol(symbol)
     if start_date is None:
         start_date = (date.today() - timedelta(days=months * 31)).isoformat()
     if end_date is None:
         end_date = date.today().isoformat()
+    if p.type in ("global", "cn"):
+        order = so.configured(p.type, "history")
+        if order is not None:
+            return _fetch_ordered_history(
+                p,
+                order,
+                months=months,
+                start_date=start_date,
+                end_date=end_date,
+                use_ibkr=use_ibkr,
+                use_longport=use_longport,
+                prefer_akshare=prefer_akshare,
+            )
     if use_ibkr:
         try:
             from .. import ibkr as ibkr_mod

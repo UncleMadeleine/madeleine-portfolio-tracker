@@ -65,6 +65,7 @@ def _item_meta(
     source_id: str,
     domain: str,
     channel: str,
+    settings: dict,
     eodhd_cfg: dict,
     eodhd_ok: bool,
 ) -> dict:
@@ -80,6 +81,10 @@ def _item_meta(
             item["badge"] = "未启用"
         elif channel == "quote" and str(eodhd_cfg.get("quotes")) == "off":
             item["badge"] = "quotes=off"
+    elif source_id == "longport" and not settings.get("use_longport"):
+        item["badge"] = "未启用"
+    elif source_id == "ibkr" and not settings.get("use_ibkr"):
+        item["badge"] = "未启用"
     elif source_id == "yfinance" and domain == "global":
         item["note"] = "免 Key；全球域有批量请求"
     elif source_id == "akshare" and domain == "index":
@@ -88,10 +93,14 @@ def _item_meta(
 
 
 def _items(
-    domain: str, channel: str, eodhd_cfg: dict, eodhd_ok: bool
+    domain: str,
+    channel: str,
+    settings: dict,
+    eodhd_cfg: dict,
+    eodhd_ok: bool,
 ) -> list[dict]:
     return [
-        _item_meta(source_id, domain, channel, eodhd_cfg, eodhd_ok)
+        _item_meta(source_id, domain, channel, settings, eodhd_cfg, eodhd_ok)
         for source_id in so.CATALOG[domain][channel]
     ]
 
@@ -213,7 +222,7 @@ def _render_one(
     is_custom = so.configured(domain, channel) is not None
     st.markdown(f"**{so.CHANNEL_LABELS[channel]}**")
     _component()(
-        items=_items(domain, channel, eodhd_cfg, eodhd_ok),
+        items=_items(domain, channel, settings, eodhd_cfg, eodhd_ok),
         order=st.session_state.get(key) or saved,
         key=key,
         on_change=partial(_on_order_change, domain, channel, key),
@@ -255,10 +264,15 @@ def render_source_order_editor(
     domain = domains[labels.index(selected)]
     title, desc = so.DOMAIN_META[domain]
     st.caption(f"{title}: {desc}")
-    if domain in ("global", "cn"):
+    if domain == "global":
         st.caption(
-            "IBKR / 长桥是批量前置源，固定在最前，由上方开关控制；"
-            "本列表只排序逐代码回退源。"
+            "IBKR / 长桥也在本列表内参与排序；上方开关只控制是否启用，"
+            "未启用时自动跳过。排在前面就优先命中，排在后面只为前面未命中的代码兜底。"
+        )
+    elif domain == "cn":
+        st.caption(
+            "长桥也在本列表内参与排序；上方开关只控制是否启用，"
+            "未启用时自动跳过。排在前面就优先命中，排在后面只为前面未命中的代码兜底。"
         )
     if domain == "global":
         st.caption("akshare 只对港股生效；非港股代码会自动跳过它。")

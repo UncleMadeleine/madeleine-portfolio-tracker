@@ -53,6 +53,26 @@ def get_quote(
             f"{p.yahoo}: 近期全部数据源失败 (负缓存), 稍后自动重试"
         )
     try:
+        if p.type in ("global", "cn"):
+            from . import source_order as source_order_mod
+            from . import storage
+
+            if source_order_mod.configured(p.type, "quote") is not None:
+                settings = storage.load_settings(storage.SETTINGS_PATH)
+                quotes, errs, _notes = get_quotes(
+                    [p.yahoo],
+                    prefer_akshare=prefer_akshare,
+                    use_ibkr=bool(settings.get("use_ibkr")),
+                    use_longport=bool(settings.get("use_longport")),
+                    crypto_source=crypto_source,
+                    refresh=refresh,
+                )
+                quote = quotes.get(p.yahoo)
+                if quote is None:
+                    raise RuntimeError(
+                        errs.get(p.yahoo) or f"{p.yahoo}: 行情缺失"
+                    )
+                return quote
         prefer = crypto_source if p.type == "crypto" else prefer_akshare
         return resolve(p.type).fetch_quote(p, prefer_first=prefer)
     except Exception:

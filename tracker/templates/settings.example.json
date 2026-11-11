@@ -1,13 +1,13 @@
 {
-  "_说明": "示例配置: 复制为 settings.json 后修改。color_scheme: cn(红涨绿跌) / intl(绿涨红跌); prefer_akshare/use_ibkr/use_longport/crypto_source 为旧版快捷偏好; source_order: 各 provider 逐代码回退顺序 (留空 {} = 沿用默认链; 设置页可拖动编辑)",
+  "_说明": "示例配置: 复制为 settings.json 后修改。color_scheme: cn(红涨绿跌) / intl(绿涨红跌); prefer_akshare/use_ibkr/use_longport/crypto_source 为旧版快捷偏好; source_order: 各 provider 的数据源回退顺序 (含 IBKR/长桥; 留空 {} = 沿用默认链; 设置页可拖动编辑)",
   "_source_order示例": {
     "global": {
-      "quote": ["eodhd", "yfinance", "akshare"],
-      "history": ["eodhd", "yfinance", "akshare"]
+      "quote": ["ibkr", "longport", "eodhd", "yfinance", "akshare"],
+      "history": ["ibkr", "longport", "eodhd", "yfinance", "akshare"]
     },
     "cn": {
-      "quote": ["akshare", "yfinance"],
-      "history": ["akshare", "yfinance"]
+      "quote": ["longport", "akshare", "yfinance"],
+      "history": ["longport", "akshare", "yfinance"]
     },
     "crypto": {
       "quote": ["binance", "gate", "hyperliquid", "yfinance"],
@@ -17,7 +17,7 @@
       "history": ["akshare", "yfinance"]
     }
   },
-  "_source_order说明": "列表从上到下即优先级; 手写配置里未列出的源自动补到末尾。可选别名: yahoo→yfinance, gate.io→gate。IBKR/长桥为批量前置, 不在此列表, 由 use_ibkr/use_longport 开关控制。",
+  "_source_order说明": "列表从上到下即优先级; 手写配置里未列出的源自动补到末尾。可选别名: yahoo→yfinance, gate.io→gate。IBKR/长桥也参与排序, use_ibkr/use_longport 只控制是否启用。",
   "color_scheme": "cn",
   "prefer_akshare": false,
   "use_ibkr": false,

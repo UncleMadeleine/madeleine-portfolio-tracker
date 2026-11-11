@@ -90,7 +90,7 @@ tracker-ui                        # pip 安装后 (等价, 参数透传给 strea
 - **基本面** (`/fundamentals`) — 第一期 AH 溢价率曲线：可选 A+H 股票对（东财目录，失败退回内置常见股票对，也可手动输入代码），按近 3/6/12/24/36/60 个月展示 A 股收盘 ÷ (H 股收盘 × 历史汇率) − 1，0% 为两地同价
 - **日历** (`/calendar`) — 持仓/自选的财报、预约披露、除权除息/派息事件月历（窗口与范围可切），可一键导出 `.ics` 导入本地日历
 - **导入** (`/import`) — IBKR 账户 / 长桥账户 / 链上钱包 / A股券商文件导入
-- **设置** (`/settings`) — 涨跌配色（红涨绿跌/绿涨红跌）、数据源偏好（akshare / IBKR / 长桥）、基础货币
+- **设置** (`/settings`) — 涨跌配色（红涨绿跌/绿涨红跌）、数据源开关与拖动回退顺序（含 akshare / IBKR / 长桥 / EODHD / 加密源）、基础货币
 
 ### CLI 快速上手
 
@@ -499,7 +499,7 @@ tests/                  单元测试（离线, mock）
 
 | type | 覆盖代码 | 实时行情优先级 | 历史K线优先级 |
 |----------|----------|----------------|----------------|
-| **global** | 裸代码（美股）、`.HK/.DE/.L/.TO/.AX/.T/.KS/.KQ/.SI/.SA…` | 长桥(可选) → IBKR(可选) → **EODHD(可选, primary 时)** → yfinance 批量 → 港股 akshare → EODHD(可选, fallback) | IBKR(可选) → 长桥(可选) → **EODHD(可选, primary)** → yfinance（港股可 `--akshare` 翻转） → EODHD(可选, fallback) |
+| **global** | 裸代码（美股）、`.HK/.DE/.L/.TO/.AX/.T/.KS/.KQ/.SI/.SA…` | IBKR(可选, 优先) → 长桥(可选) → **EODHD(可选, primary 时)** → yfinance 批量 → 港股 akshare → EODHD(可选, fallback) | IBKR(可选) → 长桥(可选) → **EODHD(可选, primary)** → yfinance（港股可 `--akshare` 翻转） → EODHD(可选, fallback) |
 | **cn** | `.SS/.SZ/.BJ`（A/B股、北交所） | 长桥(可选前置) → **akshare 优先** → yfinance | 长桥(可选前置) → **akshare 优先** → yfinance |
 | **crypto** | `BASE-QUOTE`（`BTC-USD`） | **Binance API** → Gate.io 现货 → Hyperliquid 永续（仅USD系） → yfinance | **Binance klines** → Gate.io → Hyperliquid → yfinance |
 | **index** | `IX.<KEY>`（`IX.DXY` 美元指数 / `IX.VIX` 恐慌指数 / `IX.CSI300` 沪深 300 / `IX.AU` 黄金 · `IX.AG` 白银 · `IX.JD` 鸡蛋 · `IX.M` 豆粕 · `IX.A` 豆一 · `IX.B` 豆二 · `IX.LH` 生猪 · `IX.LC` 碳酸锂主力连续 / `IX.URANIUM` 铀现货价 · `IX.URANIUM_LT` 铀长协价 / `IX.CEMPI` 水泥价格指数 / `IX.HSI` 恒生指数 · `IX.HSTECH` 恒生科技指数 等恒生官网港股指数 / `IX.HSAHP` AH股溢价指数 …） | —（指数无实时行情, 不参与持仓聚合） | 中国指数 **akshare 优先** → yfinance；美股 SPX/NDX/DJI 有新浪兜底；水泥网/商品期货/恒生官网/Cameco 铀价为专属源（无兜底） |
@@ -509,15 +509,16 @@ tests/                  单元测试（离线, mock）
   配置写在 `settings.json` 的 `source_order`。顺序从上到下即优先级，手写配置里未列出的源自动补到末尾；
   手改 JSON 同样生效，空对象 `{}` = 沿用上表默认链。
   例：`{"global": {"quote": ["akshare", "yfinance", "eodhd"]}}`。
-  IBKR / 长桥是批量前置源，不参与该列表，仍由 `use_ibkr` / `use_longport` 开关控制。
+  IBKR / 长桥也在这份列表里参与排序：`use_ibkr` / `use_longport` 开关只控制是否启用，
+  拖到前面就优先命中，拖到 yfinance 后面则只为前面未命中的代码兜底。
 - **type 即域**：`type` 字段由系统在保存/导入时按 `symbols.type_for_symbol()` 自动推导覆写，
   手改 JSON 无效。点后缀/裸代码永远是股票，连字符+计价货币永远是加密货币，同一代码不会映射两个域。
   测试用例、搜索结果、导入产出的代码均符合该规范。
-- **长桥与 IBKR 同开时**：实时行情两者都拉、IBKR 结果覆盖长桥（IBKR 优先）；历史K线先试 IBKR、失败再试长桥
+- **长桥与 IBKR 同开时**：默认顺序为 IBKR → 长桥（IBKR 命中的代码优先，长桥补未命中项）；历史同理。可在设置页把长桥拖到 IBKR 前面改变优先级
 - **IBKR 历史K线按 ≤365 天窗口分块拼接**（IBKR 单次日K请求上限 365 D，超限拒单）：60 个月（5 年）区间在 IBKR 源同样可用；标的上市晚于区间起点时连续空窗即停，任一分块失败该代码整体回退默认源（不返回半截区间）
 - 汇率：CFETS 一次拿全 XXX/CNY；直对/逆对/USD 桥接兜底
 - A股/港股实时行情（akshare 源）走东财 push2 **单代码**接口（`.SS`=市场段 1、`.SZ`/`.BJ`=0、`.HK`=116+5位码），一个请求拿齐 最新价/昨收/涨跌幅/名称/总市值/市净率，实测 0.4-0.8s；不用 akshare 全市场 spot（内部分 60 页拉全 A 股、页间 sleep，单次 42-102s，秒级超时必然失败——改之前「A股 akshare 优先 / 港股 akshare 兜底」实际从未生效）。单代码接口还比全市场表多给港股的总市值/市净率（全市场 spot 最终列丢了这两列），港股 PB/市值阈值提醒因此有了东财实时口径；带 5s 进程内缓存 + per-key 单飞 + 失败 15s 占位
-- `--akshare` 开关仅影响港股数据源顺序（A股域固定 akshare 优先）；设置页已改为直接拖动排序，
+- `--akshare` 开关仅影响港股数据源顺序（A股域默认 akshare 优先，也可在设置页拖动）；设置页已改为直接拖动排序，
   旧 `"prefer_akshare": true` 仍作为未配置 `source_order` 时的默认链兼容偏好
 - 加密货币域默认链 Binance → Gate.io → Hyperliquid(USD系) → yfinance；可直接在设置页拖动排序，
   也可用 `settings.json` `"crypto_source": "auto|binance|gate|hyperliquid|yfinance"`
@@ -525,8 +526,8 @@ tests/                  单元测试（离线, mock）
 - IBKR 行情可选叠加于任何域（需订阅）；英股 GBp 便士报价自动换算为 GBP；汇率缓存 10 分钟，行情缓存 5 分钟
 - IBKR 连接参数**从配置文件读取**（不写死在代码里）：优先数据目录下的 `ibkr.json`，其次包内模板 `tracker/templates/ibkr.example.json` 兜底（`tracker init` 生成后修改），也可用环境变量 `IBKR_CONFIG=/path/to/xxx.json` 指定；交易所映射在同一文件（A股经沪深港通通道：沪 `SEHKNTL`、深 `SEHKSZSE`、科创 `SEHKSTAR`，计价 CNH；B股走 `SHSE`/`SZSE` 并配 `tradingClass`；模板 `exchanges` 键名与代码读取一致，删键即用内置默认路由）
 - IBKR 断开时自动静默回退下一级数据源，不影响页面运行；持仓同步见下方
-- 长桥 (LongPort) 可选前置行情/历史源：`settings.json` `"use_longport": true` 或子命令 `--longport` 启用；
-  两源都启用时 IBKR 优先级更高，长桥不可用自动回退默认源（详见下方「长桥 (LongPort) 账户」）
+- 长桥 (LongPort) 可选行情/历史源：`settings.json` `"use_longport": true` 或子命令 `--longport` 启用；
+  默认顺序中 IBKR 在长桥之前，长桥位置可在设置页拖动调整；不可用自动落到下一源（详见下方「长桥 (LongPort) 账户」）
 - EODHD 可选付费源 (BYOK)：`eodhd.json` 填 token（或 env `TRACKER_EODHD_TOKEN`）后生效，未配置时
   完全不影响免费链路。默认历史K线 `priority=primary`（在 yfinance 之前，IBKR/长桥之后），
   实时行情 `quotes=fallback`（仅在默认源失败时兜底）、`quotes=primary` 时走 `s=` 批量
@@ -610,7 +611,7 @@ python -m tracker.cli watchlist import-longport --overwrite  # 覆盖现有自�
 - 认证配置在数据目录下的 `longport.json`（模板 `tracker/templates/longport.example.json` 随包分发，`tracker init` 生成；已 gitignore）：推荐 `auth: oauth`
   （填入 OAuth 客户端注册返回的 `client_id`），也支持 `auth: apikey`（开发者中心 app_key/app_secret/access_token，90 天过期）
 - 行情接入：各取数子命令加 `--longport`（如 `quote AAPL --longport`），或 `settings.json` `"use_longport": true`；
-  两源都启用时 IBKR 优先级更高，长桥失败自动回退默认数据源
+  默认顺序中 IBKR 在长桥之前，可在设置页拖动调整；长桥失败自动落到下一源
 - 代码映射：内部 `0700.HK` ↔ 长桥 `700.HK`，`600519.SS` ↔ `600519.SH`，`AAPL` ↔
   `AAPL.US`，`D05.SI` ↔ `D05.SG`，类别股/优先股 `TAP-A` ↔ `TAP.A.US` / `WFC-PL` ↔
   `WFC.PR.L.US`；德英加澳日韩/北交所不支持（前置自动跳过，回落默认源）
@@ -857,8 +858,8 @@ source, else the platform user dir (`~/.local/share/tracker` on Linux). See `tra
 
 Quotes are fetched with a priority chain:
 
-1. **LongPort** (optional, `use_longport` / `--longport`) — HK/US/CN quotes & history, silent fallback
-2. **IBKR** (TWS / IB Gateway) — real-time if subscribed, delayed otherwise, batch snapshot (higher priority than LongPort when both enabled)
+1. **IBKR** (TWS / IB Gateway) — real-time if subscribed, delayed otherwise, batch snapshot (default order ahead of LongPort; draggable)
+2. **LongPort** (optional, `use_longport` / `--longport`) — HK/US/CN quotes & history, silent fallback
 3. **EODHD** (optional BYOK, `eodhd.json` / `TRACKER_EODHD_TOKEN`) — history primary by default (ahead of yfinance, behind IBKR/LongPort), live quotes fallback-only by default; errors fall through to the next source
 4. **yfinance** (via OpenBB) — batch quote (1 request) + individual retry
 5. **akshare** (East Money) — A-shares / HK spot + history (CN domain: akshare first)
@@ -868,8 +869,9 @@ Quotes are fetched with a priority chain:
 
 The per-domain quote/history fallback order is editable by drag-and-drop on the Settings page
 (quotes and history are separate lists for global / CN / crypto / index), or directly under
-`settings.json` → `source_order`. The list is authoritative: sources omitted from a list are
-disabled. IBKR and LongPort remain batch prefetch steps controlled by `use_ibkr` / `use_longport`.
+`settings.json` → `source_order`. The list is authoritative; sources omitted from a hand-written
+list are appended at the end. IBKR and LongPort participate in the same ordering — their toggles
+only control whether they are enabled, not their position.
 
 IBKR/LongPort disconnects silently fall back to the next source; the page continues running without interruption.
 

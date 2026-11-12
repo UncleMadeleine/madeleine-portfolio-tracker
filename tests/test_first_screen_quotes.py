@@ -174,11 +174,19 @@ def _recording_fx(rate: float):
     return fake
 
 
-def _boot(monkeypatch, tmp_path, holdings=None, get_quotes=None, get_fx=None):
+def _boot(
+    monkeypatch,
+    tmp_path,
+    holdings=None,
+    get_quotes=None,
+    get_fx=None,
+    pending_refresh=None,
+):
     """以指定持仓启动 app.py 完整渲染组合页.
 
     get_quotes/get_fx 缺省时不打桩 (真实实现): 磁盘全新路径下不会被调用,
     冷启动路径则会走真实取数 —— 调用方按测试意图显式传 mock。
+    pending_refresh: 首轮渲染前预置「刷新选中」待办 (模拟表格选中后点按钮).
     """
     wl = tmp_path / "watchlist.json"
     pf = tmp_path / "portfolio.json"
@@ -206,7 +214,10 @@ def _boot(monkeypatch, tmp_path, holdings=None, get_quotes=None, get_fx=None):
         )
     if get_quotes is not None:
         monkeypatch.setattr(prices, "get_quotes", get_quotes)
-    at = AppTest.from_file(app_mod.__file__).run(timeout=60)
+    at = AppTest.from_file(app_mod.__file__)
+    if pending_refresh:
+        at.session_state["_refresh_quotes_pending"] = list(pending_refresh)
+    at = at.run(timeout=60)
     assert not at.exception, at.exception
     return at
 
@@ -448,6 +459,49 @@ class TestFirstScreenStaleWhileRevalidate:
         assert fake.calls  # 同步走完 cached_quotes
         assert any("2,130" in str(m.value) for m in at.metric)
         assert not _plan_dirty(at)
+
+    def test_pending_refresh_only_refetches_selected_symbols(
+        self, monkeypatch, tmp_path, _clean_quote_state
+    ):
+        """「刷新选中」待办: 只对选中代码回源, 其余代码继续用缓存.
+
+        回归: 全量「强制刷新」会把当前范围所有代码重打一遍数据源; 用户通常
+        只想立刻重试其中 1-2 只。这里断言 get_quotes 只收到选中代码且
+        refresh=True, 未选中的代码不被请求。
+        """
+        _seed_quotes({"AAPL": 100.0, "MSFT": 100.0}, age_seconds=10)
+        calls: list[tuple[tuple[str, ...], bool]] = []
+
+        def fake(symbols, refresh=False, **_kw):
+            calls.append((tuple(symbols), refresh))
+            quotes = {
+                s: Quote(
+                    symbol=s,
+                    name=s,
+                    price=200.0,
+                    prev_close=198.0,
+                    change_pct=1.0,
+                    currency="USD",
+                )
+                for s in symbols
+            }
+            cache_mod.set_cached(quotes)
+            return quotes, {}, []
+
+        holdings = [
+            {"symbol": "AAPL", "quantity": 2, "avg_cost": 100},
+            {"symbol": "MSFT", "quantity": 1, "avg_cost": 100},
+        ]
+        at = _boot(
+            monkeypatch,
+            tmp_path,
+            holdings=holdings,
+            get_quotes=fake,
+            pending_refresh=["AAPL"],
+        )
+        assert calls == [(("AAPL",), True)]
+        # AAPL 2×200×7.1 + MSFT 1×100×7.1 = 3,550 (MSFT 仍用缓存)
+        assert any("3,550" in str(m.value) for m in at.metric)
 
     def test_cold_start_reports_progress(self, monkeypatch, tmp_path, _clean_quote_state):
         """冷启动阻塞取数带 progress 回调 (done/total/label 推进到 100%)."""

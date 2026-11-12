@@ -285,7 +285,7 @@ def _fetch_quotes_with_progress(
         bar.empty()
 
 
-def _load_quotes(
+def _load_quotes_cached(
     fetch_symbols: tuple[str, ...],
     prefer_akshare: bool,
     use_ibkr: bool,
@@ -349,6 +349,54 @@ def _load_quotes(
     # 陈旧数据秒渲染 + 挂后台刷新
     plan["dirty"] = True
     return hits, errors, []
+
+
+def _load_quotes(
+    fetch_symbols: tuple[str, ...],
+    prefer_akshare: bool,
+    use_ibkr: bool,
+    use_longport: bool,
+    crypto_source: str,
+    refresh_symbols: tuple[str, ...] = (),
+) -> tuple[dict, dict, list]:
+    """首屏行情加载 + 可选「只刷新选中代码」.
+
+    常规路径全部走 _load_quotes_cached (缓存优先/SWR); refresh_symbols 非空时
+    (用户在主表选中 1-2 只后点「刷新选中」), 只对这些代码绕过缓存与负缓存
+    回源, 再把结果合并进本次快照 —— 不会像全量强制刷新那样把当前范围内所有
+    代码都重新打一遍数据源。
+    """
+    quotes, errors, notes = _load_quotes_cached(
+        fetch_symbols, prefer_akshare, use_ibkr, use_longport, crypto_source
+    )
+    targets = tuple(
+        dict.fromkeys(
+            _norm_sym(str(s)) for s in refresh_symbols if str(s).strip()
+        )
+    )
+    if not targets:
+        return quotes, errors, notes
+    try:
+        with st.spinner(f"刷新 {'、'.join(targets)} …"):
+            fresh, fresh_errors, fresh_notes = prices.get_quotes(
+                list(targets),
+                prefer_akshare=prefer_akshare,
+                use_ibkr=use_ibkr,
+                use_longport=use_longport,
+                crypto_source=crypto_source,
+                refresh=True,
+            )
+    except Exception as e:  # noqa: BLE001 - 单次刷新失败不能穿透成整页 traceback
+        errors = {**errors, "刷新": f"刷新失败: {e}"}
+        return quotes, errors, notes
+    quotes.update(fresh)
+    # 选中代码的旧错误作废 (可能刚从负缓存/超时中恢复), 以本轮结果为准
+    target_set = set(targets)
+    errors = {
+        k: v for k, v in errors.items() if _norm_sym(str(k)) not in target_set
+    }
+    errors.update(fresh_errors)
+    return quotes, errors, [*notes, *fresh_notes]
 
 
 def _load_fx(
@@ -586,6 +634,21 @@ def _stage_delete_watchlist() -> None:
     symbols = st.session_state.get("_selected_watchlist") or []
     if symbols:
         st.session_state["_delete_watchlist_pending"] = list(symbols)
+
+
+def _stage_refresh(symbols_key: str) -> None:
+    """「刷新选中」按钮 on_click: 只记代码, 下一次脚本 run 只回源这几只."""
+    symbols = st.session_state.get(symbols_key) or []
+    if symbols:
+        st.session_state["_refresh_quotes_pending"] = list(symbols)
+
+
+def _stage_refresh_holdings() -> None:
+    _stage_refresh("_selected_holdings")
+
+
+def _stage_refresh_watchlist() -> None:
+    _stage_refresh("_selected_watchlist")
 
 
 def _clear_delete_holdings() -> None:
@@ -1194,6 +1257,11 @@ def render_portfolio_page() -> None:
         key="watch_scope",
         help="行情拉取范围 = 持仓 + 所选列表的自选股 (K线页「常用」仍含全部代码)",
     )
+    # 「刷新选中」按钮在表格下方, 回调只把代码暂存; 这里取一次即清, 本次
+    # 渲染只回源这几只 (不重拉整个范围), 下轮 rerun 不会重复刷新。
+    refresh_symbols = tuple(
+        st.session_state.pop("_refresh_quotes_pending", ()) or ()
+    )
     watch_entries = entries_for(watch, None if scope == "全部" else scope)
     fetch_symbols = tuple(
         dict.fromkeys(holding_symbols + [str(e["symbol"]) for e in watch_entries])
@@ -1208,7 +1276,12 @@ def render_portfolio_page() -> None:
     # 首屏刷新计划每次渲染重建 (行情/汇率各自判定陈旧), 看门狗片段据此刻度调度
     _plan_reset()
     quotes, errors, notes = _load_quotes(
-        fetch_symbols, prefer_akshare, use_ibkr, use_longport, crypto_source
+        fetch_symbols,
+        prefer_akshare,
+        use_ibkr,
+        use_longport,
+        crypto_source,
+        refresh_symbols=refresh_symbols,
     )
     if not quotes:
         st.error(
@@ -1366,6 +1439,10 @@ def render_portfolio_page() -> None:
             f":material/warning: 数据问题 ({len(detail)})",
             icon=":material/warning:",
         ):
+            st.caption(
+                "失败代码会进入 5 分钟负缓存 (避免反复撞击限流的数据源); "
+                "想立刻重试, 在下方明细/自选表选中代码后点「刷新选中」, 只重取这几只。"
+            )
             for line in detail:
                 st.write(f"- {line}")
 
@@ -1447,7 +1524,7 @@ def render_portfolio_page() -> None:
             )
             selected = _selected_symbols(detail_event, detail)
             st.session_state["_selected_holdings"] = selected
-            dl_l, dl_mid, dl_r = st.columns([1, 1.1, 2])
+            dl_l, dl_mid, dl_rf, dl_r = st.columns([1, 1, 1, 2])
             dl_l.download_button(
                 "导出 CSV",
                 # 与页面明细表同口径: 包含缺行情/无法估值但仍存在的持仓,
@@ -1458,6 +1535,15 @@ def render_portfolio_page() -> None:
                 icon=":material/download:",
             )
             dl_mid.button(
+                f"刷新选中{f' ({len(selected)})' if selected else ''}",
+                icon=":material/refresh:",
+                width="stretch",
+                key="refresh_holdings_selected",
+                disabled=not selected,
+                on_click=_stage_refresh_holdings,
+                help="只强制重取选中代码 (跳过缓存与 5 分钟负缓存), 其它代码不重新请求",
+            )
+            dl_rf.button(
                 f"删除选中{f' ({len(selected)})' if selected else ''}",
                 icon=":material/delete:",
                 width="stretch",
@@ -1468,7 +1554,7 @@ def render_portfolio_page() -> None:
             if selected:
                 dl_r.caption("已选: " + "、".join(selected))
             else:
-                dl_r.caption("点击表格行可多选，再点「删除选中」。")
+                dl_r.caption("点击表格行可多选，再点「刷新选中」或「删除选中」。")
             pending_holdings = st.session_state.get("_delete_holdings_pending")
             if pending_holdings:
                 _confirm_delete_holdings(list(pending_holdings))
@@ -1655,7 +1741,7 @@ def render_portfolio_page() -> None:
                 )
                 w_selected = _selected_symbols(w_event, wview)
                 st.session_state["_selected_watchlist"] = w_selected
-                wc1, wc2 = st.columns([1, 3])
+                wc1, wc_rf, wc2 = st.columns([1, 1, 3])
                 wc1.button(
                     f"删除选中{f' ({len(w_selected)})' if w_selected else ''}",
                     icon=":material/delete:",
@@ -1664,10 +1750,19 @@ def render_portfolio_page() -> None:
                     disabled=not w_selected,
                     on_click=_stage_delete_watchlist,
                 )
+                wc_rf.button(
+                    f"刷新选中{f' ({len(w_selected)})' if w_selected else ''}",
+                    icon=":material/refresh:",
+                    width="stretch",
+                    key="refresh_watchlist_selected",
+                    disabled=not w_selected,
+                    on_click=_stage_refresh_watchlist,
+                    help="只强制重取选中代码 (跳过缓存与 5 分钟负缓存), 其它代码不重新请求",
+                )
                 if w_selected:
                     wc2.caption("已选: " + "、".join(w_selected))
                 else:
-                    wc2.caption("点击表格行可多选，再点「删除选中」。")
+                    wc2.caption("点击表格行可多选，再点「刷新选中」或「删除选中」。")
                 pending_watchlist = st.session_state.get("_delete_watchlist_pending")
                 if pending_watchlist:
                     _confirm_delete_watchlist(list(pending_watchlist))

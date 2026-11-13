@@ -1226,9 +1226,13 @@ export default function (component) {
     ctxEl.style.visibility = 'hidden';
     ctxEl.classList.add('fp-ctx-open');
     var r = ctxEl.getBoundingClientRect();
-    var left = Math.max(8, Math.min(x, window.innerWidth - r.width - 8));
-    var top = y + r.height > window.innerHeight - 8 ? y - r.height : y;
-    top = Math.max(8, Math.min(top, window.innerHeight - r.height - 8));
+    // clientWidth/Height 不含滚动条; innerWidth 会把菜单贴到 Windows
+    // 经典滚动条下面
+    var vw = document.documentElement.clientWidth || window.innerWidth;
+    var vh = document.documentElement.clientHeight || window.innerHeight;
+    var left = Math.max(8, Math.min(x, vw - r.width - 8));
+    var top = y + r.height > vh - 8 ? y - r.height : y;
+    top = Math.max(8, Math.min(top, vh - r.height - 8));
     ctxEl.style.left = left + 'px';
     ctxEl.style.top = top + 'px';
     ctxEl.style.visibility = 'visible';
@@ -1260,6 +1264,10 @@ export default function (component) {
     if (ev.button === 2 || ev.ctrlKey) { return; }
     cxHide();
   }
+  function cxOnFocusIn(ev) {
+    // Tab 到菜单外时收起, 避免键盘焦点走了菜单还浮在页面上
+    if (ctxEl && !ctxEl.contains(ev.target)) { cxHide(); }
+  }
   function cxOnKeyDown(ev) {
     if (!ctxEl) { return; }
     if (ev.key === 'Escape') {
@@ -1281,7 +1289,9 @@ export default function (component) {
   el.addEventListener('contextmenu', cxOnContext);
   document.addEventListener('pointerdown', cxOnPointerDown, true);
   document.addEventListener('keydown', cxOnKeyDown, true);
+  document.addEventListener('focusin', cxOnFocusIn, true);
   window.addEventListener('scroll', cxHide, true);
+  window.addEventListener('resize', cxHide);
 
   var dispose = function () {
     try { chart.remove(); } catch (e) {}
@@ -1293,7 +1303,9 @@ export default function (component) {
     el.removeEventListener('gestureend', onGestureEnd);
     document.removeEventListener('pointerdown', cxOnPointerDown, true);
     document.removeEventListener('keydown', cxOnKeyDown, true);
+    document.removeEventListener('focusin', cxOnFocusIn, true);
     window.removeEventListener('scroll', cxHide, true);
+    window.removeEventListener('resize', cxHide);
   };
   root.__fpChartDispose = dispose;
   return dispose;

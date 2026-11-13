@@ -390,7 +390,7 @@ def test_theme_table_right_click_menu_js():
     assert "复制单元格" in js
     assert "复制整行" in js
     assert "复制含表头" in js
-    assert "/kline?symbol=" in js
+    assert "'kline?symbol='" in js
     # 特定表格 (持仓/自选) 提供删除, 并经组件 trigger 交回 Python 确认
     assert "从自选删除" in js
     assert "从持仓删除" in js
@@ -420,6 +420,10 @@ def test_theme_table_right_click_menu_js():
     # 整行/含表头复制不受横向虚拟化影响: 从 canvas props 取全部列
     assert "rowFromGrid" in js
     assert "getCellContent" in js
+    # 相对 URL: 反向代理 / --server.baseUrlPath 下保留挂载前缀
+    assert "window.location.href" in js
+    # 键盘 Tab 离开菜单时收起
+    assert "focusin" in js
     # 右键/Control+左键的 pointerdown 不能先把菜单关掉 (两指双击第二下)
     assert "ev.button === 2 || ev.ctrlKey" in js
 

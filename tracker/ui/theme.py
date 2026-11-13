@@ -201,9 +201,13 @@ export default function (component) {
     box.classList.add('fp-ctx-open');
     box.setAttribute('aria-hidden', 'false');
     var r = box.getBoundingClientRect();
-    var left = Math.max(8, Math.min(x, window.innerWidth - r.width - 8));
-    var top = y + r.height > window.innerHeight - 8 ? y - r.height : y;
-    top = Math.max(8, Math.min(top, window.innerHeight - r.height - 8));
+    // clientWidth/Height 不含滚动条; innerWidth 会把菜单贴到 Windows
+    // 经典滚动条下面
+    var vw = document.documentElement.clientWidth || window.innerWidth;
+    var vh = document.documentElement.clientHeight || window.innerHeight;
+    var left = Math.max(8, Math.min(x, vw - r.width - 8));
+    var top = y + r.height > vh - 8 ? y - r.height : y;
+    top = Math.max(8, Math.min(top, vh - r.height - 8));
     box.style.left = left + 'px';
     box.style.top = top + 'px';
     box.style.visibility = 'visible';
@@ -234,6 +238,9 @@ export default function (component) {
     var rowDist = Infinity;
     for (var i = 0; i < cells.length; i++) {
       var r = cells[i].getBoundingClientRect();
+      // 跳过 0×0 的无障碍单元格 (Chromium/Edge), 否则它们会在 (0,0)
+      // 误命中页面左上角的右键
+      if (r.width <= 0 || r.height <= 0) { continue; }
       if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
         return cells[i];
       }
@@ -299,6 +306,32 @@ export default function (component) {
     return null;
   }
 
+  function isDataColumn(meta) {
+    return !(meta && meta.id == null && !meta.title);
+  }
+
+  function nearestDataColumn(props, col) {
+    var cols = props.columns || [];
+    // 落在行号/选择列或最后一列右侧空白: 与 Firefox 的 DOM 命中一致,
+    // 取同一行最近的数据列, 不把用户打回浏览器原生菜单.
+    if (col == null) {
+      for (var i = cols.length - 1; i >= 0; i--) {
+        if (isDataColumn(cols[i])) { return i; }
+      }
+      return null;
+    }
+    if (col >= 0 && col < cols.length && isDataColumn(cols[col])) {
+      return col;
+    }
+    for (var j = col + 1; j < cols.length; j++) {
+      if (isDataColumn(cols[j])) { return j; }
+    }
+    for (var k = col - 1; k >= 0; k--) {
+      if (isDataColumn(cols[k])) { return k; }
+    }
+    return null;
+  }
+
   function cellFromCanvas(df, x, y) {
     var canvas = df.querySelector('[data-testid="data-grid-canvas"]');
     if (!canvas) { return null; }
@@ -320,11 +353,27 @@ export default function (component) {
     if (row < 0 || row >= props.rows) { return null; }
     var scroller = df.querySelector('.dvn-scroller');
     var scrollLeft = scroller ? (scroller.scrollLeft || 0) : 0;
-    var col = columnAt(props, x - rect.left, scrollLeft);
-    if (col == null) { return null; }
-    return df.querySelector(
-      '[data-testid="glide-cell-' + col + '-' + row + '"]'
+    var col = nearestDataColumn(
+      props, columnAt(props, x - rect.left, scrollLeft)
     );
+    if (col == null) { return null; }
+    // 目标列可能被横向虚拟化出无障碍表格; 向左/右回退到同屏最近的数据列
+    function find(colIndex) {
+      if (colIndex < 0 || colIndex >= props.columns.length) { return null; }
+      if (!isDataColumn(props.columns[colIndex])) { return null; }
+      return df.querySelector(
+        '[data-testid="glide-cell-' + colIndex + '-' + row + '"]'
+      );
+    }
+    for (var left = col; left >= 0; left--) {
+      var hit = find(left);
+      if (hit) { return hit; }
+    }
+    for (var right = col + 1; right < props.columns.length; right++) {
+      var hit2 = find(right);
+      if (hit2) { return hit2; }
+    }
+    return null;
   }
 
   function cellParts(cell) {
@@ -519,8 +568,14 @@ export default function (component) {
           label: '查看 K 线',
           icon: 'chart',
           action: function () {
+            // 用相对 URL: 反向代理/--server.baseUrlPath 部署时 /kline 的
+            // 根路径不存在, 必须保留当前挂载前缀.
             window.location.assign(
-              '/kline?symbol=' + encodeURIComponent(row.symbol) + '&t=' + Date.now()
+              new URL(
+                'kline?symbol=' + encodeURIComponent(row.symbol) +
+                '&t=' + Date.now(),
+                window.location.href
+              ).toString()
             );
           }
         });
@@ -603,6 +658,10 @@ export default function (component) {
     if (ev.button === 2 || ev.ctrlKey) { return; }
     hideMenu();
   }
+  function onFocusIn(ev) {
+    // Tab 到菜单外时收起, 避免键盘焦点走了菜单还浮在页面上
+    if (menu && !menu.contains(ev.target)) { hideMenu(); }
+  }
   function onKeyDown(ev) {
     if (!menu) { return; }
     if (ev.key === 'Escape') {
@@ -628,6 +687,7 @@ export default function (component) {
   document.addEventListener('contextmenu', onContext, true);
   document.addEventListener('pointerdown', onPointerDown, true);
   document.addEventListener('keydown', onKeyDown, true);
+  document.addEventListener('focusin', onFocusIn, true);
   window.addEventListener('scroll', onViewportChange, true);
   window.addEventListener('resize', onViewportChange);
 
@@ -635,6 +695,7 @@ export default function (component) {
     document.removeEventListener('contextmenu', onContext, true);
     document.removeEventListener('pointerdown', onPointerDown, true);
     document.removeEventListener('keydown', onKeyDown, true);
+    document.removeEventListener('focusin', onFocusIn, true);
     window.removeEventListener('scroll', onViewportChange, true);
     window.removeEventListener('resize', onViewportChange);
     hideMenu();
@@ -875,12 +936,17 @@ _CONTEXT_MENU_CSS = """
   z-index: 2147483000;
   min-width: 188px;
   max-width: min(320px, calc(100vw - 16px));
+  /* 小窗口/移动端横屏: 菜单不能长到视口外, 超出时在菜单内滚动 */
+  max-height: min(calc(100vh - 16px), 520px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 6px;
   border: 1px solid var(--fp-border-strong);
   border-radius: 12px;
   background: rgba(18, 18, 34, 0.97);
   box-shadow: 0 22px 56px -18px rgba(0, 0, 0, 0.9),
     0 0 0 1px rgba(0, 0, 0, 0.25);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
   backdrop-filter: blur(20px) saturate(140%);
   color: var(--fp-text);
   font-family: var(--fp-sans);

@@ -571,38 +571,19 @@ class GlobalStocksProvider(Provider):
         cfg = eodhd_mod.load_config()
         eod = eodhd_mod.available(cfg)
         mode = cfg["quotes"] if eod else "off"
-
-        # 设置页/手写配置的显式顺序优先: 列表顺序即优先级, 未列出的源由
-        # source_order.normalize 补到末尾。显式 --akshare 仍可把 akshare 临时
-        # 前置; 非港股会跳过 akshare。
-        order = so.configured("global", "quote")
-        if order is not None:
-            if prefer_first:
-                order = so.prefer_akshare_order(order)
-            funcs = {"yfinance": _yahoo_quote}
-            if eod and mode != "off":
-                funcs["eodhd"] = eodhd_mod.quote
-            if p.market is Market.HK:
-                funcs["akshare"] = _akshare_quote
-            return ordered_sources(order, funcs)
-
+        order = so.display_order(
+            "global",
+            "quote",
+            prefer_akshare=bool(prefer_first),
+            eodhd_quotes=mode,
+            eodhd_priority=cfg["priority"],
+        )
+        funcs = {"yfinance": _yahoo_quote}
         if p.market is Market.HK:
-            # prefer_first=True (--akshare / 国内网络): akshare 在前
-            base = (
-                [_akshare_quote, _yahoo_quote]
-                if prefer_first
-                else [_yahoo_quote, _akshare_quote]
-            )
-        else:
-            base = [_yahoo_quote]
-        if mode == "primary":
-            # 显式要求 akshare 优先时不抢跑: akshare → EODHD → yahoo
-            if p.market is Market.HK and prefer_first:
-                return [_akshare_quote, eodhd_mod.quote, _yahoo_quote]
-            return [eodhd_mod.quote, *base]
-        if mode == "fallback":
-            return [*base, eodhd_mod.quote]
-        return base
+            funcs["akshare"] = _akshare_quote
+        if eod and mode != "off":
+            funcs["eodhd"] = eodhd_mod.quote
+        return ordered_sources(order, funcs)
 
     def history_sources(
         self,
@@ -616,40 +597,23 @@ class GlobalStocksProvider(Provider):
 
         cfg = eodhd_mod.load_config()
         eod = eodhd_mod.available(cfg)
-        primary = eod and cfg["priority"] == "primary"
         eod_src = lambda: eodhd_mod.history(p, start_date, end_date)  # noqa: E731
         yahoo_src = lambda: _yahoo_history(p, start_date, end_date)  # noqa: E731
         ak_src = lambda: _akshare_history(p, start_date, end_date)  # noqa: E731
 
-        order = so.configured("global", "history")
-        if order is not None:
-            if prefer_first:
-                order = so.prefer_akshare_order(order)
-            funcs = {
-                "eodhd": eod_src if eod else None,
-                "yfinance": yahoo_src,
-                "akshare": ak_src if p.market is Market.HK else None,
-            }
-            return ordered_sources(
-                order, {k: v for k, v in funcs.items() if v is not None}
-            )
-
+        order = so.display_order(
+            "global",
+            "history",
+            prefer_akshare=bool(prefer_first),
+            eodhd_quotes=cfg["quotes"],
+            eodhd_priority=cfg["priority"],
+        )
+        funcs = {"yfinance": yahoo_src}
+        if eod:
+            funcs["eodhd"] = eod_src
         if p.market is Market.HK:
-            if prefer_first:
-                chain = [ak_src, yahoo_src]
-                return (
-                    [ak_src, eod_src, yahoo_src]
-                    if primary
-                    else chain + ([eod_src] if eod else [])
-                )
-            chain = [yahoo_src, ak_src]
-            return (
-                [eod_src, *chain] if primary else chain + ([eod_src] if eod else [])
-            )
-        # 非港股 (美股/德英加澳): yfinance 为主, EODHD 可选前置/兜底
-        if primary:
-            return [eod_src, yahoo_src]
-        return [yahoo_src] + ([eod_src] if eod else [])
+            funcs["akshare"] = ak_src
+        return ordered_sources(order, funcs)
 
     # -- 搜索: IBKR (可选) → 东财 suggest (纯数字, 补零命中港股) → yfinance Search → 合法代码直查 --
 

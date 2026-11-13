@@ -268,6 +268,7 @@ def default_order(
     eodhd_quotes: str = "fallback",
     eodhd_priority: str = "primary",
     akshare_supported: bool = True,
+    akshare_first: bool = True,
 ) -> list[str]:
     """未配置 source_order 时, 当前设置对应的默认链 (供 UI 展示/恢复默认)."""
     if domain == "global":
@@ -300,7 +301,7 @@ def default_order(
     if domain == "index":
         if not akshare_supported:
             return ["yfinance"]
-        return ["akshare", "yfinance"]
+        return ["akshare", "yfinance"] if akshare_first else ["yfinance", "akshare"]
     return list(CATALOG.get(domain, {}).get(channel, ()))
 
 
@@ -313,6 +314,7 @@ def display_order(
     eodhd_quotes: str = "fallback",
     eodhd_priority: str = "primary",
     akshare_supported: bool = True,
+    akshare_first: bool = True,
 ) -> list[str]:
     """UI 展示用顺序: 已配置则用配置, 否则用默认链."""
     configured_order = configured(domain, channel)
@@ -333,6 +335,7 @@ def display_order(
         eodhd_quotes=eodhd_quotes,
         eodhd_priority=eodhd_priority,
         akshare_supported=akshare_supported,
+        akshare_first=akshare_first,
     )
 
 

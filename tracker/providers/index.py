@@ -459,11 +459,10 @@ class IndexProvider(Provider):
             return [yf]
         from .. import source_order as so
 
-        order = so.configured("index", "history")
-        if order is not None:
-            funcs = {"akshare": ak, "yfinance": yf}
-            return ordered_sources(order, funcs)
-        # 中国指数: akshare 优先 (与 A 股域惯例一致); 其余 yfinance 主源
-        if prefer_first or _catalog(p).get("ak"):
-            return [ak, yf]
-        return [yf, ak]
+        order = so.display_order(
+            "index",
+            "history",
+            akshare_supported=True,
+            akshare_first=bool(_catalog(p).get("ak")) or prefer_first,
+        )
+        return ordered_sources(order, {"akshare": ak, "yfinance": yf})

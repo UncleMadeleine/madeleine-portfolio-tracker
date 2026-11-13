@@ -495,29 +495,19 @@ class CryptoProvider(Provider):
     def quote_sources(
         self, p: ParsedSymbol, prefer_first: str | bool = False
     ) -> list:
-        """行情源链; prefer_first 传 crypto 源偏好 (settings/CLI), 指定源前置。
-
-        bool (True/False) 走其它域 prefer_akshare 语义, 本域忽略 → 默认链。
-        """
+        """行情源链; prefer_first 传 crypto 源偏好 (settings/CLI), 指定源前置."""
         from .. import source_order as so
 
-        order = so.configured("crypto", "quote")
-        if order is not None:
-            order = so.prefer_source(order, prefer_first)
-            funcs = {
+        source = prefer_first if isinstance(prefer_first, str) else "auto"
+        return ordered_sources(
+            so.display_order("crypto", "quote", crypto_source=source),
+            {
                 "binance": _binance_quote,
                 "gate": _gate_quote,
                 "hyperliquid": _hl_quote,
                 "yfinance": _yf_quote,
-            }
-            return ordered_sources(order, funcs)
-        chain = [_binance_quote, _gate_quote, _hl_quote, _yf_quote]
-        if isinstance(prefer_first, bool) or not prefer_first:
-            return chain
-        idx = _CRYPTO_SOURCE_INDEX.get(str(prefer_first).strip().lower())
-        if idx is None:
-            return chain
-        return [chain[idx]] + [fn for i, fn in enumerate(chain) if i != idx]
+            },
+        )
 
     def history_sources(
         self,
@@ -529,28 +519,16 @@ class CryptoProvider(Provider):
         """历史源链; prefer_first 语义同 quote_sources (str=偏好, bool=忽略)."""
         from .. import source_order as so
 
-        order = so.configured("crypto", "history")
-        if order is not None:
-            order = so.prefer_source(order, prefer_first)
-            funcs = {
-                "binance": lambda: _binance_history(p, start_date, end_date),
-                "gate": lambda: _gate_history(p, start_date, end_date),
-                "hyperliquid": lambda: _hl_history(p, start_date, end_date),
-                "yfinance": lambda: _yf_history(p, start_date, end_date),
-            }
-            return ordered_sources(order, funcs)
-        chain = [
-            lambda: _binance_history(p, start_date, end_date),
-            lambda: _gate_history(p, start_date, end_date),
-            lambda: _hl_history(p, start_date, end_date),
-            lambda: _yf_history(p, start_date, end_date),
-        ]
-        if isinstance(prefer_first, bool) or not prefer_first:
-            return chain
-        idx = _CRYPTO_SOURCE_INDEX.get(str(prefer_first).strip().lower())
-        if idx is None:
-            return chain
-        return [chain[idx]] + [fn for i, fn in enumerate(chain) if i != idx]
+        source = prefer_first if isinstance(prefer_first, str) else "auto"
+        funcs = {
+            "binance": lambda: _binance_history(p, start_date, end_date),
+            "gate": lambda: _gate_history(p, start_date, end_date),
+            "hyperliquid": lambda: _hl_history(p, start_date, end_date),
+            "yfinance": lambda: _yf_history(p, start_date, end_date),
+        }
+        return ordered_sources(
+            so.display_order("crypto", "history", crypto_source=source), funcs
+        )
 
     def search(self, query: str, limit: int = 10) -> list[SymbolEntry]:
         """加密域搜索: yfinance Search (CRYPTOCURRENCY 结果), 代码与名称模糊均可。

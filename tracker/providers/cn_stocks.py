@@ -30,12 +30,10 @@ class CNStocksProvider(Provider):
     def quote_sources(self, p: ParsedSymbol, prefer_first: bool = False) -> list:
         from .. import source_order as so
 
-        order = so.configured("cn", "quote")
-        if order is not None:
-            funcs = {"akshare": _akshare_quote, "yfinance": _yahoo_quote}
-            return ordered_sources(order, funcs)
-        # 未配置顺序: akshare 永远在前 (prefer_first 仅影响全球域的港股顺序)
-        return [_akshare_quote, _yahoo_quote]
+        return ordered_sources(
+            so.display_order("cn", "quote"),
+            {"akshare": _akshare_quote, "yfinance": _yahoo_quote},
+        )
 
     def history_sources(
         self,
@@ -46,17 +44,11 @@ class CNStocksProvider(Provider):
     ) -> list:
         from .. import source_order as so
 
-        order = so.configured("cn", "history")
-        if order is not None:
-            funcs = {
-                "akshare": lambda: _akshare_history(p, start_date, end_date),
-                "yfinance": lambda: _yahoo_history(p, start_date, end_date),
-            }
-            return ordered_sources(order, funcs)
-        return [
-            lambda: _akshare_history(p, start_date, end_date),
-            lambda: _yahoo_history(p, start_date, end_date),
-        ]
+        funcs = {
+            "akshare": lambda: _akshare_history(p, start_date, end_date),
+            "yfinance": lambda: _yahoo_history(p, start_date, end_date),
+        }
+        return ordered_sources(so.display_order("cn", "history"), funcs)
 
     # 本域在东财 suggest 中对应的市场 (SecurityTypeName)
     _EM_TYPES = ("沪A", "深A", "科创版", "科创板", "京A", "沪B", "深B")

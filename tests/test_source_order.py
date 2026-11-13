@@ -478,6 +478,20 @@ def test_drag_component_asset_is_present():
     assert "streamlit:componentReady" in html
 
 
+def test_drag_component_height_uses_content_not_viewport():
+    """回归: 不能用 documentElement.scrollHeight 上报 iframe 高度。
+
+    iframe 的 documentElement 至少等于当前视口高度, 而 Streamlit 会按上报值
+    继续放大 iframe, 形成每轮 rerun 都长高的正反馈 (设置页被撑出几万像素空白)。
+    """
+    from tracker.ui import source_order_ui as ui
+
+    html = (ui._COMPONENT_DIR / "index.html").read_text(encoding="utf-8")
+    assert "document.documentElement.scrollHeight" not in html
+    assert "getBoundingClientRect().height" in html
+    assert "ResizeObserver" in html
+
+
 def test_store_order_resets_only_relevant_legacy_preference(monkeypatch):
     from tracker.ui import source_order_ui as ui
 

@@ -14,6 +14,7 @@
     color: var(--fg, #31333f);
   }
   .list { display: flex; flex-direction: column; gap: 6px; }
+  #app { padding: 2px; }
   .item {
     display: flex;
     align-items: center;
@@ -30,7 +31,7 @@
   .item.dragging { opacity: .4; cursor: grabbing; }
   .item.drop-before { box-shadow: 0 -2px 0 var(--accent, #ff4b4b); }
   .item.drop-after { box-shadow: 0 2px 0 var(--accent, #ff4b4b); }
-  .handle { color: var(--muted, #808495); font-size: 16px; line-height: 1; }
+  .handle { color: var(--muted, #808495); font-size: 16px; line-height: 1; cursor: grab; }
   .meta { display: flex; flex-direction: column; min-width: 0; flex: 1; }
   .label { font-size: .92rem; font-weight: 600; }
   .note { font-size: .76rem; color: var(--muted, #808495); margin-top: 1px; }
@@ -43,15 +44,16 @@
     color: var(--muted, #808495);
     white-space: nowrap;
   }
-  .actions { display: flex; gap: 4px; flex: none; }
+  .actions { display: flex; gap: 6px; flex: none; }
   button {
     border: 1px solid var(--border, rgba(49, 51, 63, .18));
     background: transparent;
     color: var(--fg, #31333f);
     border-radius: 6px;
     cursor: pointer;
-    font-size: 12px;
-    line-height: 18px;
+    font-size: 13px;
+    line-height: 20px;
+    min-width: 28px;
     padding: 1px 7px;
   }
   button:hover:not(:disabled) { border-color: var(--accent, #ff4b4b); }
@@ -71,10 +73,23 @@
   function setValue(value) {
     post("streamlit:setComponentValue", { value: value, dataType: "json" });
   }
-  function setHeight() {
-    post("streamlit:setFrameHeight", {
-      height: Math.max(document.documentElement.scrollHeight, document.body.scrollHeight) + 2
-    });
+  // iframe 高度必须按「内容」计算, 不能用 documentElement.scrollHeight:
+  // iframe 的 documentElement 高度至少等于当前视口高度, 而 Streamlit 又会按
+  // 我们上报的高度放大 iframe → 每轮 rerun 都把高度再加一遍, 最终撑出几万像素
+  // 的空白把设置页挤爆。这里只量 #app 的实际内容高度, 并用 ResizeObserver 跟随
+  // 换行/窗口宽度变化。
+  var lastHeight = -1;
+  function contentHeight() {
+    var app = document.getElementById("app");
+    if (!app) { return 0; }
+    return Math.ceil(app.getBoundingClientRect().height);
+  }
+  function setHeight(force) {
+    var height = contentHeight();
+    if (height <= 0) { return; }
+    if (!force && Math.abs(height - lastHeight) < 1) { return; }
+    lastHeight = height;
+    post("streamlit:setFrameHeight", { height: height + 4 });
   }
 
   var items = [];
@@ -82,6 +97,7 @@
   var disabled = false;
   var lastCommitted = null;
   var draggingId = null;
+  var resizeObserver = null;
 
   function itemMap() {
     var map = {};
@@ -143,8 +159,17 @@
     render();
   }
 
+  function focusedId() {
+    var active = document.activeElement;
+    if (active && active.classList && active.classList.contains("item")) {
+      return active.dataset.id;
+    }
+    return null;
+  }
+
   function render() {
     var app = document.getElementById("app");
+    var keepFocus = focusedId();
     app.innerHTML = "";
     var map = itemMap();
     var list = document.createElement("div");
@@ -214,6 +239,10 @@
       });
       actions.appendChild(up);
       actions.appendChild(down);
+      // 按钮只负责点击: 阻止 mousedown 冒泡, 避免在按钮上按住拖动整行.
+      up.draggable = false;
+      down.draggable = false;
+      actions.addEventListener("mousedown", function (e) { e.stopPropagation(); });
       row.appendChild(actions);
 
       row.addEventListener("dragstart", function (e) {
@@ -239,7 +268,10 @@
         cleanupMarks();
         row.classList.add(after ? "drop-after" : "drop-before");
       });
-      row.addEventListener("dragleave", function () {
+      row.addEventListener("dragleave", function (e) {
+        // 拖过行内子元素 (label/badge) 也会触发 dragleave, 不能清掉指示线,
+        // 否则拖动时指示线一直闪.
+        if (e.relatedTarget && row.contains(e.relatedTarget)) { return; }
         row.classList.remove("drop-before", "drop-after");
       });
       row.addEventListener("drop", function (e) {
@@ -263,8 +295,26 @@
       list.appendChild(row);
     });
     app.appendChild(list);
-    setHeight();
+    if (keepFocus) {
+      var again = list.querySelector('.item[data-id="' + keepFocus.replace(/"/g, '\\"') + '"]');
+      if (again) { again.focus({ preventScroll: true }); }
+    }
+    observeSize();
+    setHeight(true);
   }
+
+  function observeSize() {
+    if (typeof ResizeObserver === "undefined") { return; }
+    var app = document.getElementById("app");
+    if (!app) { return; }
+    if (!resizeObserver) {
+      resizeObserver = new ResizeObserver(function () { setHeight(); });
+    }
+    resizeObserver.disconnect();
+    resizeObserver.observe(app);
+  }
+
+  window.addEventListener("resize", function () { setHeight(true); });
 
   window.addEventListener("message", function (event) {
     if (!event.data || event.data.type !== "streamlit:render") { return; }

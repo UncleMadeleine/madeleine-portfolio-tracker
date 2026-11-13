@@ -30,7 +30,7 @@ import pandas as pd
 
 from ..symbols import INDEX_CATALOG, ParsedSymbol, index_key
 from ..util import with_timeout
-from .base import Provider, openbb_history_frame
+from .base import Provider, openbb_history_frame, ordered_sources
 from .global_stocks import _AK_HIST_TIMEOUT
 
 __all__ = ["IndexProvider"]
@@ -462,7 +462,7 @@ class IndexProvider(Provider):
         order = so.configured("index", "history")
         if order is not None:
             funcs = {"akshare": ak, "yfinance": yf}
-            return [funcs[s] for s in order if s in funcs]
+            return ordered_sources(order, funcs)
         # 中国指数: akshare 优先 (与 A 股域惯例一致); 其余 yfinance 主源
         if prefer_first or _catalog(p).get("ak"):
             return [ak, yf]

@@ -15,7 +15,7 @@ import pandas as pd
 
 from ..symbols import Market, ParsedSymbol, is_currency_code, is_pence
 from ..util import with_timeout
-from .base import Provider, Quote, SymbolEntry, openbb_history_frame
+from .base import Provider, Quote, SymbolEntry, openbb_history_frame, ordered_sources
 from .em_suggest import parse_symbol_safe
 
 # akshare 单代码日K (stock_zh_a_hist / stock_hk_hist): 接口不传 timeout,
@@ -579,17 +579,12 @@ class GlobalStocksProvider(Provider):
         if order is not None:
             if prefer_first:
                 order = so.prefer_akshare_order(order)
-            chain: list = []
-            for source_id in order:
-                if source_id == "eodhd":
-                    if eod and mode != "off":
-                        chain.append(eodhd_mod.quote)
-                elif source_id == "akshare":
-                    if p.market is Market.HK:
-                        chain.append(_akshare_quote)
-                elif source_id == "yfinance":
-                    chain.append(_yahoo_quote)
-            return chain
+            funcs = {"yfinance": _yahoo_quote}
+            if eod and mode != "off":
+                funcs["eodhd"] = eodhd_mod.quote
+            if p.market is Market.HK:
+                funcs["akshare"] = _akshare_quote
+            return ordered_sources(order, funcs)
 
         if p.market is Market.HK:
             # prefer_first=True (--akshare / 国内网络): akshare 在前
@@ -631,17 +626,13 @@ class GlobalStocksProvider(Provider):
             if prefer_first:
                 order = so.prefer_akshare_order(order)
             funcs = {
-                "eodhd": eod_src,
+                "eodhd": eod_src if eod else None,
                 "yfinance": yahoo_src,
-                "akshare": ak_src,
+                "akshare": ak_src if p.market is Market.HK else None,
             }
-            return [
-                funcs[source_id]
-                for source_id in order
-                if source_id in funcs
-                and (source_id != "eodhd" or eod)
-                and (source_id != "akshare" or p.market is Market.HK)
-            ]
+            return ordered_sources(
+                order, {k: v for k, v in funcs.items() if v is not None}
+            )
 
         if p.market is Market.HK:
             if prefer_first:

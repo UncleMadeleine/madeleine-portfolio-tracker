@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from ..symbols import ParsedSymbol
-from .base import Provider, SymbolEntry
+from .base import Provider, SymbolEntry, ordered_sources
 from .em_suggest import (
     em_code_to_yahoo,
     normalize_suggest_row,
@@ -33,7 +33,7 @@ class CNStocksProvider(Provider):
         order = so.configured("cn", "quote")
         if order is not None:
             funcs = {"akshare": _akshare_quote, "yfinance": _yahoo_quote}
-            return [funcs[s] for s in order if s in funcs]
+            return ordered_sources(order, funcs)
         # 未配置顺序: akshare 永远在前 (prefer_first 仅影响全球域的港股顺序)
         return [_akshare_quote, _yahoo_quote]
 
@@ -52,7 +52,7 @@ class CNStocksProvider(Provider):
                 "akshare": lambda: _akshare_history(p, start_date, end_date),
                 "yfinance": lambda: _yahoo_history(p, start_date, end_date),
             }
-            return [funcs[s] for s in order if s in funcs]
+            return ordered_sources(order, funcs)
         return [
             lambda: _akshare_history(p, start_date, end_date),
             lambda: _yahoo_history(p, start_date, end_date),

@@ -18,6 +18,11 @@ __all__ = [
 ]
 
 
+def ordered_sources(order, funcs: dict):
+    """按 source_order 顺序取可执行的源函数; 未映射/不适用的源自动跳过."""
+    return [funcs[source_id] for source_id in order if source_id in funcs]
+
+
 def openbb_history_frame(res, *, ensure_volume: bool = False):
     """OpenBB 历史结果 → 统一 OHLCV DataFrame (date/open/high/low/close/volume).
 

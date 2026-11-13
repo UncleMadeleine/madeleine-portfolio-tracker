@@ -18,7 +18,7 @@ import pandas as pd
 
 from ..symbols import ParsedSymbol
 from ..util import finite_float as _finite_opt, with_timeout
-from .base import Provider, Quote, SymbolEntry, openbb_history_frame
+from .base import Provider, Quote, SymbolEntry, openbb_history_frame, ordered_sources
 
 _BINANCE_HOSTS = ("https://api.binance.com", "https://data-api.binance.vision")
 _HTTP_TIMEOUT = 8.0
@@ -510,7 +510,7 @@ class CryptoProvider(Provider):
                 "hyperliquid": _hl_quote,
                 "yfinance": _yf_quote,
             }
-            return [funcs[s] for s in order if s in funcs]
+            return ordered_sources(order, funcs)
         chain = [_binance_quote, _gate_quote, _hl_quote, _yf_quote]
         if isinstance(prefer_first, bool) or not prefer_first:
             return chain
@@ -538,7 +538,7 @@ class CryptoProvider(Provider):
                 "hyperliquid": lambda: _hl_history(p, start_date, end_date),
                 "yfinance": lambda: _yf_history(p, start_date, end_date),
             }
-            return [funcs[s] for s in order if s in funcs]
+            return ordered_sources(order, funcs)
         chain = [
             lambda: _binance_history(p, start_date, end_date),
             lambda: _gate_history(p, start_date, end_date),

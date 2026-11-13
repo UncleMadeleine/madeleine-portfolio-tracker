@@ -383,9 +383,11 @@ def test_style_chart_does_not_inject_empty_title():
 
 def test_theme_table_right_click_menu_js():
     """表格右键菜单: 复制单元格/整行/含表头 + 跳转 K线, 但不劫持输入框."""
+    from tracker.ctx_menu_js import CTX_MENU_KIT_JS
     from tracker.ui import theme
 
     js = theme._TABLE_CONTEXT_MENU_JS
+    assert CTX_MENU_KIT_JS in js
     assert "contextmenu" in js
     assert "复制单元格" in js
     assert "复制整行" in js

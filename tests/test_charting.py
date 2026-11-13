@@ -313,6 +313,9 @@ class TestKlineComponent:
     def test_component_js_has_right_click_menu(self):
         """图表右键: 自己的菜单而不是浏览器原生菜单 (重置/复制/导出)."""
         js = charting.kline_component_js()
+        from tracker.ctx_menu_js import CTX_MENU_KIT_JS
+
+        assert CTX_MENU_KIT_JS in js
         assert "contextmenu" in js
         assert "重置缩放" in js
         assert "复制数据 (CSV)" in js

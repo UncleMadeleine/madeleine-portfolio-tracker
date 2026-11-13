@@ -17,8 +17,11 @@ import numpy as np
 import pandas as pd
 from pandas.tseries.frequencies import to_offset
 
+from .ctx_menu_js import CTX_MENU_KIT_JS
+
 if TYPE_CHECKING:  # 仅类型标注用 (运行时不依赖 plotly, 见构建函数内惰性导入)
     import plotly.graph_objects as go
+
 
 OHLC_COLUMNS = ("date", "open", "high", "low", "close", "volume")
 DEFAULT_MA: tuple[int, ...] = (5, 20, 60)
@@ -604,8 +607,9 @@ KLINE_COMPONENT_CSS = """
 # component.data 为 kline_payload()/compare_payload() 生成的配置;
 # CFG.mode === 'compare' 时渲染多条折线 (多股对比), 否则为单只蜡烛图.
 # parentElement 为 ShadowRoot.
-_LWC_COMPONENT_MODULE = r"""
+_LWC_COMPONENT_MODULE = CTX_MENU_KIT_JS + r"""
 export default function (component) {
+  var K = _ctxKit();
   var CFG = typeof component.data === 'string'
     ? JSON.parse(component.data) : component.data;
   var root = component.parentElement;
@@ -1052,12 +1056,6 @@ export default function (component) {
   var ctxLastAt = 0;
   var ctxLastX = 0;
   var ctxLastY = 0;
-  function cxMake(tag, cls, text) {
-    var e = document.createElement(tag);
-    if (cls) { e.className = cls; }
-    if (text != null) { e.textContent = text; }
-    return e;
-  }
   function cxHide() {
     if (ctxEl) {
       // 同 theme.py: 移除节点, 避免反复右键在 body 里堆积空菜单
@@ -1066,39 +1064,10 @@ export default function (component) {
     }
   }
   function cxToast(text) {
-    var t = document.getElementById('fp-context-toast');
-    if (!t) {
-      t = cxMake('div', 'fp-ctx-toast');
-      t.id = 'fp-context-toast';
-      t.setAttribute('role', 'status');
-      document.body.appendChild(t);
-    }
-    t.textContent = text;
-    t.classList.add('fp-ctx-show');
-    clearTimeout(t.__fpTimer);
-    t.__fpTimer = setTimeout(function () { t.classList.remove('fp-ctx-show'); }, 1300);
+    K.toast(text, 'fp-context-toast');
   }
   function cxCopy(text) {
-    if (!text) { return; }
-    // 与 theme.py 的表格菜单一致: 先给反馈, clipboard Promise 不阻塞提示
-    cxToast('已复制到剪贴板');
-    if (navigator.clipboard && window.isSecureContext) {
-      navigator.clipboard.writeText(text).catch(function () {
-        cxFallbackCopy(text);
-      });
-    } else {
-      cxFallbackCopy(text);
-    }
-  }
-  function cxFallbackCopy(text) {
-    var ta = document.createElement('textarea');
-    ta.value = text;
-    ta.style.position = 'fixed';
-    ta.style.left = '-9999px';
-    document.body.appendChild(ta);
-    ta.select();
-    try { document.execCommand('copy'); } catch (e) {}
-    ta.remove();
+    K.copy(text, cxToast);
   }
   function cxDownload(blob, filename) {
     if (!blob) { return; }
@@ -1170,9 +1139,7 @@ export default function (component) {
       download: '<path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path>' +
         '<path d="M5 21h14"></path>'
     };
-    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
-      'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" ' +
-      'aria-hidden="true">' + (paths[name] || '') + '</svg>';
+    return K.icon(paths, name);
   }
   function cxShow(x, y) {
     if (ctxEl) { cxHide(); }
@@ -1187,7 +1154,7 @@ export default function (component) {
       ev.stopPropagation();
     });
 
-    var head = cxMake('div', 'fp-ctx-header', CFG.copyText || CFG.title || '图表');
+    var head = K.make('div', 'fp-ctx-header', CFG.copyText || CFG.title || '图表');
     ctxEl.appendChild(head);
 
     var items = [
@@ -1210,7 +1177,7 @@ export default function (component) {
     ];
     items.forEach(function (item) {
       if (item.sep) {
-        ctxEl.appendChild(cxMake('div', 'fp-ctx-sep'));
+        ctxEl.appendChild(K.make('div', 'fp-ctx-sep'));
         return;
       }
       var btn = document.createElement('button');
@@ -1229,21 +1196,7 @@ export default function (component) {
     });
 
     document.body.appendChild(ctxEl);
-    ctxEl.style.left = '0px';
-    ctxEl.style.top = '0px';
-    ctxEl.style.visibility = 'hidden';
-    ctxEl.classList.add('fp-ctx-open');
-    var r = ctxEl.getBoundingClientRect();
-    // clientWidth/Height 不含滚动条; innerWidth 会把菜单贴到 Windows
-    // 经典滚动条下面
-    var vw = document.documentElement.clientWidth || window.innerWidth;
-    var vh = document.documentElement.clientHeight || window.innerHeight;
-    var left = Math.max(8, Math.min(x, vw - r.width - 8));
-    var top = y + r.height > vh - 8 ? y - r.height : y;
-    top = Math.max(8, Math.min(top, vh - r.height - 8));
-    ctxEl.style.left = left + 'px';
-    ctxEl.style.top = top + 'px';
-    ctxEl.style.visibility = 'visible';
+    K.place(ctxEl, x, y);
     // 鼠标右键打开时不预选第一项; 键盘用户按 ArrowDown 进入菜单项。
   }
   function cxOnContext(ev) {

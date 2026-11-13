@@ -21,6 +21,8 @@ import json
 
 import streamlit as st
 
+from ..ctx_menu_js import CTX_MENU_KIT_JS
+
 # 与 .streamlit/config.toml 保持同步的主色 (CSS 内无法读 config, 故常量集中于此)
 BG = "#0a0a0f"
 SURFACE = "#141428"
@@ -39,8 +41,9 @@ _MAX_WIDTH = "1560px"
 #   * 图表 (Plotly): 右键落在画布上时提供重置视图 / 下载图片;
 #   * 输入框、正文等仍保留浏览器原生菜单 (复制/粘贴/翻译是用户预期行为)。
 # 菜单 DOM 追加到 document.body, 复用本模块的全局 CSS, 避免被 ShadowRoot 裁剪。
-_TABLE_CONTEXT_MENU_JS = r"""
+_TABLE_CONTEXT_MENU_JS = CTX_MENU_KIT_JS + r"""
 export default function (component) {
+  var K = _ctxKit();
   // rerun 会重新执行组件函数但不一定先调用上一次 cleanup: 用 window 级单例
   // 防止 document 上叠加多个 contextmenu 监听器。返回同一个 cleanup, 保证
   // Streamlit 真正卸载组件时仍能把监听器摘干净。
@@ -52,20 +55,12 @@ export default function (component) {
   // 锁内读-改-写), 前端只负责把「哪张表、哪一行」送出去。
   var setTriggerValue = component && component.setTriggerValue;
   var menu = null;
-  var toastTimer = null;
   // 触控板「两指双击」会在同一位置连发两次 contextmenu。第一次已经打开了
   // 菜单, 第二次如果当作新的右键处理, 轻则菜单闪一下重开, 重则落在刚弹出的
   // 菜单上触发浏览器原生菜单。这里把短时间同位置的重复右键视为同一次手势。
   var lastContextAt = 0;
   var lastContextX = 0;
   var lastContextY = 0;
-
-  function make(tag, cls, text) {
-    var e = document.createElement(tag);
-    if (cls) { e.className = cls; }
-    if (text != null) { e.textContent = text; }
-    return e;
-  }
 
   function ensureMenu() {
     if (menu && document.body.contains(menu)) { return menu; }
@@ -102,46 +97,11 @@ export default function (component) {
   }
 
   function toast(text) {
-    var el = document.getElementById(TOAST_ID);
-    if (!el) {
-      el = make('div', 'fp-ctx-toast');
-      el.id = TOAST_ID;
-      el.setAttribute('role', 'status');
-      document.body.appendChild(el);
-    }
-    el.textContent = text;
-    el.classList.add('fp-ctx-show');
-    if (toastTimer) { clearTimeout(toastTimer); }
-    toastTimer = setTimeout(function () {
-      el.classList.remove('fp-ctx-show');
-    }, 1300);
-  }
-
-  function fallbackCopy(text) {
-    var ta = document.createElement('textarea');
-    ta.value = text;
-    ta.setAttribute('readonly', '');
-    ta.style.position = 'fixed';
-    ta.style.left = '-9999px';
-    ta.style.top = '0';
-    document.body.appendChild(ta);
-    ta.select();
-    try { document.execCommand('copy'); } catch (e) {}
-    ta.remove();
+    K.toast(text, TOAST_ID);
   }
 
   function copy(text) {
-    if (!text) { return; }
-    // 先给反馈再写剪贴板: 部分浏览器 (尤其 Firefox headless / 未授权)
-    // 的 clipboard Promise 会长时间不落定, 等它再弹提示会让用户以为没生效。
-    toast('已复制到剪贴板');
-    if (navigator.clipboard && window.isSecureContext) {
-      navigator.clipboard.writeText(text).catch(function () {
-        fallbackCopy(text);
-      });
-    } else {
-      fallbackCopy(text);
-    }
+    K.copy(text, toast);
   }
 
   function icon(name) {
@@ -158,20 +118,18 @@ export default function (component) {
              '<path d="M19 6l-1 14H6L5 6"></path>' +
              '<path d="M10 11v5M14 11v5"></path>'
     };
-    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
-      'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" ' +
-      'aria-hidden="true">' + (paths[name] || '') + '</svg>';
+    return K.icon(paths, name);
   }
 
   function showMenu(x, y, title, items) {
     var box = ensureMenu();
     box.innerHTML = '';
     if (title) {
-      box.appendChild(make('div', 'fp-ctx-header', title));
+      box.appendChild(K.make('div', 'fp-ctx-header', title));
     }
     items.forEach(function (item) {
       if (item.sep) {
-        box.appendChild(make('div', 'fp-ctx-sep'));
+        box.appendChild(K.make('div', 'fp-ctx-sep'));
         return;
       }
       var btn = document.createElement('button');
@@ -192,23 +150,8 @@ export default function (component) {
       }
       box.appendChild(btn);
     });
-    // 先按左上角定位量出尺寸, 再贴边翻转, 避免菜单溢出窗口
-    box.style.left = '0px';
-    box.style.top = '0px';
-    box.style.visibility = 'hidden';
-    box.classList.add('fp-ctx-open');
     box.setAttribute('aria-hidden', 'false');
-    var r = box.getBoundingClientRect();
-    // clientWidth/Height 不含滚动条; innerWidth 会把菜单贴到 Windows
-    // 经典滚动条下面
-    var vw = document.documentElement.clientWidth || window.innerWidth;
-    var vh = document.documentElement.clientHeight || window.innerHeight;
-    var left = Math.max(8, Math.min(x, vw - r.width - 8));
-    var top = y + r.height > vh - 8 ? y - r.height : y;
-    top = Math.max(8, Math.min(top, vh - r.height - 8));
-    box.style.left = left + 'px';
-    box.style.top = top + 'px';
-    box.style.visibility = 'visible';
+    K.place(box, x, y);
     // 鼠标右键打开时不预选第一项 (与系统右键菜单一致); 键盘用户按
     // ArrowDown 再进入菜单项, 由 onKeyDown 处理。
   }

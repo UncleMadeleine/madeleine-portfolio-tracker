@@ -26,6 +26,16 @@ from pathlib import Path
 PACKAGE_DIR = Path(__file__).resolve().parent
 #: 包内配置模板目录 (随 wheel 分发; tracker init 的来源)
 TEMPLATES_DIR = PACKAGE_DIR / "templates"
+#: 包内前端资产目录 (CSS/JS, 随 wheel 分发)
+ASSETS_DIR = PACKAGE_DIR / "assets"
+
+
+def read_asset(name: str) -> str:
+    """读取包内 assets/ 文件 (importlib.resources 兼容 zip 安装)."""
+    from importlib.resources import files
+
+    return files("tracker").joinpath("assets", name).read_text(encoding="utf-8")
+
 
 # 仓库根判定标记: 任一存在即认为处于源码树 / editable 安装
 _REPO_MARKERS = (".git", "pyproject.toml", "README.md", "requirements.txt")

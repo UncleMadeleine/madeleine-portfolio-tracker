@@ -8,6 +8,7 @@ recursive-include tests *.py
 recursive-include skills *
 recursive-include docs *.md
 recursive-include tracker/ui/components *.html
+recursive-include tracker/assets *
 prune .venv
 global-exclude *.py[cod]
 global-exclude __pycache__

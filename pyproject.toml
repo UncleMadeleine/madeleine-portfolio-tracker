@@ -84,6 +84,8 @@ tracker = [
     "templates/*.json",
     "templates/*.toml",
     "assets/*.js",
+    "assets/*.css",
+    "assets/*.html",
     "ui/components/*/*.html",
 ]
 

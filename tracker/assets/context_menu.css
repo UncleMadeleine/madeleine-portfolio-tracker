@@ -1,0 +1,106 @@
+
+.fp-ctx-menu {
+  position: fixed;
+  z-index: 2147483000;
+  min-width: 188px;
+  max-width: min(320px, calc(100vw - 16px));
+  /* 小窗口/移动端横屏: 菜单不能长到视口外, 超出时在菜单内滚动 */
+  max-height: min(calc(100vh - 16px), 520px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 6px;
+  border: 1px solid var(--fp-border-strong);
+  border-radius: 12px;
+  background: rgba(18, 18, 34, 0.97);
+  box-shadow: 0 22px 56px -18px rgba(0, 0, 0, 0.9),
+    0 0 0 1px rgba(0, 0, 0, 0.25);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  backdrop-filter: blur(20px) saturate(140%);
+  color: var(--fp-text);
+  font-family: var(--fp-sans);
+  font-size: 13px;
+  line-height: 1.35;
+  user-select: none;
+  opacity: 0;
+  transform: translateY(-3px) scale(0.985);
+  transform-origin: top left;
+  transition: opacity 110ms ease, transform 110ms ease;
+}
+.fp-ctx-menu.fp-ctx-open {
+  opacity: 1;
+  transform: none;
+}
+.fp-ctx-header {
+  padding: 5px 10px 7px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--fp-border);
+  color: var(--fp-text-2);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fp-ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--fp-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 110ms ease, color 110ms ease;
+}
+.fp-ctx-item svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  color: var(--fp-cyan);
+  opacity: 0.82;
+}
+.fp-ctx-item:hover,
+.fp-ctx-item:focus-visible {
+  background: rgba(0, 212, 255, 0.13);
+  color: #ffffff;
+  outline: none;
+}
+.fp-ctx-item:hover svg,
+.fp-ctx-item:focus-visible svg { opacity: 1; }
+.fp-ctx-item:disabled {
+  opacity: 0.38;
+  cursor: default;
+  background: transparent;
+}
+.fp-ctx-sep {
+  height: 1px;
+  margin: 5px 8px;
+  background: var(--fp-border);
+}
+.fp-ctx-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 32px;
+  z-index: 2147483001;
+  padding: 8px 16px;
+  border: 1px solid var(--fp-border-strong);
+  border-radius: 999px;
+  background: rgba(18, 18, 34, 0.96);
+  box-shadow: 0 16px 40px -16px rgba(0, 0, 0, 0.9);
+  color: var(--fp-text);
+  font-family: var(--fp-sans);
+  font-size: 12px;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-50%, 8px);
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+.fp-ctx-toast.fp-ctx-show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}

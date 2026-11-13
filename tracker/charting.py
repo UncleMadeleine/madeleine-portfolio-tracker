@@ -1039,6 +1039,11 @@ export default function (component) {
   // 原生菜单。菜单挂到 document.body 上, 复用 theme.py 的全局 .fp-ctx-* 样式;
   // 图表在 ShadowRoot 里, 但组件 JS 不受 sandbox 限制, 可以直接操作宿主 DOM。
   var ctxEl = null;
+  // 触控板两指双击会在同一位置连发两次 contextmenu, 第二次不能把刚弹出的
+  // 菜单当成新的右键: 否则菜单会闪一下重开, 甚至叠出浏览器原生菜单。
+  var ctxLastAt = 0;
+  var ctxLastX = 0;
+  var ctxLastY = 0;
   function cxMake(tag, cls, text) {
     var e = document.createElement(tag);
     if (cls) { e.className = cls; }
@@ -1168,6 +1173,11 @@ export default function (component) {
     ctxEl.setAttribute('role', 'menu');
     ctxEl.setAttribute('aria-label', '图表右键菜单');
     ctxEl.tabIndex = -1;
+    // 右键落在菜单自身时保留自定义菜单, 不叠浏览器原生菜单
+    ctxEl.addEventListener('contextmenu', function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+    });
 
     var head = cxMake('div', 'fp-ctx-header', CFG.copyText || CFG.title || '图表');
     ctxEl.appendChild(head);
@@ -1225,12 +1235,30 @@ export default function (component) {
     // 鼠标右键打开时不预选第一项; 键盘用户按 ArrowDown 进入菜单项。
   }
   function cxOnContext(ev) {
+    var now = Date.now();
+    // 触控板两指双击: 第二次 contextmenu 是同一手势的重复事件。
+    // 阈值覆盖系统「双击速度」的慢速设置 (macOS 可调到 ~900ms)。
+    if (ctxEl && now - ctxLastAt < 900 &&
+        Math.abs(ev.clientX - ctxLastX) <= 10 &&
+        Math.abs(ev.clientY - ctxLastY) <= 10) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      return;
+    }
+    ctxLastAt = now;
+    ctxLastX = ev.clientX;
+    ctxLastY = ev.clientY;
     ev.preventDefault();
     ev.stopPropagation();
     cxShow(ev.clientX, ev.clientY);
   }
   function cxOnPointerDown(ev) {
-    if (ctxEl && !ctxEl.contains(ev.target)) { cxHide(); }
+    if (!ctxEl) { return; }
+    if (ctxEl.contains(ev.target)) { return; }
+    // 右键/Control+左键的 pointerdown 先于 contextmenu: 不能在 contextmenu
+    // 到达前关掉菜单, 否则两指双击的第二下会先关后开。右键统一交给 cxOnContext。
+    if (ev.button === 2 || ev.ctrlKey) { return; }
+    cxHide();
   }
   function cxOnKeyDown(ev) {
     if (!ctxEl) { return; }

@@ -402,6 +402,26 @@ def test_theme_table_right_click_menu_js():
     assert "headers[String(col - 1)]" in js
     # 输入/编辑状态必须保留浏览器原生菜单 (复制/粘贴/拼写检查)
     assert 'input, textarea, [contenteditable="true"]' in js
+    # 触控板两指双击: 同位置短时间内的第二次 contextmenu 是同一手势,
+    # 不能重开菜单/叠出浏览器原生菜单
+    assert "两指双击" in js
+    assert "document.querySelector('.fp-ctx-menu')" in js
+    assert "fp-ctx-menu, .fp-ctx-toast" in js
+    assert "lastContextAt" in js
+    # 单次右键 (菜单尚未打开) 不能被去重逻辑吞掉
+    assert "var openMenu = menu || document.querySelector('.fp-ctx-menu')" in js
+    # Chromium/Edge 的 Glide 用 canvas 绘制, 无障碍 td 是 0×0:
+    # 必须从 canvas 的 React props 反推行列, 否则 Edge 上表格右键完全失效
+    assert "data-grid-canvas" in js
+    assert "__reactFiber$" in js
+    assert "cellFromCanvas" in js
+    assert "cellYOffset" in js
+    assert "freezeColumns" in js
+    # 整行/含表头复制不受横向虚拟化影响: 从 canvas props 取全部列
+    assert "rowFromGrid" in js
+    assert "getCellContent" in js
+    # 右键/Control+左键的 pointerdown 不能先把菜单关掉 (两指双击第二下)
+    assert "ev.button === 2 || ev.ctrlKey" in js
 
 
 def test_theme_trackpad_guard_blocks_history_swipe():

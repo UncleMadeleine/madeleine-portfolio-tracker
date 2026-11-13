@@ -318,6 +318,11 @@ class TestKlineComponent:
         assert "复制数据 (CSV)" in js
         assert "导出图片 (PNG)" in js
         assert "takeScreenshot" in js
+        # 触控板两指双击: 第二次 contextmenu 不重开菜单, 菜单上右键不叠原生菜单
+        assert "两指双击" in js
+        assert "ctxEl.addEventListener('contextmenu'" in js
+        assert "ctxLastAt" in js
+        assert "ev.button === 2 || ev.ctrlKey" in js
 
     def test_payload_copy_text_is_symbol(self):
         """右键「复制代码」只复制标的, 不把周期/币种一起带出去."""

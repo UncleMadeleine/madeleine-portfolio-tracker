@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from ..symbols import Market, ParsedSymbol
+from ..symbols import ParsedSymbol
 from .base import Provider, SymbolEntry
 from .em_suggest import (
     em_code_to_yahoo,
@@ -98,7 +98,3 @@ class CNStocksProvider(Provider):
             return _local_fallback()
         return out[:limit]
 
-
-def is_cn_market(market) -> bool:
-    m = market.value if hasattr(market, "value") else str(market).upper()
-    return m in (Market.CN.value, Market.BJ.value)

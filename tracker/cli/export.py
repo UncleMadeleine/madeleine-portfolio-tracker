@@ -10,10 +10,9 @@ from datetime import datetime
 
 import pandas as pd
 
-from ..services.snapshot import snapshot_json, take_snapshot
-from ..storage import load_portfolio
-from ..watchlist import load_watchlist
-from ._common import _finish_with_error, _sanitize, _source_strict
+from ..services.snapshot import snapshot_json
+from .snapshot import take_snapshot_from_args
+from ._common import _finish_with_error, _sanitize
 
 # 持仓 CSV 导出列 (按出现顺序)
 _CSV_COLS = [
@@ -149,20 +148,7 @@ def _export_md(base: str, view: pd.DataFrame, summary: dict, issues: list[str]) 
 
 def cmd_export(args) -> None:
     """导出投资组合快照为 CSV / JSON / Markdown 报表."""
-    portfolio = load_portfolio(args.portfolio)
-    if args.base:
-        portfolio["base_currency"] = args.base.upper()
-    watchlist = load_watchlist(args.watchlist_file)
-    base, view, summary, wview, issues = take_snapshot(
-        portfolio,
-        watchlist,
-        watch_name=args.watchlist,
-        prefer_akshare=args.akshare,
-        use_ibkr=args.ibkr,
-        use_longport=getattr(args, "longport", False),
-        crypto_source=getattr(args, "crypto_source", "auto"),
-        source_strict=_source_strict(args),
-    )
+    base, view, summary, wview, issues = take_snapshot_from_args(args)
     if args.watchlist and args.format != "json":
         print(
             "⚠ -w/--watchlist 仅对 -f json 生效; CSV/Markdown 会包含全部自选",

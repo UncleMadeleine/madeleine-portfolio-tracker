@@ -18,15 +18,10 @@ from __future__ import annotations
 
 import math
 from concurrent.futures import ThreadPoolExecutor
-from threading import Lock
 
 from . import cache as cache_mod
 
 _METRICS_TTL = 21600  # 秒 (6h); book_value 属低频报表数据
-
-_lock = Lock()
-_inflight: dict[str, object] = {}
-
 
 def _fund_metrics(symbols: list[str]) -> dict[str, dict[str, float | None]]:
     """OpenBB fundamental.metrics 批量拉取 → {symbol: {book_value, market_cap}}."""
@@ -242,24 +237,3 @@ def fetch_market_caps(
     return {s: out.get(s, {}).get("market_cap") for s in dict.fromkeys(symbols)}
 
 
-def book_value_for(symbol: str, refresh: bool = False) -> float | None:
-    """单代码每股净资产 (并发去重: 同代码 in-flight 只发一次请求)."""
-    with _lock:
-        gate = _inflight.setdefault(symbol, Lock())
-    acquired = gate.acquire(blocking=False)
-    try:
-        if acquired:
-            if refresh:
-                return fetch_book_values([symbol], refresh=True).get(symbol)
-            return fetch_book_values([symbol]).get(symbol)
-        gate.acquire()
-        gate.release()
-    finally:
-        if acquired:
-            with _lock:
-                if _inflight.get(symbol) is gate:
-                    _inflight.pop(symbol, None)
-            gate.release()
-    if refresh:
-        return fetch_book_values([symbol], refresh=True).get(symbol)
-    return fetch_book_values([symbol]).get(symbol)

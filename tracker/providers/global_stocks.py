@@ -15,7 +15,7 @@ import pandas as pd
 
 from ..symbols import Market, ParsedSymbol, is_currency_code, is_pence
 from ..util import with_timeout
-from .base import Provider, Quote, SymbolEntry
+from .base import Provider, Quote, SymbolEntry, openbb_history_frame
 from .em_suggest import parse_symbol_safe
 
 # akshare 单代码日K (stock_zh_a_hist / stock_hk_hist): 接口不传 timeout,
@@ -305,13 +305,7 @@ def _yahoo_history(
     # _obb() 在计时区外求值 (冷启动 import 不计入预算); 网络调用硬超时,
     # 避免半开连接/OpenBB 内部重试把 CLI/页面主线程无限挂住。
     res = with_timeout(_obb().equity.price.historical, _HISTORY_TIMEOUT, **kwargs)
-    df = res.to_dataframe().reset_index()
-    df = df.rename(columns={df.columns[0]: "date"})
-    df = df.dropna(subset=["close"])
-    keep = [
-        c for c in ("date", "open", "high", "low", "close", "volume") if c in df.columns
-    ]
-    df = df[keep]
+    df = openbb_history_frame(res)
     if p.market is Market.GB:
         # LSE 惯例: 便士报价 (GBp/GBX, is_pence 命中) 或币种未知时 ÷100 折成
         # 英镑; 真正的英镑报价 (Yahoo 报 "GBP", 如 VUSA.L/VWRL.L 的 ETF) 与

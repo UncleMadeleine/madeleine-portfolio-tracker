@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import sys
-
-from pathlib import Path
-
 from .. import prices
 from ..paths import var_dir
 from ..symbols import INDEX_CATALOG, index_groups, index_label, parse
-from ._common import _finish_with_error, _print_json, _records, atomic_write_text
+from ._common import _finish_with_error, _print_json
+from ._kline_common import output_kline
 
 # 指数K线 HTML 默认输出目录 (数据目录 var/, 安装位置无关)
 VAR_DIR = var_dir()
@@ -17,10 +14,6 @@ VAR_DIR = var_dir()
 
 def cmd_index_kline(args) -> None:
     """生成指数K线蜡烛图 HTML + 终端摘要, 支持 --json."""
-    import webbrowser
-
-    from .. import charting
-
     if not args.symbol:
         _finish_with_error(
             "请指定指数代码 (IX.<KEY>), 如 index-kline IX.DXY; --list 查看目录"
@@ -35,95 +28,22 @@ def cmd_index_kline(args) -> None:
         df = prices.get_index_history(p.yahoo, months=args.months, refresh=args.refresh)
     except Exception as e:
         _finish_with_error(f"{p.yahoo}: 指数K线数据获取失败 ({e})")
-    # 数据驱动兜底: 请求周期细于数据原生粒度 (如周K源请求日K) 时降级并明示
-    period = charting.resolve_period(df, args.period)
-    if period != args.period:
-        print(
-            f"ℹ {p.yahoo} ({index_label(p.yahoo[3:])}): 数据源为"
-            f"{charting.PERIOD_LABELS[period]}, "
-            f"{charting.PERIOD_LABELS[args.period]}不可用 — 已按"
-            f"{charting.PERIOD_LABELS[period]}展示",
-            file=sys.stderr,
-        )
-    if period != "daily":
-        df = charting.resample_ohlc(df, period)
-    if df.empty:
-        _finish_with_error(f"{p.yahoo}: 无有效K线数据")
-
-    mas = charting.parse_ma_periods(args.ma)
-    s = charting.summarize_ohlc(df, mas)
     label = index_label(p.yahoo[3:])
-    if args.json:
-        recs = df.copy()
-        recs["date"] = recs["date"].dt.strftime("%Y-%m-%d")
-        _print_json(
-            {
-                "symbol": p.yahoo,
-                "name": label,
-                "currency": p.currency,
-                "period": period,
-                "months": args.months,
-                "bars": len(df),
-                "summary": s,
-                # _records 把 NaN/NaT 转 None: json.dumps 默认会输出裸 NaN,
-                # 不是合法 JSON (与 kline 子命令一致)
-                "data": _records(recs.round(6)),
-            }
-        )
-        return
-
-    period_label = charting.PERIOD_LABELS.get(period, period)
-    # 精度随价格量级 (与 kline 子命令同口径)
-    prec = int(s.get("precision", 3))
-    print(
-        f"\n=== 指数K线 {label} ({p.yahoo}) · {period_label} · 近 {args.months} 个月"
-        f" ({s['bars']} 根) ==="
-    )
-    chg = f" ({s['change_pct']:+.2f}%)" if s["change_pct"] is not None else ""
-    print(
-        f"区间: {s['first_date']} → {s['last_date']}"
-        f"  · 收 {s['first_close']:,.{prec}f} → {s['last_close']:,.{prec}f}{chg}"
-    )
-    print(
-        f"最新 {s['last_date']}: 开 {s['last_open']:,.{prec}f}"
-        f"  高 {s['last_high']:,.{prec}f}  低 {s['last_low']:,.{prec}f}"
-        f"  收 {s['last_close']:,.{prec}f}"
-    )
-    if s["ma"]:
-        parts = [
-            f"MA{n[2:]} {v:,.{prec}f}" if v is not None else f"MA{n[2:]} —"
-            for n, v in s["ma"].items()
-        ]
-        print("均线: " + "  ".join(parts))
-    print(
-        f"区间最高 {s['period_high']:,.{prec}f} ({s['period_high_date']})"
-        f"  · 最低 {s['period_low']:,.{prec}f} ({s['period_low_date']})"
-    )
-
-    fig = charting.build_candlestick_fig(
+    output_kline(
+        args,
+        p,
         df,
-        f"{label} ({p.yahoo})",
+        heading=f"指数K线 {label} ({p.yahoo})",
+        title=f"{label} ({p.yahoo})",
         currency=None,
-        mas=mas,
         show_volume=args.volume,
-        period=period,
+        summary_volume=False,
+        default_dir=VAR_DIR,
+        output_prefix="index_kline",
+        noun="指数K线图",
+        warn_prefix=f"{p.yahoo} ({label})",
+        extra_json={"name": label},
     )
-    out = (
-        Path(args.output)
-        if args.output
-        else VAR_DIR / f"index_kline_{p.yahoo.replace('.', '_')}.html"
-    )
-    try:
-        out.parent.mkdir(parents=True, exist_ok=True)
-        if out.is_dir():
-            _finish_with_error(f"输出路径是一个目录, 请指定文件: {out}")
-        atomic_write_text(out, charting.fig_to_html(fig))
-    except OSError as e:
-        _finish_with_error(f"指数K线图写入失败: {out} ({e})")
-    print(f"\n✅ 指数K线图已生成: {out}")
-    if args.open_browser:
-        webbrowser.open(out.resolve().as_uri())
-        print("已在浏览器中打开。")
 
 
 def print_index_catalog(as_json: bool = False) -> None:

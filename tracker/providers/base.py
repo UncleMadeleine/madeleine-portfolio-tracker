@@ -18,6 +18,25 @@ __all__ = [
 ]
 
 
+def openbb_history_frame(res, *, ensure_volume: bool = False):
+    """OpenBB 历史结果 → 统一 OHLCV DataFrame (date/open/high/low/close/volume).
+
+    yfinance 在 global/index/crypto 三个域都走同一个 OpenBB 接口, 返回结构
+    与列清洗完全一致; 集中在这里避免三份实现各自漂移。
+    """
+    df = res.to_dataframe().reset_index()
+    df = df.rename(columns={df.columns[0]: "date"})
+    df = df.dropna(subset=["close"])
+    keep = [
+        c for c in ("date", "open", "high", "low", "close", "volume")
+        if c in df.columns
+    ]
+    if ensure_volume and "volume" not in keep:
+        df["volume"] = 0.0
+        keep.append("volume")
+    return df[keep]
+
+
 def _err_repr(err: BaseException | None) -> str:
     """异常 → 诊断字符串.
 

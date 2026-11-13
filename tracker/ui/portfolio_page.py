@@ -187,17 +187,6 @@ def _plan_reset() -> None:
     plan["checked_at"] = time.time()
 
 
-def _plan_set(kind: str, args, dirty: bool = False) -> None:
-    """记录取数参数 (周期保温刷新要用); dirty=True 表示需后台刷新.
-
-    args=None 表示该数据面本渲染没有取数需求 (如无持仓 → 无汇率)。
-    """
-    plan = _plan()
-    plan[kind] = args
-    if dirty:
-        plan["dirty"] = True
-
-
 def _plan_key(plan: dict) -> tuple:
     """刷新任务键: 行情参数 + 汇率参数 (任一变化都是新任务)."""
     return warm_mod.refresh_key(plan)
@@ -506,14 +495,6 @@ def _plan_needs_periodic_refresh(plan: dict) -> bool:
     return _plan_data_age(plan) >= _refresh_period(_plan_symbol_count(plan))
 
 
-def _cache_age(symbols=(), fx=None) -> float:
-    """磁盘缓存覆盖数据的最旧年龄 (秒); 有代码缺缓存 → inf (视为必须刷).
-
-    后台保温线程用 (没有 session 计划可读), 与页面 _plan_data_age 同口径。
-    """
-    return warm_mod.cache_age(symbols, fx)
-
-
 def _disk_refresh_plan() -> dict | None:
     """从磁盘数据 (持仓/自选/设置) 推导刷新参数; 无代码时返回 None."""
     return warm_mod.disk_refresh_plan(watchlist_path=WATCHLIST_PATH)
@@ -522,11 +503,6 @@ def _disk_refresh_plan() -> dict | None:
 def ensure_background_refresher() -> None:
     """启动进程级后台保温线程 (每个服务进程一条, 惰性启动, 重复调用无副作用)."""
     warm_mod.ensure_background_refresher(_disk_refresh_plan)
-
-
-def _background_refresher_loop() -> None:
-    """保温线程主循环 (实现见 tracker.services.warm)."""
-    warm_mod.background_refresher_loop(_disk_refresh_plan)
 
 
 def _post_import() -> None:

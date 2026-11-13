@@ -18,7 +18,7 @@ import pandas as pd
 
 from ..symbols import ParsedSymbol
 from ..util import finite_float as _finite_opt, with_timeout
-from .base import Provider, Quote, SymbolEntry
+from .base import Provider, Quote, SymbolEntry, openbb_history_frame
 
 _BINANCE_HOSTS = ("https://api.binance.com", "https://data-api.binance.vision")
 _HTTP_TIMEOUT = 8.0
@@ -484,13 +484,7 @@ def _yf_history(p: ParsedSymbol, start_date: str, end_date: str | None) -> pd.Da
     res = with_timeout(
         obb_mod.equity.price.historical, _YF_HISTORY_TIMEOUT, **kwargs
     )
-    df = res.to_dataframe().reset_index()
-    df = df.rename(columns={df.columns[0]: "date"})
-    df = df.dropna(subset=["close"])
-    keep = [
-        c for c in ("date", "open", "high", "low", "close", "volume") if c in df.columns
-    ]
-    return df[keep]
+    return openbb_history_frame(res)
 
 
 class CryptoProvider(Provider):

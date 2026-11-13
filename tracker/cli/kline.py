@@ -4,27 +4,14 @@ from __future__ import annotations
 
 import sys
 
-from pathlib import Path
-
-import pandas as pd
-
 from .. import prices
 from ..paths import var_dir
 from ..symbols import parse
-from ._common import _finish_with_error, _print_json, _records, atomic_write_text
+from ._common import _finish_with_error
+from ._kline_common import output_kline
 
 # K线 HTML 默认输出目录 (数据目录 var/, 安装位置无关)
 VAR_DIR = var_dir()
-
-
-def _fmt_vol(v) -> str:
-    """成交量格式化 (亿/万单位)."""
-    if v is None or (isinstance(v, float) and pd.isna(v)):
-        return "—"
-    for unit, div in (("亿", 1e8), ("万", 1e4)):
-        if v >= div:
-            return f"{v / div:.2f}{unit}"
-    return f"{v:,.0f}"
 
 
 def _resolve_or_fail(symbol: str):
@@ -58,10 +45,6 @@ def _resolve_or_fail(symbol: str):
 
 def cmd_kline(args) -> None:
     """生成 K线蜡烛图 HTML + 终端摘要, 支持 --json; 宽松输入自动搜索回退."""
-    import webbrowser
-
-    from .. import charting
-
     p = _resolve_or_fail(args.symbol)
     if p.yahoo != args.symbol.strip().upper():
         # 归一化提示走 stderr: --json 的 stdout 必须纯净 (周期降级提示与
@@ -81,92 +64,17 @@ def cmd_kline(args) -> None:
         )
     except Exception as e:
         _finish_with_error(f"{p.yahoo}: K线数据获取失败 ({e})")
-    # 空表校验: 源返回非空但 clean_ohlc 清空 (停牌/价格<=0) 时 get_ohlc 给空表,
-    # 直接进 summarize_ohlc 会因空表只返 {"bars":0} 而在 s["change_pct"] 崩 KeyError
-    if df.empty:
-        _finish_with_error(f"{p.yahoo}: 无有效K线数据")
-    # 数据驱动兜底: 请求周期细于数据原生粒度 (周K源请求日K等) 时降级并明示
-    period = charting.resolve_period(df, args.period)
-    if period != args.period:
-        print(
-            f"ℹ {p.yahoo}: 数据源为{charting.PERIOD_LABELS[period]}, "
-            f"{charting.PERIOD_LABELS[args.period]}不可用 — 已按"
-            f"{charting.PERIOD_LABELS[period]}展示",
-            file=sys.stderr,
-        )
-    if period != "daily":
-        df = charting.resample_ohlc(df, period)
-
-    mas = charting.parse_ma_periods(args.ma)
-    s = charting.summarize_ohlc(df, mas)
-    if args.json:
-        recs = df.copy()
-        recs["date"] = recs["date"].dt.strftime("%Y-%m-%d")
-        _print_json(
-            {
-                "symbol": p.yahoo,
-                "currency": p.currency,
-                "period": period,
-                "months": args.months,
-                "bars": len(df),
-                "summary": s,
-                # _records 把 NaN/NaT 转 None: json.dumps 默认会输出裸 NaN,
-                # 不是合法 JSON (history 子命令同款处理)
-                "data": _records(recs.round(6)),
-            }
-        )
-        return
-
-    period_label = charting.PERIOD_LABELS.get(period, period)
-    # 精度随价格量级 (summarize_ohlc 已按收盘价中位数计算): 固定 3 位会把
-    # SHIB/PEPE 这类 ~1e-5 的价格显示成 0.000。
-    prec = int(s.get("precision", 3))
-    print(
-        f"\n=== K线 {p.yahoo} · {period_label} · 近 {args.months} 个月"
-        f" ({s['bars']} 根) ==="
-    )
-    chg = f" ({s['change_pct']:+.2f}%)" if s["change_pct"] is not None else ""
-    print(
-        f"区间: {s['first_date']} → {s['last_date']}"
-        f"  · 收 {s['first_close']:,.{prec}f} → {s['last_close']:,.{prec}f}{chg}"
-    )
-    print(
-        f"最新 {s['last_date']}: 开 {s['last_open']:,.{prec}f}"
-        f"  高 {s['last_high']:,.{prec}f}  低 {s['last_low']:,.{prec}f}"
-        f"  收 {s['last_close']:,.{prec}f}  量 {_fmt_vol(s['last_volume'])}"
-    )
-    if s["ma"]:
-        parts = [
-            f"MA{n[2:]} {v:,.{prec}f}" if v is not None else f"MA{n[2:]} —"
-            for n, v in s["ma"].items()
-        ]
-        print("均线: " + "  ".join(parts))
-    print(
-        f"区间最高 {s['period_high']:,.{prec}f} ({s['period_high_date']})"
-        f"  · 最低 {s['period_low']:,.{prec}f} ({s['period_low_date']})"
-    )
-
-    fig = charting.build_candlestick_fig(
+    output_kline(
+        args,
+        p,
         df,
-        p.yahoo,
+        heading=f"K线 {p.yahoo}",
+        title=p.yahoo,
         currency=p.currency,
-        mas=mas,
         show_volume=not args.no_volume,
-        period=period,
+        summary_volume=True,
+        default_dir=VAR_DIR,
+        output_prefix="kline",
+        noun="K线图",
+        warn_prefix=p.yahoo,
     )
-    out = (
-        Path(args.output)
-        if args.output
-        else VAR_DIR / f"kline_{p.yahoo.replace('.', '_')}.html"
-    )
-    try:
-        out.parent.mkdir(parents=True, exist_ok=True)
-        if out.is_dir():
-            _finish_with_error(f"输出路径是一个目录, 请指定文件: {out}")
-        atomic_write_text(out, charting.fig_to_html(fig))
-    except OSError as e:
-        _finish_with_error(f"K线图写入失败: {out} ({e})")
-    print(f"\n✅ K线图已生成: {out}")
-    if args.open_browser:
-        webbrowser.open(out.resolve().as_uri())
-        print("已在浏览器中打开。")

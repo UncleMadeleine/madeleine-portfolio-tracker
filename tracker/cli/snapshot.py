@@ -51,12 +51,13 @@ def cmd_snapshot(args) -> None:
     run_snapshot(args)
 
 
-def run_snapshot(args) -> None:
+def take_snapshot_from_args(args):
+    """按 CLI 参数加载组合/自选并取快照 (snapshot/export 共用)."""
     portfolio = load_portfolio(args.portfolio)
     if args.base:
         portfolio["base_currency"] = args.base.upper()
     watchlist = load_watchlist(args.watchlist_file)
-    base, view, summary, wview, issues = take_snapshot(
+    return take_snapshot(
         portfolio,
         watchlist,
         watch_name=args.watchlist,
@@ -66,6 +67,10 @@ def run_snapshot(args) -> None:
         crypto_source=getattr(args, "crypto_source", "auto"),
         source_strict=_source_strict(args),
     )
+
+
+def run_snapshot(args) -> None:
+    base, view, summary, wview, issues = take_snapshot_from_args(args)
 
     saved_nav = None
     if getattr(args, "save", False):

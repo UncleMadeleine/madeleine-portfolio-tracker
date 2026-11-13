@@ -30,7 +30,7 @@ import pandas as pd
 
 from ..symbols import INDEX_CATALOG, ParsedSymbol, index_key
 from ..util import with_timeout
-from .base import Provider
+from .base import Provider, openbb_history_frame
 from .global_stocks import _AK_HIST_TIMEOUT
 
 __all__ = ["IndexProvider"]
@@ -319,16 +319,7 @@ def _yf_history(
     res = with_timeout(
         _obb().equity.price.historical, _YF_HISTORY_TIMEOUT, **kwargs
     )
-    df = res.to_dataframe().reset_index()
-    df = df.rename(columns={df.columns[0]: "date"})
-    df = df.dropna(subset=["close"])
-    keep = [
-        c for c in ("date", "open", "high", "low", "close", "volume") if c in df.columns
-    ]
-    if "volume" not in keep:
-        df["volume"] = 0.0
-        keep.append("volume")
-    return df[keep]
+    return openbb_history_frame(res, ensure_volume=True)
 
 
 # ---------- akshare 源 (新浪商品期货主力连续) ----------

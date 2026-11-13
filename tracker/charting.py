@@ -26,7 +26,17 @@ DEFAULT_MA: tuple[int, ...] = (5, 20, 60)
 # 默认中国看盘软件配色: 红涨绿跌; green_up=True 时切换为国际配色 (绿涨红跌)
 CN_UP_COLOR, CN_DOWN_COLOR = "#ef232a", "#14b143"
 INTL_UP_COLOR, INTL_DOWN_COLOR = "#089981", "#f23648"
-VOLUME_OPACITY = 0.75
+
+
+def up_down_colors(green_up: bool = False) -> tuple[str, str]:
+    """涨跌配色: cn=红涨绿跌, green_up=True 时切换为国际绿涨红跌."""
+    return (
+        (INTL_UP_COLOR, INTL_DOWN_COLOR)
+        if green_up
+        else (CN_UP_COLOR, CN_DOWN_COLOR)
+    )
+
+
 MA_PALETTE = (
     "#f7d774",
     "#4ea1f3",
@@ -353,9 +363,7 @@ def build_candlestick_fig(
     df = clean_ohlc(df)
     if df.empty:
         raise ValueError(f"{symbol}: 无有效K线数据")
-    up, down = (
-        (INTL_UP_COLOR, INTL_DOWN_COLOR) if green_up else (CN_UP_COLOR, CN_DOWN_COLOR)
-    )
+    up, down = up_down_colors(green_up)
     dates = df["date"]
     # 与 K线组件同一套精度规则: 固定 .2f 会把 SHIB/PEPE 这类低价币的
     # 悬停 OHLC 和最新价都显示成 0.00。
@@ -1439,9 +1447,7 @@ def kline_payload(
     df = clean_ohlc(df)
     if df.empty:
         raise ValueError(f"{symbol}: 无有效K线数据")
-    up, down = (
-        (INTL_UP_COLOR, INTL_DOWN_COLOR) if green_up else (CN_UP_COLOR, CN_DOWN_COLOR)
-    )
+    up, down = up_down_colors(green_up)
     dates = df["date"].dt.strftime("%Y-%m-%d")
     # 精度按价格中位数定 (低价币 SHIB/PEPE ~1e-5 需 8~10 位): 硬编码 round(,6)
     # 会把 1e-5 显示误差放大到百分之几、<1e-6 直接归零, 故蜡烛/MA 统一用
@@ -1767,9 +1773,7 @@ def compare_payload(
     names = " vs ".join(ln["name"] for ln in lines[:4]) + (
         " …" if len(lines) > 4 else ""
     )
-    up, down = (
-        (INTL_UP_COLOR, INTL_DOWN_COLOR) if green_up else (CN_UP_COLOR, CN_DOWN_COLOR)
-    )
+    up, down = up_down_colors(green_up)
     # 原始价格模式按最细精度展示 (低价币), 归一化模式 ~100 量级用 2 位
     payload_precision = (max(precisions) if precisions else 2) if not normalize else 2
     ratio = ratio or None
@@ -1853,9 +1857,7 @@ def line_payload(
     )
     if not data:
         raise ValueError("无有效折线数据")
-    up, down = (
-        (INTL_UP_COLOR, INTL_DOWN_COLOR) if green_up else (CN_UP_COLOR, CN_DOWN_COLOR)
-    )
+    up, down = up_down_colors(green_up)
     payload = _base_payload(
         title=title or series_name,
         up=up,
@@ -1945,9 +1947,7 @@ def crypto_compare_payload(
     names = " vs ".join(cn["name"] for cn in coins[:4]) + (
         " …" if len(coins) > 4 else ""
     )
-    up, down = (
-        (INTL_UP_COLOR, INTL_DOWN_COLOR) if green_up else (CN_UP_COLOR, CN_DOWN_COLOR)
-    )
+    up, down = up_down_colors(green_up)
     payload = _base_payload(
         title=f"{names} · {PERIOD_LABELS.get(period, '日K')}",
         up=up,

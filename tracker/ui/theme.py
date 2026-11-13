@@ -26,8 +26,6 @@ BG = "#0a0a0f"
 SURFACE = "#141428"
 PRIMARY = "#00d4ff"
 ACCENT = "#bf5af2"
-UP_CN = "#ff453a"
-DOWN_CN = "#32d74b"
 
 # 页面主区最大宽度 (wide 布局下避免超宽屏元素被拉散)
 _MAX_WIDTH = "1560px"

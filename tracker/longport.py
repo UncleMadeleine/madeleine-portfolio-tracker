@@ -442,21 +442,25 @@ def get_quotes_longport(
     return quotes, reason
 
 
-def _pb_ratios_longport(
-    symbols_lp: list[str], cfg: dict | None = None
+def _calc_index_longport(
+    symbols_lp: list[str],
+    index_name: str,
+    attr: str,
+    cfg: dict | None = None,
 ) -> dict[str, float | None]:
-    """calc_indexes(PbRatio) → {lp_symbol: PB 倍数}; 失败/空输入返回 {}.
+    """calc_indexes(单项指标) → {lp_symbol: 数值}; 失败/空输入返回 {}.
 
-    PB 属可选增强: 任何异常静默吞掉 (行情本体已到手, 不为基本面拖垮取数)。
-    长桥直接返回 PB 倍数 (非 BVPS), 由调用方按现价反推。
+    PB / 总市值等可选增强共用: 任何异常静默吞掉 (行情本体已到手, 不为基本面
+    拖垮取数); 只保留有限正数。
     """
     if not symbols_lp:
         return {}
     try:
         from longport.openapi import CalcIndex
 
+        index = getattr(CalcIndex, index_name)
         resp = _ctx_call(
-            lambda c, syms: c.calc_indexes(syms, [CalcIndex.PbRatio]),
+            lambda c, syms: c.calc_indexes(syms, [index]),
             list(symbols_lp),
             cfg=cfg,
         )
@@ -468,44 +472,27 @@ def _pb_ratios_longport(
         if not sym:
             continue
         try:
-            pb = float(getattr(r, "pb_ratio", None))
+            value = float(getattr(r, attr, None))
         except (TypeError, ValueError):
-            pb = None
-        out[sym] = pb if pb is not None and math.isfinite(pb) and pb > 0 else None
+            value = None
+        out[sym] = value if value is not None and math.isfinite(value) and value > 0 else None
     return out
+
+
+def _pb_ratios_longport(
+    symbols_lp: list[str], cfg: dict | None = None
+) -> dict[str, float | None]:
+    """calc_indexes(PbRatio) → {lp_symbol: PB 倍数}; 失败/空输入返回 {}."""
+    return _calc_index_longport(symbols_lp, "PbRatio", "pb_ratio", cfg)
 
 
 def _total_market_values_longport(
     symbols_lp: list[str], cfg: dict | None = None
 ) -> dict[str, float | None]:
-    """calc_indexes(TotalMarketValue) → {lp_symbol: 总市值 (当地货币)}; 失败返回 {}.
-
-    与 PB 同为可选增强: 任何异常静默吞掉 (行情本体已到手)。
-    长桥直接给绝对值 (非倍数), 无需反推。
-    """
-    if not symbols_lp:
-        return {}
-    try:
-        from longport.openapi import CalcIndex
-
-        resp = _ctx_call(
-            lambda c, syms: c.calc_indexes(syms, [CalcIndex.TotalMarketValue]),
-            list(symbols_lp),
-            cfg=cfg,
-        )
-    except Exception:  # noqa: BLE001
-        return {}
-    out: dict[str, float | None] = {}
-    for r in resp or []:
-        sym = str(getattr(r, "symbol", "") or "").strip()
-        if not sym:
-            continue
-        try:
-            mc = float(getattr(r, "total_market_value", None))
-        except (TypeError, ValueError):
-            mc = None
-        out[sym] = mc if mc is not None and math.isfinite(mc) and mc > 0 else None
-    return out
+    """calc_indexes(TotalMarketValue) → {lp_symbol: 总市值 (当地货币)}; 失败返回 {}."""
+    return _calc_index_longport(
+        symbols_lp, "TotalMarketValue", "total_market_value", cfg
+    )
 
 
 def static_names_longport(

@@ -52,6 +52,36 @@ def _print_json(payload) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
+def parse_symbols_or_fail(symbols, *, as_json: bool):
+    """解析 CLI 输入代码; 全部无效时不写盘并退出 (portfolio/watchlist 共用)."""
+    parsed: list = []
+    skipped: list[str] = []
+    for s in symbols:
+        try:
+            parsed.append(parse(s))
+        except ValueError as e:
+            skipped.append(f"跳过 {s}: {e}")
+    if not parsed:
+        if as_json:
+            _print_json({"changed": [], "skipped": skipped})
+        else:
+            for s in skipped:
+                print(f"⚠ {s}")
+        _finish_with_error("没有可添加的有效代码")
+    return parsed, skipped
+
+
+def normalize_targets(symbols) -> set[str]:
+    """删除命令的代码归一化: 非法输入保留大写原串, 便于精确报告未找到."""
+    targets: set[str] = set()
+    for s in symbols:
+        try:
+            targets.add(parse(s).yahoo)
+        except ValueError:
+            targets.add(s.strip().upper())
+    return targets
+
+
 def _source_strict(args) -> bool:
     """命令行是否显式指定了数据源偏好.
 

@@ -97,4 +97,3 @@ class CNStocksProvider(Provider):
         if not out:
             return _local_fallback()
         return out[:limit]
-

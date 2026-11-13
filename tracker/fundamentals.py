@@ -235,5 +235,3 @@ def fetch_market_caps(
     out, missing = _load_cached(symbols, refresh=refresh, field="market_cap")
     _fill_fundamentals(out, missing)
     return {s: out.get(s, {}).get("market_cap") for s in dict.fromkeys(symbols)}
-
-

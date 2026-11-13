@@ -505,10 +505,16 @@ def ensure_background_refresher() -> None:
     warm_mod.ensure_background_refresher(_disk_refresh_plan)
 
 
+def _clear_quote_caches(*, fx: bool = True) -> None:
+    """清行情缓存; 汇率只在持仓/自选结构影响本币换算时一起清."""
+    cached_quotes.clear()
+    if fx:
+        cached_fx.clear()
+
+
 def _post_import() -> None:
     """导入写盘后清行情/汇率缓存, 让新持仓立即取数."""
-    cached_quotes.clear()
-    cached_fx.clear()
+    _clear_quote_caches()
 
 
 def fmt(v, digits: int = 2) -> str:
@@ -654,78 +660,83 @@ def _consume_context_action() -> None:
         st.session_state["_delete_holdings_pending"] = [symbol]
 
 
-@st.dialog("删除持仓", on_dismiss=_clear_delete_holdings)
-def _confirm_delete_holdings(symbols: list[str]) -> None:
-    """从主表选中行删除持仓: 弹窗确认后锁内读-改-写."""
-    st.warning("将从组合中删除以下持仓：", icon=":material/warning:")
+_DELETE_CONFIG = {
+    "holdings": {
+        "warning": "将从组合中删除以下持仓：",
+        "noun": "持仓",
+        "edit": storage.edit_portfolio,
+        "path": lambda: storage.PORTFOLIO_PATH,
+        "list_key": "holdings",
+        "editor": "holdings_editor",
+        "detail": "holdings_detail_select",
+        "selected": "_selected_holdings",
+        "pending": "_delete_holdings_pending",
+        "clear_fx": True,
+        "error": "持仓删除失败",
+    },
+    "watchlist": {
+        "warning": "将从自选中删除以下代码：",
+        "noun": "自选",
+        "edit": storage.edit_watchlist,
+        "path": lambda: WATCHLIST_PATH,
+        "list_key": "watchlist",
+        "editor": "watchlist_editor",
+        "detail": "watchlist_detail_select",
+        "selected": "_selected_watchlist",
+        "pending": "_delete_watchlist_pending",
+        "clear_fx": False,
+        "error": "自选删除失败",
+    },
+}
+
+
+def _confirm_delete(kind: str, symbols: list[str]) -> None:
+    """删除持仓/自选的公共确认框: 锁内读-改-写, 不改动另一类数据."""
+    cfg = _DELETE_CONFIG[kind]
+    st.warning(cfg["warning"], icon=":material/warning:")
     st.markdown("、".join(f"**{s}**" for s in symbols))
     c1, c2 = st.columns(2)
-    if c1.button("取消", width="stretch", key="cancel_delete_holdings"):
-        _clear_delete_holdings()
+    if c1.button("取消", width="stretch", key=f"cancel_delete_{kind}"):
+        st.session_state.pop(cfg["pending"], None)
         st.rerun()
     if c2.button(
         "删除",
         type="primary",
         icon=":material/delete:",
         width="stretch",
-        key="confirm_delete_holdings",
+        key=f"confirm_delete_{kind}",
     ):
         targets = set(symbols)
         try:
-            with storage.edit_portfolio(storage.PORTFOLIO_PATH) as pf:
-                pf["holdings"] = [
-                    h
-                    for h in pf.get("holdings", [])
-                    if _norm_sym(str(h.get("symbol", ""))) not in targets
+            with cfg["edit"](cfg["path"]()) as data:
+                data[cfg["list_key"]] = [
+                    row
+                    for row in data.get(cfg["list_key"], [])
+                    if _norm_sym(str(row.get("symbol", ""))) not in targets
                 ]
         except (DataFileLocked, CorruptDataError, OSError) as e:
-            st.error(f"持仓删除失败: {e}")
+            st.error(f"{cfg['error']}: {e}")
             return
-        cached_quotes.clear()
-        cached_fx.clear()
+        _clear_quote_caches(fx=cfg["clear_fx"])
         # data_editor 里可能还留着被删行; 不清会在下次「保存」时写回。
-        st.session_state.pop("holdings_editor", None)
-        st.session_state.pop("holdings_detail_select", None)
-        st.session_state.pop("_selected_holdings", None)
-        st.session_state.pop("_delete_holdings_pending", None)
-        st.toast(f"已删除 {len(targets)} 个持仓")
+        st.session_state.pop(cfg["editor"], None)
+        st.session_state.pop(cfg["detail"], None)
+        st.session_state.pop(cfg["selected"], None)
+        st.session_state.pop(cfg["pending"], None)
+        st.toast(f"已删除 {len(targets)} 个{cfg['noun']}")
         st.rerun()
+
+
+@st.dialog("删除持仓", on_dismiss=_clear_delete_holdings)
+def _confirm_delete_holdings(symbols: list[str]) -> None:
+    """从主表选中行删除持仓: 弹窗确认后锁内读-改-写."""
+    _confirm_delete("holdings", symbols)
 
 
 @st.dialog("删除自选", on_dismiss=_clear_delete_watchlist)
 def _confirm_delete_watchlist(symbols: list[str]) -> None:
     """从自选主表选中行删除条目: 弹窗确认后锁内读-改-写."""
-    st.warning("将从自选中删除以下代码：", icon=":material/warning:")
-    st.markdown("、".join(f"**{s}**" for s in symbols))
-    c1, c2 = st.columns(2)
-    if c1.button("取消", width="stretch", key="cancel_delete_watchlist"):
-        _clear_delete_watchlist()
-        st.rerun()
-    if c2.button(
-        "删除",
-        type="primary",
-        icon=":material/delete:",
-        width="stretch",
-        key="confirm_delete_watchlist",
-    ):
-        targets = set(symbols)
-        try:
-            with storage.edit_watchlist(WATCHLIST_PATH) as wl:
-                wl["watchlist"] = [
-                    e
-                    for e in wl.get("watchlist", [])
-                    if _norm_sym(str(e.get("symbol", ""))) not in targets
-                ]
-        except (DataFileLocked, CorruptDataError, OSError) as e:
-            st.error(f"自选删除失败: {e}")
-            return
-        cached_quotes.clear()
-        st.session_state.pop("watchlist_editor", None)
-        st.session_state.pop("watchlist_detail_select", None)
-        st.session_state.pop("_selected_watchlist", None)
-        st.session_state.pop("_delete_watchlist_pending", None)
-        st.toast(f"已删除 {len(targets)} 个自选")
-        st.rerun()
+    _confirm_delete("watchlist", symbols)
 
 
 def _pnl_color(v) -> str:
@@ -992,8 +1003,7 @@ def render_portfolio_page() -> None:
                     except (DataFileLocked, CorruptDataError, OSError) as e:
                         st.error(f"持仓保存失败: {e}")
                         return
-                    cached_quotes.clear()
-                    cached_fx.clear()
+                    _clear_quote_caches()
                     # 必须 rerun: 本次渲染的 holdings 仍是 data_editor 原始行
                     # (含重复行), 而落盘的 clean 已去重剔除 —— 不 rerun 的话
                     # 同一次渲染里的 KPI/明细表按未去重行计算, 重复代码市值
@@ -1171,7 +1181,7 @@ def render_portfolio_page() -> None:
                     except (DataFileLocked, CorruptDataError, OSError) as e:
                         st.error(f"自选保存失败: {e}")
                         return
-                    cached_quotes.clear()
+                    _clear_quote_caches(fx=False)
                     if dups:
                         st.toast("自选已保存 (重复行已移除)")
                     else:

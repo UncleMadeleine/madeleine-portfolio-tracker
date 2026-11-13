@@ -59,6 +59,22 @@ def _catalog(p: ParsedSymbol) -> dict:
     return INDEX_CATALOG[index_key(p.yahoo)]
 
 
+def _flat_ohlc(df: pd.DataFrame) -> pd.DataFrame:
+    """只有收盘价/点位的数据源 → 平K线 (open=high=low=close, volume=0)."""
+    out = df.copy()
+    out["open"] = out["high"] = out["low"] = out["close"]
+    out["volume"] = 0.0
+    return out[["date", "open", "high", "low", "close", "volume"]]
+
+
+def _flat_ohlc(df: pd.DataFrame) -> pd.DataFrame:
+    """点位序列 (仅 date/close) → 平K线 (open=high=low=close, volume=0)."""
+    out = df.copy()
+    out["open"] = out["high"] = out["low"] = out["close"]
+    out["volume"] = 0.0
+    return out[["date", "open", "high", "low", "close", "volume"]]
+
+
 def _slice_range(
     df: pd.DataFrame, start_date: str, end_date: str | None
 ) -> pd.DataFrame:
@@ -234,11 +250,7 @@ def _hsi_history(
     df = pd.DataFrame(records)
     df["date"] = pd.to_datetime(df["date"])
     df["close"] = df["close"].astype(float)
-    df["open"] = df["high"] = df["low"] = df["close"]
-    df["volume"] = 0.0
-    return _slice_range(
-        df[["date", "open", "high", "low", "close", "volume"]], start_date, end_date
-    )
+    return _slice_range(_flat_ohlc(df), start_date, end_date)
 
 
 # ---------- Cameco 官网铀价表 (monthly) ----------
@@ -297,13 +309,7 @@ def _cameco_history(
     # 否则 provider 返回值里会有两根同日期 K 线 (下游 clean_ohlc 虽会兜住,
     # 但 provider 自身的契约就是「每月一个点」)
     df = df.drop_duplicates(subset="date", keep="last")
-    df["open"] = df["high"] = df["low"] = df["close"]
-    df["volume"] = 0.0
-    return _slice_range(
-        df[["date", "open", "high", "low", "close", "volume"]],
-        start_date,
-        end_date,
-    )
+    return _slice_range(_flat_ohlc(df), start_date, end_date)
 
 
 # ---------- yfinance (OpenBB) 源 ----------

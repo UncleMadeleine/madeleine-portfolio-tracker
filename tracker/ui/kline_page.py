@@ -166,6 +166,37 @@ def cached_kline_all(
     )
 
 
+def _normalize_selection(sel_raw, *, crypto_only: bool = False):
+    """对比代码输入归一化/去重; 返回 (合法代码, 非法输入)."""
+    sel, bad = [], []
+    for s in sel_raw:
+        y = normalize_or_none(s)
+        if y is None:
+            bad.append(s)
+        elif crypto_only and type_for_symbol(y) != "crypto":
+            bad.append(f"{s} (非加密货币)")
+        else:
+            sel.append(y)
+    return list(dict.fromkeys(sel)), bad
+
+
+def _render_period_changes(frames: dict, period: str) -> None:
+    """区间涨跌摘要 (价格对比/加密货币对比共用)."""
+    chg = []
+    for sym, d in frames.items():
+        dd = charting.resample_ohlc(d, period) if period != "daily" else d
+        if len(dd) >= 2:
+            pct = float(dd["close"].iloc[-1]) / float(dd["close"].iloc[0]) - 1
+            up_tag, down_tag = settings.up_down_tags()
+            chg.append(
+                f"{sym} :{up_tag}[{pct:+.2%}]"
+                if pct >= 0
+                else f"{sym} :{down_tag}[{pct:+.2%}]"
+            )
+    if chg:
+        st.markdown("区间涨跌: " + " · ".join(chg))
+
+
 def is_valid_symbol(s: str) -> bool:
     if not s or not s.strip():
         return False
@@ -519,11 +550,7 @@ def render_compare_controls(
     if force_refresh:
         clear_kline_caches()
 
-    sel, bad = [], []
-    for s in sel_raw:
-        y = normalize_or_none(s)
-        (sel if y is not None else bad).append(y if y is not None else s)
-    sel = list(dict.fromkeys(sel))
+    sel, bad = _normalize_selection(sel_raw)
     if bad:
         st.error(f"无法识别: {', '.join(bad)}")
     if not sel:
@@ -729,19 +756,7 @@ def render_compare_controls(
             st.warning(
                 "汇率历史取数失败, 比例线未做汇率调整 (比值含汇率波动)。"
             )
-    chg = []
-    for sym, d in frames.items():
-        dd = charting.resample_ohlc(d, cmp_period) if cmp_period != "daily" else d
-        if len(dd) >= 2:
-            pct = float(dd["close"].iloc[-1]) / float(dd["close"].iloc[0]) - 1
-            up_tag, down_tag = settings.up_down_tags()
-            chg.append(
-                f"{sym} :{up_tag}[{pct:+.2%}]"
-                if pct >= 0
-                else f"{sym} :{down_tag}[{pct:+.2%}]"
-            )
-    if chg:
-        st.markdown("区间涨跌: " + " · ".join(chg))
+    _render_period_changes(frames, cmp_period)
     if norm:
         st.caption(
             "各代码按自身区间首个收盘归一化 (=100); 不同市场按各自交易日绘制, "
@@ -1253,16 +1268,7 @@ def render_crypto_compare_controls(
     if force_refresh:
         clear_kline_caches()
 
-    sel, bad = [], []
-    for s in sel_raw:
-        y = normalize_or_none(s)
-        if y is None:
-            bad.append(s)
-        elif type_for_symbol(y) == "crypto":
-            sel.append(y)
-        else:
-            bad.append(f"{s} (非加密货币)")
-    sel = list(dict.fromkeys(sel))
+    sel, bad = _normalize_selection(sel_raw, crypto_only=True)
     if bad:
         st.error(f"仅支持加密货币代码, 已忽略: {', '.join(bad)}")
     if not sel:
@@ -1310,19 +1316,7 @@ def render_crypto_compare_controls(
         ),
         height=max(560, 300 * len(frames)),
     )
-    chg = []
-    for sym, d in frames.items():
-        dd = charting.resample_ohlc(d, ccmp_period) if ccmp_period != "daily" else d
-        if len(dd) >= 2:
-            pct = float(dd["close"].iloc[-1]) / float(dd["close"].iloc[0]) - 1
-            up_tag, down_tag = settings.up_down_tags()
-            chg.append(
-                f"{sym} :{up_tag}[{pct:+.2%}]"
-                if pct >= 0
-                else f"{sym} :{down_tag}[{pct:+.2%}]"
-            )
-    if chg:
-        st.markdown("区间涨跌: " + " · ".join(chg))
+    _render_period_changes(frames, ccmp_period)
     st.caption(
         "各币按原始价格绘制 (不归一化), 每币一个窗格/独立价轴, 共享时间轴与十字光标;"
         "窗格分隔线可拖拽调高, 拖动平移 / 滚轮缩放同步作用于全部窗格。"

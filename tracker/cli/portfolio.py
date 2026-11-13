@@ -7,8 +7,13 @@ import math
 import pandas as pd
 
 from ..storage import edit_portfolio, load_portfolio
-from ..symbols import parse
-from ._common import _finish_with_error, _print_json, _sym
+from ._common import (
+    _finish_with_error,
+    _print_json,
+    _sym,
+    normalize_targets,
+    parse_symbols_or_fail,
+)
 
 
 def portfolio_add(args) -> None:
@@ -29,20 +34,7 @@ def portfolio_add(args) -> None:
         _finish_with_error(f"成本价不能为负数, 得到: {args.avg_cost}")
     # 先解析再进锁: edit_portfolio 的 with 块正常退出时无条件保存, 校验若放在
     # 块内, 「没有可添加代码」也会在 --portfolio 指向的新路径创建空持仓文件。
-    parsed: list = []
-    skipped: list[str] = []
-    for s in args.symbols:
-        try:
-            parsed.append(parse(s))
-        except ValueError as e:
-            skipped.append(f"跳过 {s}: {e}")
-    if not parsed:
-        if args.json:
-            _print_json({"changed": [], "skipped": skipped})
-        else:
-            for s in skipped:
-                print(f"⚠ {s}")
-        _finish_with_error("没有可添加的有效代码")
+    parsed, skipped = parse_symbols_or_fail(args.symbols, as_json=args.json)
     # 锁内读-改-写: 读也在临界区内, 并发进程的写入不会被本次的全量替换覆盖
     with edit_portfolio(args.portfolio) as data:
         holdings = data.setdefault("holdings", [])
@@ -92,12 +84,7 @@ def portfolio_remove(args) -> None:
     if not args.symbols:
         _finish_with_error("请指定要删除的代码, 如: portfolio remove AAPL")
     with edit_portfolio(args.portfolio) as data:
-        targets: set[str] = set()
-        for s in args.symbols:
-            try:
-                targets.add(parse(s).yahoo)
-            except ValueError:
-                targets.add(s.strip().upper())
+        targets = normalize_targets(args.symbols)
         original = data.get("holdings", [])
         remaining = [h for h in original if _sym(h) not in targets]
         removed = [_sym(h) for h in original if _sym(h) in targets]

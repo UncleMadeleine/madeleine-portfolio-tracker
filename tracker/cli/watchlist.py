@@ -5,7 +5,7 @@ from __future__ import annotations
 import pandas as pd
 
 from .. import importer, prices
-from ..symbols import parse
+
 from ..services.watchlist import (
     build_watchlist_view,
     entries_for,
@@ -18,6 +18,8 @@ from ._common import (
     _records,
     _source_strict,
     _sym,
+    normalize_targets,
+    parse_symbols_or_fail,
 )
 
 
@@ -28,22 +30,7 @@ def watchlist_add(args) -> None:
     # 先解析再进锁: 全部代码无效时必须在任何写盘动作之前退出。
     # edit_watchlist 的 with 块正常退出时无条件保存, 把校验放在块内
     # 会导致「没有可添加代码」也把 --file 指向的新路径写成空文件。
-    parsed: list = []
-    skipped: list[str] = []
-    for s in args.symbols:
-        try:
-            parsed.append(parse(s))
-        except ValueError as e:
-            skipped.append(f"跳过 {s}: {e}")
-    if not parsed:
-        # 全部代码都无法识别: 不写盘 (否则会在 --file 指向的新路径上凭空
-        # 建一个空自选文件), 非 0 退出让调用方/Agent 知道有失败
-        if args.json:
-            _print_json({"changed": [], "skipped": skipped})
-        else:
-            for s in skipped:
-                print(f"⚠ {s}")
-        _finish_with_error("没有可添加的有效代码")
+    parsed, skipped = parse_symbols_or_fail(args.symbols, as_json=args.json)
     # 锁内读-改-写: 读也在临界区内, 并发进程的写入不会被本次全量替换覆盖
     with edit_watchlist(args.file) as data:
         entries = data.setdefault("watchlist", [])
@@ -99,12 +86,7 @@ def watchlist_remove(args) -> None:
     if not args.symbols:
         _finish_with_error("请指定要删除的代码, 如: watchlist remove AAPL")
     with edit_watchlist(args.file) as data:
-        targets: set[str] = set()
-        for s in args.symbols:
-            try:
-                targets.add(parse(s).yahoo)
-            except ValueError:
-                targets.add(s.strip().upper())
+        targets = normalize_targets(args.symbols)
         # --list 允许多个列表 (逗号分隔, 与 add/entries_for 行为一致);
         # 直接拿原串比对单个列表名会永远匹配不上, 导致静默删不掉
         scope = set(parse_lists(args.wl_list)) if args.wl_list else set()

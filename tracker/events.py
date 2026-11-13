@@ -743,6 +743,52 @@ def _quiet_stderr():
 _CN_BOARDS = ("沪深A股", "京市A股")
 
 
+def _fetch_cn_cached(
+    key: str,
+    *,
+    period: str,
+    step_label: str,
+    refresh: bool,
+    stale_ok: bool,
+    cache_only: bool,
+    reporter: _ProgressReporter | None,
+    quiet: bool,
+    fetch,
+    normalize,
+    error_text,
+) -> tuple[list[dict], str | None, dict]:
+    """CN 日历单块缓存的公共壳 (预约披露/分红共用)."""
+    meta = {"stale": False, "missing": False, "stale_age": 0.0, "used": False}
+    row = None if refresh else cache_mod.get_calendar_row(key)
+    if row is not None:
+        age = _age_of(row["fetched_at"])
+        if age <= CAL_TTL or (stale_ok and age <= CAL_STALE_TTL):
+            meta.update(stale=age > CAL_TTL, stale_age=age, used=True)
+            if reporter is not None:
+                reporter.step(step_label)
+            return row["events"], None, meta
+    if cache_only:
+        meta["missing"] = True
+        if reporter is not None:
+            reporter.step(step_label)
+        return [], None, meta
+    try:
+        if quiet:
+            with _quiet_stderr():
+                raw = fetch()
+        else:
+            raw = fetch()
+    except Exception as e:  # noqa: BLE001 - 单块失败注记并继续其余块
+        if reporter is not None:
+            reporter.step(step_label)
+        return [], error_text(e)[:200], meta
+    evs = normalize(raw)
+    cache_mod.set_calendar_row(key, evs)
+    if reporter is not None:
+        reporter.step(step_label)
+    return evs, None, meta
+
+
 def _fetch_cn_yysj_board(
     board: str,
     period: str,
@@ -752,46 +798,24 @@ def _fetch_cn_yysj_board(
     reporter: _ProgressReporter | None = None,
     quiet: bool = True,
 ) -> tuple[list[dict], str | None, dict]:
-    """单个板块的预约披露 (缓存优先, TTL 6h) → events, error, meta.
-
-    分板块独立缓存: 一块接口失败只影响该板, 不会把另一板的成功结果一起丢掉,
-    也不会把「缺一块」的合并结果缓存 6h。meta 记录该行是否陈旧/缺失。
-    quiet=False 供外层并发批次使用 (stderr 重定向由批次统一负责)。
-    """
-    key = f"cn:yysj:{period}:{board}"
-    meta = {"stale": False, "missing": False, "stale_age": 0.0, "used": False}
-    row = None if refresh else cache_mod.get_calendar_row(key)
-    if row is not None:
-        age = _age_of(row["fetched_at"])
-        if age <= CAL_TTL or (stale_ok and age <= CAL_STALE_TTL):
-            meta.update(stale=age > CAL_TTL, stale_age=age, used=True)
-            if reporter is not None:
-                reporter.step(f"{period} {board}")
-            return row["events"], None, meta
-    if cache_only:
-        meta["missing"] = True
-        if reporter is not None:
-            reporter.step(f"{period} {board}")
-        return [], None, meta
+    """单个板块的预约披露 (缓存优先, TTL 6h) → events, error, meta."""
     import akshare as ak
 
-    try:
-        if quiet:
-            with _quiet_stderr():
-                df = with_timeout(
-                    ak.stock_yysj_em, _AK_TIMEOUT, symbol=board, date=period
-                )
-        else:
-            df = with_timeout(ak.stock_yysj_em, _AK_TIMEOUT, symbol=board, date=period)
-    except Exception as e:  # noqa: BLE001 - 单板失败注记并继续另一板
-        if reporter is not None:
-            reporter.step(f"{period} {board}")
-        return [], f"akshare 预约披露 {period} {board} 失败 ({e})"[:200], meta
-    evs = _cn_normalize_disclosure(df, period)
-    cache_mod.set_calendar_row(key, evs)
-    if reporter is not None:
-        reporter.step(f"{period} {board}")
-    return evs, None, meta
+    return _fetch_cn_cached(
+        f"cn:yysj:{period}:{board}",
+        period=period,
+        step_label=f"{period} {board}",
+        refresh=refresh,
+        stale_ok=stale_ok,
+        cache_only=cache_only,
+        reporter=reporter,
+        quiet=quiet,
+        fetch=lambda: with_timeout(
+            ak.stock_yysj_em, _AK_TIMEOUT, symbol=board, date=period
+        ),
+        normalize=lambda df: _cn_normalize_disclosure(df, period),
+        error_text=lambda e: f"akshare 预约披露 {period} {board} 失败 ({e})",
+    )
 
 
 def _fetch_cn_fhps_period(
@@ -802,42 +826,22 @@ def _fetch_cn_fhps_period(
     reporter: _ProgressReporter | None = None,
     quiet: bool = True,
 ) -> tuple[list[dict], str | None, dict]:
-    """单个报表期的分红送转 (缓存优先, TTL 6h) → events, error, meta.
-
-    quiet=False 供外层并发批次使用 (stderr 重定向由批次统一负责)。
-    """
-    key = f"cn:fhps:{period}"
-    meta = {"stale": False, "missing": False, "stale_age": 0.0, "used": False}
-    row = None if refresh else cache_mod.get_calendar_row(key)
-    if row is not None:
-        age = _age_of(row["fetched_at"])
-        if age <= CAL_TTL or (stale_ok and age <= CAL_STALE_TTL):
-            meta.update(stale=age > CAL_TTL, stale_age=age, used=True)
-            if reporter is not None:
-                reporter.step(f"{period} 分红")
-            return row["events"], None, meta
-    if cache_only:
-        meta["missing"] = True
-        if reporter is not None:
-            reporter.step(f"{period} 分红")
-        return [], None, meta
+    """单个报表期的分红送转 (缓存优先, TTL 6h) → events, error, meta."""
     import akshare as ak
 
-    try:
-        if quiet:
-            with _quiet_stderr():
-                df = with_timeout(ak.stock_fhps_em, _AK_TIMEOUT, date=period)
-        else:
-            df = with_timeout(ak.stock_fhps_em, _AK_TIMEOUT, date=period)
-    except Exception as e:  # noqa: BLE001 - 分红失败只在 events 缺口上可见
-        if reporter is not None:
-            reporter.step(f"{period} 分红")
-        return [], f"akshare 分红 {period} 失败 ({e})"[:200], meta
-    evs = _cn_normalize_fhps(df)
-    cache_mod.set_calendar_row(key, evs)
-    if reporter is not None:
-        reporter.step(f"{period} 分红")
-    return evs, None, meta
+    return _fetch_cn_cached(
+        f"cn:fhps:{period}",
+        period=period,
+        step_label=f"{period} 分红",
+        refresh=refresh,
+        stale_ok=stale_ok,
+        cache_only=cache_only,
+        reporter=reporter,
+        quiet=quiet,
+        fetch=lambda: with_timeout(ak.stock_fhps_em, _AK_TIMEOUT, date=period),
+        normalize=_cn_normalize_fhps,
+        error_text=lambda e: f"akshare 分红 {period} 失败 ({e})",
+    )
 
 
 def _fetch_cn_period(

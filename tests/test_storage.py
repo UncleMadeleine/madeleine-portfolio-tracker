@@ -207,6 +207,28 @@ def test_load_portfolio_gbk_encoded_file(tmp_path):
     assert data["holdings"][0]["note"] == "苹果"
 
 
+def test_default_paths_resolve_at_call_time(monkeypatch, tmp_path):
+    """默认路径必须跟运行期绑定的模块常量走, 不能固化在 def 默认参数里.
+
+    否则测试/嵌入式调用 rebind PORTFOLIO_PATH 后, 一次无参保存仍写到 import
+    时的真实数据目录 (曾导致测试覆盖开发者真实 watchlist.json)。
+    """
+    for attr, save, load, payload in (
+        ("PORTFOLIO_PATH", storage.save_portfolio, storage.load_portfolio,
+         {"base_currency": "CNY", "holdings": []}),
+        ("WATCHLIST_PATH", storage.save_watchlist, storage.load_watchlist,
+         {"watchlist": []}),
+        ("SETTINGS_PATH", storage.save_settings, storage.load_settings,
+         {"color_scheme": "cn"}),
+    ):
+        target = tmp_path / f"dynamic-{attr}.json"
+        monkeypatch.setattr(storage, attr, target)
+        save(payload)
+        assert target.exists(), attr
+        loaded = load()
+        assert isinstance(loaded, dict), attr
+
+
 def test_load_portfolio_unreadable_encoding_raises_readable_error(tmp_path):
     """既非 UTF-8 也非 GBK 的字节 → CorruptDataError, 不是裸 UnicodeDecodeError."""
     p = tmp_path / "portfolio.json"

@@ -349,20 +349,32 @@ def _stamp_type(row: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def load_portfolio(path: str | Path = PORTFOLIO_PATH) -> dict:
+def _resolve_path(path: str | Path | None, default: Path) -> Path:
+    """默认路径在**调用时**解析: 模块级常量在 import 后可能被改.
+
+    ``TRACKER_HOME`` 通常在 import 前设置, 但测试隔离、嵌入式调用与切换数据
+    目录会在 import 后重绑 ``PORTFOLIO_PATH`` 等常量。若默认参数写成
+    ``path=PORTFOLIO_PATH``, 默认值在 def 时已固化, 运行期改常量不生效 ——
+    测试里一次无参保存就可能写进开发者真实持仓文件。
+    """
+    return Path(default if path is None else path)
+
+
+def load_portfolio(path: str | Path | None = None) -> dict:
     """读取持仓文件; 文件缺失时返回空组合。
 
     存在文件时也补齐 base_currency/holdings 两个必需键: 手写/旧版/第三方
     导入的文件可能缺键, 直接 `data["base_currency"]` 的调用方 (如 compare
     --metric mcap) 会抛 KeyError。
     """
-    if not Path(path).exists():
+    p = _resolve_path(path, PORTFOLIO_PATH)
+    if not p.exists():
         return {"base_currency": DEFAULT_BASE_CURRENCY, "holdings": []}
     data = _read_json_or_recover(
-        path, lambda d: _require_entry_list(d, "holdings", path)
+        p, lambda d: _require_entry_list(d, "holdings", p)
     )
     data["base_currency"] = _normalize_base_currency(data.get("base_currency"))
-    data["holdings"] = _require_entry_list(data, "holdings", path)
+    data["holdings"] = _require_entry_list(data, "holdings", p)
     return data
 
 
@@ -403,13 +415,13 @@ def _clean_rows(rows: list) -> list[dict]:
     return out
 
 
-def save_portfolio(data: dict, path: str | Path = PORTFOLIO_PATH) -> None:
+def save_portfolio(data: dict, path: str | Path | None = None) -> None:
     """保存持仓/基础货币 (写盘唯一入口)。
 
     保留文件中其它键 (_说明 等文档/自定义字段), holdings 逐行清洗并覆写权威 type。
     读-改-写全程持 <path>.lock (见 _file_lock): 并发保存不会静默丢更新。
     """
-    p = Path(path)
+    p = _resolve_path(path, PORTFOLIO_PATH)
     with _file_lock(p):
         if p.exists():
             # 损坏/不可读的旧文件不能静默当 {} —— 同 _read_json_or_recover 注释:
@@ -571,19 +583,19 @@ def dedupe_watch_entries(entries: list[dict]) -> list[dict]:
     return list(by_symbol.values())
 
 
-def load_watchlist(path: str | Path = WATCHLIST_PATH) -> dict:
+def load_watchlist(path: str | Path | None = None) -> dict:
     """读取自选; 兼容旧扁平/分组格式并迁移为扁平条目, 读取侧补写权威 type.
 
     读出去重 (合并语义同 save_watchlist): 外部编辑/旧文件可能在同代码上
     留多条, 读路径若不去重会把同一提醒重复计数。
     """
-    p = Path(path)
+    p = _resolve_path(path, WATCHLIST_PATH)
     if not p.exists():
         return {"watchlist": []}
 
     def _validate(d: dict) -> None:
         if "watchlist" in d:
-            _require_entry_list(d, "watchlist", path)
+            _require_entry_list(d, "watchlist", p)
             return
         if "watchlists" not in d:
             return
@@ -593,13 +605,13 @@ def load_watchlist(path: str | Path = WATCHLIST_PATH) -> dict:
             for v in groups.values()
         ):
             raise CorruptDataError(
-                f"{path} 的 watchlists 结构畸形 (应为 对象→对象数组)"
+                f"{p} 的 watchlists 结构畸形 (应为 对象→对象数组)"
             )
 
     raw = _read_json_or_recover(p, _validate)
     if "watchlist" in raw:
         entries = []
-        for e in _require_entry_list(raw, "watchlist", path):
+        for e in _require_entry_list(raw, "watchlist", p):
             e = dict(e)
             e["lists"] = parse_lists(e.get("lists"))
             entries.append(normalize_watch_entry(e))
@@ -611,7 +623,7 @@ def load_watchlist(path: str | Path = WATCHLIST_PATH) -> dict:
             for v in groups.values()
         ):
             raise CorruptDataError(
-                f"{path} 的 watchlists 结构畸形 (应为 对象→对象数组)"
+                f"{p} 的 watchlists 结构畸形 (应为 对象→对象数组)"
             )
         merged: dict[str, dict] = {}
         for name, lst in raw["watchlists"].items():
@@ -663,7 +675,7 @@ def _watchlist_rows(data: dict) -> list:
     return rows
 
 
-def save_watchlist(data: dict, path: str | Path = WATCHLIST_PATH) -> None:
+def save_watchlist(data: dict, path: str | Path | None = None) -> None:
     """保存自选 (写盘唯一入口): 逐条 schema 归一 + 权威 type 覆写 + 同代码去重。
 
     与 save_portfolio 一致: 保留文件中已有其它键 (_说明 等文档/自定义字段)。
@@ -671,7 +683,7 @@ def save_watchlist(data: dict, path: str | Path = WATCHLIST_PATH) -> None:
     非空者补齐): 别名 (如 D05.SG/D05.SI) 与规范形态不会在文件里裂成两条。
     读-改-写全程持 path 同名 .lock (见 _file_lock): 并发保存不丢更新。
     """
-    p = Path(path)
+    p = _resolve_path(path, WATCHLIST_PATH)
     with _file_lock(p):
         if p.exists():
             # 与 save_portfolio 一致: 损坏文件不静默当 {} 覆盖掉已有数据。
@@ -754,13 +766,13 @@ def _as_bool(value, default: bool = False) -> bool:
     return default
 
 
-def load_settings(path: str | Path = SETTINGS_PATH) -> dict:
+def load_settings(path: str | Path | None = None) -> dict:
     """读取设置; 文件缺失/损坏时回退默认值, 未知键与非法值忽略。"""
     data = dict(DEFAULT_SETTINGS)
     # 嵌套默认值必须深拷贝/重建: dict(DEFAULT_SETTINGS) 是浅拷贝, 调用方
     # 修改 data["source_order"] 会污染模块级默认值。
     data["source_order"] = {}
-    p = Path(path)
+    p = _resolve_path(path, SETTINGS_PATH)
     if p.exists():
         try:
             # 复用通用读取口: 同时获得 UTF-8(BOM) → GBK 编码兜底与
@@ -792,9 +804,9 @@ def load_settings(path: str | Path = SETTINGS_PATH) -> dict:
     return data
 
 
-def save_settings(data: dict, path: str | Path = SETTINGS_PATH) -> None:
+def save_settings(data: dict, path: str | Path | None = None) -> None:
     """保存设置 (写盘唯一入口): 与磁盘已有键/默认键合并, 不丢未知键。"""
-    p = Path(path)
+    p = _resolve_path(path, SETTINGS_PATH)
     # 与 save_portfolio/save_watchlist 一致: 保留文件中已有自定义键 (_说明 等),
     # 只覆盖本次写入的已知键。settings 属可重建的轻量配置, 损坏且无 .bak 时
     # 不阻断保存 (load_settings 同样回退默认值), 避免设置页彻底不可写。
@@ -821,7 +833,7 @@ def save_settings(data: dict, path: str | Path = SETTINGS_PATH) -> None:
 
 
 @contextmanager
-def edit_portfolio(path: str | Path = PORTFOLIO_PATH):
+def edit_portfolio(path: str | Path | None = None):
     """锁内读-改-写持仓; with 块退出时自动走 save_portfolio 的清洗/打标。
 
         with edit_portfolio() as data:
@@ -829,7 +841,7 @@ def edit_portfolio(path: str | Path = PORTFOLIO_PATH):
 
     文件不存在时给空组合 (调用方无需分支)。块内抛异常则不写盘。
     """
-    p = Path(path)
+    p = _resolve_path(path, PORTFOLIO_PATH)
     with _file_lock(p):
         data = (
             load_portfolio(p)
@@ -841,9 +853,9 @@ def edit_portfolio(path: str | Path = PORTFOLIO_PATH):
 
 
 @contextmanager
-def edit_watchlist(path: str | Path = WATCHLIST_PATH):
+def edit_watchlist(path: str | Path | None = None):
     """锁内读-改-写自选; with 块退出时自动走 save_watchlist 的归一/去重。"""
-    p = Path(path)
+    p = _resolve_path(path, WATCHLIST_PATH)
     with _file_lock(p):
         data = load_watchlist(p)
         yield data
@@ -851,9 +863,9 @@ def edit_watchlist(path: str | Path = WATCHLIST_PATH):
 
 
 @contextmanager
-def edit_settings(path: str | Path = SETTINGS_PATH):
+def edit_settings(path: str | Path | None = None):
     """锁内读-改-写设置; with 块退出时自动走 save_settings 的合并。"""
-    p = Path(path)
+    p = _resolve_path(path, SETTINGS_PATH)
     with _file_lock(p):
         data = load_settings(p)
         yield data

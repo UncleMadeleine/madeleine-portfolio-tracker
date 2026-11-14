@@ -122,7 +122,14 @@ def _build_report(
             names = list(e.get("lists") or [])
             if scope:
                 names = [n for n in names if n in scope]
-            sym_lists.setdefault(_sym(e), names)
+            key = _sym(e)
+            sym_lists.setdefault(key, names)
+            # 无法解析的代码在视图里保留原始输入 (可能小写/混合大小写),
+            # 而 _sym 会 upper() 它; 两个键都登记, 否则该行在所有列表里
+            # 都取不到 lists (仍计入总数, 但 Markdown 分组里消失)。
+            raw = str(e.get("symbol", "")).strip()
+            if raw and raw != key:
+                sym_lists.setdefault(raw, names)
         except ValueError:
             pass
     return wview, trig, sym_lists, issues

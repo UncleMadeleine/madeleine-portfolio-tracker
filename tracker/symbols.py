@@ -439,7 +439,9 @@ def is_currency_code(value: object) -> bool:
     s = str(value or "").strip()
     if s.upper() in ("NONE", "NULL", "NAN"):
         return False
-    return 3 <= len(s) <= 5 and s.isalpha()
+    # 必须是 ASCII 字母: str.isalpha() 会把 "人民币" 这类本地化文本也当成
+    # 货币代码, 绕过占位符校验后拼出伪 Yahoo 货币对。
+    return 3 <= len(s) <= 5 and s.isascii() and s.isalpha()
 
 
 def _is_us_preferred(quote: str) -> bool:

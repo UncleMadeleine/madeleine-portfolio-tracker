@@ -372,6 +372,17 @@ def _configured_quote_order(
     return None
 
 
+def _longport_can_quote(parsed: ParsedSymbol) -> bool:
+    """长桥是否真的能为该代码提供行情 (与 get_quotes_longport 能力过滤一致)."""
+    from .. import longport as lp_mod
+
+    return not (
+        parsed.is_b_share
+        or parsed.market is Market.SG
+        or lp_mod.yahoo_to_longport(parsed.yahoo) is None
+    )
+
+
 def _first_configured_quote_source(
     parsed: ParsedSymbol,
     order: list[str],
@@ -393,13 +404,7 @@ def _first_configured_quote_source(
             # 与 get_quotes_longport 的能力过滤保持完全一致: B 股/SG 虽能
             # 拼出 ticker, 长桥实际不提供行情; 日韩德英加澳/北交所则连
             # 映射都没有。不跳过会让 yfinance 缓存永远「来源不符」而反复回源。
-            from .. import longport as lp_mod
-
-            if (
-                parsed.is_b_share
-                or parsed.market is Market.SG
-                or lp_mod.yahoo_to_longport(parsed.yahoo) is None
-            ):
+            if not _longport_can_quote(parsed):
                 continue
             return "longport"
         elif source_id == "eodhd":
@@ -431,7 +436,11 @@ def _legacy_required_quote_source(
     """未配置 source_order 时, 旧版优先级最高源所对应的 Quote.source."""
     if use_ibkr and parsed.type == "global":
         return "ibkr"
-    if use_longport and parsed.type in ("global", "cn") and not parsed.is_b_share:
+    if (
+        use_longport
+        and parsed.type in ("global", "cn")
+        and _longport_can_quote(parsed)
+    ):
         return "longport"
     if prefer_akshare and parsed.market is Market.HK:
         return "akshare"
@@ -511,8 +520,11 @@ def get_quotes(
         if progress is not None:
             progress(min(len(settled), total), total, label)
 
-    if refresh:
-        # 强制刷新: 负缓存只按代码记, 不清会让「上次失败」继续挡住本轮取数
+    if refresh or source_strict:
+        # 强制刷新/命令行显式指定数据源: 负缓存只按代码记, 不清会让「上次
+        # 失败」继续挡住本轮取数 (例如默认链失败后 `--crypto-source gate`
+        # 根本不执行)。UI/设置页切换源时由设置页自行 neg_clear_all, 这里
+        # 不能按 use_longport 等设置态清, 否则失败代码会在每次刷新时重试。
         for yahoo in by_yahoo:
             neg_clear(yahoo)
     # 优先读本地缓存 (refresh 时跳过, 真正回源)
@@ -568,7 +580,13 @@ def get_quotes(
             notes.append(f"长桥接入异常: {e}")
         _emit("长桥批量行情")
     if use_ibkr and global_order is None:
-        ib_plist = [p for p in by_yahoo.values() if p.type == "global"]
+        # 与长桥预取一致: 新鲜缓存命中的代码不再打 IBKR 配额; 原先未过滤,
+        # 一只缺失代码会让整个全球域 (可能数百只) 重新批量请求。
+        ib_plist = [
+            p
+            for p in by_yahoo.values()
+            if p.type == "global" and p.yahoo not in quotes
+        ]
         if ib_plist:
             _emit("IBKR 批量行情")
             try:

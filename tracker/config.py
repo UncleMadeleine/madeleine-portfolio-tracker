@@ -55,6 +55,7 @@ def load_json_object(path: str | Path) -> dict:
     """读取 JSON 对象; 缺失/损坏/非对象返回 {} (配置错误不阻断取数).
 
     - utf-8-sig: 兼容编辑器存成的带 BOM 文件
+    - gbk 兜底: 中文 Windows 编辑器 (记事本 ANSI) 保存的配置也能读取
     - mtime_ns + size 缓存: 反复读同一份配置时只解析一次
     - 返回深拷贝: 调用方修改 cfg 不会污染缓存
     """
@@ -69,8 +70,23 @@ def load_json_object(path: str | Path) -> dict:
     if hit is not None and hit[0] == key:
         return copy.deepcopy(hit[1])
     try:
-        data = json.loads(p.read_text(encoding="utf-8-sig"))
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        raw = p.read_bytes()
+    except OSError:
+        return {}
+    # 与 storage._read_json 同口径: 中文 Windows 编辑器常把 JSON 存成 GBK,
+    # 只按 UTF-8 读会 UnicodeDecodeError 并静默当成空配置, 用户配置全部失效。
+    text = None
+    for enc in ("utf-8-sig", "gbk"):
+        try:
+            text = raw.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    if text is None:
+        return {}
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
         return {}
     if not isinstance(data, dict):
         return {}

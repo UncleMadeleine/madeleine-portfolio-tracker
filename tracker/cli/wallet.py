@@ -64,7 +64,9 @@ def cmd_import_wallet(args: argparse.Namespace) -> None:
     # 部分 RPC 失败时结果不完整, 清理会误删仍存在的余额。
     prune = importer.wallet_source(result) if not errors else None
     res = None
-    if rows or (prune and args.add):
+    # --overwrite 时即使查询结果为空也要执行: 钱包余额已全部转出, 必须清掉
+    # 该地址的旧持仓 (与 `tracker import wallet --overwrite` 行为一致)。
+    if rows or (prune and (args.add or args.overwrite)):
         mode = importer.MODE_OVERWRITE if args.overwrite else importer.MODE_APPEND
         res = importer.apply_import(
             rows, args.portfolio, mode=mode, prune_source=prune

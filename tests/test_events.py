@@ -134,6 +134,73 @@ class TestCnPeriods:
         )
 
 
+class TestDirtyCacheRows:
+    def test_window_rows_skips_row_without_type(self):
+        rows = events._window_rows(
+            [{"date": "2026-11-10", "source": "yfinance"}],
+            date(2026, 11, 1),
+            date(2026, 11, 30),
+        )
+        assert rows == []
+
+    def test_fetch_calendar_ignores_dirty_global_row(self, monkeypatch):
+        """缺 type 的缓存/上游行不能触发排序阶段 KeyError 弄挂整张日历."""
+        monkeypatch.setattr(
+            events,
+            "_yf_calendar_rows",
+            lambda s: [{"date": "2026-11-10", "source": "yfinance"}],
+        )
+        r = fetch_calendar(["AAPL"], months=2, refresh=True)
+        assert r["events"] == []
+
+
+    def test_future_cn_period_is_not_requested(self, monkeypatch):
+        """窗口包含尚未结束的季度时, 不能拿未来报表期去问东财 (必失败)."""
+        import pandas as pd
+
+        today = date.today()
+        start = date(today.year + 1, 12, 1)
+        end = date(today.year + 2, 1, 31)
+        calls: list[str] = []
+
+        def fake_yysj(symbol, date):
+            calls.append(date)
+            return pd.DataFrame()
+
+        def fake_fhps(date):
+            calls.append(date)
+            return pd.DataFrame()
+
+        monkeypatch.setattr("akshare.stock_yysj_em", fake_yysj)
+        monkeypatch.setattr("akshare.stock_fhps_em", fake_fhps)
+        fetch_calendar(["600519.SS"], start=start, end=end, refresh=True)
+        assert all(c <= today.strftime("%Y%m%d") for c in calls)
+
+
+    def test_dividend_note_skips_zero_cash_component(self):
+        import pandas as pd
+
+        from tracker.events import _cn_normalize_fhps
+
+        df = pd.DataFrame(
+            [
+                {
+                    "代码": "600519",
+                    "名称": "贵州茅台",
+                    "现金分红-现金分红比例": 0.0,
+                    "送转股份-送转总比例": 10.0,
+                    "股权登记日": "2026-11-10",
+                    "除权除息日": "2026-11-11",
+                    "方案进度": "实施分配",
+                }
+            ]
+        )
+        evs = _cn_normalize_fhps(df)
+        assert evs
+        assert all("现金分红" not in (e.get("note") or "") for e in evs)
+        assert all("送转" in (e.get("note") or "") for e in evs)
+
+
 class TestMonthSlices:
     def test_two_months(self):
         segs = _month_starts(date(2026, 10, 22), date(2026, 12, 15))

@@ -516,6 +516,13 @@ def _window_rows(
     """缓存载荷行 → 窗口内事件行 (date 统一 date 对象; source/symbol 补齐)."""
     picked = []
     for r in evs or []:
+        if not isinstance(r, dict):
+            continue
+        # 旧版本/手改缓存可能混进缺 type 的行; 排序阶段 e["type"] 会 KeyError,
+        # 让整张日历挂掉。脏行只跳过, 其余事件照常渲染。
+        typ = r.get("type")
+        if not isinstance(typ, str) or not typ.strip():
+            continue
         d = _to_date(r.get("date"))
         if _in_window(d, start, end):
             r = dict(r)
@@ -624,6 +631,13 @@ def _fetch_cn_cached(
     return evs, None, meta
 
 
+def _akshare():
+    """惰性导入 akshare: 缓存命中/首屏 cache_only 路径不应付冷启动成本."""
+    import akshare
+
+    return akshare
+
+
 def _fetch_cn_yysj_board(
     board: str,
     period: str,
@@ -634,8 +648,6 @@ def _fetch_cn_yysj_board(
     quiet: bool = True,
 ) -> tuple[list[dict], str | None, dict]:
     """单个板块的预约披露 (缓存优先, TTL 6h) → events, error, meta."""
-    import akshare as ak
-
     return _fetch_cn_cached(
         f"cn:yysj:{period}:{board}",
         period=period,
@@ -646,7 +658,7 @@ def _fetch_cn_yysj_board(
         reporter=reporter,
         quiet=quiet,
         fetch=lambda: with_timeout(
-            ak.stock_yysj_em, _AK_TIMEOUT, symbol=board, date=period
+            _akshare().stock_yysj_em, _AK_TIMEOUT, symbol=board, date=period
         ),
         normalize=lambda df: _cn_normalize_disclosure(df, period),
         error_text=lambda e: f"akshare 预约披露 {period} {board} 失败 ({e})",
@@ -662,8 +674,6 @@ def _fetch_cn_fhps_period(
     quiet: bool = True,
 ) -> tuple[list[dict], str | None, dict]:
     """单个报表期的分红送转 (缓存优先, TTL 6h) → events, error, meta."""
-    import akshare as ak
-
     return _fetch_cn_cached(
         f"cn:fhps:{period}",
         period=period,
@@ -673,7 +683,7 @@ def _fetch_cn_fhps_period(
         cache_only=cache_only,
         reporter=reporter,
         quiet=quiet,
-        fetch=lambda: with_timeout(ak.stock_fhps_em, _AK_TIMEOUT, date=period),
+        fetch=lambda: with_timeout(_akshare().stock_fhps_em, _AK_TIMEOUT, date=period),
         normalize=_cn_normalize_fhps,
         error_text=lambda e: f"akshare 分红 {period} 失败 ({e})",
     )
@@ -769,6 +779,9 @@ def _fetch_cn_events(
             sym = ev.get("symbol")
             if not isinstance(sym, str) or not sym:
                 continue
+            typ = ev.get("type")
+            if not isinstance(typ, str) or not typ.strip():
+                continue
             d = _pd_date(ev.get("date"))
             if sym in symbols and _in_window(d, start, end):
                 events.append({**ev, "date": d})
@@ -776,10 +789,18 @@ def _fetch_cn_events(
                     names[sym] = ev["name"]
 
     boards = _cn_boards_for(symbols)
-    earn_periods = cn_periods_for_window(start, end)
+    # 未来的报表期不可能已经有预约披露/分红实施数据, 东财接口对这类 date
+    # 还会抛 TypeError 并被当成「数据源失败」反复重试。窗口可以包含尚未结束
+    # 的季度 (如 11 月查 12 月), 这里按今天截断。
+    today_s = date.today().strftime("%Y%m%d")
+    earn_periods = [
+        p for p in cn_periods_for_window(start, end) if p <= today_s
+    ]
     earn_set = set(earn_periods)
     div_extra = [
-        p for p in cn_dividend_periods_for_window(start, end) if p not in earn_set
+        p
+        for p in cn_dividend_periods_for_window(start, end)
+        if p not in earn_set and p <= today_s
     ]
 
     # (kind, period, board) 任务清单: 预约披露按板块拆, 分红按报表期拆。
@@ -1293,7 +1314,7 @@ def fetch_calendar(
     for ev in events:
         src = ev.get("source") or "yfinance"
         sources[src] = sources.get(src, 0) + 1
-    events.sort(key=lambda e: (e["date"], e["symbol"], e["type"]))
+    events.sort(key=lambda e: (e["date"], e.get("symbol") or "", e.get("type") or ""))
     if cache_only and not meta["used"]:
         # 完全没有可渲染的缓存: 首屏只能阻塞取数, 由调用方处理
         return None

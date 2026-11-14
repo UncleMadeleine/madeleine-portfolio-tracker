@@ -35,6 +35,30 @@ RECENT_LIMIT = 10
 # 连累整个页面的其它查询)。
 BUST_KEY = "_kline_cache_bust"
 
+
+def _source_state(
+    prefer_akshare: bool,
+    use_ibkr: bool,
+    use_longport: bool,
+    crypto_source: str,
+) -> tuple:
+    """影响 K 线实际来源的全部配置 (会话数据失效键).
+
+    不能只看四个布尔/枚举参数: 设置页的拖动源顺序、EODHD 角色/复权/
+    币种覆盖同样会改变 prices.get_ohlc 的结果。缺少这些签名时, 改完设置
+    回到 K线页会继续展示旧源的会话数据, 直到换代码或点强制刷新。
+    """
+    from tracker import eodhd, source_order
+
+    return (
+        prefer_akshare,
+        use_ibkr,
+        use_longport,
+        crypto_source,
+        source_order.signature(),
+        eodhd.cache_signature(),
+    )
+
 # TradingView lightweight-charts 组件 (st.components.v2, JS 不过 DOMPurify):
 # 拖动平移 / 滚轮·捏合缩放 / 触控板双指手势, 券商 App 通用交互.
 _KLINE_CHART = st.components.v2.component(
@@ -844,7 +868,7 @@ def _render_slide_mode(
 
     # 失效键含数据源偏好组: 设置页切换 prefer_akshare/use_ibkr/use_longport/
     # crypto_source 后必须重取数, 否则继续展示旧源数据
-    src = (prefer_akshare, use_ibkr, use_longport, crypto_source)
+    src = _source_state(prefer_akshare, use_ibkr, use_longport, crypto_source)
     qid = (yahoo, *src)
     prev_qid = st.session_state.get(state_qid_key)
     qid_changed = prev_qid != qid
@@ -1108,7 +1132,7 @@ def render_kline_controls(
     # ---- 范围模式 (旧流程兜底) ----
     # 已查询标志取数成功后置位 (两种模式共用): 范围模式曾只在滑动模式赋值,
     # 纯范围流程改均线/周期/成交量后整张图退回「点查询」提示页, 只能重按
-    src = (prefer_akshare, use_ibkr, use_longport, crypto_source)
+    src = _source_state(prefer_akshare, use_ibkr, use_longport, crypto_source)
     # 范围模式: 代码/范围/数据源设置变化才重新取数; 其余参数变化只重绘。
     data_changed = (
         st.session_state.get("kline_current_symbol") != yahoo

@@ -167,19 +167,23 @@ def _store_order(domain: str, channel: str, order: list[str]) -> None:
 
 def _reset_order(domain: str, channel: str) -> None:
     changed = False
-    with storage.edit_settings(storage.SETTINGS_PATH) as settings:
-        raw = settings.get("source_order")
-        if isinstance(raw, dict):
-            raw = copy.deepcopy(raw)
-            domain_cfg = raw.get(domain)
-            if isinstance(domain_cfg, dict) and channel in domain_cfg:
-                domain_cfg.pop(channel, None)
-                if domain_cfg:
-                    raw[domain] = domain_cfg
-                else:
-                    raw.pop(domain, None)
-                settings["source_order"] = raw
-                changed = True
+    try:
+        with storage.edit_settings(storage.SETTINGS_PATH) as settings:
+            raw = settings.get("source_order")
+            if isinstance(raw, dict):
+                raw = copy.deepcopy(raw)
+                domain_cfg = raw.get(domain)
+                if isinstance(domain_cfg, dict) and channel in domain_cfg:
+                    domain_cfg.pop(channel, None)
+                    if domain_cfg:
+                        raw[domain] = domain_cfg
+                    else:
+                        raw.pop(domain, None)
+                    settings["source_order"] = raw
+                    changed = True
+    except Exception as e:  # noqa: BLE001 - 设置文件锁/损坏不应炸整页
+        st.error(f"恢复默认顺序失败: {e}")
+        return
     if not changed:
         return
     so.clear_cache()

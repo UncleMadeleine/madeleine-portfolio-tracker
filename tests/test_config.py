@@ -78,6 +78,15 @@ def test_load_tolerates_bom_and_caches(tmp_path):
     assert config.load_json_object(p)["token"] == "new"
 
 
+def test_load_tolerates_gbk_encoded_json(tmp_path):
+    """中文 Windows 编辑器常存成 GBK; 不能静默当空配置丢弃用户设置."""
+    p = tmp_path / "cfg.json"
+    p.write_bytes(
+        json.dumps({"mode": "paper", "_comment": "中文说明"}).encode("gbk")
+    )
+    assert config.load_json_object(p) == {"mode": "paper", "_comment": "中文说明"}
+
+
 def test_load_returns_deep_copy(tmp_path):
     p = tmp_path / "nested.json"
     p.write_text(json.dumps({"nested": {"a": 1}}), encoding="utf-8")

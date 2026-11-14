@@ -224,6 +224,112 @@ class TestRoutescan:
         assert token_deltas == [pytest.approx(50.0)]
 
 
+    def test_internal_root_operation_is_not_double_counted(self, monkeypatch):
+        """Routescan internal-operations 的 opIndex=0 是交易根调用, 与 txlist 重复."""
+        one_eth = "1000000000000000000"
+
+        def fake(url, params=None, **_kw):
+            if url.endswith("/gas-balance"):
+                return {"items": [{"balance": "0"}]}
+            if url.endswith("/erc20-holdings"):
+                return {"items": [], "link": {}}
+            if url.endswith("/erc20-transfers"):
+                return {"items": [], "link": {}}
+            if url.endswith("/transactions"):
+                return {
+                    "items": [
+                        {
+                            "id": "0x1",
+                            "timestamp": "2026-01-02T01:00:00Z",
+                            "from": "0xother",
+                            "to": ADDR,
+                            "value": one_eth,
+                            "gasUsed": "0",
+                            "gasPrice": "0",
+                            "status": True,
+                        }
+                    ],
+                    "link": {},
+                }
+            if url.endswith("/internal-operations"):
+                return {
+                    "items": [
+                        {
+                            "opIndex": 0,
+                            "txHash": "0x1",
+                            "timestamp": "2026-01-02T01:00:00Z",
+                            "from": "0xother",
+                            "to": ADDR,
+                            "value": one_eth,
+                            "status": True,
+                        }
+                    ],
+                    "link": {},
+                }
+            raise AssertionError(url)
+
+        monkeypatch.setattr(wh, "_http_json", fake)
+        ledger = wh._fetch_evm_routescan(
+            1,
+            "eth",
+            ADDR,
+            _ts("2026-01-01"),
+            _ts("2026-01-03", 23),
+            {**wh.DEFAULTS, "max_pages": 2},
+        )
+        native = [t.delta for t in ledger.transfers if t.asset_key == "native"]
+        assert sum(native) == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
+# Blockscout
+# ---------------------------------------------------------------------------
+
+
+class TestBlockscout:
+    def test_fee_object_is_deducted(self, monkeypatch):
+        """Blockscout v2 的 fee 是对象; 解析成 0 会漏掉所有转出 gas."""
+        fee_wei = "3400145656320"
+
+        def fake(url, params=None, **_kw):
+            if url.endswith("/token-balances"):
+                return []
+            if "/token-transfers" in url:
+                return {"items": [], "next_page_params": None}
+            if url.endswith("/transactions"):
+                return {
+                    "items": [
+                        {
+                            "hash": "0xout",
+                            "timestamp": "2026-01-02T01:00:00Z",
+                            "from": {"hash": ADDR},
+                            "to": {"hash": "0xother"},
+                            "value": "0",
+                            "fee": {"type": "actual", "value": fee_wei},
+                            "status": "ok",
+                        }
+                    ],
+                    "next_page_params": None,
+                }
+            if url.endswith("/internal-transactions"):
+                return {"items": [], "next_page_params": None}
+            if url.rstrip("/").endswith(f"/addresses/{ADDR}"):
+                return {"coin_balance": "0"}
+            raise AssertionError(url)
+
+        monkeypatch.setattr(wh, "_http_json", fake)
+        ledger = wh._fetch_evm_blockscout(
+            "https://example.invalid",
+            "eth",
+            ADDR,
+            _ts("2026-01-01"),
+            _ts("2026-01-03", 23),
+            {**wh.DEFAULTS, "max_pages": 2},
+        )
+        native = [t.delta for t in ledger.transfers if t.asset_key == "native"]
+        assert native == [pytest.approx(-int(fee_wei) / 1e18)]
+
+
 # ---------------------------------------------------------------------------
 # Etherscan 兼容接口
 # ---------------------------------------------------------------------------
@@ -387,6 +493,55 @@ class TestTron:
         native = [t.delta for t in ledger.transfers if t.asset_key == "native"]
         assert native == [pytest.approx(-(2.0 + 0.1))]
 
+    def test_failed_transfer_only_counts_fee(self, monkeypatch):
+        hex_addr = wh._tron_hex_address(TRON_ADDR)
+
+        def fake_get(path, cfg):
+            if path.startswith("/v1/accounts/") and "/transactions/trc20" in path:
+                return {"data": [], "meta": {}}
+            if path.startswith("/v1/accounts/") and "/transactions" in path:
+                return {
+                    "data": [
+                        {
+                            "txID": "tfail",
+                            "block_timestamp": _ts("2026-01-02") * 1000,
+                            "raw_data": {
+                                "contract": [
+                                    {
+                                        "type": "TransferContract",
+                                        "parameter": {
+                                            "value": {
+                                                "owner_address": hex_addr,
+                                                "to_address": "41" + "11" * 20,
+                                                "amount": 2000000,
+                                            }
+                                        },
+                                    }
+                                ]
+                            },
+                            "ret": [
+                                {"fee": 100000, "contractRet": "REVERT"}
+                            ],
+                        }
+                    ],
+                    "meta": {},
+                }
+            if path.startswith("/v1/accounts/"):
+                return {"data": [{"balance": 0, "trc20": []}]}
+            raise AssertionError(path)
+
+        monkeypatch.setattr(wh, "_tron_get", fake_get)
+        ledger = wh.fetch_ledger(
+            "tron",
+            TRON_ADDR,
+            date(2026, 1, 1),
+            date(2026, 1, 3),
+            cfg=wh.DEFAULTS,
+        )
+        # 失败转账的 2 TRX 并未移动, 只应扣 0.1 TRX 手续费
+        native = [t.delta for t in ledger.transfers if t.asset_key == "native"]
+        assert native == [pytest.approx(-0.1)]
+
 
 # ---------------------------------------------------------------------------
 # Solana
@@ -481,3 +636,50 @@ class TestSolana:
         assert native == [pytest.approx(-0.5)]
         token = [t for t in ledger.transfers if t.asset_key == usdc_mint]
         assert [t.delta for t in token] == [pytest.approx(2.0)]
+
+    def test_wsol_is_merged_into_native(self, monkeypatch):
+        wsol = "So11111111111111111111111111111111111111112"
+
+        def fake_rpc(method, params, cfg):
+            if method == "getBalance":
+                return {"value": 1_000_000_000}
+            if method == "getTokenAccountsByOwner":
+                if (
+                    params[1].get("programId")
+                    != "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+                ):
+                    return {"value": []}
+                return {
+                    "value": [
+                        {
+                            "account": {
+                                "data": {
+                                    "parsed": {
+                                        "info": {
+                                            "mint": wsol,
+                                            "tokenAmount": {
+                                                "amount": "1000000000",
+                                                "decimals": 9,
+                                            },
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    ]
+                }
+            if method == "getSignaturesForAddress":
+                return []
+            raise AssertionError(method)
+
+        monkeypatch.setattr(wh, "_sol_rpc", fake_rpc)
+        ledger = wh.fetch_ledger(
+            "solana",
+            SOL_ADDR,
+            date(2026, 1, 2),
+            date(2026, 1, 2),
+            cfg={**wh.DEFAULTS, "max_pages": 2, "max_transactions": 10},
+        )
+        assert ledger.current["native"] == pytest.approx(2.0)
+        assert wsol not in ledger.assets
+        assert any("wSOL" in note for note in ledger.notes)

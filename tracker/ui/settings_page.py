@@ -217,21 +217,26 @@ def render_settings_page() -> None:
     st.markdown("#### 基础货币")
     portfolio = storage.load_portfolio(storage.PORTFOLIO_PATH)
     saved_base = portfolio.get("base_currency", "CNY")
+    # 保存值可能来自 CLI/手改 (如 JPY), 不在常用列表里。直接把它塞进
+    # selectbox 的 session_state 会让 Streamlit 回退显示第一项 (CNY),
+    # 页面看起来像已切成 CNY, 实际组合仍按 JPY 估值。把它临时加入选项。
+    base_options = list(S.BASE_CURRENCIES)
+    if saved_base not in base_options:
+        base_options.append(saved_base)
     if st.session_state.get("set_base_currency") != saved_base:
         st.session_state["set_base_currency"] = saved_base
     st.selectbox(
         "基础货币",
-        S.BASE_CURRENCIES,
-        index=S.BASE_CURRENCIES.index(saved_base)
-        if saved_base in S.BASE_CURRENCIES
-        else 0,
+        base_options,
+        index=base_options.index(saved_base),
         key="set_base_currency",
         on_change=_save_base,
         help="组合市值/盈亏的换算货币; CLI snapshot 默认也读取该值",
     )
     if saved_base not in S.BASE_CURRENCIES:
-        st.warning(
-            f"portfolio.json 中的基础货币 {saved_base} 不在常用列表, 保存后将被覆盖。"
+        st.info(
+            f"portfolio.json 的基础货币 {saved_base} 不在常用列表, 已临时加入选项; "
+            "可保留或改为常用货币。"
         )
 
 

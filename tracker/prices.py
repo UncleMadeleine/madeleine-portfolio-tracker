@@ -46,7 +46,8 @@ def get_quote(
     from .providers.base import resolve
 
     p = parse(symbol)
-    if refresh:
+    if refresh or prefer_akshare or crypto_source != "auto":
+        # 显式指定源时清掉负缓存: 否则默认链上一次失败会挡住新指定的源。
         orch.neg_clear(p.yahoo)
     elif orch.neg_cached(p.yahoo):
         raise RuntimeError(

@@ -96,6 +96,12 @@ def _non_negative(value: object) -> float | None:
     return f if f is not None and f >= 0 else None
 
 
+def _percent(value: object) -> float | None:
+    """确定是比例的值 → 百分数 (payout_ratio 始终为比例, 可 >100%)."""
+    f = _non_negative(value)
+    return f * 100.0 if f is not None else None
+
+
 def _fraction_or_percent(value: object) -> float | None:
     """兼容「小数比例」与「百分数」两种数据源口径.
 
@@ -127,8 +133,10 @@ def _snapshot_from_metrics(
         dividend_yield_5y_avg_pct=_fraction_or_percent(
             data.get("dividend_yield_5y_avg")
         ),
-        # OpenBB 的 payout_ratio 为比例 (0.2955 = 29.55%)
-        payout_ratio_pct=_fraction_or_percent(data.get("payout_ratio")),
+        # OpenBB 的 payout_ratio 为比例 (0.2955 = 29.55%); 该指标可以
+        # 合法地超过 100% (如 PFE 2.457), 不能套用「≤1 才 ×100」的启发式,
+        # 否则 245.7% 会被显示成 2.46%。
+        payout_ratio_pct=_percent(data.get("payout_ratio")),
         eps_ttm=_positive(data.get("eps_ttm")),
         book_value=_positive(data.get("book_value")),
         market_cap=_positive(data.get("market_cap")),

@@ -447,6 +447,20 @@ def kline_page_app(monkeypatch):
 
 
 class TestUiFixes:
+    def test_source_state_tracks_configured_order_and_eodhd(self, monkeypatch):
+        """会话缓存失效键必须包含源顺序/EODHD 签名, 否则改设置后仍显示旧源."""
+        import tracker.eodhd as eodhd
+        import tracker.source_order as so
+
+        monkeypatch.setattr(so, "signature", lambda: "order-a")
+        monkeypatch.setattr(eodhd, "cache_signature", lambda: "eodhd-a")
+        a = kline_page._source_state(False, False, False, "auto")
+        monkeypatch.setattr(so, "signature", lambda: "order-b")
+        b = kline_page._source_state(False, False, False, "auto")
+        monkeypatch.setattr(eodhd, "cache_signature", lambda: "eodhd-b")
+        c = kline_page._source_state(False, False, False, "auto")
+        assert a != b and b != c
+
     def test_pick_from_non_last_domain_works(self, kline_page_app):
         """从第一个非空域 (cn) 的下拉选中: 回填代码 (修复前 key 漂移到最后域)."""
         app = kline_page_app

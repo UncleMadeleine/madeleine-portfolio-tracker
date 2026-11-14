@@ -146,7 +146,9 @@ def _cn_normalize_fhps(df) -> list[dict]:
             ("送转(股/10股)", "送转股份-送转总比例"),
         ):
             v = _cn_num(r.get(col)) if col in df.columns else None
-            if v:
+            # 送转-only 方案 (现金分红=0) 不应出现 "现金分红 … 0" 的噪音;
+            # _cn_num 返回字符串 "0"/"-0", 不能用真值判断。
+            if v is not None and float(v) != 0:
                 note_bits.append(f"{label} {v}")
         note = "·".join(note_bits) or None
         if progress_col:

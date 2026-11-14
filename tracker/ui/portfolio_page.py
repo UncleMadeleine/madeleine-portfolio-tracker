@@ -213,6 +213,18 @@ def _start_refresh(key: tuple, plan: dict) -> bool:
 
 
 
+def _status_md_tag(status: object, up_tag: str, down_tag: str) -> str:
+    """阈值状态 → Streamlit 颜色标签 (上限用涨色, 下限用跌色)."""
+    s = str(status or "")
+    if s.startswith(("🟠", "🔴")):
+        return up_tag
+    if s.startswith("🟢"):
+        return down_tag
+    if s.startswith("🟡"):
+        return "orange"
+    return up_tag
+
+
 def _local_quote_errors(fetch_symbols) -> dict[str, str]:
     """纯本地计算的低级错误 (代码无法识别), 不依赖刷新结果.
 
@@ -1287,10 +1299,11 @@ def render_portfolio_page() -> None:
         with st.container(border=True):
             top, more = st.columns([5, 1], vertical_alignment="center")
             scope_tag = "" if scope == "全部" else f" ({scope})"
+            up_tag, down_tag = S.up_down_tags()
             top.markdown(
                 f":material/notifications_active: **{len(trig_all)} 只自选触及价格阈值**{scope_tag} · "
                 + " · ".join(
-                    f"**:{S.up_down_tags()[0]}[{r['symbol']}]** {r['status'].split(' ', 1)[1]}"
+                    f"**:{_status_md_tag(r['status'], up_tag, down_tag)}[{r['symbol']}]** {r['status'].split(' ', 1)[1]}"
                     for _, r in trig_all.iterrows()
                 )
             )

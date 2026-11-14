@@ -467,7 +467,9 @@ def _tron_account(
     if not isinstance(body, dict):
         raise RuntimeError(f"TRON 响应格式异常: {str(body)[:100]}")
     data = body.get("data") or []
-    return data[0] if data else {}
+    # data 元素同样可能是畸形结构 (list/str/null): 只在确认为对象时返回,
+    # 否则调用方 account.get(...) 会抛 AttributeError 逃出可读错误路径。
+    return data[0] if data and isinstance(data[0], dict) else {}
 
 
 # ---------------------------------------------------------------------------

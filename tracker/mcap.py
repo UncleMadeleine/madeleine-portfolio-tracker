@@ -279,9 +279,50 @@ def _em_history(bare: str, refresh: bool = False) -> pd.DataFrame | None:
     return df
 
 
+def _adjust_shares_for_splits(
+    df: pd.DataFrame, splits: pd.Series | None
+) -> pd.DataFrame:
+    """把历史股本换算到与 split-adjusted 收盘价相同的「当前股数」口径.
+
+    ``get_shares_full`` 返回的是当时实际股数, 而行情源的 Close 已按拆股
+    回溯调整。两者直接相乘会在拆股日出现一个 N 倍的假跳变 (AAPL 4:1 /
+    NVDA 10:1)。对 split 日之前的股数乘以拆股比例, 即换算成当前股数;
+    同日同时出现拆股前/后的两条记录时, 保留拆股后的那条。
+
+    纯函数, 便于离线测试。
+    """
+    if df is None or df.empty or splits is None or len(splits) == 0:
+        return df
+    out = df.copy()
+    out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.normalize()
+    out = out.dropna(subset=["date"])
+    for raw_date, raw_ratio in splits.items():
+        try:
+            split_date = pd.Timestamp(raw_date)
+            ratio = float(raw_ratio)
+        except (TypeError, ValueError):
+            continue
+        if split_date.tzinfo is not None:
+            split_date = split_date.tz_localize(None)
+        split_date = split_date.normalize()
+        if not (ratio > 0) or ratio == 1:
+            continue
+        before = out["date"] < split_date
+        out.loc[before, "close"] = out.loc[before, "close"] * ratio
+        same = out["date"] == split_date
+        if int(same.sum()) > 1:
+            # 拆股日可能同时返回拆股前/后的股数: 正向拆股取较大值,
+            # 反向合股取较小值, 即拆股后的实际股本。
+            target = out.loc[same, "close"].max() if ratio > 1 else out.loc[
+                same, "close"
+            ].min()
+            out.loc[same, "close"] = target
+    return out
+
+
 def _shares_history(yahoo: str, refresh: bool = False) -> pd.DataFrame | None:
     """yfinance 历史股本 (date/close=股本数); 全量历史一次性缓存 7 天."""
-    key = f"shares_full:{yahoo}"
+    key = f"shares_full_v2:{yahoo}"
     hit = None if refresh else _cache_get(key, MCAP_SHARES_TTL)
     if hit is not None:
         return hit
@@ -296,6 +337,11 @@ def _shares_history(yahoo: str, refresh: bool = False) -> pd.DataFrame | None:
         return None
     if srs is None or len(srs) == 0:
         return None
+    # 拆股事件单独取; 失败时退化为不调整 (仍好过整个市值路径不可用)
+    try:
+        splits = with_timeout(lambda: ticker.splits, _SHARES_TIMEOUT)
+    except Exception:
+        splits = None
     df = pd.DataFrame(
         {
             "date": pd.to_datetime(srs.index, errors="coerce"),
@@ -307,6 +353,7 @@ def _shares_history(yahoo: str, refresh: bool = False) -> pd.DataFrame | None:
     # 股本变更被提前一天应用。tz_localize(None) 只剥时区, 不改墙上时间。
     if getattr(df["date"].dt, "tz", None) is not None:
         df["date"] = df["date"].dt.tz_localize(None)
+    df = _adjust_shares_for_splits(df, splits)
     df = (
         df[df["close"] > 0]
         .groupby("date", as_index=False)["close"]

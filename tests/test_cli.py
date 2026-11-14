@@ -593,6 +593,40 @@ class TestImportWalletCli:
         assert data["holdings"][1]["type"] == "crypto"
         assert data["base_currency"] == "CNY"
 
+    def test_import_wallet_overwrite_clears_emptied_wallet(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        """钱包余额归零后 --overwrite 必须清掉旧持仓 (不能因 rows 为空而跳过)."""
+        self._mock_rpc(monkeypatch, 0)
+        f = tmp_path / "p.json"
+        src = f"wallet:eth:{self.ADDR.lower()}"
+        f.write_text(
+            json.dumps(
+                {
+                    "base_currency": "CNY",
+                    "holdings": [
+                        {
+                            "symbol": "ETH-USD",
+                            "quantity": 1.0,
+                            "type": "crypto",
+                            "import_source": src,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        _run(
+            capsys,
+            "import-wallet",
+            "eth",
+            self.ADDR,
+            "--portfolio",
+            str(f),
+            "--overwrite",
+        )
+        assert _load(f)["holdings"] == []
+
     def test_import_wallet_unsupported_chain(self, capsys):
         with pytest.raises(SystemExit) as exc:
             _run(capsys, "import-wallet", "cosmos", self.ADDR)
@@ -875,6 +909,23 @@ class TestReportCli:
         )
         assert "报告已写入" in out
         assert "# 自选监控阈值报告" in out_f.read_text(encoding="utf-8")
+
+    def test_report_keeps_unparseable_symbol_in_list_group(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        """无法解析的代码保留原始大小写; 列表分组不能因归一化键不同而丢行."""
+        monkeypatch.setattr(
+            cli.prices, "get_quotes", lambda symbols, **kw: ({}, {}, [])
+        )
+        f = tmp_path / "w.json"
+        f.write_text(
+            json.dumps({"watchlist": [{"symbol": "bad.zz", "lists": ["X"]}]}),
+            encoding="utf-8",
+        )
+        out = _run(capsys, "report", "--file", str(f), "-f", "json")
+        data = json.loads(out)
+        assert data["summary"]["total"] == 1
+        assert [r["symbol"] for r in data["by_list"]["X"]] == ["bad.zz"]
 
     def test_report_scope_filter(self, tmp_path, capsys, monkeypatch):
         monkeypatch.setattr(cli.prices, "get_quotes", self._fake_quotes)

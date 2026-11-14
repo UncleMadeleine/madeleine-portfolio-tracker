@@ -793,6 +793,14 @@ def _fetch_evm_routescan(
                 continue
             if not bool(row.get("status", True)):
                 continue
+            # Routescan 的 internal-operations 会把每笔交易的根调用
+            # (opIndex=0) 也列出来, 它和 /transactions 的同一条记录完全重复。
+            # 不跳过会把所有原生币转入/转出计算两遍, 反推历史余额时整体偏移。
+            try:
+                if row.get("opIndex") is not None and int(row["opIndex"]) == 0:
+                    continue
+            except (TypeError, ValueError):
+                pass
             value = _to_float(row.get("value")) or 0.0
             if not value:
                 continue
@@ -969,7 +977,18 @@ def _fetch_evm_blockscout(
         dst = _bs_hash(row.get("to")).lower()
         addr = address.lower()
         value = _to_float(row.get("value")) or 0.0
-        fee = _to_float(row.get("fee")) or 0.0
+        # Blockscout v2 的 fee 是对象 ({"type":"actual","value":"..."}),
+        # 直接 float() 会得到 0, 导致所有转出交易都不扣手续费; 部分版本/
+        # 自建实例仍给数字或 gas_used×gas_price, 三种形态都要兼容。
+        raw_fee = row.get("fee")
+        if isinstance(raw_fee, dict):
+            fee = _to_float(raw_fee.get("value")) or 0.0
+        else:
+            fee = _to_float(raw_fee) or 0.0
+        if fee <= 0:
+            fee = (_to_float(row.get("gas_used")) or 0.0) * (
+                _to_float(row.get("gas_price")) or 0.0
+            )
         ok = str(row.get("status") or "ok").lower() in ("ok", "success", "true", "1")
         txid = str(row.get("hash") or "")
         if src == addr:
@@ -1413,8 +1432,17 @@ def _fetch_tron(
         owner = str(value.get("owner_address") or "")
         fee = _tron_fee(tx)
         txid = str(tx.get("txID") or "")
+        # TronGrid 会返回失败交易: 失败的转账金额并未移动, 只能计手续费。
+        ret = tx.get("ret") or []
+        success = True
+        if isinstance(ret, list) and ret and isinstance(ret[0], dict):
+            code = ret[0].get("contractRet")
+            if code:
+                success = str(code).upper() == "SUCCESS"
         if ctype == "TransferContract":
-            amount = _raw_to_amount(value.get("amount"), native.decimals) or 0.0
+            amount = (
+                _raw_to_amount(value.get("amount"), native.decimals) or 0.0
+            ) if success else 0.0
             to_addr = str(value.get("to_address") or "")
             if owner == addr_hex:
                 ledger.add_transfer(
@@ -1556,6 +1584,7 @@ def _fetch_solana(
             ledger.set_current(native, lamports / (10**native.decimals))
 
     current_mints: dict[str, tuple[int, int]] = {}
+    wsol_raw = 0
     for program in (wallet._SOL_TOKEN_PROGRAM, wallet._SOL_TOKEN2022_PROGRAM):
         try:
             res = _sol_rpc(
@@ -1579,10 +1608,23 @@ def _fetch_solana(
                 continue
             if not mint or raw <= 0:
                 continue
+            # wSOL 与 wallet.import_wallet 同口径并入原生 SOL: 否则当前
+            # 锚点漏掉包装 SOL, 而曲线里又按无行情的 "So111..." 丢弃。
+            if mint == wallet._SOL_WSOL_MINT:
+                wsol_raw += raw
+                continue
             prev_raw, _ = current_mints.get(mint, (0, dec))
             current_mints[mint] = (prev_raw + raw, dec)
     for mint, (raw, dec) in current_mints.items():
         ledger.set_current(_asset_for_mint(mint, dec), raw / (10**dec))
+    if wsol_raw:
+        native_now = float(ledger.current.get(native.key) or 0.0)
+        ledger.set_current(
+            native, native_now + wsol_raw / (10**native.decimals)
+        )
+        ledger.notes.append(
+            f"wSOL 已并入原生 SOL ({wsol_raw / 10**native.decimals:g})"
+        )
 
     # 2. 签名列表 (从新到旧, 截到窗口起点)
     signatures: list[dict] = []
@@ -1669,7 +1711,12 @@ def _fetch_solana(
                 ledger.add_transfer(ts, native, delta, txid)
         for mint, (delta, dec) in _sol_token_deltas(meta, address).items():
             if abs(delta) > 0:
-                ledger.add_transfer(ts, _asset_for_mint(mint, dec), delta, txid)
+                # 包装 SOL 的增减与原生 SOL 余额变化互补: 并入同一个资产键,
+                # 否则 wrap/unwrap 会在曲线上凭空多出一笔/少掉一笔。
+                if mint == wallet._SOL_WSOL_MINT:
+                    ledger.add_transfer(ts, native, delta, txid)
+                else:
+                    ledger.add_transfer(ts, _asset_for_mint(mint, dec), delta, txid)
 
     if failed:
         ledger.notes.append(

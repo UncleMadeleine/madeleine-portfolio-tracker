@@ -1175,6 +1175,69 @@ def test_cached_non_finite_change_pct_normalized(cache_db):
 # ---------------------------------------------------------------------------
 
 
+def test_openbb_omitted_symbol_is_not_negative_cached(cache_db, monkeypatch):
+    """数据源未返回该代码 ≠ 确认无数据: 不能写 6h 负缓存阻止重试."""
+    from tracker import eodhd, fundamentals as f
+
+    monkeypatch.setattr(eodhd, "fundamentals_mode", lambda cfg=None: "off")
+    calls: list[list[str]] = []
+
+    def fake_metrics(symbols):
+        calls.append(list(symbols))
+        return {}
+
+    monkeypatch.setattr(f, "_fund_metrics", fake_metrics)
+    assert f.fetch_book_values(["AAPL"]) == {"AAPL": None}
+    assert f.fetch_book_values(["AAPL"]) == {"AAPL": None}
+    assert len(calls) == 2
+
+
+def test_eodhd_transient_failure_keeps_field_unconfirmed(cache_db, monkeypatch):
+    """EODHD 临时失败时, 其缺失字段不能标记为 checked, 下轮仍应重试."""
+    from tracker import eodhd, fundamentals as f
+
+    monkeypatch.setattr(eodhd, "fundamentals_mode", lambda cfg=None: "fallback")
+    monkeypatch.setattr(eodhd, "yahoo_to_eodhd", lambda s: "AAPL.US")
+    calls = {"eodhd": 0}
+
+    def boom(symbol, path=None):
+        calls["eodhd"] += 1
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(eodhd, "fundamentals", boom)
+    monkeypatch.setattr(
+        f,
+        "_fund_metrics",
+        lambda symbols: {
+            s: {"book_value": 10.0, "market_cap": None} for s in symbols
+        },
+    )
+    assert f.fetch_market_caps(["AAPL"]) == {"AAPL": None}
+    assert f.fetch_market_caps(["AAPL"]) == {"AAPL": None}
+    assert calls["eodhd"] == 2
+
+
+def test_cached_non_finite_book_value_and_market_cap_normalized(cache_db):
+    """quote 缓存里的 ±Infinity 基本面字段读写都要归一, 不能进 JSON/计算."""
+    cache_db.set_cached(
+        {
+            "AAPL": Quote(
+                "AAPL",
+                "Apple",
+                100.0,
+                99.0,
+                1.0,
+                "USD",
+                book_value=float("inf"),
+                market_cap=float("inf"),
+            )
+        }
+    )
+    q = cache_db.get_cached(["AAPL"])["AAPL"]
+    assert q.book_value is None
+    assert q.market_cap is None
+
+
 def test_partial_fundamental_cache_does_not_block_other_metric(
     cache_db, monkeypatch
 ):
@@ -1227,6 +1290,24 @@ def test_refresh_clears_stale_fundamental_values(cache_db, monkeypatch):
 # ---------------------------------------------------------------------------
 # 数据源顺序: 能力过滤 / 缓存命中不重复批量取数
 # ---------------------------------------------------------------------------
+
+
+def test_legacy_required_longport_skips_unsupported_market(monkeypatch):
+    """未配置 source_order 时, 长桥不支持的代码不能被要求必须来自长桥."""
+    import tracker.longport as lp
+    from tracker.providers import orchestration as orch
+
+    monkeypatch.setattr(lp, "yahoo_to_longport", lambda y: None)
+    assert (
+        orch._legacy_required_quote_source(parse("9984.T"), False, False, True, "auto")
+        is None
+    )
+    # 长桥能映射的代码仍按长桥优先
+    monkeypatch.setattr(lp, "yahoo_to_longport", lambda y: "AAPL.US")
+    assert (
+        orch._legacy_required_quote_source(parse("AAPL"), False, False, True, "auto")
+        == "longport"
+    )
 
 
 def test_cached_source_ok_skips_longport_unsupported_market(monkeypatch):

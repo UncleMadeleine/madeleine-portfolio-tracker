@@ -45,6 +45,33 @@ class TestApproxFrame:
         assert len(out) == 4  # NaN 收盘行剔除
 
 
+class TestSharesSplitAdjustment:
+    def test_pre_split_shares_are_scaled_to_current_basis(self):
+        """股本 (实际股数) 必须与 split-adjusted 收盘价同口径, 否则拆股日跳变."""
+        df = pd.DataFrame(
+            {
+                "date": pd.to_datetime(
+                    ["2020-08-27", "2020-08-31", "2020-09-01"]
+                ),
+                "close": [4.275e9, 17.1e9, 17.1e9],
+            }
+        )
+        splits = pd.Series([4.0], index=pd.to_datetime(["2020-08-31"]))
+        out = mcap._adjust_shares_for_splits(df, splits)
+        assert out["close"].tolist() == pytest.approx([17.1e9, 17.1e9, 17.1e9])
+
+    def test_same_day_duplicate_keeps_post_split_value(self):
+        df = pd.DataFrame(
+            {
+                "date": pd.to_datetime(["2020-08-31", "2020-08-31"]),
+                "close": [17.1e9, 4.275e9],
+            }
+        )
+        splits = pd.Series([4.0], index=pd.to_datetime(["2020-08-31"]))
+        out = mcap._adjust_shares_for_splits(df, splits)
+        assert out["close"].tolist() == pytest.approx([17.1e9, 17.1e9])
+
+
 class TestOhlcvShim:
     def test_kline_isomorphism(self):
         caps = pd.DataFrame(

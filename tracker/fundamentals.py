@@ -28,22 +28,23 @@ def _fund_metrics(symbols: list[str]) -> dict[str, dict[str, float | None]]:
     from .providers.global_stocks import _obb
 
     ob = _obb()
-    out: dict[str, dict[str, float | None]] = {
-        s: {"book_value": None, "market_cap": None} for s in symbols
-    }
+    out: dict[str, dict[str, float | None]] = {}
+    wanted = set(symbols)
     res = ob.equity.fundamental.metrics(symbol=symbols, provider="yfinance")
     for item in res.results:
         d = item.model_dump()
         sym = str(d.get("symbol") or "").strip()
-        if sym not in out:
+        if sym not in wanted or sym in out:
             continue
+        vals: dict[str, float | None] = {}
         for key in ("book_value", "market_cap"):
             v = d.get(key)
             try:
                 f = float(v) if v is not None else None
             except (TypeError, ValueError):
                 f = None
-            out[sym][key] = f if f is not None and math.isfinite(f) else None
+            vals[key] = f if f is not None and math.isfinite(f) else None
+        out[sym] = vals
     return out
 
 
@@ -143,10 +144,13 @@ def _eodhd_metrics(symbols: list[str]) -> dict[str, dict]:
         except Exception:  # noqa: BLE001 - 单代码失败只跳过该代码
             return sym, None
 
-    out: dict[str, dict] = {}
+    out: dict[str, dict | None] = {}
     with ThreadPoolExecutor(max_workers=4) as pool:
         for sym, data in pool.map(_one, targets):
             if not data:
+                # 请求过但失败: None 表示「未确认」而不是「确认没有」,
+                # 调用方据此避免把临时故障写进 6h 负缓存。
+                out[sym] = None
                 continue
             vals = {
                 "book_value": data.get("book_value"),
@@ -154,6 +158,9 @@ def _eodhd_metrics(symbols: list[str]) -> dict[str, dict]:
             }
             if vals["book_value"] is not None or vals["market_cap"] is not None:
                 out[sym] = vals
+            else:
+                # 请求成功但两个字段都缺失: 是「确认没有」, 不是故障。
+                out[sym] = {}
     return out
 
 
@@ -165,9 +172,14 @@ def _fill_fundamentals(out: dict[str, dict], missing: list[str]) -> None:
 
     mode = eodhd_mod.fundamentals_mode()
     fresh: dict[str, dict] = {}
+    # EODHD 请求过但返回失败的代码: 它缺失的字段不能标记为「已确认缺失」,
+    # 否则一次临时网络故障会让该代码 6 小时内不再重试 EODHD。
+    unconfirmed: set[str] = set()
     pending = list(missing)
     if mode == "primary":
-        fresh.update(_eodhd_metrics(pending))
+        eodhd = _eodhd_metrics(pending)
+        unconfirmed.update(s for s, v in eodhd.items() if v is None)
+        fresh.update({s: v for s, v in eodhd.items() if v is not None})
         pending = [s for s in pending if not _complete(fresh.get(s))]
 
     if pending:
@@ -185,20 +197,26 @@ def _fill_fundamentals(out: dict[str, dict], missing: list[str]) -> None:
     if mode == "fallback":
         need = [s for s in missing if not _complete(fresh.get(s))]
         if need:
-            for s, vals in _eodhd_metrics(need).items():
-                fresh[s] = _merge_fill(fresh.get(s), vals)
+            eodhd = _eodhd_metrics(need)
+            unconfirmed.update(s for s, v in eodhd.items() if v is None)
+            for s, vals in eodhd.items():
+                if vals is not None:
+                    fresh[s] = _merge_fill(fresh.get(s), vals)
 
     for s in missing:
         vals = fresh.get(s)
         if vals is not None:
+            # 本轮已合并全部配置源: 有值时必然可确认; 只有仍为 None 且
+            # 某个源请求失败时才保留「未确认」, 下轮继续重试该源。
+            bv_checked = not (s in unconfirmed and vals.get("book_value") is None)
+            mc_checked = not (s in unconfirmed and vals.get("market_cap") is None)
             cache_mod.set_fundamental_cached(
                 s,
                 vals.get("book_value"),
                 market_cap=vals.get("market_cap"),
-                # 本轮已合并全部配置源: None 是「确认没有」, 不只是「没取到」。
                 # 显式标记后, 刷新才能清掉旧值, 另一个指标也不会被半行缓存挡住。
-                book_value_checked=True,
-                market_cap_checked=True,
+                book_value_checked=bv_checked,
+                market_cap_checked=mc_checked,
             )
             out[s] = (
                 cache_mod.get_fundamental_cached(s, ttl=_METRICS_TTL)

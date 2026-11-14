@@ -452,6 +452,16 @@ class TestKoreanLeadingZeros:
         assert normalize("ABC.KS") == "ABC.KS"
 
 
+def test_is_currency_code_rejects_non_ascii_text():
+    """本地化币种名 ("人民币") 不是货币代码, 不能进入伪货币对查询."""
+    from tracker.symbols import is_currency_code
+
+    assert is_currency_code("CNY")
+    assert is_currency_code("USDT")
+    assert not is_currency_code("人民币")
+    assert not is_currency_code("-")
+
+
 def test_resolve_market_jp_kr_to_global():
     from tracker.providers.base import resolve
     from tracker.symbols import Market

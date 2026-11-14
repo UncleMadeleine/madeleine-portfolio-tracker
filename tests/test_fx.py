@@ -35,6 +35,17 @@ def test_get_rate_rejects_placeholder_currency(monkeypatch):
     assert called == []
 
 
+def test_fx_history_rejects_placeholder_currency(monkeypatch):
+    """历史汇率同样不能把占位币种拼成 '-CNY=X' 伪货币对."""
+    called: list[str] = []
+    monkeypatch.setattr(
+        fx, "_yahoo_pair_history", lambda pair, *a, **k: called.append(pair)
+    )
+    assert fx.get_fx_history("-", "CNY", "2026-01-01", "2026-02-01") is None
+    assert fx.get_fx_history("CNY", "N/A", "2026-01-01", "2026-02-01") is None
+    assert called == []
+
+
 def test_get_fx_rates_reports_placeholder_as_missing(monkeypatch):
     monkeypatch.setattr(fx, "_cfets_rate", lambda s, d: None)
     monkeypatch.setattr(fx, "_pair_rate", lambda a, b: 6.67)

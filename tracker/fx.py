@@ -202,6 +202,10 @@ def get_fx_history(src: str, dst: str, start_date, end_date=None, refresh: bool 
 
     # 与 get_rate 同口径: 稳定币计价按 USD 等价 (比例线汇率调整也要能折算)
     src, dst = valuation_currency(src), valuation_currency(dst)
+    # 占位币种 ("-"/"NONE"/空串) 不是货币代码: 否则会拼出 "-CNY=X" 这类
+    # 伪货币对, Yahoo 可能返回真实汇率, 静默放大/缩小整条对比线。
+    if not is_currency_code(src) or not is_currency_code(dst):
+        return None
     # 起止日期统一归一成 YYYY-MM-DD: 调用方传 pd.Timestamp / datetime 时
     # str() 会带上 " 00:00:00", 同一语义的两次调用缓存键不同 (6h 缓存永远
     # 命中不了), 且该字符串会作为 end_date 传给 OpenBB (schema 是 date 类型)

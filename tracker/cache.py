@@ -664,8 +664,8 @@ def get_cached_with_age(
                     prev_close=_finite_opt(prev),
                     change_pct=_finite_opt(chg),
                     currency=quote_ccy,
-                    book_value=float(bv) if bv is not None else None,
-                    market_cap=float(mc) if mc is not None else None,
+                    book_value=_finite_opt(bv),
+                    market_cap=_finite_opt(mc),
                     source=str(src) if src else None,
                 )
                 ages[sym] = max(0.0, now - float(fetched_at or now))
@@ -706,8 +706,8 @@ def set_cached(quotes: dict[str, "Quote"]) -> None:
                 _finite_opt(q.prev_close),
                 _finite_opt(q.change_pct),
                 quote_ccy,
-                q.book_value,
-                getattr(q, "market_cap", None),
+                _finite_opt(q.book_value),
+                _finite_opt(getattr(q, "market_cap", None)),
                 getattr(q, "source", None),
                 now,
             )

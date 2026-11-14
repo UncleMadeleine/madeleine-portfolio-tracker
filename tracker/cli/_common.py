@@ -117,7 +117,9 @@ def atomic_write_text(path: str | Path, text: str) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=f".{p.name}.", suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
+        # newline="": ICS/CSV 文本自身已含 CRLF, 交给 Windows 的换行翻译
+        # 会变成 \r\r\n; 其它文本保持原样写入, 由调用方决定换行。
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
             f.write(text)
             f.flush()
             os.fsync(f.fileno())

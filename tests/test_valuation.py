@@ -45,6 +45,14 @@ class TestSnapshot:
         )
         assert snap.dividend_yield_5y_avg_pct == pytest.approx(5.29)
 
+    def test_payout_ratio_over_100_percent_is_not_scaled_down(self):
+        # PFE 等公司的 payout ratio 可 >1 (亏损/一次性项目); 比例→百分数
+        # 必须始终 ×100, 不能套用「≤1 才乘」的启发式。
+        snap = valuation._snapshot_from_metrics(
+            "PFE", {"payout_ratio": 2.4571}
+        )
+        assert snap.payout_ratio_pct == pytest.approx(245.71)
+
     def test_snapshot_cache_and_refresh(self, monkeypatch):
         calls = []
 

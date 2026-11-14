@@ -5,6 +5,9 @@ __pycache__/
 .venv/
 venv/
 .pytest_cache/
+# 本地 uv 解析产物: 仓库以 requirements.txt / pyproject.toml 为依赖入口,
+# uv.lock 由开发者本地按需生成, 不入库
+uv.lock
 
 # 构建产物
 dist/

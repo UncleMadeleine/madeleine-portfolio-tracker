@@ -19,8 +19,23 @@ __all__ = [
 
 
 def ordered_sources(order, funcs: dict):
-    """按 source_order 顺序取可执行的源函数; 未映射/不适用的源自动跳过."""
-    return [funcs[source_id] for source_id in order if source_id in funcs]
+    """按 source_order 顺序取可执行的源函数; 未映射/不适用的源自动跳过。
+
+    给每个函数挂 ``__source_id__``: 取数热路径只拿到一个 callable, 健康观测
+    需要知道这次尝试属于哪个数据源。共享的模块级函数重复写同一个 id 无副作用;
+    lambda (历史源链) 是每次新建对象, 互不干扰。
+    """
+    out = []
+    for sid in order:
+        fn = funcs.get(sid)
+        if fn is None:
+            continue
+        try:
+            fn.__source_id__ = sid
+        except (AttributeError, TypeError):  # 内建/不可写对象: 保留按名兜底
+            pass
+        out.append(fn)
+    return out
 
 
 def openbb_history_frame(res, *, ensure_volume: bool = False):
@@ -118,10 +133,13 @@ class Provider:
     # -- 默认实现: 按源链依次尝试 --
 
     def fetch_quote(self, p: ParsedSymbol, prefer_first: bool = False) -> Quote:
+        from .. import health
+
         last_err: Exception | None = None
         for fn in self.quote_sources(p, prefer_first):
             try:
-                return fn(p)
+                with health.span("quote", health.source_id(fn), p.yahoo):
+                    return fn(p)
             except Exception as e:  # noqa: BLE001 - 降级到下一数据源
                 last_err = e
         if last_err is None:
@@ -142,13 +160,21 @@ class Provider:
         prefer_first: bool = False,
     ):
         """返回 DataFrame (date/open/high/low/close/volume); 全部源失败抛 RuntimeError."""
+        from .. import health
+
         last_err: Exception | None = None
         sources = self.history_sources(p, start_date, end_date, prefer_first)
         for fn in sources:
             try:
-                df = fn()
-                if not df.empty:
-                    return df
+                with health.span("history", health.source_id(fn), p.yahoo) as sp:
+                    df = fn()
+                    if df is None or df.empty:
+                        # 不抛异常但返回空表同样是失败 (EODHD/长桥常见):
+                        # 不标记会让健康页把「无数据」显示成成功。
+                        sp.ok = False
+                        sp.error = "空结果"
+                    else:
+                        return df
             except Exception as e:  # noqa: BLE001 - 降级到下一数据源
                 last_err = e
         if last_err is None and not sources:

@@ -33,8 +33,10 @@ Madeleine Portfolio Tracker 是一款**本地优先**的投资组合追踪工具
 - **历史净值曲线** — 每日组合快照落独立 SQLite（`nav_history.db`，与行情缓存分离），组合页画总市值 + 成本走势；支持 `nav --save` 手动存档、组合页每次渲染自动 upsert、`nav --backfill` 按当前持仓 × 历史收盘价回填近似历史（含历史汇率折算）
 - **链上钱包净值曲线** — `wallet-nav` / 「钱包净值」页按**链上转账记录回放历史余额**（不是「当前余额 × 历史价」），再按历史币价与历史汇率折算成每日净值；Ethereum / Avalanche / TRON / Solana 零 API Key，Polygon / Arbitrum / BSC 可配 Etherscan V2 key 或自定义浏览器
 - **基本面分析** — 估值指标子视图：任意 A股/港股/美股的最新 PE(TTM)、PB、股息率、5 年平均股息率，以及历史 PE/PB 曲线与自身历史分位（百度股市通）；AH 溢价子视图保留单只 A+H 股票的溢价率曲线：A 股收盘 ÷ (H 股收盘 × 历史汇率) − 1，支持任意 A+H 股票对 / 范围切换，0% 同价参考线 + 区间高低点/均值/分位摘要（独立页面 `/fundamentals`）
-- **Streamlit 可视化页面** — 组合明细 / 资产配置 / 自选提醒 / K线查询（含多股走势对比）/ 指数K线 / 基本面分析 / 日历 / 钱包净值 / 设置
-- **统一 CLI** — 23 个子命令（快照、净值、钱包净值、报价、持仓、自选、监控报告、导出、汇率、历史、K线、日历、搜索、对比、指数K线、导入、长桥登录、EODHD 自检、同步、钱包导入、缓存管理、缓存保温 `warm`、初始化），全部支持机器可读输出（`--json`，`report`/`export` 为 `-f json`）；`warm` 可一次性预热或 `--interval` 常驻，不依赖 Streamlit 进程
+- **数据健康观测** — provider 热路径记录每次真实回源的来源/成功失败/耗时（缓存命中不计）到 `health_events`；`tracker doctor` 与「数据健康」页聚合成功率、p50/p95、最近失败，并从持仓/自选视角列出**行情缺失/过期、持仓无 K线、汇率缺失**等「页面还能开但数字可能已经不准」的缺口；`doctor --probe` 可主动打一次真实行情/汇率；总体异常时退出码 1，可接告警脚本。事件保留 7 天 / 最多 2 万条，`cache clear` 不会误删排障线索
+- **线上契约测试** — `tests/test_provider_contract_live.py`（`@pytest.mark.network`，默认不跑）真实调用各域代表代码，断言价格为有限正数、币种规范、历史日期升序/收盘为正、汇率为正；离线侧另有源链归名与坏数据拒绝测试，数据源改字段时能第一时间红
+- **Streamlit 可视化页面** — 组合明细 / 资产配置 / 自选提醒 / K线查询（含多股走势对比）/ 指数K线 / 基本面分析 / 日历 / 钱包净值 / 数据健康 / 设置
+- **统一 CLI** — 24 个子命令（快照、净值、钱包净值、报价、持仓、自选、监控报告、导出、汇率、历史、K线、日历、搜索、对比、指数K线、导入、长桥登录、EODHD 自检、同步、钱包导入、缓存管理、缓存保温 `warm`、数据健康 `doctor`、初始化），全部支持机器可读输出（`--json`，`report`/`export` 为 `-f json`）；`warm` 可一次性预热或 `--interval` 常驻，不依赖 Streamlit 进程
 - **链上钱包导入** — EVM 五链 + TRON + Solana 共七条链地址余额只读查询，一键写入持仓
 - **A股券商持仓导入** — 解析券商客户端导出的 CSV/Excel 持仓文件
 
@@ -83,7 +85,7 @@ streamlit run tracker/ui/app.py   # 源码树
 tracker-ui                        # pip 安装后 (等价, 参数透传给 streamlit)
 ```
 
-页面默认运行在 `http://localhost:8501`，七个页面各有独立 URL（刷新 / 书签 / 前进后退不丢页）。触控板双指横滑不会触发浏览器前进/后退手势（侧边栏持仓/自选表横向滚动到边界时最易误触），返回上一页请用浏览器后退按钮或 `Alt+←`：
+页面默认运行在 `http://localhost:8501`，九个页面各有独立 URL（刷新 / 书签 / 前进后退不丢页）。触控板双指横滑不会触发浏览器前进/后退手势（侧边栏持仓/自选表横向滚动到边界时最易误触），返回上一页请用浏览器后退按钮或 `Alt+←`：
 
 - **组合** (`/`) — 持仓编辑、明细表、资产配置（按市场 / 按币种 / 按代码三张饼图，按代码为市值 Top 20 + 其他 + 持仓市值 Top 15 柱图）、净值走势、自选提醒
 - **K线** (`/kline`) — 任意代码 K 线查询（支持按代码或名称模糊搜索）+ 多股走势对比 + 加密货币对比（K线页子功能）
@@ -93,6 +95,7 @@ tracker-ui                        # pip 安装后 (等价, 参数透传给 strea
   - **AH 溢价** — 可选 A+H 股票对（东财目录，失败退回内置常见股票对，也可手动输入代码），按近 3/6/12/24/36/60 个月展示 A 股收盘 ÷ (H 股收盘 × 历史汇率) − 1，0% 为两地同价
 - **日历** (`/calendar`) — 持仓/自选的财报、预约披露、除权除息/派息事件月历（窗口与范围可切），可一键导出 `.ics` 导入本地日历
 - **导入** (`/import`) — IBKR 账户 / 长桥账户 / 链上钱包 / A股券商文件导入
+- **数据健康** (`/health`) — 数据源成功率 / p50·p95 / 最近成功与失败 / 最近错误；组合行情·K线·汇率缓存覆盖与缺口；本地 JSON/缓存库/目录权限体检；缓存来源分布与保温线程状态；可一键主动探测
 - **设置** (`/settings`) — 涨跌配色（红涨绿跌/绿涨红跌）、数据源开关与拖动回退顺序（含 akshare / IBKR / 长桥 / EODHD / 加密源）、基础货币
 
 ### CLI 快速上手
@@ -120,6 +123,12 @@ python -m tracker.cli nav --backfill --dry-run   # 只预览, 不写库
 # 查询单个/多个代码实时行情
 python -m tracker.cli quote AAPL 600519.SS BTC-USD
 python -m tracker.cli quote AAPL --refresh   # 单支强制刷新: 跳过 5min 磁盘缓存与失败负缓存
+
+# 数据健康体检（默认只读本地; 异常退出码 1，可接告警）
+python -m tracker.cli doctor                  # 近 24h 来源成功率 + 缓存覆盖 + 完整性
+python -m tracker.cli doctor --window 72      # 近 3 天
+python -m tracker.cli doctor --json           # 机器可读（含全部来源明细与逐代码缓存年龄）
+python -m tracker.cli doctor --probe          # 主动打一次真实行情/汇率（慢）
 
 # 汇率查询
 python -m tracker.cli fx USD CNY EUR
@@ -216,6 +225,9 @@ python -m pytest tests/ -q
 
 # 真实联网集成测试（仅 @pytest.mark.network 标记的用例，默认不运行）
 python -m pytest -m network
+
+# 线上数据契约（各域真实行情/历史/指数/汇率；源改字段时第一时间红）
+python -m pytest -m network tests/test_provider_contract_live.py -q
 ```
 
 > 完整 CLI 帮助：`python -m tracker.cli --help`（或每个子命令 `--help`）。`python -m tracker` 等价。
@@ -422,17 +434,20 @@ tracker/ui/           Streamlit 页面包（streamlit run tracker/ui/app.py / �
 ├── fundamentals_page.py 「基本面」页面（估值指标 PE/PB/股息率 + 历史 PE/PB 分位; AH 溢价曲线: A+H 股票对 / 范围切换, 明细表）
 ├── import_page.py      「导入」页面（IBKR 账户 / 长桥账户 / 链上钱包 / 券商文件, 追加合并或覆盖）
 ├── wallet_page.py      「钱包净值」页面（链上转账回放历史余额 + 历史币价/汇率折算曲线）
+├── health_page.py      「数据健康」页面（来源成功率/耗时/最近失败 + 缓存覆盖/缺口 + 完整性 + 主动探测）
 ├── settings_page.py    「设置」页面（配色 / 数据源 / EODHD BYOK / 基础货币）
 ├── longport_login.py   长桥 OAuth 登录引导（独立子进程, 状态文件 <数据目录>/var/longport_oauth_state.json）
 └── settings.py         settings.json 读写（涨跌配色 / prefer_akshare / use_ibkr / use_longport / crypto_source / source_order）+ portfolio 读写助手
 tracker/
 ├── __main__.py         python -m tracker 入口（转发到 cli）
 ├── paths.py            数据目录解析（TRACKER_HOME > 仓库根 > 平台用户目录）+ 包内资源定位
-├── cli/                CLI 包（python -m tracker.cli，23 个子命令各一个模块）
+├── health.py           数据健康观测（回源事件记录/聚合、缓存覆盖、完整性体检、主动探测）
+├── cli/                CLI 包（python -m tracker.cli，24 个子命令各一个模块）
 │   ├── __init__.py       argparse 注册与分发
 │   ├── _common.py        JSON 序列化 / 代码归一化 / 原子写 / 错误退出
 │   ├── __main__.py       python -m tracker.cli 入口
 │   ├── init.py           首次使用: 包内模板 → 数据目录（pip 安装后必走一步）
+│   ├── doctor.py         数据健康体检（来源成功率/缓存覆盖/完整性, --probe 联网）
 │   ├── eodhd.py          EODHD BYOK 状态 / 连通性自检
 │   ├── snapshot.py       快照（持仓 + 自选 + 阈值触发; --save 落历史净值）
 │   ├── nav.py            历史净值（读取 / 保存今日快照 / 按当前持仓回填）
@@ -775,6 +790,7 @@ CLI 不再依赖前端进程做缓存保温：`python -m tracker.cli warm` 可�
 - IBKR A股经沪深港通通道：沪 `SEHKNTL` / 科创 `SEHKSTAR` / 深 `SEHKSZSE`，计价 CNH；若你的账户显示不同交易所代码，在 `ibkr.json` 的 `exchanges` 中修改对应键（`CN_SH` / `CN_STAR` / `CN_SZ`）；B股合约根据 IBKR 返回的 `SHSE/USD` 或 `SZSE/HKD` 自动识别
 - 长桥行情/持仓需 `pip install longport` 并完成登录；未安装/未配置时 `--longport` 与 `import longport` 报可读错误并回退默认数据源
 - EODHD 为 BYOK 付费源：免费套餐 20 次/天；`quotes=primary`/`fundamentals=primary` 都会逐代码消耗调用次数（自选 600+ 时注意额度）；EODHD 行情本身不返回名称/币种/PB/总市值（PB/市值需 `fundamentals` 角色，行情币种用 `currency_overrides` 覆盖例外）；LSE 便士口径可用 `lse_pence` / `lse_gbp_symbols` 调整
+- 数据健康只观测**真实回源**（缓存命中不记录）：窗口内无记录只说明这段时间没打上游，不代表数据新鲜；「组合覆盖」以磁盘缓存为准，从未打开过的自选不会因缺缓存报警（持仓缺行情/持仓缺K线会）。`doctor --probe` 是主动联网，单次失败可能只是限流，需结合窗口成功率看趋势；健康事件保留 7 天/最多 2 万条，`cache clear` 不会删除它。只读数据目录/不希望落盘观测时设 `TRACKER_HEALTH_DISABLE=1` 关闭记录
 
 ---
 
@@ -794,6 +810,8 @@ CLI 不再依赖前端进程做缓存保温：`python -m tracker.cli warm` 可�
 - [x] 历史净值曲线（按日聚合组合市值；每日快照 + `nav` 子命令 + 组合页走势，回填为当前持仓 × 历史价近似口径）
 - [x] 链上钱包净值曲线（`wallet-nav` / 「钱包净值」页：按转账记录回放历史余额，历史币价 + 历史汇率折算）
 - [x] EODHD 付费 provider 接入（BYOK token 自备；历史K线 primary、行情 fallback，LSE 便士/复权口径可配）
+- [x] 数据健康观测（`doctor` / 「数据健康」页：回源成功率·耗时·最近失败 + 持仓/自选缓存缺口 + 本地完整性；`--probe` 主动探测）
+- [x] 线上数据契约测试（各域真实行情/历史/指数/汇率字段契约，`pytest -m network` 显式运行）
 
 ---
 

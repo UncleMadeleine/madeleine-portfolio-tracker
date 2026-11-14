@@ -184,6 +184,30 @@ def _create_schema(con) -> None:
         )
         """
     )
+    # 数据源健康事件: 每次真实回源尝试一行 (缓存命中不记). 供 `tracker doctor`
+    # 与「数据健康」页聚合成功率/耗时/最近失败; 与行情缓存同库但独立清理,
+    # `cache clear` 不删它 —— 排障线索不该被「清缓存」顺手清掉。
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS health_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts REAL NOT NULL,
+            kind TEXT NOT NULL,
+            source TEXT NOT NULL,
+            ok INTEGER NOT NULL,
+            latency_ms REAL,
+            symbol TEXT,
+            error TEXT
+        )
+        """
+    )
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_health_ts ON health_events(ts)"
+    )
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_health_source "
+        "ON health_events(source, kind, ts)"
+    )
     try:
         con.execute("ALTER TABLE fundamentals ADD COLUMN market_cap REAL")
     except sqlite3.OperationalError:
@@ -951,6 +975,151 @@ def set_series_cached(key: str, df: pd.DataFrame) -> None:
         """,
         (key, payload, time.time()),
     )
+
+
+# ---------- 数据源健康事件 (取数成功率 / 耗时 / 最近失败) ----------
+
+
+def add_health_events(rows: list[tuple]) -> bool:
+    """批量写入健康事件 (ts, kind, source, ok, latency_ms, symbol, error).
+
+    与行情缓存一样属于「可再生」数据: 写失败不影响取数, 返回 False。
+    """
+    if not rows:
+        return True
+    return _execute_write(
+        """
+        INSERT INTO health_events
+            (ts, kind, source, ok, latency_ms, symbol, error)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        rows,
+        many=True,
+    )
+
+
+def get_health_events(since: float, limit: int = 20000) -> list[dict]:
+    """读取 since 之后的健康事件 (按时间升序, 最多 limit 条).
+
+    库忙/损坏时返回空列表: 诊断功能不能反过来把 doctor 弄崩。
+    """
+    rows = _read_all(
+        """
+        SELECT ts, kind, source, ok, latency_ms, symbol, error
+        FROM health_events WHERE ts >= ?
+        ORDER BY ts ASC LIMIT ?
+        """,
+        (float(since), int(limit)),
+    )
+    return [
+        {
+            "ts": float(ts),
+            "kind": str(kind),
+            "source": str(source),
+            "ok": bool(ok),
+            "latency_ms": float(latency_ms) if latency_ms is not None else None,
+            "symbol": symbol,
+            "error": error,
+        }
+        for ts, kind, source, ok, latency_ms, symbol, error in rows
+    ]
+
+
+def prune_health_events(before: float, max_rows: int = 20000) -> int:
+    """删除 before 之前的事件, 并把总行数压到 max_rows 以内; 返回删除条数."""
+    def _prune():
+        with _lock, _connection() as con:
+            n = con.execute(
+                "DELETE FROM health_events WHERE ts < ?", (float(before),)
+            ).rowcount
+            n += con.execute(
+                """
+                DELETE FROM health_events WHERE id <= (
+                    SELECT MAX(id) - ? FROM health_events
+                )
+                """,
+                (int(max_rows),),
+            ).rowcount
+            con.commit()
+            return n
+
+    try:
+        return _with_schema_retry(_prune)
+    except (sqlite3.Error, OSError):
+        return 0
+
+
+def clear_health_events() -> int:
+    """清空健康事件 (供 doctor --clear 使用), 返回删除条数."""
+    def _clear():
+        with _lock, _connection() as con:
+            n = con.execute("DELETE FROM health_events").rowcount
+            con.commit()
+            return n
+
+    try:
+        return _with_schema_retry(_clear)
+    except (sqlite3.Error, OSError):
+        return 0
+
+
+def ohlc_freshness(symbols: list[str], now: float | None = None) -> dict[str, float]:
+    """每只代码最近一次 K线缓存年龄 (秒); 无缓存者不在返回值中."""
+    if not symbols:
+        return {}
+    now = time.time() if now is None else now
+    out: dict[str, float] = {}
+    for chunk in _chunks(list(symbols)):
+        rows = _read_all(
+            f"SELECT symbol, MAX(fetched_at) FROM ohlc_cache "
+            f"WHERE symbol IN ({','.join('?' * len(chunk))}) GROUP BY symbol",
+            list(chunk),
+        )
+        for sym, ts in rows:
+            if ts is not None:
+                out[str(sym)] = max(0.0, now - float(ts))
+    return out
+
+
+def source_distribution() -> dict[str, dict[str, int]]:
+    """当前行情缓存按来源统计: {source: {total, fresh}}.
+
+    回答「这次为什么用了 Yahoo 而不是长桥」: 缓存里实际存的是哪一源的结果。
+    历史命中记录（health_events）在一次次刷新后会被覆盖, 快照统计补上这一点。
+    """
+    now = time.time()
+
+    def _query():
+        with _connection() as con:
+            rows = con.execute(
+                """
+                SELECT COALESCE(NULLIF(source, ''), 'unknown') AS src,
+                       COUNT(*) AS total,
+                       SUM(CASE WHEN fetched_at > ? THEN 1 ELSE 0 END) AS fresh
+                FROM quotes GROUP BY src ORDER BY total DESC
+                """,
+                (now - CACHE_TTL,),
+            ).fetchall()
+        return {str(src): {"total": int(total), "fresh": int(fresh or 0)}
+                for src, total, fresh in rows}
+
+    try:
+        return _with_schema_retry(_query)
+    except (sqlite3.Error, OSError):
+        return {}
+
+
+def quick_check() -> str:
+    """SQLite PRAGMA quick_check 结果 ("ok" 表示结构完好)."""
+    def _check():
+        with _connection() as con:
+            row = con.execute("PRAGMA quick_check").fetchone()
+        return str(row[0]) if row else "unknown"
+
+    try:
+        return _with_schema_retry(_check)
+    except (sqlite3.Error, OSError) as e:
+        return f"不可用: {e}"
 
 
 def info() -> dict:

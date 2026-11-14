@@ -441,6 +441,18 @@ class IndexProvider(Provider):
         def cm():
             return _cameco_history(p, start_date, end_date)
 
+        # 健康观测按 source id 归并; 这些是局部 lambda 样式的包装函数,
+        # 函数名 (ak/yf/cc/hs/ft/cm) 无法反推来源, 显式打标。
+        for _fn, _sid in (
+            (ak, "akshare"),
+            (yf, "yfinance"),
+            (cc, "ccement"),
+            (hs, "hsi"),
+            (ft, "akshare"),
+            (cm, "cameco"),
+        ):
+            _fn.__source_id__ = _sid
+
         # Cameco 铀价: 目录带 cameco 字段, 月频专属源 (无第二数据源)
         if _catalog(p).get("cameco"):
             return [cm]

@@ -6,6 +6,7 @@ import math
 import time
 from datetime import date, timedelta
 
+from . import health
 from .symbols import is_currency_code, valuation_currency
 from .util import with_timeout
 
@@ -37,28 +38,32 @@ def _yahoo_pair(pair: str) -> float | None:
         return hit[0]
     rate = None
     try:
-        start = (date.today() - timedelta(days=30)).isoformat()
-        # _obb() 在计时区外求值 (冷启动 5s+ 不能吃掉超时预算), 只把真正的
-        # 网络调用放进 with_timeout。
-        res = with_timeout(
-            _obb().currency.price.historical,
-            _YAHOO_FX_TIMEOUT,
-            symbol=pair,
-            provider="yfinance",
-            start_date=start,
-        )
-        df = res.to_dataframe()
-        if "close" not in df.columns or df.empty:
-            return None
-        s = df["close"].dropna()
-        if s.empty:
-            return None
-        candidate = float(s.iloc[-1])
-        # 与 _cfets_table/_yahoo_pair_history/cache.set_fx_cached 同口径挡
-        # <=0: 负汇率 (Yahoo 脏收盘) 会一路传到 build_view 的 mv = mv_local*rate,
-        # 市值变负、权重归一与盈亏全错; _pair_rate 的 `if rate:` 只挡得住 0
-        if math.isfinite(candidate) and candidate > 0:
-            rate = candidate
+        with health.span("fx", "yfinance", pair) as sp:
+            start = (date.today() - timedelta(days=30)).isoformat()
+            # _obb() 在计时区外求值 (冷启动 5s+ 不能吃掉超时预算), 只把真正的
+            # 网络调用放进 with_timeout。
+            res = with_timeout(
+                _obb().currency.price.historical,
+                _YAHOO_FX_TIMEOUT,
+                symbol=pair,
+                provider="yfinance",
+                start_date=start,
+            )
+            df = res.to_dataframe()
+            s = df["close"].dropna() if "close" in df.columns else None
+            if "close" not in df.columns or df.empty or s is None or s.empty:
+                sp.ok = False
+                sp.error = "无汇率数据"
+                return None
+            candidate = float(s.iloc[-1])
+            # 与 _cfets_table/_yahoo_pair_history/cache.set_fx_cached 同口径挡
+            # <=0: 负汇率 (Yahoo 脏收盘) 会一路传到 build_view 的 mv = mv_local*rate,
+            # 市值变负、权重归一与盈亏全错; _pair_rate 的 `if rate:` 只挡得住 0
+            if math.isfinite(candidate) and candidate > 0:
+                rate = candidate
+            else:
+                sp.ok = False
+                sp.error = f"无效汇率: {candidate!r}"
     except Exception:
         return None
     if rate is not None:
@@ -83,7 +88,11 @@ def _cfets_table() -> dict[str, float]:
         return _cfets_cache[1]
     import akshare as ak
 
-    df = with_timeout(ak.fx_spot_quote, _CFETS_TIMEOUT)
+    with health.span("fx", "cfets", "CNY") as sp:
+        df = with_timeout(ak.fx_spot_quote, _CFETS_TIMEOUT)
+        if df is None or df.empty:
+            sp.ok = False
+            sp.error = "无汇率表"
     out: dict[str, float] = {"CNY": 1.0}
     if df is None or df.empty:
         _cfets_cache = (now, out)
@@ -142,9 +151,12 @@ def get_rate(src: str, dst: str, use_ibkr: bool = False) -> float | None:
         try:
             from . import ibkr as ibkr_mod
 
-            rate, reason = ibkr_mod.get_fx_rate_ibkr(src, dst)
-            if rate is not None:
-                return rate
+            with health.span("fx", "ibkr", f"{src}/{dst}") as sp:
+                rate, reason = ibkr_mod.get_fx_rate_ibkr(src, dst)
+                if rate is not None:
+                    return rate
+                sp.ok = False
+                sp.error = reason or "无汇率"
         except Exception:
             pass
     cf = _finite(_cfets_rate(src, dst))
@@ -173,21 +185,28 @@ def _yahoo_pair_history(pair: str, start_date: str, end_date: str | None = None)
     if end_date:
         kwargs["end_date"] = end_date
     try:
-        df = with_timeout(
-            _obb().currency.price.historical, _YAHOO_FX_TIMEOUT, **kwargs
-        ).to_dataframe()
+        with health.span("fx", "yfinance", pair) as sp:
+            df = with_timeout(
+                _obb().currency.price.historical, _YAHOO_FX_TIMEOUT, **kwargs
+            ).to_dataframe()
+            if df is None or df.empty or "close" not in df.columns:
+                sp.ok = False
+                sp.error = "无汇率历史"
+                return None
+            out = df.reset_index()
+            date_col = "date" if "date" in out.columns else out.columns[0]
+            out = out[[date_col, "close"]].rename(columns={date_col: "date"})
+            out["date"] = pd.to_datetime(out["date"], errors="coerce")
+            out["close"] = pd.to_numeric(out["close"], errors="coerce")
+            out = out.dropna(subset=["date", "close"])
+            out = out[out["close"] > 0].sort_values("date").reset_index(drop=True)
+            if out.empty:
+                sp.ok = False
+                sp.error = "无汇率历史"
+                return None
+            return out
     except Exception:
         return None
-    if df is None or df.empty or "close" not in df.columns:
-        return None
-    out = df.reset_index()
-    date_col = "date" if "date" in out.columns else out.columns[0]
-    out = out[[date_col, "close"]].rename(columns={date_col: "date"})
-    out["date"] = pd.to_datetime(out["date"], errors="coerce")
-    out["close"] = pd.to_numeric(out["close"], errors="coerce")
-    out = out.dropna(subset=["date", "close"])
-    out = out[out["close"] > 0].sort_values("date").reset_index(drop=True)
-    return out if not out.empty else None
 
 
 def get_fx_history(src: str, dst: str, start_date, end_date=None, refresh: bool = False):

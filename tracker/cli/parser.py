@@ -1046,6 +1046,53 @@ def _add_warm_parser(sub: argparse.ArgumentParser) -> None:
     p_w.set_defaults(func=_cmd(".warm", "cmd_warm"))
 
 
+def _add_doctor_parser(sub: argparse.ArgumentParser) -> None:
+    # ---- doctor (数据源健康 / 缓存覆盖 / 完整性体检) ----
+    p_doc = sub.add_parser(
+        "doctor",
+        help="数据健康体检 (数据源成功率 / 缓存覆盖 / 本地完整性)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "默认只读本地, 零网络。回答「页面上的数来自哪里、谁在失败、组合里\n"
+            "谁缺数据」; 总体异常 (down) 时退出码为 1, 可接告警脚本。\n"
+            "示例:\n"
+            "  tracker doctor                       # 近 24h 健康度 + 缓存覆盖\n"
+            "  tracker doctor --window 72           # 看近 3 天\n"
+            "  tracker doctor --json                # 机器可读 (含全部来源明细)\n"
+            "  tracker doctor --probe               # 主动打一次真实行情/汇率\n"
+            "  tracker doctor --probe --symbols AAPL 0700.HK\n"
+            "  tracker doctor --clear-events        # 清空历史健康事件\n"
+        ),
+    )
+    p_doc.add_argument(
+        "--window",
+        type=int,
+        default=24,
+        metavar="HOURS",
+        help="统计窗口小时数 (默认 24)",
+    )
+    p_doc.add_argument(
+        "--probe",
+        action="store_true",
+        help="主动联网探测 (慢): 全球/A股/港股/加密行情 + USD/CNY 汇率",
+    )
+    p_doc.add_argument(
+        "--symbols",
+        nargs="+",
+        default=None,
+        dest="probe_symbols",
+        metavar="SYMBOL",
+        help="--probe 的自定义代码 (可多个)",
+    )
+    p_doc.add_argument(
+        "--clear-events",
+        action="store_true",
+        help="清空健康事件记录 (排障后重置)",
+    )
+    p_doc.add_argument("--json", action="store_true", help="输出 JSON")
+    p_doc.set_defaults(func=_cmd(".doctor", "cmd_doctor"))
+
+
 def _add_init_parser(sub: argparse.ArgumentParser) -> None:
     # ---- init (首次使用: 模板落地到数据目录) ----
     p_init = sub.add_parser(
@@ -1089,6 +1136,7 @@ _SUBCOMMAND_REGISTRARS = (
     _add_import_wallet_parser,
     _add_cache_parser,
     _add_warm_parser,
+    _add_doctor_parser,
     _add_init_parser,
 )
 

@@ -1,6 +1,6 @@
 ---
 name: portfolio-tracker
-description: Use when the user asks to check or manage their investment portfolio, holdings, watchlist, stock prices, price-threshold alerts, exchange rates, historical NAV, wallet NAV, on-chain wallet history, IBKR sync, Longport (长桥) quotes/positions/login, EODHD (BYOK) status/config, or quote cache in this repo (madeleine-portfolio-tracker). Trigger keywords: 持仓, 组合, 自选, watchlist, 股票, 行情, 报价, quote, 汇率, fx, IBKR, 长桥, longport, EODHD, BYOK, 快照, snapshot, 净值, nav, 历史净值, 钱包净值, wallet-nav, 链上钱包, 钱包历史, 缓存, 缓存保温, 预热, warm, K线, kline, 指数, index, 导入, import, 搜索, search, 对比, compare. Operate it through the CLI `python -m tracker.cli <子命令>` (alias `python -m tracker`). Also covers editing portfolio.json / watchlist.json / ibkr.json / longport.json / eodhd.json / wallet_history.json and the Yahoo symbol conventions.
+description: Use when the user asks to check or manage their investment portfolio, holdings, watchlist, stock prices, price-threshold alerts, exchange rates, historical NAV, wallet NAV, on-chain wallet history, IBKR sync, Longport (长桥) quotes/positions/login, EODHD (BYOK) status/config, data-source health / data doctor, online provider contracts, or quote cache in this repo (madeleine-portfolio-tracker). Trigger keywords: 持仓, 组合, 自选, watchlist, 股票, 行情, 报价, quote, 汇率, fx, IBKR, 长桥, longport, EODHD, BYOK, 快照, snapshot, 净值, nav, 历史净值, 钱包净值, wallet-nav, 链上钱包, 钱包历史, 缓存, 缓存保温, 预热, warm, 数据健康, doctor, 成功率, 契约测试, K线, kline, 指数, index, 导入, import, 搜索, search, 对比, compare. Operate it through the CLI `python -m tracker.cli <子命令>` (alias `python -m tracker`). Also covers editing portfolio.json / watchlist.json / ibkr.json / longport.json / eodhd.json / wallet_history.json and the Yahoo symbol conventions.
 ---
 
 # Madeleine Portfolio Tracker CLI
@@ -58,6 +58,7 @@ tracker-ui          # pip 安装后起 Streamlit 页面 (等价 streamlit run tr
 | `import-wallet` | 链上钱包导入 (兼容入口→import wallet; 缺省只查询, `--add`/`--overwrite` 才写盘) | `import-wallet eth 0x... --add` |
 | `cache` | 行情磁盘缓存 | `cache info`, `cache clear` |
 | `warm` | 主动预热/保温行情、汇率、日历 (不依赖前端进程) | `warm`, `warm --symbols AAPL TSLA`, `warm --calendar-only --json`, `warm --interval 300` (常驻) |
+| `doctor` | 数据健康体检 (来源成功率/耗时/最近失败 + 持仓自选缓存缺口 + 本地完整性) | `doctor`, `doctor --window 72`, `doctor --json`, `doctor --probe` (主动联网), `doctor --clear-events`; 总体异常退出码 1 |
 | `init` | 首次使用: 模板落地到数据目录 | `init`, `init --force` |
 
 `--help` 查看每个子命令的完整参数: `python -m tracker.cli snapshot --help`; `-v/--version` 看版本。

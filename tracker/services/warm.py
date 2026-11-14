@@ -553,3 +553,33 @@ def warm_once(
         result["calendar"] = warm_calendar_once(extra_symbols=extra_symbols)
     result["elapsed_seconds"] = round(time.time() - started, 2)
     return result
+
+
+def status() -> dict:
+    """进程内保温线程状态 (doctor / 数据健康页展示用).
+
+    注意「是否启动」是进程级的: `tracker doctor` 是独立进程, 这里读到 False
+    只说明本进程没启动保温线程, 不代表常驻服务没在跑。
+    """
+    with _refresher_lock:
+        quote_started = _refresher_started
+    with _cal_refresher_lock:
+        cal_started = _cal_refresher_started
+    with _refresh_lock:
+        quote_inflight = len(_refresh_inflight)
+        quote_last = max(_refresh_done_at.values()) if _refresh_done_at else None
+    with _cal_refresh_lock:
+        cal_inflight = len(_cal_refresh_inflight)
+        cal_last = max(_cal_refresh_done_at.values()) if _cal_refresh_done_at else None
+    return {
+        "quotes": {
+            "started": quote_started,
+            "inflight": quote_inflight,
+            "last_done_at": quote_last,
+        },
+        "calendar": {
+            "started": cal_started,
+            "inflight": cal_inflight,
+            "last_done_at": cal_last,
+        },
+    }

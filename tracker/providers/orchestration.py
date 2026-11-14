@@ -17,6 +17,7 @@ from threading import Lock
 import pandas as pd
 
 from .. import cache as cache_mod
+from .. import health
 from ..symbols import Market, ParsedSymbol, parse as _parse_symbol
 from .base import Quote, resolve
 from .crypto import CryptoProvider
@@ -65,6 +66,15 @@ def neg_clear(yahoo: str) -> None:
     """代码取数成功, 清出负缓存."""
     with _neg_lock:
         _neg_cache.pop(yahoo, None)
+
+
+def neg_stats() -> dict:
+    """负缓存快照: 有效条数 + TTL (doctor / 数据健康页展示用)."""
+    now = time.time()
+    with _neg_lock:
+        active = sum(1 for ts in _neg_cache.values() if now - ts < _NEG_TTL)
+        total = len(_neg_cache)
+    return {"active": active, "total": total, "ttl_seconds": int(_NEG_TTL)}
 
 
 def neg_clear_all() -> None:
@@ -213,57 +223,93 @@ def _fetch_ordered_quotes(
         if source_id == "ibkr":
             if domain != "global" or not use_ibkr:
                 continue
+            before = len(quotes)
             try:
                 from .. import ibkr as ibkr_mod
 
-                batch, reason = ibkr_mod.get_quotes_ibkr(pending)
-                _settle(batch)
-                if reason:
-                    notes.append(f"IBKR 不可用: {reason} (已按顺序尝试下一源)")
+                with health.span("quote", "ibkr") as sp:
+                    batch, reason = ibkr_mod.get_quotes_ibkr(pending)
+                    _settle(batch)
+                    if reason:
+                        sp.ok = False
+                        sp.error = reason
+                    elif len(quotes) == before:
+                        sp.ok = False
+                        sp.error = "无行情"
+                    if reason:
+                        notes.append(f"IBKR 不可用: {reason} (已按顺序尝试下一源)")
             except Exception as e:  # noqa: BLE001 - 可选增强
                 notes.append(f"IBKR 接入异常: {e}")
         elif source_id == "longport":
             if not use_longport:
                 continue
+            before = len(quotes)
             try:
                 from .. import longport as lp_mod
 
-                batch, reason = lp_mod.get_quotes_longport(pending)
-                _settle(batch)
-                if reason:
-                    notes.append(f"长桥不可用: {reason} (已按顺序尝试下一源)")
+                with health.span("quote", "longport") as sp:
+                    batch, reason = lp_mod.get_quotes_longport(pending)
+                    _settle(batch)
+                    if reason:
+                        sp.ok = False
+                        sp.error = reason
+                    elif len(quotes) == before:
+                        sp.ok = False
+                        sp.error = "无行情"
+                    if reason:
+                        notes.append(f"长桥不可用: {reason} (已按顺序尝试下一源)")
             except Exception as e:  # noqa: BLE001 - 可选增强
                 notes.append(f"长桥接入异常: {e}")
         elif source_id == "eodhd":
             cfg = eodhd_mod.load_config()
             if not eodhd_mod.available(cfg) or cfg["quotes"] == "off":
                 continue
+            before = len(quotes)
             try:
-                batch, batch_errors = eodhd_mod.quotes_batch(pending)
-                _settle(batch)
-                for err in batch_errors[:3]:
-                    notes.append(f"EODHD 批量行情: {err}")
+                with health.span("quote", "eodhd") as sp:
+                    batch, batch_errors = eodhd_mod.quotes_batch(pending)
+                    _settle(batch)
+                    if len(quotes) == before:
+                        sp.ok = False
+                        sp.error = (batch_errors[0] if batch_errors else "无行情")
+                    for err in batch_errors[:3]:
+                        notes.append(f"EODHD 批量行情: {err}")
             except Exception as e:  # noqa: BLE001 - 批量失败落到下一源
                 notes.append(f"EODHD 批量行情异常: {e} (已按顺序尝试下一源)")
         elif source_id == "yfinance":
             if domain == "global":
+                before = len(quotes)
                 try:
-                    _settle(_yahoo_batch(pending))
+                    with health.span("quote", "yfinance") as sp:
+                        _settle(_yahoo_batch(pending))
+                        if len(quotes) == before:
+                            sp.ok = False
+                            sp.error = "批量无结果"
                 except Exception as e:  # noqa: BLE001 - 批量失败落到下一源
                     notes.append(f"yfinance 批量行情异常: {e} (已按顺序尝试下一源)")
             else:
-                out, errs = _run_single_source(pending, _yahoo_quote)
-                last_err.update(errs)
-                _settle(out)
+                with health.span("quote", "yfinance") as sp:
+                    out, errs = _run_single_source(pending, _yahoo_quote)
+                    last_err.update(errs)
+                    _settle(out)
+                    if errs and len(out) < len(pending):
+                        sp.ok = False
+                        sp.error = next(iter(errs.values()))
         elif source_id == "akshare":
             targets = (
                 pending
                 if domain == "cn"
                 else [p for p in pending if p.market is Market.HK]
             )
-            out, errs = _run_single_source(targets, _akshare_quote)
-            last_err.update(errs)
-            _settle(out)
+            if not targets:
+                continue
+            with health.span("quote", "akshare") as sp:
+                out, errs = _run_single_source(targets, _akshare_quote)
+                last_err.update(errs)
+                _settle(out)
+                if errs and len(out) < len(targets):
+                    sp.ok = False
+                    sp.error = next(iter(errs.values()))
 
     for p in pending:
         errors[p.yahoo] = last_err.get(p.yahoo) or "所有数据源均未返回行情"
@@ -298,44 +344,62 @@ def _fetch_ordered_history(
 
     last_err: Exception | None = None
     for source_id in order:
+        if source_id == "ibkr" and (not use_ibkr or p.type != "global"):
+            continue
+        if source_id == "longport" and not use_longport:
+            continue
+        if source_id == "eodhd":
+            cfg = eodhd_mod.load_config()
+            if not eodhd_mod.available(cfg):
+                continue
+        if source_id == "akshare" and p.market not in (
+            Market.HK,
+            Market.CN,
+            Market.BJ,
+        ):
+            continue
         try:
-            if source_id == "ibkr":
-                if not use_ibkr or p.type != "global":
-                    continue
-                from .. import ibkr as ibkr_mod
+            with health.span("history", source_id, p.yahoo) as sp:
+                if source_id == "ibkr":
+                    from .. import ibkr as ibkr_mod
 
-                hist, reason = ibkr_mod.get_history_ibkr(
-                    [p], months, start_date=start_date, end_date=end_date
-                )
-                if p.yahoo in hist and not hist[p.yahoo].empty:
-                    return hist[p.yahoo]
-                if reason:
-                    warnings.warn(f"IBKR 历史数据不可用: {reason} (已按顺序尝试下一源)")
-            elif source_id == "longport":
-                if not use_longport:
-                    continue
-                from .. import longport as lp_mod
+                    hist, reason = ibkr_mod.get_history_ibkr(
+                        [p], months, start_date=start_date, end_date=end_date
+                    )
+                    if p.yahoo in hist and not hist[p.yahoo].empty:
+                        return hist[p.yahoo]
+                    sp.ok = False
+                    sp.error = reason or "无历史数据"
+                    if reason:
+                        warnings.warn(
+                            f"IBKR 历史数据不可用: {reason} (已按顺序尝试下一源)"
+                        )
+                elif source_id == "longport":
+                    from .. import longport as lp_mod
 
-                df = lp_mod.get_history_longport(p, start_date, end_date)
-                if df is not None and not df.empty:
-                    return df
-            elif source_id == "eodhd":
-                cfg = eodhd_mod.load_config()
-                if not eodhd_mod.available(cfg):
-                    continue
-                df = eodhd_mod.history(p, start_date, end_date)
-                if df is not None and not df.empty:
-                    return df
-            elif source_id == "yfinance":
-                df = _yahoo_history(p, start_date, end_date)
-                if df is not None and not df.empty:
-                    return df
-            elif source_id == "akshare":
-                if p.market not in (Market.HK, Market.CN, Market.BJ):
-                    continue
-                df = _akshare_history(p, start_date, end_date)
-                if df is not None and not df.empty:
-                    return df
+                    df = lp_mod.get_history_longport(p, start_date, end_date)
+                    if df is not None and not df.empty:
+                        return df
+                    sp.ok = False
+                    sp.error = "无历史数据"
+                elif source_id == "eodhd":
+                    df = eodhd_mod.history(p, start_date, end_date)
+                    if df is not None and not df.empty:
+                        return df
+                    sp.ok = False
+                    sp.error = "无历史数据"
+                elif source_id == "yfinance":
+                    df = _yahoo_history(p, start_date, end_date)
+                    if df is not None and not df.empty:
+                        return df
+                    sp.ok = False
+                    sp.error = "无历史数据"
+                elif source_id == "akshare":
+                    df = _akshare_history(p, start_date, end_date)
+                    if df is not None and not df.empty:
+                        return df
+                    sp.ok = False
+                    sp.error = "无历史数据"
         except Exception as e:  # noqa: BLE001 - 降级到下一源
             last_err = e
             if source_id == "ibkr":
@@ -571,11 +635,18 @@ def get_quotes(
         try:
             from .. import longport as lp_mod
 
-            lp_quotes, reason = lp_mod.get_quotes_longport(legacy_prefetch)
-            quotes.update(lp_quotes)
-            settled.update(lp_quotes)
-            if reason:
-                notes.append(f"长桥不可用: {reason} (已回退默认数据源)")
+            with health.span("quote", "longport") as sp:
+                lp_quotes, reason = lp_mod.get_quotes_longport(legacy_prefetch)
+                quotes.update(lp_quotes)
+                settled.update(lp_quotes)
+                if reason:
+                    sp.ok = False
+                    sp.error = reason
+                elif not lp_quotes:
+                    sp.ok = False
+                    sp.error = "无行情"
+                if reason:
+                    notes.append(f"长桥不可用: {reason} (已回退默认数据源)")
         except Exception as e:  # noqa: BLE001 - 长桥属可选增强
             notes.append(f"长桥接入异常: {e}")
         _emit("长桥批量行情")
@@ -592,11 +663,18 @@ def get_quotes(
             try:
                 from .. import ibkr as ibkr_mod
 
-                ib_quotes, reason = ibkr_mod.get_quotes_ibkr(ib_plist)
-                quotes.update(ib_quotes)
-                settled.update(ib_quotes)
-                if reason:
-                    notes.append(f"IBKR 不可用: {reason} (已回退默认数据源)")
+                with health.span("quote", "ibkr") as sp:
+                    ib_quotes, reason = ibkr_mod.get_quotes_ibkr(ib_plist)
+                    quotes.update(ib_quotes)
+                    settled.update(ib_quotes)
+                    if reason:
+                        sp.ok = False
+                        sp.error = reason
+                    elif not ib_quotes:
+                        sp.ok = False
+                        sp.error = "无行情"
+                    if reason:
+                        notes.append(f"IBKR 不可用: {reason} (已回退默认数据源)")
             except Exception as e:  # noqa: BLE001 - IBKR 属可选增强
                 notes.append(f"IBKR 接入异常: {e}")
             _emit("IBKR 批量行情")
@@ -721,11 +799,19 @@ def get_quotes(
                     if eod_plist:
                         _emit("EODHD 批量行情")
                         try:
-                            eod_batch, eod_errors = eodhd_mod.quotes_batch(eod_plist)
-                            quotes.update(eod_batch)
-                            settled.update(eod_batch)
-                            for err in eod_errors[:3]:
-                                notes.append(f"EODHD 批量行情: {err}")
+                            with health.span("quote", "eodhd") as sp:
+                                eod_batch, eod_errors = eodhd_mod.quotes_batch(
+                                    eod_plist
+                                )
+                                quotes.update(eod_batch)
+                                settled.update(eod_batch)
+                                if not eod_batch:
+                                    sp.ok = False
+                                    sp.error = (
+                                        eod_errors[0] if eod_errors else "批量无结果"
+                                    )
+                                for err in eod_errors[:3]:
+                                    notes.append(f"EODHD 批量行情: {err}")
                         except Exception as e:  # noqa: BLE001 - 批量失败回落 yfinance
                             notes.append(f"EODHD 批量行情异常: {e} (已回退默认源)")
                         _emit("EODHD 批量行情")
@@ -744,9 +830,13 @@ def get_quotes(
                 if batch_plist:
                     _emit("yfinance 批量行情")
                     try:
-                        batch = _yahoo_batch(batch_plist)
-                        quotes.update(batch)
-                        settled.update(batch)
+                        with health.span("quote", "yfinance") as sp:
+                            batch = _yahoo_batch(batch_plist)
+                            quotes.update(batch)
+                            settled.update(batch)
+                            if not batch:
+                                sp.ok = False
+                                sp.error = "批量无结果"
                     except Exception as e:  # noqa: BLE001 - 批量失败不能让整个域崩
                         # 批量是优化不是必需: 失败则全部代码落逐代码源链 (那里每源
                         # 单独 try)。逐代码阶段异常也会被 _fetch_domain 收敛成单码错误。
@@ -857,15 +947,18 @@ def get_history(
         try:
             from .. import ibkr as ibkr_mod
 
-            ib_hist, reason = ibkr_mod.get_history_ibkr(
-                [p], months, start_date=start_date, end_date=end_date
-            )
-            if p.yahoo in ib_hist:
-                return ib_hist[p.yahoo]
-            if reason:
-                import warnings
+            with health.span("history", "ibkr", p.yahoo) as sp:
+                ib_hist, reason = ibkr_mod.get_history_ibkr(
+                    [p], months, start_date=start_date, end_date=end_date
+                )
+                if p.yahoo in ib_hist:
+                    return ib_hist[p.yahoo]
+                sp.ok = False
+                sp.error = reason or "无历史数据"
+                if reason:
+                    import warnings
 
-                warnings.warn(f"IBKR 历史数据不可用: {reason} (已回退)")
+                    warnings.warn(f"IBKR 历史数据不可用: {reason} (已回退)")
         except Exception as e:  # noqa: BLE001 - IBKR 属可选增强
             import warnings
 
@@ -874,9 +967,12 @@ def get_history(
         try:
             from .. import longport as lp_mod
 
-            lp_hist = lp_mod.get_history_longport(p, start_date, end_date)
-            if lp_hist is not None:
-                return lp_hist
+            with health.span("history", "longport", p.yahoo) as sp:
+                lp_hist = lp_mod.get_history_longport(p, start_date, end_date)
+                if lp_hist is not None:
+                    return lp_hist
+                sp.ok = False
+                sp.error = "无历史数据"
         except Exception as e:  # noqa: BLE001 - 长桥属可选增强
             import warnings
 

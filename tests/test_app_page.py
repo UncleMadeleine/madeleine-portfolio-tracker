@@ -5,9 +5,9 @@
    自选行情, 一处 import 就把整套测试拖死 (沙箱无网时无限挂起)。
 2. AppTest.from_file 走与 `streamlit run` 相同的 __main__ 执行模型, 默认页
    (组合) 完整渲染 —— 保证路由入口没有把页面"锁死"在 import 里。
-3. st.navigation 多页面路由: 八页各有独立 url_path (组合 / · K线 /kline ·
+3. st.navigation 多页面路由: 九页各有独立 url_path (组合 / · K线 /kline ·
    指数 /index · 基本面 /fundamentals · 日历 /calendar · 钱包净值 /wallet ·
-   导入 /import · 设置 /settings), 刷新/直链不丢页。
+   导入 /import · 数据健康 /health · 设置 /settings), 刷新/直链不丢页。
 """
 
 from __future__ import annotations
@@ -32,6 +32,7 @@ _URL_PATHS = {
     "calendar": "日历",
     "wallet": "钱包净值",
     "import": "导入",
+    "health": "数据健康",
     "settings": "设置",
 }
 
@@ -159,7 +160,7 @@ def test_cli_main_starts_background_warmers(monkeypatch, tmp_path):
 
 
 def test_navigation_registers_independent_urls(app_boot):
-    """八页各有独立 url_path: 当前页由 URL 决定, 刷新不回落组合页.
+    """九页各有独立 url_path: 当前页由 URL 决定, 刷新不回落组合页.
 
     st.navigation 的注册表是唯一权威: 断言 url_path 全部注册且互不重复,
     组合页为默认页 (空路径 = 根 URL /)。
@@ -182,6 +183,50 @@ def test_portfolio_page_module_renders_directly(app_boot):
     ).run()
     assert not at.exception, at.exception
     assert any("组合总览" in m.value for m in at.markdown)
+
+
+def test_health_page_renders_without_network(app_boot):
+    """数据健康页只读本地: 空库/无事件也应完整渲染."""
+    from tracker.ui import health_page
+
+    health_page.cached_report.clear()
+    at = AppTest.from_string(
+        "import tracker.ui.health_page as hp\nhp.render_health_page()",
+        default_timeout=30,
+    ).run()
+    assert not at.exception, at.exception
+    assert any("数据健康" in m.value for m in at.markdown)
+
+
+def test_health_page_renders_with_events_and_gaps(app_boot):
+    """有事件/有缺口时表格与摘要也能完整渲染 (DataFrame 列名/NaN 兜底)."""
+    import tracker.cache as cache_mod
+    from tracker.ui import health_page
+
+    # st.cache_data 是进程级全局: 前面的空库用例可能已缓存 window=24 的报告
+    health_page.cached_report.clear()
+    now = time.time()
+    cache_mod.add_health_events(
+        [
+            (now - 5, "quote", "yfinance", 1, 120.0, "AAPL", None),
+            (now - 3, "quote", "yfinance", 0, 80.0, "BAD", "HTTP 429"),
+            (now - 2, "fx", "cfets", 1, 40.0, "CNY", None),
+        ]
+    )
+    storage.save_portfolio(
+        {
+            "base_currency": "USD",
+            "holdings": [{"symbol": "0700.HK", "quantity": 10, "avg_cost": 300}],
+        },
+        storage.PORTFOLIO_PATH,
+    )
+    at = AppTest.from_string(
+        "import tracker.ui.health_page as hp\nhp.render_health_page()",
+        default_timeout=30,
+    ).run()
+    assert not at.exception, at.exception
+    # 缺口摘要出现 (持仓缺行情/K线)
+    assert any("0700.HK" in str(df.value) for df in at.dataframe)
 
 
 def test_wallet_page_renders_without_query():

@@ -94,6 +94,7 @@ tracker-ui                        # pip 安装后 (等价, 参数透传给 strea
   - **估值指标** — 任意 A股/港股/美股代码，最新 PE(TTM)、PB、股息率、5 年平均股息率（OpenBB/yfinance，6h 缓存）；历史 PE/PB 曲线按近 3/6/12/24/36/60 个月展示，并给出区间均值/高低点/分位（百度股市通，6h 缓存）
   - **AH 溢价** — 可选 A+H 股票对（东财目录，失败退回内置常见股票对，也可手动输入代码），按近 3/6/12/24/36/60 个月展示 A 股收盘 ÷ (H 股收盘 × 历史汇率) − 1，0% 为两地同价
 - **日历** (`/calendar`) — 持仓/自选的财报、预约披露、除权除息/派息事件月历（窗口与范围可切），可一键导出 `.ics` 导入本地日历
+- **钱包净值** (`/wallet`) — 只读查询单个链上地址：按窗口内转账/交易回放每日余额，再按历史币价与历史汇率折算成净值曲线
 - **导入** (`/import`) — IBKR 账户 / 长桥账户 / 链上钱包 / A股券商文件导入
 - **数据健康** (`/health`) — 数据源成功率 / p50·p95 / 最近成功与失败 / 最近错误；组合行情·K线·汇率缓存覆盖与缺口；本地 JSON/缓存库/目录权限体检；缓存来源分布与保温线程状态；可一键主动探测
 - **设置** (`/settings`) — 涨跌配色（红涨绿跌/绿涨红跌）、数据源开关与拖动回退顺序（含 akshare / IBKR / 长桥 / EODHD / 加密源）、基础货币
@@ -157,7 +158,7 @@ python -m tracker.cli compare AAPL 0700.HK 600519.SS
 python -m tracker.cli compare 601155.SS 1030.HK --ratio 601155.SS 1030.HK  # 比例线
 python -m tracker.cli compare AAPL NVDA --refresh  # 强制刷新 (含比例线历史汇率缓存)
 
-# 多股市值对比（统一折算币种; A股东财历史总市值, 美股/港股等历史股本×收盘价）
+# 多股市值对比（统一折算币种; A股东财历史总市值, 美股/港股等历史股本×收盘价, 股本已按拆股调整）
 python -m tracker.cli compare 0700.HK 600519.SS --metric mcap
 
 # 持仓管理
@@ -309,7 +310,7 @@ K线页支持两种输入方式：
 - **日K / 周K / 月K** 一键切换（周K 按 W-FRI 对齐）
 - 数据经过**清洗校验**（去重/排序，丢弃 high<low 等自相矛盾的脏行），英股便士自动换算
 - **双层缓存**：SQLite 磁盘缓存 30 分钟（`cache info` 可查看），页面另有内存缓存；CLI `--refresh` 强制刷新
-- **强制刷新**：页面「强制刷新」按钮 / CLI `--refresh`（`quote`/`kline`/`compare`/`calendar`）会清对应页面缓存、跳过对应磁盘缓存（行情/K线/日历/市值），并穿透基本面/汇率历史等负缓存；基本面页的估值快照/历史 PE/PB 与 AH 溢价也有独立刷新按钮；单只查询页只失效当前代码的页面缓存，不影响其它代码。数据源偶发失败后可立即重试，不必等缓存或 6h 负缓存过期
+- **强制刷新**：页面「强制刷新」按钮 / CLI `--refresh`（`quote`/`kline`/`compare`/`calendar`）会清对应页面缓存、跳过对应磁盘缓存（行情/K线/日历/市值），并穿透基本面/汇率历史等负缓存；显式指定 `--akshare`/`--ibkr`/`--longport`/`--crypto-source` 时也会清掉进程内负缓存，立即用新源重试；基本面页的估值快照/历史 PE/PB 与 AH 溢价也有独立刷新按钮；单只查询页只失效当前代码的页面缓存，不影响其它代码。数据源偶发失败后可立即重试，不必等缓存或 6h 负缓存过期
 
 CLI 导出的独立 HTML 用 **plotly**：
 
@@ -343,6 +344,8 @@ python -m tracker.cli kline 0700.HK --period weekly --open  # 周K + 自动打�
 
 > 市值指标（`--metric mcap` / 页面「指标: 市值」）的序列币种跟随实际报价币种：
 > `.IL`、港股人民币/美元柜台等按数据源自报换算，统一折算前不会按市场默认币种硬编码。
+> 美股/港股等按「历史股本 × 收盘价」计算；股本数据会按拆股比例换算到与复权收盘价
+> 相同的口径，避免拆股日出现 N 倍的假跳变。
 
 > 比值线（两标的收盘价相除画成折线）已支持，见上；把比值画成 K 线（OHLC）仍在 Roadmap 中。
 
@@ -386,9 +389,10 @@ python -m tracker.cli wallet-nav solana H... --max-assets 20
   （Etherscan V2，或环境变量 `TRACKER_EXPLORER_KEY`），或用 `explorers` /
   `blockscout_urls` 指向自建/其它兼容服务（`tracker init` 会生成模板）。
 - **限制**：质押/解冻中的 TRX 不计入；rebasing / fee-on-transfer 代币、浏览器索引
-  缺失、以及 Solana 公共节点裁剪历史可能造成偏差；代币垃圾空投会被忽略，资产
-  数量超过 `--max-assets`（默认 30）时按当前估值优先保留大头，跳过项在 `notes`
-  中列出。曲线用于看趋势，不作为审计口径。
+  缺失、以及 Solana 公共节点裁剪历史可能造成偏差；未识别或当前估值过低的代币会
+  被忽略，但窗口内实际出现过转账的代币仍可能参与估值。资产数量超过 `--max-assets`
+  （默认 30）时按当前估值优先保留大头，跳过项在 `notes` 中列出。曲线用于看趋势，
+  不作为审计口径。
 - **JSON**：输出 `{chain, address, base, start, end, rows[], assets[], issues[], notes[]}`。
 
 ---
@@ -784,7 +788,7 @@ CLI 不再依赖前端进程做缓存保温：`python -m tracker.cli warm` 可�
 - CFETS 汇率为中间价，与离岸 CNH 有细微差异，组合展示场景可忽略
 - `今日估算` 按各持仓 `涨跌幅 × 当前市值` 近似，非精确日内盯市
 - 历史净值回填使用**当前持仓数量 × 历史收盘价**，不还原历史调仓；曲线只适合看「一直持有现在的仓位」的近似走势，不能当作真实历史业绩；取不到历史行情的标的（如部分可转债）会被跳过并在 CLI `issues` 中列出，曲线只覆盖有数据的持仓
-- 钱包净值 `wallet-nav` 用链上转账回放历史余额：ETH/AVAX/TRON/Solana 零 API Key；Polygon/Arbitrum/BSC 的免费公共浏览器接口不稳定或需要 Etherscan V2 key（可在 `wallet_history.json` 配置）。质押/解冻中的 TRX 不计入；rebasing / fee-on-transfer 代币、浏览器索引缺失、公共节点裁剪历史可能造成偏差；垃圾空投会被忽略，资产数超过 `--max-assets` 时只保留当前估值较大的资产；同名代币（不同链/合约）按 symbol 取主流市场价格，可能与链上实际价值有差异
+- 钱包净值 `wallet-nav` 用链上转账回放历史余额：ETH/AVAX/TRON/Solana 零 API Key；Polygon/Arbitrum/BSC 的免费公共浏览器接口不稳定或需要 Etherscan V2 key（可在 `wallet_history.json` 配置）。质押/解冻中的 TRX 不计入；rebasing / fee-on-transfer 代币、浏览器索引缺失、公共节点裁剪历史可能造成偏差；未识别/低估值代币会优先跳过，但窗口内真实出现转账的代币仍可能参与估值，资产数超过 `--max-assets` 时只保留当前估值较大的资产；同名代币（不同链/合约）按 symbol 取主流市场价格，可能与链上实际价值有差异
 - A股/港股历史 K 线为前复权（qfq）口径，回填曲线在历史日期的市值/盈亏与当时实际值可能有差异（最新一天一致）；分红/拆股较多的标的历史段仅供看趋势
 - IBKR 行情需本机运行 IB Gateway 且 API 已启用；A股/港股/B股数据若无市场数据订阅，`reqTickers` 可能返回空值，自动回退 Yahoo/akshare
 - IBKR A股经沪深港通通道：沪 `SEHKNTL` / 科创 `SEHKSTAR` / 深 `SEHKSZSE`，计价 CNH；若你的账户显示不同交易所代码，在 `ibkr.json` 的 `exchanges` 中修改对应键（`CN_SH` / `CN_STAR` / `CN_SZ`）；B股合约根据 IBKR 返回的 `SHSE/USD` 或 `SZSE/HKD` 自动识别
@@ -940,11 +944,12 @@ IBKR/LongPort disconnects silently fall back to the next source; the page contin
 ### Project Structure
 
 ```
-tracker/ui/        Streamlit dashboard (app.py + cli_main() console entry + kline/index/fundamentals/calendar/import/settings pages + longport login + settings)
+tracker/ui/        Streamlit dashboard (app.py + cli_main() console entry + kline/index/fundamentals/calendar/wallet/import/settings pages + longport login + settings)
 tracker/           Core package: paths.py (data-dir resolution), cli/ subcommands (incl. init, warm),
                    providers/, symbols, symbol_migrations, storage, prices, fx, search,
                    cache, charting, analytics, watchlist, services/ (incl. warm.py),
-                   importer, ibkr, longport, longport_oauth, eodhd, ibkr_sync, ashare_sync, wallet
+                   importer, ibkr, longport, longport_oauth, eodhd, ibkr_sync, ashare_sync,
+                   wallet, wallet_history, wallet_nav
 tracker/templates/ Packaged config templates + streamlit theme (shipped in the wheel; `tracker init` copies them into the data dir)
 tracker/assets/    Vendored lightweight-charts standalone JS (offline, no extra dependency)
 pyproject.toml     Packaging metadata (dependency extras, console scripts, package-data)

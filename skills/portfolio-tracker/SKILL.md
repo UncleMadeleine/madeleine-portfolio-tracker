@@ -11,7 +11,7 @@ description: Use when the user asks to check or manage their investment portfoli
 加密货币 (`BASE-QUOTE` 连字符代码, Binance 优先→Gate.io→Hyperliquid(仅USD系)→yfinance; 数据源偏好 settings.json `crypto_source` 或 CLI `--crypto-source`, 默认 auto=默认链, 指定源前置失败自动回落),
 指数 (`IX.<KEY>`, 中国指数 akshare 优先, 其余 yfinance→akshare 新浪兜底; 水泥网/商品期货/恒生官网/Cameco 铀价指数为专属源无兜底)。
 各域只在投资组合/watchlist 聚合, 数据层面严格分域。有 Streamlit 页面
-(`python -m streamlit run tracker/ui/app.py`, 7 页: 组合 `/` · K线 `/kline` · 指数K线 `/index` · 基本面 `/fundamentals` · 日历 `/calendar` · 导入 `/import` · 设置 `/settings`)
+(`python -m streamlit run tracker/ui/app.py`, 9 页: 组合 `/` · K线 `/kline` · 指数K线 `/index` · 基本面 `/fundamentals` · 日历 `/calendar` · 钱包净值 `/wallet` · 导入 `/import` · 数据健康 `/health` · 设置 `/settings`)
 和命令行两套入口。**AI 操作请优先用 CLI。**
 
 所有子命令都支持机器可读输出: 多数是 `--json`; `report`/`export` 用 `-f json`
@@ -262,7 +262,8 @@ Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致);
    eth/avalanche/tron/solana 零 API Key; polygon/arbitrum/bsc 可在
    `wallet_history.json` 配置 `explorer_key` (Etherscan V2, 或 env
    `TRACKER_EXPLORER_KEY`) 或 `explorers`/`blockscout_urls`。
-   TRX 质押/解冻中的余额不计入; 垃圾空投会被忽略; 资产超过 `--max-assets`
+   TRX 质押/解冻中的余额不计入; 未识别/低估值代币优先跳过, 但窗口内真实出现
+   转账的代币仍可能参与估值; 资产超过 `--max-assets`
    时按当前估值保留大头, 跳过项见 `notes`。
 
 1c. **预热缓存 (可选, 让后续命令秒回)**:
@@ -354,7 +355,8 @@ Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致);
    .venv/bin/python -m tracker.cli compare 0700.HK 600519.SS --metric mcap        # 市值对比 (统一折算基础货币)
    .venv/bin/python -m tracker.cli compare AAPL NVDA --metric mcap --currency USD # 指定折算币种
    # 市值模式口径: A股=东财历史总市值 (真实日频); 美股/港股等=历史股本×收盘价
-   # (yfinance shares_full); 股本不可得时按当前市值×价格比例近似 (--json sources 有标注);
+   # (yfinance shares_full, 股本已按拆股比例换算到复权价口径); 股本不可得时按
+   # 当前市值×价格比例近似 (--json sources 有标注);
    # 序列币种跟随实际报价币种 (.IL / 港股美元柜台按数据源自报), 再统一折算;
    # crypto/指数无市值语义会被跳过并告警; --raw 不归一化 (图表按亿显示, JSON 为原值)
    .venv/bin/python -m tracker.cli index-kline IX.DXY --months 12 --json   # 指数K线数据
@@ -431,5 +433,7 @@ Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致);
   搜索全部为在线接口; 中文查询仅东财 suggest 支持 (A股/北交所全量, 美股/港股域只认领港股行),
   美股/港股/crypto 直接搜中文名基本无结果。
 - 取数失败的代码进进程内负缓存 (5 分钟 TTL 内跳过重试), 报「近期全部数据源失败 (负缓存)」属预期行为。
+  显式指定 `--akshare` / `--ibkr` / `--longport` / `--crypto-source` 或 `--refresh` 会先清掉该负缓存,
+  立即用新源重试。
 - 修改 `portfolio.json`/`watchlist.json` 后如需页面生效, 让用户在页面点「重载」或重启 streamlit。
 - 单元测试: `.venv/bin/python -m pytest tests/ -q` (纯逻辑, 不联网)。

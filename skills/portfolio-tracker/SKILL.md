@@ -1,6 +1,6 @@
 ---
 name: portfolio-tracker
-description: Use when the user asks to check or manage their investment portfolio, holdings, watchlist, stock prices, price-threshold alerts, exchange rates, historical NAV, IBKR sync, Longport (长桥) quotes/positions/login, EODHD (BYOK) status/config, or quote cache in this repo (madeleine-portfolio-tracker). Trigger keywords: 持仓, 组合, 自选, watchlist, 股票, 行情, 报价, quote, 汇率, fx, IBKR, 长桥, longport, EODHD, BYOK, 快照, snapshot, 净值, nav, 历史净值, 缓存, 缓存保温, 预热, warm, K线, kline, 指数, index, 导入, import, 搜索, search, 对比, compare. Operate it through the CLI `python -m tracker.cli <子命令>` (alias `python -m tracker`). Also covers editing portfolio.json / watchlist.json / ibkr.json / longport.json / eodhd.json and the Yahoo symbol conventions.
+description: Use when the user asks to check or manage their investment portfolio, holdings, watchlist, stock prices, price-threshold alerts, exchange rates, historical NAV, wallet NAV, on-chain wallet history, IBKR sync, Longport (长桥) quotes/positions/login, EODHD (BYOK) status/config, or quote cache in this repo (madeleine-portfolio-tracker). Trigger keywords: 持仓, 组合, 自选, watchlist, 股票, 行情, 报价, quote, 汇率, fx, IBKR, 长桥, longport, EODHD, BYOK, 快照, snapshot, 净值, nav, 历史净值, 钱包净值, wallet-nav, 链上钱包, 钱包历史, 缓存, 缓存保温, 预热, warm, K线, kline, 指数, index, 导入, import, 搜索, search, 对比, compare. Operate it through the CLI `python -m tracker.cli <子命令>` (alias `python -m tracker`). Also covers editing portfolio.json / watchlist.json / ibkr.json / longport.json / eodhd.json / wallet_history.json and the Yahoo symbol conventions.
 ---
 
 # Madeleine Portfolio Tracker CLI
@@ -38,6 +38,7 @@ tracker-ui          # pip 安装后起 Streamlit 页面 (等价 streamlit run tr
 |---|---|---|
 | `snapshot` | 持仓+自选快照(含阈值提醒) | `snapshot --json`, `snapshot --base USD`, `snapshot --watchlist 科技`, `snapshot --save` (同时落历史净值) |
 | `nav` | 历史净值 (读取/保存/回填) | `nav`, `nav --days 30 --json`, `nav --save`, `nav --backfill --days 365`, `nav --backfill --dry-run` |
+| `wallet-nav` | 钱包历史净值 (链上转账回放) | `wallet-nav eth 0x... --days 90`, `wallet-nav tron T... --base CNY --json`, `wallet-nav solana H... --max-assets 20` |
 | `quote` | 实时行情 | `quote AAPL 600519.SS`, `quote AAPL --refresh` (跳过 5min 磁盘/负缓存) |
 | `watchlist` | 自选管理 list/add/remove/triggered/import-longport | `watchlist list`, `watchlist triggered` (只输出到达阈值的自选), `watchlist triggered --json`, `watchlist add TSLA --list 科技 --upper1 420`, `watchlist import-longport --dry-run` (长桥自选导入, 分组→列表, 代码归一) |
 | `portfolio` | 持仓管理 list/add/remove/set-base | `portfolio list`, `portfolio add AAPL --quantity 10 --avg-cost 180`, `portfolio set-base USD` |
@@ -220,6 +221,14 @@ Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致);
     名称与币种按代码规范兜底, PB/市值仍走原基本面链路
   - 失败一律静默回落下一源; 401/403/404/429 会把可读原因写进 `issues`/报错信息
     (已脱敏, 不含 token)
+- `wallet_history.json`: 链上钱包历史净值查询的浏览器配置 (可选; env
+  `TRACKER_WALLET_HISTORY_CONFIG` 指定路径, key 也可用 env `TRACKER_EXPLORER_KEY` 注入):
+  - `explorer_key`: Etherscan V2 API Key (主要在 Polygon / Arbitrum / BSC 需要)
+  - `explorers`: `{链: Etherscan 兼容 API 根地址}`, 指向自建/其它浏览器
+  - `blockscout_urls`: `{链: Blockscout v2 根地址}`
+  - `max_pages` (每个分页接口最多翻页数, 默认 40) · `max_transactions`
+    (Solana 逐笔交易详情上限, 默认 1200) · `timeout`
+  - eth/avalanche/tron/solana 无需配置即可用; `tracker init` 会生成模板
 
 ## 常见 AI 操作流程
 
@@ -240,6 +249,20 @@ Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致);
    回填只覆盖没有真实快照的日期 (真实快照优先; 重新回填会更新旧回填行),
    口径为当前持仓数量 × 历史收盘价
    (跨币种按历史汇率折算), **不含历史调仓**, 不能当作真实历史业绩。
+
+1b-2. **看单个链上钱包的历史净值 (不导入组合)**:
+   ```
+   .venv/bin/python -m tracker.cli wallet-nav eth 0x... --days 90 --json
+   .venv/bin/python -m tracker.cli wallet-nav tron T... --base CNY
+   .venv/bin/python -m tracker.cli wallet-nav solana H... --max-assets 20
+   ```
+   口径: 当前余额 + 窗口内链上转账/交易/手续费 → 反推每天余额, 再按
+   `SYMBOL-USD` 历史日线与 `USD→基础货币` 历史汇率折算。
+   eth/avalanche/tron/solana 零 API Key; polygon/arbitrum/bsc 可在
+   `wallet_history.json` 配置 `explorer_key` (Etherscan V2, 或 env
+   `TRACKER_EXPLORER_KEY`) 或 `explorers`/`blockscout_urls`。
+   TRX 质押/解冻中的余额不计入; 垃圾空投会被忽略; 资产超过 `--max-assets`
+   时按当前估值保留大头, 跳过项见 `notes`。
 
 1c. **预热缓存 (可选, 让后续命令秒回)**:
    ```

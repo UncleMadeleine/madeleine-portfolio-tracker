@@ -133,6 +133,50 @@ def _add_nav_parser(sub: argparse.ArgumentParser) -> None:
     p_nav.set_defaults(func=_cmd(".nav", "cmd_nav"))
 
 
+def _add_wallet_nav_parser(sub: argparse.ArgumentParser) -> None:
+    # ---- wallet-nav (链上转账回放的钱包净值曲线) ----
+    p_wn = sub.add_parser(
+        "wallet-nav",
+        help="钱包历史净值曲线 (链上转账回放)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "示例:\n"
+            "  tracker wallet-nav eth 0xd8dA...6045\n"
+            "  tracker wallet-nav eth 0xd8dA...6045 --days 90 --json\n"
+            "  tracker wallet-nav solana H... --days 365 --base CNY\n"
+            "  tracker wallet-nav tron T... --crypto-source binance --refresh\n"
+            "口径: 用当前余额 + 窗口内链上转账反推每天余额, 再按历史币价与\n"
+            "USD→基础货币历史汇率折算; 不含质押/解冻中的 TRX。\n"
+            "eth/avalanche/tron/solana 零 API Key 可用; polygon/arbitrum/bsc\n"
+            "可能需要在 wallet_history.json 配置 explorer_key 或自定义浏览器。\n"
+        ),
+    )
+    p_wn.add_argument(
+        "chain",
+        help="链: eth/bsc/polygon/arbitrum/avalanche/tron/solana",
+    )
+    p_wn.add_argument("address", help="链上地址/公钥")
+    p_wn.add_argument("--portfolio", default=str(DEFAULT_PORTFOLIO))
+    p_wn.add_argument(
+        "--base", default=None, help="基础货币 (默认取 portfolio.json 的 base_currency)"
+    )
+    p_wn.add_argument(
+        "--days", type=positive_int, default=180, help="回看自然日数 (默认 180)"
+    )
+    p_wn.add_argument("--tokenlist", default=None, help="外部 tokenlist JSON (可选)")
+    p_wn.add_argument("--config", default=None, help="wallet_history.json 路径")
+    p_wn.add_argument(
+        "--max-assets",
+        type=int,
+        default=30,
+        help="单次估值最多取多少个资产的历史价 (默认 30, 按当前估值优先保留大头)",
+    )
+    _add_crypto_source_arg(p_wn)
+    p_wn.add_argument("--refresh", action="store_true", help="强制刷新历史行情缓存")
+    p_wn.add_argument("--json", action="store_true", help="输出 JSON")
+    p_wn.set_defaults(func=_cmd(".wallet_nav", "cmd_wallet_nav"))
+
+
 def _add_quote_parser(sub: argparse.ArgumentParser) -> None:
     # ---- quote ----
     p_q = sub.add_parser(
@@ -1010,7 +1054,7 @@ def _add_init_parser(sub: argparse.ArgumentParser) -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
-            "  tracker init            # 生成缺失的 portfolio/watchlist/settings/ibkr/longport/eodhd.json\n"
+            "  tracker init            # 生成缺失的 portfolio/watchlist/settings/ibkr/longport/eodhd/wallet_history.json\n"
             "  tracker init --force    # 用模板覆盖已存在的配置\n"
             "数据目录: $TRACKER_HOME > 源码树仓库根 > 平台用户目录 (~/.tracker)\n"
         ),
@@ -1025,6 +1069,7 @@ def _add_init_parser(sub: argparse.ArgumentParser) -> None:
 _SUBCOMMAND_REGISTRARS = (
     _add_snapshot_parser,
     _add_nav_parser,
+    _add_wallet_nav_parser,
     _add_quote_parser,
     _add_watchlist_parser,
     _add_portfolio_parser,

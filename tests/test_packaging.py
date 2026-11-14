@@ -135,7 +135,8 @@ class TestInitCommand:
         payload = json.loads(capsys.readouterr().out)
         assert payload["ok"] is True
         assert payload["data_home"] == str(home)
-        assert len(payload["created"]) == 6
+        assert len(payload["created"]) == 7
+        assert any(p.endswith("wallet_history.json") for p in payload["created"])
 
 
 class TestVersionSingleSource:

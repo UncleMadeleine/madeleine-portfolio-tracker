@@ -5,9 +5,9 @@
   已安装   tracker-ui (pip 安装后的控制台入口, 见本文件 cli_main)
 
 每个页面有独立 URL (组合 / · K线 /kline · 指数 /index · 基本面 /fundamentals ·
-日历 /calendar · 导入 /import · 设置 /settings), 当前页由浏览器地址决定 —— 刷新、
-书签、前进后退都不丢页。页面渲染逻辑在各 *_page.py 模块; 行情/汇率缓存在
-portfolio_page.py。
+日历 /calendar · 钱包净值 /wallet · 导入 /import · 设置 /settings), 当前页由
+浏览器地址决定 —— 刷新、书签、前进后退都不丢页。页面渲染逻辑在各 *_page.py
+模块; 行情/汇率缓存在 portfolio_page.py。
 """
 
 from __future__ import annotations
@@ -37,6 +37,7 @@ from tracker.ui.portfolio_page import (  # noqa: E402
     render_portfolio_page,
 )
 from tracker.ui.settings_page import render_settings_page  # noqa: E402
+from tracker.ui.wallet_page import render_wallet_page  # noqa: E402
 
 
 def main() -> None:
@@ -87,6 +88,12 @@ def main() -> None:
             title="日历",
             icon=":material/event:",
             url_path="calendar",
+        ),
+        st.Page(
+            render_wallet_page,
+            title="钱包净值",
+            icon=":material/account_balance_wallet:",
+            url_path="wallet",
         ),
         st.Page(
             lambda: render_import_page(on_saved=_post_import),

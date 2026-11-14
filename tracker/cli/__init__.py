@@ -3,6 +3,7 @@
 子命令:
   snapshot  组合 + 自选快照 (持仓 / 自选提醒 / 阈值触发; --save 落历史净值)
   nav       历史净值 (读取 / 保存今日快照 / 按当前持仓回填)
+  wallet-nav 钱包历史净值 (链上转账回放 + 历史币价/汇率折算)
   quote     查询单个或多个代码实时行情
   watchlist 自选股管理 (list / add / remove / triggered) 与阈值提醒
   portfolio 持仓管理 (list / add / remove / set-base)

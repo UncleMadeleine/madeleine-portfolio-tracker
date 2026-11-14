@@ -31,9 +31,10 @@ Madeleine Portfolio Tracker 是一款**本地优先**的投资组合追踪工具
 - **财经日历** — 持仓/自选的本月与下月财报、预约披露、除权除息/派息事件（yfinance 单票 + akshare 整批，长桥可选兜底），独立页面与 `calendar` 子命令；支持导出 iCalendar (`.ics`) 到 Apple 日历 / Google Calendar / Outlook；A股只请求窗口内可能命中的报表期、按范围跳过无关板块，取数并发执行；首屏先展示磁盘缓存并后台刷新，服务进程内置保温线程按默认范围周期预热缓存，冷启动带 A股整批/海外单票进度条
 - **首屏性能** — 组合与日历均采用 stale-while-revalidate：先渲染 30 分钟 / 7 天内的旧缓存秒开，后台静默重取；仅在完全无缓存时阻塞取数（组合/日历均显示实时进度条）；行情/汇率/日历均有进程级保温线程周期刷新磁盘缓存，且保温服务已抽成无 Streamlit 依赖的 `tracker/services/warm.py`，CLI 可用 `tracker warm` 一次性预热或 `--interval` 常驻保温
 - **历史净值曲线** — 每日组合快照落独立 SQLite（`nav_history.db`，与行情缓存分离），组合页画总市值 + 成本走势；支持 `nav --save` 手动存档、组合页每次渲染自动 upsert、`nav --backfill` 按当前持仓 × 历史收盘价回填近似历史（含历史汇率折算）
+- **链上钱包净值曲线** — `wallet-nav` / 「钱包净值」页按**链上转账记录回放历史余额**（不是「当前余额 × 历史价」），再按历史币价与历史汇率折算成每日净值；Ethereum / Avalanche / TRON / Solana 零 API Key，Polygon / Arbitrum / BSC 可配 Etherscan V2 key 或自定义浏览器
 - **基本面分析** — 估值指标子视图：任意 A股/港股/美股的最新 PE(TTM)、PB、股息率、5 年平均股息率，以及历史 PE/PB 曲线与自身历史分位（百度股市通）；AH 溢价子视图保留单只 A+H 股票的溢价率曲线：A 股收盘 ÷ (H 股收盘 × 历史汇率) − 1，支持任意 A+H 股票对 / 范围切换，0% 同价参考线 + 区间高低点/均值/分位摘要（独立页面 `/fundamentals`）
-- **Streamlit 可视化页面** — 组合明细 / 资产配置 / 自选提醒 / K线查询（含多股走势对比）/ 指数K线 / 基本面分析 / 日历 / 设置
-- **统一 CLI** — 22 个子命令（快照、净值、报价、持仓、自选、监控报告、导出、汇率、历史、K线、日历、搜索、对比、指数K线、导入、长桥登录、EODHD 自检、同步、钱包导入、缓存管理、缓存保温 `warm`、初始化），全部支持机器可读输出（`--json`，`report`/`export` 为 `-f json`）；`warm` 可一次性预热或 `--interval` 常驻，不依赖 Streamlit 进程
+- **Streamlit 可视化页面** — 组合明细 / 资产配置 / 自选提醒 / K线查询（含多股走势对比）/ 指数K线 / 基本面分析 / 日历 / 钱包净值 / 设置
+- **统一 CLI** — 23 个子命令（快照、净值、钱包净值、报价、持仓、自选、监控报告、导出、汇率、历史、K线、日历、搜索、对比、指数K线、导入、长桥登录、EODHD 自检、同步、钱包导入、缓存管理、缓存保温 `warm`、初始化），全部支持机器可读输出（`--json`，`report`/`export` 为 `-f json`）；`warm` 可一次性预热或 `--interval` 常驻，不依赖 Streamlit 进程
 - **链上钱包导入** — EVM 五链 + TRON + Solana 共七条链地址余额只读查询，一键写入持仓
 - **A股券商持仓导入** — 解析券商客户端导出的 CSV/Excel 持仓文件
 
@@ -352,6 +353,32 @@ python -m tracker.cli kline 0700.HK --period weekly --open  # 周K + 自动打�
 - **JSON**：`nav --json` 输出 `{base, count, rows[]}`；回填输出
   `{base, action, days, generated, inserted, dry_run, issues[]}`。
 
+### 钱包净值曲线（链上转账回放）
+
+单个链上地址的历史净值，独立于 `nav_history.db`，按需查询、不写组合：
+
+```bash
+python -m tracker.cli wallet-nav eth 0xd8dA...6045 --days 90
+python -m tracker.cli wallet-nav eth 0xd8dA...6045 --days 365 --json
+python -m tracker.cli wallet-nav tron T... --base CNY --crypto-source binance
+python -m tracker.cli wallet-nav solana H... --max-assets 20
+```
+
+- **口径**：先取当前链上余额，再用窗口内的转账/交易/手续费从今天往前反推
+  每个 UTC 自然日的收盘余额，最后按 `SYMBOL-USD` 历史日线与 `USD→基础货币`
+  历史汇率折算。**不是**「当前余额 × 历史价」，因此能反映历史转入/转出/交易。
+- **来源**：Ethereum 走 Routescan（Blockscout 兜底）；Avalanche 走 Snowtrace /
+  Routescan；TRON 走 TronGrid；Solana 走公共 RPC（`getSignaturesForAddress` +
+  `getTransaction`）。以上零 API Key。Polygon / Arbitrum / BSC 的免费公共浏览器
+  接口不稳定或需要 key：可在 `wallet_history.json` 配置 `explorer_key`
+  （Etherscan V2，或环境变量 `TRACKER_EXPLORER_KEY`），或用 `explorers` /
+  `blockscout_urls` 指向自建/其它兼容服务（`tracker init` 会生成模板）。
+- **限制**：质押/解冻中的 TRX 不计入；rebasing / fee-on-transfer 代币、浏览器索引
+  缺失、以及 Solana 公共节点裁剪历史可能造成偏差；代币垃圾空投会被忽略，资产
+  数量超过 `--max-assets`（默认 30）时按当前估值优先保留大头，跳过项在 `notes`
+  中列出。曲线用于看趋势，不作为审计口径。
+- **JSON**：输出 `{chain, address, base, start, end, rows[], assets[], issues[], notes[]}`。
+
 ---
 
 ## 自选股与阈值提醒 (价格 / 市净率 / 市值)
@@ -394,13 +421,14 @@ tracker/ui/           Streamlit 页面包（streamlit run tracker/ui/app.py / �
 ├── index_page.py       「指数K线」页面（IX.<KEY> 分组下拉, 独立于股票 K线页）
 ├── fundamentals_page.py 「基本面」页面（估值指标 PE/PB/股息率 + 历史 PE/PB 分位; AH 溢价曲线: A+H 股票对 / 范围切换, 明细表）
 ├── import_page.py      「导入」页面（IBKR 账户 / 长桥账户 / 链上钱包 / 券商文件, 追加合并或覆盖）
+├── wallet_page.py      「钱包净值」页面（链上转账回放历史余额 + 历史币价/汇率折算曲线）
 ├── settings_page.py    「设置」页面（配色 / 数据源 / EODHD BYOK / 基础货币）
 ├── longport_login.py   长桥 OAuth 登录引导（独立子进程, 状态文件 <数据目录>/var/longport_oauth_state.json）
 └── settings.py         settings.json 读写（涨跌配色 / prefer_akshare / use_ibkr / use_longport / crypto_source / source_order）+ portfolio 读写助手
 tracker/
 ├── __main__.py         python -m tracker 入口（转发到 cli）
 ├── paths.py            数据目录解析（TRACKER_HOME > 仓库根 > 平台用户目录）+ 包内资源定位
-├── cli/                CLI 包（python -m tracker.cli，22 个子命令各一个模块）
+├── cli/                CLI 包（python -m tracker.cli，23 个子命令各一个模块）
 │   ├── __init__.py       argparse 注册与分发
 │   ├── _common.py        JSON 序列化 / 代码归一化 / 原子写 / 错误退出
 │   ├── __main__.py       python -m tracker.cli 入口
@@ -408,6 +436,7 @@ tracker/
 │   ├── eodhd.py          EODHD BYOK 状态 / 连通性自检
 │   ├── snapshot.py       快照（持仓 + 自选 + 阈值触发; --save 落历史净值）
 │   ├── nav.py            历史净值（读取 / 保存今日快照 / 按当前持仓回填）
+│   ├── wallet_nav.py     钱包历史净值（链上转账回放 + 历史币价/汇率折算）
 │   ├── quote.py          实时行情
 │   ├── watchlist.py      自选管理（list/add/remove/triggered/import-longport）与阈值提醒
 │   ├── portfolio.py      持仓管理（list/add/remove/set-base）
@@ -461,7 +490,9 @@ tracker/
 ├── importer.py         **统一导入管道**：四来源采集 → 追加/覆盖合并 → 原子写盘
 ├── ibkr_sync.py        IBKR 持仓导入兼容入口（委托 importer，等价 import ibkr，缺省追加合并）
 ├── ashare_sync.py      A股券商文件解析 + 兼容入口（等价 import file，缺省追加合并）
-└── wallet.py           链上钱包余额查询（EVM 五链 + TRON + Solana, 只读）
+├── wallet.py           链上钱包余额查询（EVM 五链 + TRON + Solana, 只读）
+├── wallet_history.py   链上钱包历史余额回放（Routescan / Blockscout / Etherscan / Snowtrace / TronGrid / Solana RPC）
+└── wallet_nav.py       钱包净值曲线（历史余额 × 历史币价 × 历史汇率）
 数据目录（$TRACKER_HOME > 源码树仓库根 > 平台用户目录, 规则见 tracker/paths.py;
 pip 安装后用户数据不再写进 site-packages, 升级/重装不丢）:
 portfolio.json          持仓配置（页面可直接编辑保存; type 字段由系统自动维护, 手改无效;
@@ -478,6 +509,10 @@ longport.json           长桥真实配置（已 gitignore; 模板 tracker/templ
 eodhd.json               EODHD 真实配置（BYOK token / 角色 / 复权口径; 已 gitignore, 模板
                          tracker/templates/eodhd.example.json, env EODHD_CONFIG 可指定其他路径;
                          token 也可用 env TRACKER_EODHD_TOKEN 注入, 优先级更高）
+wallet_history.json      链上钱包历史查询配置（可选 Etherscan V2 key / 自定义浏览器; 已 gitignore,
+                         模板 tracker/templates/wallet_history.example.json, env
+                         TRACKER_WALLET_HISTORY_CONFIG 可指定其他路径; key 也可用
+                         env TRACKER_EXPLORER_KEY 注入）
 var/                    运行时生成产物（行情缓存 quotes_cache.db、kline/compare 图表 HTML、
                          longport_oauth_state.json 长桥登录状态）, 位于数据目录下,
                          可随时整目录删除（重建即自动再生成）
@@ -698,6 +733,8 @@ python -m tracker.cli import wallet polygon 0x... --tokenlist my_tokens.json
 - 轻钱包策略：EVM 链主币 `eth_getBalance` + ERC-20 `balanceOf` 批量调用；TRON 走 TronGrid `GET /v1/accounts` 一次取回 TRX + TRC-20；Solana 走 `getBalance` + `getTokenAccountsByOwner`(jsonParsed) 取回 SOL + 全部 SPL（wSOL 并入 SOL），内置主流代币 tokenlist，可用外部 JSON 覆盖
 - 不依赖 web3.py/tronpy/solana-py，EVM/Solana 直接 HTTP JSON-RPC，TRON 直接 HTTP
 - 兼容入口：`python -m tracker.cli import-wallet`（`--add` 追加写入 / `--overwrite` 覆盖）
+- **历史净值**：`python -m tracker.cli wallet-nav <chain> <address> --days 180`
+  按链上转账记录回放历史余额（详见「历史净值 → 钱包净值曲线」），不需要先导入 portfolio.json
 
 **稳定币计价 = USD 等价估值**：`BTC-USDT` / `BTC-USDC` / `BTC-FDUSD` 等稳定币计价的代码，
 估值口径一律按 USD（`symbols.valuation_currency` 单一权威点，`parse` / 行情源 / 汇率链共用）。
@@ -732,6 +769,7 @@ CLI 不再依赖前端进程做缓存保温：`python -m tracker.cli warm` 可�
 - CFETS 汇率为中间价，与离岸 CNH 有细微差异，组合展示场景可忽略
 - `今日估算` 按各持仓 `涨跌幅 × 当前市值` 近似，非精确日内盯市
 - 历史净值回填使用**当前持仓数量 × 历史收盘价**，不还原历史调仓；曲线只适合看「一直持有现在的仓位」的近似走势，不能当作真实历史业绩；取不到历史行情的标的（如部分可转债）会被跳过并在 CLI `issues` 中列出，曲线只覆盖有数据的持仓
+- 钱包净值 `wallet-nav` 用链上转账回放历史余额：ETH/AVAX/TRON/Solana 零 API Key；Polygon/Arbitrum/BSC 的免费公共浏览器接口不稳定或需要 Etherscan V2 key（可在 `wallet_history.json` 配置）。质押/解冻中的 TRX 不计入；rebasing / fee-on-transfer 代币、浏览器索引缺失、公共节点裁剪历史可能造成偏差；垃圾空投会被忽略，资产数超过 `--max-assets` 时只保留当前估值较大的资产；同名代币（不同链/合约）按 symbol 取主流市场价格，可能与链上实际价值有差异
 - A股/港股历史 K 线为前复权（qfq）口径，回填曲线在历史日期的市值/盈亏与当时实际值可能有差异（最新一天一致）；分红/拆股较多的标的历史段仅供看趋势
 - IBKR 行情需本机运行 IB Gateway 且 API 已启用；A股/港股/B股数据若无市场数据订阅，`reqTickers` 可能返回空值，自动回退 Yahoo/akshare
 - IBKR A股经沪深港通通道：沪 `SEHKNTL` / 科创 `SEHKSTAR` / 深 `SEHKSZSE`，计价 CNH；若你的账户显示不同交易所代码，在 `ibkr.json` 的 `exchanges` 中修改对应键（`CN_SH` / `CN_STAR` / `CN_SZ`）；B股合约根据 IBKR 返回的 `SHSE/USD` 或 `SZSE/HKD` 自动识别
@@ -754,6 +792,7 @@ CLI 不再依赖前端进程做缓存保温：`python -m tracker.cli warm` 可�
 - [ ] 交易流水记录与分批成本（FIFO）
 - [ ] 分红/拆分事件跟踪
 - [x] 历史净值曲线（按日聚合组合市值；每日快照 + `nav` 子命令 + 组合页走势，回填为当前持仓 × 历史价近似口径）
+- [x] 链上钱包净值曲线（`wallet-nav` / 「钱包净值」页：按转账记录回放历史余额，历史币价 + 历史汇率折算）
 - [x] EODHD 付费 provider 接入（BYOK token 自备；历史K线 primary、行情 fallback，LSE 便士/复权口径可配）
 
 ---
@@ -823,7 +862,8 @@ A **local-first** portfolio tracker supporting **A-shares / B-shares / Beijing S
 - **Financial calendar** — earnings, scheduled disclosures, ex-dividend/record dates for holdings & watchlist over the current and next months (yfinance per-symbol + akshare bulk, optional LongPort fallback), dedicated page & `calendar` subcommand; export to iCalendar (`.ics`) for Apple Calendar / Google Calendar / Outlook; only probabilistically relevant A-share report periods/boards are fetched, requests run concurrently, and a process-level warmer (also exposed as `tracker warm`) keeps the disk cache fresh for the default scope
 - **Historical NAV** — daily portfolio snapshots in an isolated SQLite DB (`nav_history.db`, separate from the quote cache), NAV + cost chart on the portfolio page, `nav --save` / auto-upsert on every successful portfolio render (same-day overwrite, corrected by background refreshes), and `nav --backfill` (current holdings × historical closes, historical FX converted; approximate, no historical position changes)
 - **Unified import pipeline** — IBKR account / LongPort account / on-chain wallet (5 EVM chains + TRON + Solana) / A-share broker CSV-Excel file, each with append-merge or overwrite mode; same logic drives the Streamlit「导入」page
-- **Unified CLI** — 22 subcommands (snapshot, nav, quote, watchlist, portfolio, report, export, fx, history, kline, calendar, search, compare, index-kline, import, longport-login, eodhd, cache, warm, init; `sync` / `import-wallet` kept as compat aliases); all support machine-readable output (`--json`, or `-f json` for report/export). `warm` preheats/keeps the quote, FX and calendar caches fresh without requiring the Streamlit process (`--interval` for a resident warmer)
+- **Wallet NAV curve** — `wallet-nav` / the 「钱包净值」 page replays on-chain transfers to recover historical balances, then values them with historical crypto prices and FX; zero API key on Ethereum / Avalanche / TRON / Solana, optional Etherscan V2 key for Polygon / Arbitrum / BSC
+- **Unified CLI** — 23 subcommands (snapshot, nav, wallet-nav, quote, watchlist, portfolio, report, export, fx, history, kline, calendar, search, compare, index-kline, import, longport-login, eodhd, cache, warm, init; `sync` / `import-wallet` kept as compat aliases); all support machine-readable output (`--json`, or `-f json` for report/export). `warm` preheats/keeps the quote, FX and calendar caches fresh without requiring the Streamlit process (`--interval` for a resident warmer)
 
 ### Quick Start
 
@@ -845,6 +885,7 @@ tracker snapshot --json
 tracker snapshot --save                 # also persist today's NAV snapshot
 tracker nav --days 90                   # historical NAV table
 tracker nav --backfill --days 365       # approximate backfill from current holdings
+tracker wallet-nav eth 0xd8dA...6045    # replay on-chain transfers into a wallet NAV curve
 tracker quote AAPL 600519.SS BTC-USD
 tracker kline AAPL --months 12
 tracker import ibkr --dry-run

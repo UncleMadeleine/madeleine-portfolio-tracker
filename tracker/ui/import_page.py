@@ -208,6 +208,10 @@ def _wallet_section(mode: str, on_saved) -> None:
         "通过链上公钥/地址查询余额后导入组合。仅读操作, 无需私钥。"
         "支持: eth, bsc, polygon, arbitrum, avalanche, tron, solana"
     )
+    st.caption(
+        "想看该地址的**历史净值曲线**？打开侧栏「钱包净值」页, 或运行 "
+        "`tracker wallet-nav <chain> <address> --days 180`。"
+    )
     from tracker import wallet as wallet_mod
 
     w_chain = st.selectbox(

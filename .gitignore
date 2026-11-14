@@ -43,6 +43,9 @@ longport.json
 eodhd.json
 eodhd.json.bak
 
+# 链上钱包历史查询配置 (可能含浏览器 API key), 模板见 tracker/templates/wallet_history.example.json
+wallet_history.json
+
 # OpenBB
 .openbb_platform/
 

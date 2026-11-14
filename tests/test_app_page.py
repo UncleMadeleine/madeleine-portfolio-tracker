@@ -5,9 +5,9 @@
    自选行情, 一处 import 就把整套测试拖死 (沙箱无网时无限挂起)。
 2. AppTest.from_file 走与 `streamlit run` 相同的 __main__ 执行模型, 默认页
    (组合) 完整渲染 —— 保证路由入口没有把页面"锁死"在 import 里。
-3. st.navigation 多页面路由: 七页各有独立 url_path (组合 / · K线 /kline ·
-   指数 /index · 基本面 /fundamentals · 日历 /calendar · 导入 /import ·
-   设置 /settings), 刷新/直链不丢页。
+3. st.navigation 多页面路由: 八页各有独立 url_path (组合 / · K线 /kline ·
+   指数 /index · 基本面 /fundamentals · 日历 /calendar · 钱包净值 /wallet ·
+   导入 /import · 设置 /settings), 刷新/直链不丢页。
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ _URL_PATHS = {
     "index": "指数K线",
     "fundamentals": "基本面",
     "calendar": "日历",
+    "wallet": "钱包净值",
     "import": "导入",
     "settings": "设置",
 }
@@ -158,7 +159,7 @@ def test_cli_main_starts_background_warmers(monkeypatch, tmp_path):
 
 
 def test_navigation_registers_independent_urls(app_boot):
-    """七页各有独立 url_path: 当前页由 URL 决定, 刷新不回落组合页.
+    """八页各有独立 url_path: 当前页由 URL 决定, 刷新不回落组合页.
 
     st.navigation 的注册表是唯一权威: 断言 url_path 全部注册且互不重复,
     组合页为默认页 (空路径 = 根 URL /)。
@@ -181,6 +182,17 @@ def test_portfolio_page_module_renders_directly(app_boot):
     ).run()
     assert not at.exception, at.exception
     assert any("组合总览" in m.value for m in at.markdown)
+
+
+def test_wallet_page_renders_without_query():
+    """钱包净值页首屏不触发链上/行情请求, 只渲染输入框与说明."""
+    at = AppTest.from_string(
+        "import tracker.ui.wallet_page as wp\nwp.render_wallet_page()",
+        default_timeout=30,
+    ).run()
+    assert not at.exception, at.exception
+    assert any("钱包净值" in m.value for m in at.markdown)
+    assert any("查询净值曲线" in str(b.label) for b in at.button)
 
 
 def test_asset_allocation_symbol_pie_top20_other(monkeypatch, tmp_path):

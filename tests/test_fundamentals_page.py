@@ -1,4 +1,4 @@
-"""「基本面分析」页 (AppTest, 不联网): AH 溢价曲线渲染与交互门控."""
+"""「基本面分析」页 (AppTest, 不联网): AH 溢价曲线与估值指标子视图."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from streamlit.testing.v1 import AppTest
 import tracker.ah_premium as ah
 import tracker.prices as prices
 import tracker.ui.fundamentals_page as fundamentals_page
+from tracker import valuation
 
 _SCRIPT = """
 import tracker.ui.fundamentals_page as fp
@@ -40,6 +41,28 @@ def _fake_fx(*a, **kw):
     )
 
 
+def _fake_snapshot(symbol, refresh=False):
+    return valuation.ValuationSnapshot(
+        symbol=symbol,
+        market_label="A股",
+        currency="CNY",
+        pe_ttm=8.4,
+        forward_pe=8.2,
+        pb=0.79,
+        dividend_yield_pct=3.68,
+        dividend_yield_5y_avg_pct=5.29,
+        book_value=11.2,
+        eps_ttm=1.05,
+        source="yfinance",
+        fetched_at=1_700_000_000.0,
+    )
+
+
+def _fake_history(symbol, metric="pe", months=36, refresh=False):
+    idx = pd.date_range("2024-01-01", periods=30, freq="D")
+    return pd.DataFrame({"date": idx, "value": [8.0 + i * 0.02 for i in range(30)]})
+
+
 @pytest.fixture
 def kv_pairs(monkeypatch):
     pairs = [
@@ -49,12 +72,18 @@ def kv_pairs(monkeypatch):
     monkeypatch.setattr(ah, "list_pairs", lambda refresh=False: list(pairs))
     monkeypatch.setattr(prices, "get_ohlc", _fake_ohlc)
     monkeypatch.setattr(ah.fx_mod, "get_fx_history", _fake_fx)
+    monkeypatch.setattr(
+        fundamentals_page, "cached_valuation", _fake_snapshot
+    )
+    monkeypatch.setattr(
+        fundamentals_page, "cached_valuation_history", _fake_history
+    )
     fundamentals_page.cached_ah_pairs.clear()
     fundamentals_page.cached_ah_premium.clear()
     return pairs
 
 
-def _rendered(monkeypatch, kv_pairs):
+def _rendered(monkeypatch, kv_pairs, view="AH 溢价"):
     captured = {}
 
     def fake_chart(**kw):
@@ -64,6 +93,9 @@ def _rendered(monkeypatch, kv_pairs):
     monkeypatch.setattr(fundamentals_page, "_LINE_CHART", fake_chart)
     at = AppTest.from_string(_SCRIPT, default_timeout=30).run()
     assert not at.exception, at.exception
+    if view == "AH 溢价":
+        at.segmented_control(key="fundamentals_view").set_value("AH 溢价").run()
+        assert not at.exception, at.exception
     return at, captured
 
 
@@ -126,3 +158,49 @@ def test_invalid_manual_code_shows_error(monkeypatch, kv_pairs):
     assert not at.exception
     assert at.error
     assert "无法识别" in at.error[0].value
+
+
+def test_valuation_view_renders_pe_pb_dividend(monkeypatch, kv_pairs):
+    at, captured = _rendered(monkeypatch, kv_pairs, view="估值指标")
+    assert not at.exception
+    labels = [m.label for m in at.metric]
+    assert "PE (TTM)" in labels
+    assert "PB" in labels
+    assert "股息率" in labels
+    assert "5 年平均股息率" in labels
+    payload = captured["data"]
+    assert payload["lines"][0]["name"] == "市盈率 (TTM)"
+    assert payload["unit"] == "x"
+    assert payload["lines"][0]["data"]
+
+
+def test_valuation_view_switches_history_metric(monkeypatch, kv_pairs):
+    at, captured = _rendered(monkeypatch, kv_pairs, view="估值指标")
+    at.segmented_control(key="valuation_metric").set_value("市净率").run()
+    assert not at.exception
+    assert captured["data"]["lines"][0]["name"] == "市净率"
+
+
+def test_valuation_invalid_code_shows_error(monkeypatch, kv_pairs):
+    at, _ = _rendered(monkeypatch, kv_pairs, view="估值指标")
+    at.text_input(key="valuation_symbol").set_value("not-a-code").run()
+    assert not at.exception
+    assert at.error
+    assert "无法识别" in at.error[0].value
+
+
+def test_valuation_force_refresh_propagates(monkeypatch, kv_pairs):
+    at, _ = _rendered(monkeypatch, kv_pairs, view="估值指标")
+    calls = []
+
+    def spy_snapshot(symbol, refresh=False):
+        calls.append(bool(refresh))
+        return _fake_snapshot(symbol, refresh)
+
+    monkeypatch.setattr(fundamentals_page, "cached_valuation", spy_snapshot)
+    # 这里的 spy 没有 st.cache_data 的 .clear(); 强制刷新本身由下面的
+    # refresh=True 断言覆盖, 清缓存动作在其它用例中验证。
+    monkeypatch.setattr(fundamentals_page, "clear_valuation_caches", lambda: None)
+    at.button(key="valuation_force").click().run()
+    assert not at.exception
+    assert calls and all(c is True for c in calls), calls

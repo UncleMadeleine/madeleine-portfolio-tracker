@@ -263,7 +263,7 @@ def _clear_source_caches() -> None:
     from tracker.providers.orchestration import neg_clear_all
 
     _try("负缓存", neg_clear_all)
-    from tracker.ui.fundamentals_page import clear_ah_caches
+    from tracker.ui.fundamentals_page import clear_ah_caches, clear_valuation_caches
     from tracker.ui.index_page import cached_index_kline
     from tracker.ui.kline_page import clear_kline_caches
     from tracker.ui.portfolio_page import cached_fx, cached_quotes
@@ -272,6 +272,9 @@ def _clear_source_caches() -> None:
     # 基本面页的 AH 溢价曲线同样走历史源链 (A/H K线 + 汇率), 源顺序/开关
     # 变化后 30 分钟缓存不清会继续显示旧源结果; 目录缓存 1h 一并清。
     _try("基本面页", clear_ah_caches)
+    # 估值快照/历史曲线不进行情/K线缓存: 数据源偏好或凭据变化后单独清,
+    # 否则页面 6 小时内仍展示旧链路结果。
+    _try("估值指标", clear_valuation_caches)
     # 指数页的 st.cache_data 不经过 clear_kline_caches: source_order.index
     # 调整后 30 分钟内仍会显示旧源结果, 必须单独清
     _try("指数K线内存", cached_index_kline.clear)

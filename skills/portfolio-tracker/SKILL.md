@@ -52,6 +52,7 @@ tracker-ui          # pip 安装后起 Streamlit 页面 (等价 streamlit run tr
 | `import` | 统一持仓导入 (ibkr/longport/wallet/file) | `import ibkr --dry-run`, `import longport --dry-run`, `import wallet eth 0x... --dry-run`, `import file 持仓.csv --dry-run` |
 | `longport-login` | 长桥 OAuth 登录 (浏览器授权) | `longport-login` (token 缓存于 ~/.longport/openapi/tokens/<client_id>, 自动刷新), `longport-login --json` 只出授权 URL (供脚本), `-o <文件>` 写 URL 到文件 |
 | `eodhd` | EODHD BYOK 状态/连通性自检 | `eodhd status`, `eodhd status --json`, `eodhd test AAPL 0700.HK --json` (token 未配置时 status 说明原因, test 退出码 2) |
+| `webdav` | WebDAV 远端持仓/自选同步 | `webdav status`, `webdav status --check --json`, `webdav pull portfolio --force`, `webdav push watchlist --force` |
 | `report` | 自选监控阈值报告 | `report -f json -o report.json`, `report -f csv -w 科技` |
 | `export` | 组合快照导出 | `export -f md -o snapshot.md`, `export -f json` |
 | `sync` | IBKR 同步 (兼容入口→import ibkr; 缺省追加合并, 与 import 一致, `--overwrite` 才覆盖) | `sync --dry-run` |
@@ -153,6 +154,11 @@ Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致);
   `type` 为系统维护的内部域标记, 保存时自动按 `symbols.type_for_symbol()` 推导/覆写。
   `base_currency` 大小写不敏感, 读取/保存时归一为大写 (如 `usd`→`USD`); 非法/空值回退 `CNY`。
   均为用户本地数据 (已 gitignore), 模板随包分发在 `tracker/templates/portfolio.example.json`。
+- `webdav.json`: WebDAV 远端同步配置 (默认 `enabled=false`)。启用后
+  portfolio.json / watchlist.json 以远端目录为准, 本地只作缓存; 读取前按
+  `poll_interval` 条件拉取, 保存后自动推送。密码可用 env
+  `TRACKER_WEBDAV_PASSWORD`; 冲突默认保留本地并把远端版本存到
+  `var/webdav-conflicts/`。详见 README「WebDAV 远端持仓 / 自选同步」。
 - `watchlist.json`: 扁平条目列表, 一个代码可属多个列表, 支持两级阈值与指标基准:
   ```json
   {"watchlist": [

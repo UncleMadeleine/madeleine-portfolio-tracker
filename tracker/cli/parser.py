@@ -1093,6 +1093,57 @@ def _add_doctor_parser(sub: argparse.ArgumentParser) -> None:
     p_doc.set_defaults(func=_cmd(".doctor", "cmd_doctor"))
 
 
+def _add_webdav_parser(sub: argparse.ArgumentParser) -> None:
+    # ---- webdav (远端 portfolio/watchlist 同步) ----
+    p_wd = sub.add_parser(
+        "webdav",
+        help="WebDAV 远端持仓/自选同步 (status / pull / push)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "配置: 数据目录 webdav.json (或 env TRACKER_WEBDAV_CONFIG 指定路径),\n"
+            "密码优先取 env TRACKER_WEBDAV_PASSWORD (配置 password_env 可改名)。\n"
+            "启用后读取/保存 portfolio.json、watchlist.json 会自动与远端同步;\n"
+            "本地文件作为缓存保留, 离线时仍可打开。\n"
+            "示例:\n"
+            "  tracker webdav status                # 查看配置 / 上次同步 / 冲突\n"
+            "  tracker webdav status --check        # 同时联网检查远端元信息\n"
+            "  tracker webdav pull                  # 拉取全部接管文件\n"
+            "  tracker webdav pull portfolio --force   # 用远端覆盖本地 (本地先存档)\n"
+            "  tracker webdav push watchlist --force   # 用本地覆盖远端\n"
+        ),
+    )
+    wd_sub = p_wd.add_subparsers(dest="webdav_action", required=True)
+
+    wd_status = wd_sub.add_parser("status", help="查看同步状态")
+    wd_status.add_argument(
+        "--check", action="store_true", help="联网检查远端文件 (HEAD, 失败回退 GET)"
+    )
+    wd_status.add_argument("--config", default=None, help="webdav.json 路径")
+    wd_status.add_argument("--json", action="store_true", help="输出 JSON")
+    wd_status.set_defaults(func=_cmd(".webdav", "cmd_webdav"))
+
+    for action, help_text in (
+        ("pull", "从远端拉取到本地缓存"),
+        ("push", "把本地缓存推送到远端"),
+    ):
+        p = wd_sub.add_parser(action, help=help_text)
+        p.add_argument(
+            "target",
+            nargs="?",
+            default="all",
+            choices=["all", "portfolio", "watchlist", "portfolio.json", "watchlist.json"],
+            help="目标文件 (默认 all = 配置里接管的全部文件)",
+        )
+        p.add_argument(
+            "--force",
+            action="store_true",
+            help="pull: 远端覆盖本地 (本地版本先存档); push: 本地覆盖远端",
+        )
+        p.add_argument("--config", default=None, help="webdav.json 路径")
+        p.add_argument("--json", action="store_true", help="输出 JSON")
+        p.set_defaults(func=_cmd(".webdav", "cmd_webdav"))
+
+
 def _add_init_parser(sub: argparse.ArgumentParser) -> None:
     # ---- init (首次使用: 模板落地到数据目录) ----
     p_init = sub.add_parser(
@@ -1101,7 +1152,7 @@ def _add_init_parser(sub: argparse.ArgumentParser) -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
-            "  tracker init            # 生成缺失的 portfolio/watchlist/settings/ibkr/longport/eodhd/wallet_history.json\n"
+            "  tracker init            # 生成缺失的 portfolio/watchlist/settings/ibkr/longport/eodhd/wallet_history/webdav.json\n"
             "  tracker init --force    # 用模板覆盖已存在的配置\n"
             "数据目录: $TRACKER_HOME > 源码树仓库根 > 平台用户目录 (~/.tracker)\n"
         ),
@@ -1137,6 +1188,7 @@ _SUBCOMMAND_REGISTRARS = (
     _add_cache_parser,
     _add_warm_parser,
     _add_doctor_parser,
+    _add_webdav_parser,
     _add_init_parser,
 )
 

@@ -22,6 +22,7 @@
   calendar  财报/重大事件日历 (组合+自选, 默认本月+下月)
   warm      主动预热/保温行情、汇率与财经日历缓存 (可 --interval 常驻)
   doctor    数据健康体检 (数据源成功率 / 缓存覆盖 / 本地完整性; --probe 联网)
+  webdav    WebDAV 远端持仓/自选同步 (status / pull / push)
   init      首次使用: 把包内配置模板复制到数据目录 (pip 安装后必走一步)
 
 所有子命令均支持 --json 输出机器可读结果, 便于脚本与 AI 消费。
@@ -39,6 +40,7 @@ from ..storage import (  # noqa: F401 - 兼容再导出 (测试 monkeypatch 默�
     DataFileLocked,
 )
 from ..watchlist import DEFAULT_WATCHLIST  # noqa: F401 - 兼容再导出
+from ..webdav import WebDAVError
 from ._common import VERSION, _finish_with_error, months_arg  # noqa: F401 - 兼容再导出
 from .parser import (  # noqa: F401 - build_parser / 校验器为既有公开入口
     CRYPTO_SOURCE_CHOICES,
@@ -72,6 +74,9 @@ def main(argv=None) -> None:
     except DataFileLocked as e:
         # 数据文件被其它进程持有 (读-改-写锁等待超时): 本次保存未执行,
         # 给可读错误而不是裸 traceback
+        _finish_with_error(str(e))
+    except WebDAVError as e:
+        # 显式 webdav 命令或 strict=true 的自动同步: 给可读错误而非 traceback
         _finish_with_error(str(e))
     except BrokenPipeError:
         # 管道消费方提前关闭 (`tracker search 腾讯 | jq ...` 是官方推荐用法):

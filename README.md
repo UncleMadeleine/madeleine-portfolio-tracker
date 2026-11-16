@@ -36,7 +36,7 @@ Madeleine Portfolio Tracker 是一款**本地优先**的投资组合追踪工具
 - **数据健康观测** — provider 热路径记录每次真实回源的来源/成功失败/耗时（缓存命中不计）到 `health_events`；`tracker doctor` 与「数据健康」页聚合成功率、p50/p95、最近失败，并从持仓/自选视角列出**行情缺失/过期、持仓无 K线、汇率缺失**等「页面还能开但数字可能已经不准」的缺口；`doctor --probe` 可主动打一次真实行情/汇率；总体异常时退出码 1，可接告警脚本。事件保留 7 天 / 最多 2 万条，`cache clear` 不会误删排障线索
 - **线上契约测试** — `tests/test_provider_contract_live.py`（`@pytest.mark.network`，默认不跑）真实调用各域代表代码，断言价格为有限正数、币种规范、历史日期升序/收盘为正、汇率为正；离线侧另有源链归名与坏数据拒绝测试，数据源改字段时能第一时间红
 - **Streamlit 可视化页面** — 组合明细 / 资产配置 / 自选提醒 / K线查询（含多股走势对比）/ 指数K线 / 基本面分析 / 日历 / 钱包净值 / 数据健康 / 设置
-- **统一 CLI** — 24 个子命令（快照、净值、钱包净值、报价、持仓、自选、监控报告、导出、汇率、历史、K线、日历、搜索、对比、指数K线、导入、长桥登录、EODHD 自检、同步、钱包导入、缓存管理、缓存保温 `warm`、数据健康 `doctor`、初始化），全部支持机器可读输出（`--json`，`report`/`export` 为 `-f json`）；`warm` 可一次性预热或 `--interval` 常驻，不依赖 Streamlit 进程
+- **统一 CLI** — 25 个子命令（快照、净值、钱包净值、报价、持仓、自选、监控报告、导出、汇率、历史、K线、日历、搜索、对比、指数K线、导入、长桥登录、EODHD 自检、WebDAV 同步、同步、钱包导入、缓存管理、缓存保温 `warm`、数据健康 `doctor`、初始化），全部支持机器可读输出（`--json`，`report`/`export` 为 `-f json`）；`warm` 可一次性预热或 `--interval` 常驻，不依赖 Streamlit 进程
 - **链上钱包导入** — EVM 五链 + TRON + Solana 共七条链地址余额只读查询，一键写入持仓
 - **A股券商持仓导入** — 解析券商客户端导出的 CSV/Excel 持仓文件
 
@@ -532,8 +532,14 @@ wallet_history.json      链上钱包历史查询配置（可选 Etherscan V2 ke
                          模板 tracker/templates/wallet_history.example.json, env
                          TRACKER_WALLET_HISTORY_CONFIG 可指定其他路径; key 也可用
                          env TRACKER_EXPLORER_KEY 注入）
+webdav.json              WebDAV 远端同步配置（URL / 凭据 / 冲突策略; 已 gitignore,
+                         模板 tracker/templates/webdav.example.json, env
+                         TRACKER_WEBDAV_CONFIG 可指定其他路径; 密码可用
+                         env TRACKER_WEBDAV_PASSWORD 注入）; 启用后
+                         portfolio.json / watchlist.json 以远端为准、本地保留缓存
 var/                    运行时生成产物（行情缓存 quotes_cache.db、kline/compare 图表 HTML、
-                         longport_oauth_state.json 长桥登录状态）, 位于数据目录下,
+                         longport_oauth_state.json 长桥登录状态、webdav_state.json
+                         同步状态与 webdav-conflicts/ 冲突存档）, 位于数据目录下,
                          可随时整目录删除（重建即自动再生成）
 tracker/templates/      包内配置模板 + streamlit 主题（随 wheel 分发; tracker init 的来源）
 tracker/assets/         vendored lightweight-charts standalone JS（离线内嵌, 随 wheel 分发）
@@ -720,6 +726,61 @@ python -m tracker.cli kline AAPL --months 12
 - EODHD 的 `adjusted_close` 会随新分红整体重算：本项目按区间整段重取、不做尾部拼接，
   缓存 TTL 到期后自然刷新
 
+### WebDAV 远端持仓 / 自选同步
+
+默认数据文件在本地；如果希望多台设备共用同一份持仓/自选，可以把
+`portfolio.json` 与 `watchlist.json` 放到 WebDAV 目录（Nextcloud、群晖、
+坚果云等均可）。**不配置时零影响**，本地文件就是唯一数据源。
+
+```bash
+# 1) 生成配置模板 (tracker init 已包含 webdav.json)
+python -m tracker.cli init
+
+# 2) 编辑数据目录 webdav.json: enabled=true, url / username / password
+#    密码推荐放环境变量, 不落盘:
+export TRACKER_WEBDAV_PASSWORD=your_password
+
+# 3) 首次启用二选一: 远端已有数据 → pull; 上传本地数据 → push
+python -m tracker.cli webdav status --check
+python -m tracker.cli webdav pull --force
+# 或 python -m tracker.cli webdav push --force
+
+# 4) 之后正常使用; 读取前按 poll_interval 条件拉取, 保存后自动推送
+python -m tracker.cli snapshot
+```
+
+`webdav.json` 字段（模板见 `tracker/templates/webdav.example.json`）：
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `enabled` | `false` | 总开关 |
+| `url` | `""` | WebDAV 目录 URL，如 Nextcloud `https://cloud.example.com/remote.php/dav/files/用户名/tracker/` |
+| `username` / `password` | `""` | Basic Auth；都为空时不发送 `Authorization` |
+| `password_env` | `TRACKER_WEBDAV_PASSWORD` | 密码环境变量名；设置后优先于 `password` |
+| `username_env` | `""` | 用户名环境变量名（可选） |
+| `timeout` | `15` | 单次 HTTP 超时（秒） |
+| `verify_ssl` | `true` | 自签证书内网 NAS 可设为 `false` |
+| `poll_interval` | `30` | 自动拉取最小间隔（秒）；避免 Streamlit 每次交互都打远端 |
+| `conflict` | `keep-local` | 两端都改过时：`keep-local`=保留本地并归档远端；`remote-wins`=远端覆盖本地并归档本地 |
+| `strict` | `false` | `true` 时网络/冲突直接报错，不再告警后继续用本地缓存 |
+| `create_dir` | `true` | PUT 遇到目录不存在时尝试 `MKCOL` |
+| `files` | `["portfolio.json", "watchlist.json"]` | 接管的文件名；`settings.json`、券商凭据、行情缓存仍只在本地 |
+
+同步行为与注意事项：
+
+- **本地仍是缓存镜像**：远端是权威来源，但不会把本地文件删掉；断网/远端故障时
+  CLI 与页面继续用上次缓存（`strict=true` 才直接失败）。状态与冲突存档在
+  `var/webdav_state.json`、`var/webdav-conflicts/`。
+- **条件请求**：拉取用 `If-None-Match`（304 不重复下载），推送用 `If-Match`；
+  首次推送发现远端已存在会报冲突，不会静默覆盖另一台设备的文件。
+- **冲突默认不丢数据**：两端都改过时保留本地，远端版本另存到
+  `var/webdav-conflicts/`；确认后用 `webdav pull --force`（远端优先）或
+  `webdav push --force`（本地优先）解决。
+- **只同步默认数据文件**：CLI `--portfolio other.json` 等自定义路径不会推远端，
+  避免备份/临时文件覆盖真正的远端组合。
+- **多进程写入**仍由本地 `.lock` 串行化；WebDAV 侧用 ETag 做乐观并发，不依赖
+  WebDAV LOCK。仍建议同一时间只让一台设备编辑，跨设备冲突需人工确认。
+
 ### A股券商文件导入
 
 A股券商无跨券商统一 API（监管对个人程序化接入持续收紧），采用**文件导入**模式：
@@ -877,6 +938,7 @@ A **local-first** portfolio tracker supporting **A-shares / B-shares / Beijing S
 - **IBKR integration** — TWS / IB Gateway snapshots + position sync, automatic fallback
 - **LongPort integration** — optional quotes/history/positions source (OAuth login), silent fallback to default sources
 - **EODHD BYOK (optional paid source)** — bring your own token; EOD history primary by default (split+dividend adjusted), quotes fallback-only by default (`quotes=primary` batches 15 symbols per `s=` request); PB/market-cap can use EODHD fundamentals (`fundamentals=fallback` fills only missing fields); LSE pence handling, per-exchange ticker mapping, zero impact when unconfigured
+- **Optional WebDAV sync** — keep `portfolio.json` / `watchlist.json` on a WebDAV directory (Nextcloud, Synology, etc.) and share them across devices; ETag-conditional pull/push, local cache fallback when offline, and conflict archives instead of silent overwrites. Disabled by default (`webdav.json`), with `tracker webdav status|pull|push`
 - **K-line charts** — daily/weekly/monthly, MA overlays, volume, MACD/RSI/KDJ/Bollinger; slide mode loads full listing history by default
 - **Macro/risk index K-lines** — dedicated `IX.<KEY>` symbol space (USD index, VIX, CSI 300, commodity main-continuous futures — gold, silver, eggs, soybean meal, soybeans, hogs, lithium carbonate — uranium spot/long-term (Cameco monthly), cement indices, ...), separate page & `index-kline` subcommand, dedicated provider source chain
 - **Multi-symbol comparison** — same-coordinate overlay normalized to 100, optional ratio line with history-FX adjustment; plus a crypto-only sub-tab on the K-line page (independent per-coin candle panes, raw prices, shared time axis)
@@ -885,7 +947,7 @@ A **local-first** portfolio tracker supporting **A-shares / B-shares / Beijing S
 - **Historical NAV** — daily portfolio snapshots in an isolated SQLite DB (`nav_history.db`, separate from the quote cache), NAV + cost chart on the portfolio page, `nav --save` / auto-upsert on every successful portfolio render (same-day overwrite, corrected by background refreshes), and `nav --backfill` (current holdings × historical closes, historical FX converted; approximate, no historical position changes)
 - **Unified import pipeline** — IBKR account / LongPort account / on-chain wallet (5 EVM chains + TRON + Solana) / A-share broker CSV-Excel file, each with append-merge or overwrite mode; same logic drives the Streamlit「导入」page
 - **Wallet NAV curve** — `wallet-nav` / the 「钱包净值」 page replays on-chain transfers to recover historical balances, then values them with historical crypto prices and FX; zero API key on Ethereum / Avalanche / TRON / Solana, optional Etherscan V2 key for Polygon / Arbitrum / BSC
-- **Unified CLI** — 23 subcommands (snapshot, nav, wallet-nav, quote, watchlist, portfolio, report, export, fx, history, kline, calendar, search, compare, index-kline, import, longport-login, eodhd, cache, warm, init; `sync` / `import-wallet` kept as compat aliases); all support machine-readable output (`--json`, or `-f json` for report/export). `warm` preheats/keeps the quote, FX and calendar caches fresh without requiring the Streamlit process (`--interval` for a resident warmer)
+- **Unified CLI** — 25 subcommands (snapshot, nav, wallet-nav, quote, watchlist, portfolio, report, export, fx, history, kline, calendar, search, compare, index-kline, import, longport-login, eodhd, webdav, cache, warm, doctor, init; `sync` / `import-wallet` kept as compat aliases); all support machine-readable output (`--json`, or `-f json` for report/export). `warm` preheats/keeps the quote, FX and calendar caches fresh without requiring the Streamlit process (`--interval` for a resident warmer)
 
 ### Quick Start
 

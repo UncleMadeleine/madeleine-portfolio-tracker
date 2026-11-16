@@ -20,6 +20,7 @@ portfolio.json.bak
 watchlist.json
 watchlist.json.bak
 settings.json
+webdav.json
 ibkr.json
 longport.json
 *.sqlite

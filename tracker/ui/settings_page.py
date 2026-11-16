@@ -239,6 +239,44 @@ def render_settings_page() -> None:
             "可保留或改为常用货币。"
         )
 
+    _render_webdav_status()
+
+
+def _render_webdav_status() -> None:
+    """展示 WebDAV 同步状态 (只读, 不联网; 冲突/错误直接提示)."""
+    from tracker import webdav
+
+    cfg = webdav.load_config()
+    if not cfg.get("enabled") or not cfg.get("url"):
+        st.markdown("#### WebDAV 同步")
+        st.caption(
+            "未启用: portfolio.json / watchlist.json 仅在本地。"
+            "如需多设备共用, 配置 webdav.json 后重启页面; "
+            "可先用 `tracker webdav status --check` 检查连通性。"
+        )
+        return
+
+    info = webdav.status(
+        {
+            "portfolio.json": storage.PORTFOLIO_PATH,
+            "watchlist.json": storage.WATCHLIST_PATH,
+        }
+    )
+    st.markdown("#### WebDAV 同步")
+    st.caption(
+        f"远端: {info['url']} · 冲突策略: {info['conflict']} · "
+        f"自动拉取间隔: {info['poll_interval']:.0f}s"
+    )
+    for name, f in info["files"].items():
+        if f.get("conflict"):
+            st.error(f"{name} 同步冲突: {f['conflict'].get('message', '')}")
+        elif f.get("last_error"):
+            st.warning(f"{name} 最近同步失败: {f['last_error']}")
+        elif f["in_sync"]:
+            st.caption(f"✅ {name}: 已与远端同步")
+        else:
+            st.caption(f"⏳ {name}: 等待首次同步 (`tracker webdav pull/push --force`)")
+
 
 def _clear_source_caches() -> None:
     """数据源偏好/凭据变化: 清行情、汇率、K线磁盘/内存缓存与进程内负缓存."""

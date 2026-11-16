@@ -1,0 +1,21 @@
+{
+  "_说明": "WebDAV 远端持仓/自选同步模板: 复制为 webdav.json 后修改。启用后 portfolio.json / watchlist.json 以远端目录为准, 本地文件作为缓存镜像保留 (离线仍可打开)。settings.json、券商凭据、行情缓存不同步。",
+  "_首次启用": "推荐先备份本地文件, 再二选一: 远端已有数据用 `tracker webdav pull --force`; 想把本地数据上传用 `tracker webdav push --force`。之后读取/保存会自动同步。",
+  "_url": "WebDAV 目录 URL, 例如 Nextcloud: https://cloud.example.com/remote.php/dav/files/用户名/tracker/ ; 末尾斜杠可省略。目录不存在时会在首次推送时尝试创建 (create_dir)。",
+  "_凭据": "用户名/密码可用 Basic Auth。密码建议放在环境变量 TRACKER_WEBDAV_PASSWORD 里 (password_env 可改名), 不写入文件; 若两项都为空则不发送 Authorization。",
+  "_同步": "poll_interval 是自动拉取的最小间隔秒数 (Streamlit 每次交互都会读取, 不能每次都打远端); 保存后总是立即推送。strict=true 时网络/冲突直接报错而不是告警后继续用本地缓存。",
+  "_冲突": "conflict=keep-local 时两端都改过会保留本地, 远端版本另存到 var/webdav-conflicts/; conflict=remote-wins 时远端覆盖本地, 本地版本存档。也可用 `tracker webdav pull/push --force` 显式解决。",
+  "enabled": false,
+  "url": "",
+  "username": "",
+  "password": "",
+  "password_env": "TRACKER_WEBDAV_PASSWORD",
+  "username_env": "",
+  "timeout": 15.0,
+  "verify_ssl": true,
+  "poll_interval": 30,
+  "conflict": "keep-local",
+  "strict": false,
+  "create_dir": true,
+  "files": ["portfolio.json", "watchlist.json"]
+}

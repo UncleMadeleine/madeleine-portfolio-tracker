@@ -22,6 +22,7 @@ _TEMPLATES = {
     "longport": "longport.example.json",
     "eodhd": "eodhd.example.json",
     "wallet_history": "wallet_history.example.json",
+    "webdav": "webdav.example.json",
 }
 
 
@@ -39,10 +40,11 @@ def cmd_init(args) -> None:
         if not src.exists():  # 模板缺失 (异常构建): 跳过而不是报错中断
             continue
         dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
-        if name in ("eodhd", "longport", "wallet_history"):
+        if name in ("eodhd", "longport", "wallet_history", "webdav"):
             # eodhd.json 存 API token, longport.json 存 app_secret/access_token,
-            # wallet_history.json 可能存浏览器 API key: 首次生成即收紧为仅属主
-            # 可读写, 与其它配置文件 (0664) 区分。
+            # wallet_history.json 可能存浏览器 API key, webdav.json 可能存
+            # WebDAV 密码: 首次生成即收紧为仅属主可读写, 与其它配置文件
+            # (0664) 区分。
             try:
                 dst.chmod(0o600)
             except OSError:

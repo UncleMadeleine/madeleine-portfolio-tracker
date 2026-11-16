@@ -26,6 +26,7 @@ try:  # Unix 有 flock; Windows 没有 → 退化为进程内锁 (仍防同进�
 except ImportError:  # pragma: no cover - 平台相关
     fcntl = None
 
+from . import webdav as _webdav
 from .paths import data_home
 from .symbols import parse, type_for_symbol
 from .rules import metric_for_entry as rules_metric_for_entry
@@ -360,14 +361,7 @@ def _resolve_path(path: str | Path | None, default: Path) -> Path:
     return Path(default if path is None else path)
 
 
-def load_portfolio(path: str | Path | None = None) -> dict:
-    """读取持仓文件; 文件缺失时返回空组合。
-
-    存在文件时也补齐 base_currency/holdings 两个必需键: 手写/旧版/第三方
-    导入的文件可能缺键, 直接 `data["base_currency"]` 的调用方 (如 compare
-    --metric mcap) 会抛 KeyError。
-    """
-    p = _resolve_path(path, PORTFOLIO_PATH)
+def _load_portfolio_file(p: Path) -> dict:
     if not p.exists():
         return {"base_currency": DEFAULT_BASE_CURRENCY, "holdings": []}
     data = _read_json_or_recover(
@@ -376,6 +370,53 @@ def load_portfolio(path: str | Path | None = None) -> dict:
     data["base_currency"] = _normalize_base_currency(data.get("base_currency"))
     data["holdings"] = _require_entry_list(data, "holdings", p)
     return data
+
+
+def _remote_default_path(name: str) -> Path:
+    return PORTFOLIO_PATH if name == "portfolio.json" else WATCHLIST_PATH
+
+
+def _is_remote_default(name: str, p: Path) -> bool:
+    """只有默认数据文件才走 WebDAV.
+
+    CLI 的 `--portfolio` / `--watchlist-file` 可以指向任意文件 (备份、测试、
+    临时快照); 这些文件保存时若也按 portfolio.json 推远端, 会把真正的远端
+    组合覆盖掉。因此自动同步只认 storage 的默认路径。
+    """
+    try:
+        return Path(p).resolve() == Path(_remote_default_path(name)).resolve()
+    except OSError:
+        return False
+
+
+def _remote_pull(name: str, p: Path) -> None:
+    """读取前拉取远端 (WebDAV 未启用时是 no-op; 与本地读共用同一把锁)."""
+    if not _is_remote_default(name, p) or not _webdav.enabled_for(name):
+        return
+    with _file_lock(p):
+        _webdav.pull_if_enabled(name, p)
+
+
+def _remote_push(name: str, p: Path) -> None:
+    """写盘后推送远端 (WebDAV 未启用时是 no-op)."""
+    if not _is_remote_default(name, p):
+        return
+    _webdav.push_if_enabled(name, p)
+
+
+def load_portfolio(path: str | Path | None = None) -> dict:
+    """读取持仓文件; 文件缺失时返回空组合。
+
+    存在文件时也补齐 base_currency/holdings 两个必需键: 手写/旧版/第三方
+    导入的文件可能缺键, 直接 `data["base_currency"]` 的调用方 (如 compare
+    --metric mcap) 会抛 KeyError。
+
+    WebDAV 启用时先按 poll_interval 条件拉取远端到本地缓存, 再按原逻辑
+    读取; 拉取失败默认只告警并继续用本地缓存 (见 tracker/webdav.py)。
+    """
+    p = _resolve_path(path, PORTFOLIO_PATH)
+    _remote_pull("portfolio.json", p)
+    return _load_portfolio_file(p)
 
 
 def _clean_rows(rows: list) -> list[dict]:
@@ -453,6 +494,7 @@ def save_portfolio(data: dict, path: str | Path | None = None) -> None:
         )
         merged["holdings"] = [_stamp_type(r) for r in _clean_rows(raw_rows)]
         _write_json(merged, p)
+        _remote_push("portfolio.json", p)
 
 
 # ---------------------------------------------------------------------------
@@ -583,13 +625,7 @@ def dedupe_watch_entries(entries: list[dict]) -> list[dict]:
     return list(by_symbol.values())
 
 
-def load_watchlist(path: str | Path | None = None) -> dict:
-    """读取自选; 兼容旧扁平/分组格式并迁移为扁平条目, 读取侧补写权威 type.
-
-    读出去重 (合并语义同 save_watchlist): 外部编辑/旧文件可能在同代码上
-    留多条, 读路径若不去重会把同一提醒重复计数。
-    """
-    p = _resolve_path(path, WATCHLIST_PATH)
+def _load_watchlist_file(p: Path) -> dict:
     if not p.exists():
         return {"watchlist": []}
 
@@ -663,6 +699,20 @@ def load_watchlist(path: str | Path | None = None) -> dict:
     return {"watchlist": []}
 
 
+def load_watchlist(path: str | Path | None = None) -> dict:
+    """读取自选; 兼容旧扁平/分组格式并迁移为扁平条目, 读取侧补写权威 type.
+
+    读出去重 (合并语义同 save_watchlist): 外部编辑/旧文件可能在同代码上
+    留多条, 读路径若不去重会把同一提醒重复计数。
+
+    WebDAV 启用时先按 poll_interval 条件拉取远端到本地缓存, 再按原逻辑
+    读取; 拉取失败默认只告警并继续用本地缓存 (见 tracker/webdav.py)。
+    """
+    p = _resolve_path(path, WATCHLIST_PATH)
+    _remote_pull("watchlist.json", p)
+    return _load_watchlist_file(p)
+
+
 def _watchlist_rows(data: dict) -> list:
     """校验 save_watchlist 的 watchlist 参数; 畸形结构抛可读错误而非静默清空."""
     rows = data.get("watchlist")
@@ -727,6 +777,7 @@ def save_watchlist(data: dict, path: str | Path | None = None) -> None:
                 )
             )
         _write_json(merged, p)
+        _remote_push("watchlist.json", p)
 
 
 # ---------------------------------------------------------------------------

@@ -22,6 +22,7 @@ from tests._contracts import (
 
 from tracker import fx as fx_mod
 from tracker import prices
+from tracker import filings as filings_mod
 
 pytestmark = pytest.mark.network
 
@@ -60,3 +61,18 @@ def test_live_index_history_contract(key: str):
 @pytest.mark.parametrize("src,dst", [("USD", "CNY"), ("HKD", "CNY")])
 def test_live_fx_contract(src: str, dst: str):
     assert_fx_contract(fx_mod.get_rate(src, dst), f"{src}/{dst}")
+
+
+@pytest.mark.timeout(240)
+@pytest.mark.parametrize(
+    "symbol",
+    ["600519.SS", "0700.HK", "CBA.AX", "BP.L", "7203.T", "005930.KS", "AAPL"],
+)
+def test_live_filings_contract(symbol: str):
+    """官方财报链接仍可解析: 标题/日期/URL/来源齐全, 且至少有一条."""
+    items = filings_mod.fetch_filings(symbol, limit=3, refresh=True)
+    assert items, f"{symbol}: 未取到财报链接"
+    for item in items:
+        assert item.title and item.date and item.url.startswith("http")
+        assert item.kind and item.source
+        assert len(item.date) == 10

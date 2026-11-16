@@ -7,6 +7,7 @@ import pytest
 from streamlit.testing.v1 import AppTest
 
 import tracker.ah_premium as ah
+import tracker.filings as filings
 import tracker.prices as prices
 import tracker.ui.fundamentals_page as fundamentals_page
 from tracker import valuation
@@ -63,6 +64,25 @@ def _fake_history(symbol, metric="pe", months=36, refresh=False):
     return pd.DataFrame({"date": idx, "value": [8.0 + i * 0.02 for i in range(30)]})
 
 
+def _fake_filings(symbol, refresh=False):
+    return [
+        filings.Filing(
+            title="2025 年年度报告",
+            date="2026-03-28",
+            url="https://www.cninfo.com.cn/new/disclosure/detail?id=1",
+            kind="年度报告",
+            source="巨潮资讯",
+        ),
+        filings.Filing(
+            title="2026 半年度报告",
+            date="2026-08-29",
+            url="https://www.cninfo.com.cn/new/disclosure/detail?id=2",
+            kind="半年度报告",
+            source="巨潮资讯",
+        ),
+    ]
+
+
 @pytest.fixture
 def kv_pairs(monkeypatch):
     pairs = [
@@ -78,6 +98,7 @@ def kv_pairs(monkeypatch):
     monkeypatch.setattr(
         fundamentals_page, "cached_valuation_history", _fake_history
     )
+    monkeypatch.setattr(fundamentals_page, "cached_filings", _fake_filings)
     fundamentals_page.cached_ah_pairs.clear()
     fundamentals_page.cached_ah_premium.clear()
     return pairs
@@ -179,6 +200,25 @@ def test_valuation_view_switches_history_metric(monkeypatch, kv_pairs):
     at.segmented_control(key="valuation_metric").set_value("市净率").run()
     assert not at.exception
     assert captured["data"]["lines"][0]["name"] == "市净率"
+
+
+def test_valuation_view_renders_latest_filings(monkeypatch, kv_pairs):
+    at, _ = _rendered(monkeypatch, kv_pairs, view="估值指标")
+    assert not at.exception
+    body = "\n".join(str(m.value) for m in at.markdown)
+    assert "最新财报" in body
+    assert "2025 年年度报告" in body
+    assert "https://www.cninfo.com.cn/new/disclosure/detail?id=1" in body
+    assert "巨潮资讯" in body
+
+
+def test_unsupported_market_shows_filings_reason(monkeypatch, kv_pairs):
+    at, _ = _rendered(monkeypatch, kv_pairs, view="估值指标")
+    at.text_input(key="valuation_symbol").set_value("SAP.DE").run()
+    assert not at.exception
+    body = "\n".join(str(c.value) for c in at.caption)
+    assert "暂未接入" in body
+    assert "Bundesanzeiger" in body
 
 
 def test_valuation_invalid_code_shows_error(monkeypatch, kv_pairs):

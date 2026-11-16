@@ -4,8 +4,9 @@
 tab body 都渲染 (仅用 CSS 隐藏), 打开页面就会同时拉估值快照、A/H 历史与
 汇率。分段控件只实例化当前子视图, 未激活的控件不发请求。
 
-- 估值指标: 任意股票的最新 PE(TTM)/PB/股息率快照, 以及 A股/港股/美股
-  的历史 PE/PB 曲线 (百度股市通)。数据口径见 tracker.valuation。
+- 估值指标: 任意股票的最新 PE(TTM)/PB/股息率快照, A股/港股/美股最近财报
+  的官方原文链接, 以及历史 PE/PB 曲线 (百度股市通)。数据口径见
+  tracker.valuation / tracker.filings。
 - AH 溢价: 保留原有单只 A+H 股票能力。A 股收盘 ÷ (H 股收盘 × HKD→CNY
   汇率) − 1, 以 A 股交易日为时间轴, H 股/汇率取当日或之前最近收盘。
   曲线用与 K线页相同的 lightweight-charts 组件, 0% 处画同价参考线。
@@ -20,7 +21,7 @@ import streamlit as st
 
 from . import settings, theme
 
-from tracker import ah_premium, charting, valuation
+from tracker import ah_premium, charting, filings, valuation
 from tracker.symbols import Market, normalize, parse
 
 # 与 K线页共用组件实现, 但用独立注册名: 同一 Streamlit 进程内不同组件实例
@@ -67,6 +68,12 @@ def cached_valuation(symbol: str, refresh: bool = False):
 
 
 @st.cache_data(ttl=21600, show_spinner=False)
+def cached_filings(symbol: str, refresh: bool = False):
+    """最近财报原文链接 (底层模块另有 6h 进程内缓存)."""
+    return filings.fetch_filings(symbol, refresh=refresh)
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
 def cached_valuation_history(
     symbol: str,
     metric: str,
@@ -92,10 +99,12 @@ def clear_ah_caches() -> None:
 
 
 def clear_valuation_caches() -> None:
-    """强制刷新估值指标: 清页面缓存与最新快照的进程内缓存."""
+    """强制刷新估值指标: 清页面缓存、快照与财报链接的进程内缓存."""
     cached_valuation.clear()
     cached_valuation_history.clear()
+    cached_filings.clear()
     valuation.clear_cache()
+    filings.clear_cache()
 
 
 def _pair_label(pair: ah_premium.AHPair) -> str:
@@ -291,11 +300,59 @@ def _render_valuation_history(symbol: str, months: int, force: bool) -> None:
         st.dataframe(detail, width="stretch", hide_index=True)
 
 
+def _md_link_text(text: str) -> str:
+    """Markdown 链接文字转义 (报告标题可能含方括号)."""
+    return str(text).replace("[", r"\[").replace("]", r"\]")
+
+
+def _render_filings(symbol: str, force: bool) -> None:
+    """最近财报原文链接 (A股 巨潮 / 港股 HKEX / 美股 SEC)."""
+    st.markdown("##### 最新财报")
+    if not filings.filings_supported(symbol):
+        reason = filings.unavailable_reason(symbol)
+        if reason:
+            st.caption(
+                "最新财报链接目前覆盖 A股/北交所、港股、美股、澳股、"
+                "英股、日股、韩股；"
+                f"当前市场暂未接入（{reason}）。"
+            )
+        else:
+            st.caption(
+                "最新财报链接目前覆盖 A股/北交所、港股、美股、澳股、"
+                "英股、日股、韩股。"
+            )
+        return
+
+    try:
+        with st.spinner(f"拉取 {symbol} 最近财报链接..."):
+            items = cached_filings(symbol, refresh=force)
+    except Exception as e:  # noqa: BLE001 - 财报链接失败不影响估值快照/曲线
+        st.warning(f"{symbol}: 财报链接取数失败 ({e})")
+        return
+
+    if not items:
+        st.caption(f"{symbol}: 暂无可用的财报链接。")
+        return
+
+    lines = [
+        f"- [{_md_link_text(item.title)}]({item.url}) · "
+        f"{item.kind} · {item.date} · {item.source}"
+        for item in items
+    ]
+    st.markdown("\n".join(lines))
+    st.caption(
+        "链接均指向官方原文: A股/北交所为巨潮资讯公告页, 港股为 HKEXnews PDF, "
+        "澳股为 ASX 公告 PDF, 英股为 Companies House PDF, 日股为 TDnet PDF, "
+        "韩股为 DART 公示页, 美股为 SEC EDGAR 披露文件; "
+        "其它市场暂未接入。列表缓存 6 小时。"
+    )
+
+
 def _render_valuation() -> None:
     """估值指标子视图: 任意股票的最新 PE/PB/股息率 + 历史 PE/PB."""
     st.caption(
-        "输入 A股/港股/美股代码, 查看最新 PE(TTM)、PB、股息率, "
-        "以及历史 PE/PB 曲线与自身历史分位。"
+        "输入 A股/港股/美股/澳股/英股/日股/韩股代码, 查看最新 PE(TTM)、PB、"
+        "股息率、最近财报链接, 以及 A股/港股/美股的历史 PE/PB 曲线。"
     )
 
     c_code, c_range, c_force = st.columns(
@@ -305,7 +362,7 @@ def _render_valuation() -> None:
         "股票代码",
         value="601398.SS",
         key="valuation_symbol",
-        placeholder="如: 601398 / 1398 / 0700.HK / AAPL",
+        placeholder="如: 601398 / 1398 / 0700.HK / AAPL / BHP.AX / BP.L / 7203.T",
     )
     months = c_range.selectbox(
         "范围",
@@ -339,6 +396,9 @@ def _render_valuation() -> None:
         _render_valuation_metrics(snap)
 
     st.divider()
+    _render_filings(symbol, force)
+
+    st.divider()
     _render_valuation_history(symbol, months, force)
 
     with st.expander("指标口径与数据源"):
@@ -349,6 +409,11 @@ def _render_valuation() -> None:
             "- **股息率**: 最近 12 个月每股分红 ÷ 股价; "
             "「5 年平均股息率」用于判断当前股息率相对自身历史的高低。\n"
             "- **最新快照**: OpenBB / yfinance, 6 小时缓存。\n"
+            "- **最新财报链接**: A股/北交所 巨潮资讯、港股 HKEXnews、"
+            "澳股 ASX、英股 Companies House、日股 TDnet、韩股 DART、"
+            "美股 SEC EDGAR 官方原文, 只保留定期报告 "
+            "(年报/半年报/季报; 美股 10-K/10-Q/20-F/6-K/8-K 等), 6 小时缓存; "
+            "德/加/新/巴等市场暂未接入。\n"
             "- **历史曲线**: akshare 百度股市通 (A股 / 港股 / 美股), "
             "按所选范围截断并缓存 6 小时。历史曲线目前提供 PE(TTM) 与 PB; "
             "股息率仅展示最新快照。\n"

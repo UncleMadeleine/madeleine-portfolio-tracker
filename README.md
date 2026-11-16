@@ -32,7 +32,7 @@ Madeleine Portfolio Tracker 是一款**本地优先**的投资组合追踪工具
 - **首屏性能** — 组合与日历均采用 stale-while-revalidate：先渲染 30 分钟 / 7 天内的旧缓存秒开，后台静默重取；仅在完全无缓存时阻塞取数（组合/日历均显示实时进度条）；行情/汇率/日历均有进程级保温线程周期刷新磁盘缓存，且保温服务已抽成无 Streamlit 依赖的 `tracker/services/warm.py`，CLI 可用 `tracker warm` 一次性预热或 `--interval` 常驻保温
 - **历史净值曲线** — 每日组合快照落独立 SQLite（`nav_history.db`，与行情缓存分离），组合页画总市值 + 成本走势；支持 `nav --save` 手动存档、组合页每次渲染自动 upsert、`nav --backfill` 按当前持仓 × 历史收盘价回填近似历史（含历史汇率折算）
 - **链上钱包净值曲线** — `wallet-nav` / 「钱包净值」页按**链上转账记录回放历史余额**（不是「当前余额 × 历史价」），再按历史币价与历史汇率折算成每日净值；Ethereum / Avalanche / TRON / Solana 零 API Key，Polygon / Arbitrum / BSC 可配 Etherscan V2 key 或自定义浏览器
-- **基本面分析** — 估值指标子视图：任意 A股/港股/美股的最新 PE(TTM)、PB、股息率、5 年平均股息率，以及历史 PE/PB 曲线与自身历史分位（百度股市通）；AH 溢价子视图保留单只 A+H 股票的溢价率曲线：A 股收盘 ÷ (H 股收盘 × 历史汇率) − 1，支持任意 A+H 股票对 / 范围切换，0% 同价参考线 + 区间高低点/均值/分位摘要（独立页面 `/fundamentals`）
+- **基本面分析** — 估值指标子视图：任意 A股/港股/美股的最新 PE(TTM)、PB、股息率、5 年平均股息率，最近财报官方原文链接（已接入 A股/北交所 巨潮资讯 / 港股 HKEXnews / 美股 SEC EDGAR / 澳股 ASX / 英股 Companies House / 日股 TDnet / 韩股 DART；德/加/新/巴等市场会明确提示未接入及原因），以及历史 PE/PB 曲线与自身历史分位（百度股市通）；AH 溢价子视图保留单只 A+H 股票的溢价率曲线：A 股收盘 ÷ (H 股收盘 × 历史汇率) − 1，支持任意 A+H 股票对 / 范围切换，0% 同价参考线 + 区间高低点/均值/分位摘要（独立页面 `/fundamentals`）
 - **数据健康观测** — provider 热路径记录每次真实回源的来源/成功失败/耗时（缓存命中不计）到 `health_events`；`tracker doctor` 与「数据健康」页聚合成功率、p50/p95、最近失败，并从持仓/自选视角列出**行情缺失/过期、持仓无 K线、汇率缺失**等「页面还能开但数字可能已经不准」的缺口；`doctor --probe` 可主动打一次真实行情/汇率；总体异常时退出码 1，可接告警脚本。事件保留 7 天 / 最多 2 万条，`cache clear` 不会误删排障线索
 - **线上契约测试** — `tests/test_provider_contract_live.py`（`@pytest.mark.network`，默认不跑）真实调用各域代表代码，断言价格为有限正数、币种规范、历史日期升序/收盘为正、汇率为正；离线侧另有源链归名与坏数据拒绝测试，数据源改字段时能第一时间红
 - **Streamlit 可视化页面** — 组合明细 / 资产配置 / 自选提醒 / K线查询（含多股走势对比）/ 指数K线 / 基本面分析 / 日历 / 钱包净值 / 数据健康 / 设置
@@ -91,7 +91,7 @@ tracker-ui                        # pip 安装后 (等价, 参数透传给 strea
 - **K线** (`/kline`) — 任意代码 K 线查询（支持按代码或名称模糊搜索）+ 多股走势对比 + 加密货币对比（K线页子功能）
 - **指数K线** (`/index`) — 宏观/风险指数查询（IX.<KEY> 分组下拉，分组随目录维护；CLI `index-kline --list` 可查全部已收录指数）
 - **基本面** (`/fundamentals`) — 顶部切换「估值指标 / AH 溢价」：
-  - **估值指标** — 任意 A股/港股/美股代码，最新 PE(TTM)、PB、股息率、5 年平均股息率（OpenBB/yfinance，6h 缓存）；历史 PE/PB 曲线按近 3/6/12/24/36/60 个月展示，并给出区间均值/高低点/分位（百度股市通，6h 缓存）
+  - **估值指标** — 任意 A股/港股/美股代码，最新 PE(TTM)、PB、股息率、5 年平均股息率（OpenBB/yfinance，6h 缓存）；最近财报官方原文链接（A股/北交所 巨潮资讯、港股 HKEXnews、美股 SEC EDGAR、澳股 ASX、英股 Companies House、日股 TDnet、韩股 DART，6h 缓存；其它市场明确显示未接入原因）；历史 PE/PB 曲线按近 3/6/12/24/36/60 个月展示，并给出区间均值/高低点/分位（百度股市通，6h 缓存）
   - **AH 溢价** — 可选 A+H 股票对（东财目录，失败退回内置常见股票对，也可手动输入代码），按近 3/6/12/24/36/60 个月展示 A 股收盘 ÷ (H 股收盘 × 历史汇率) − 1，0% 为两地同价
 - **日历** (`/calendar`) — 持仓/自选的财报、预约披露、除权除息/派息事件月历（窗口与范围可切），可一键导出 `.ics` 导入本地日历
 - **钱包净值** (`/wallet`) — 只读查询单个链上地址：按窗口内转账/交易回放每日余额，再按历史币价与历史汇率折算成净值曲线
@@ -435,7 +435,7 @@ tracker/ui/           Streamlit 页面包（streamlit run tracker/ui/app.py / �
 ├── portfolio_page.py   「组合」页面（持仓编辑/明细/配置/自选提醒/净值走势 + 行情/汇率缓存）
 ├── kline_page.py       「K线」页面（搜索框 + lightweight-charts 组件 + 上市以来全量滑动 + 多股走势对比 + 加密货币对比）
 ├── index_page.py       「指数K线」页面（IX.<KEY> 分组下拉, 独立于股票 K线页）
-├── fundamentals_page.py 「基本面」页面（估值指标 PE/PB/股息率 + 历史 PE/PB 分位; AH 溢价曲线: A+H 股票对 / 范围切换, 明细表）
+├── fundamentals_page.py 「基本面」页面（估值指标 PE/PB/股息率 + 最近财报链接 + 历史 PE/PB 分位; AH 溢价曲线: A+H 股票对 / 范围切换, 明细表）
 ├── import_page.py      「导入」页面（IBKR 账户 / 长桥账户 / 链上钱包 / 券商文件, 追加合并或覆盖）
 ├── wallet_page.py      「钱包净值」页面（链上转账回放历史余额 + 历史币价/汇率折算曲线）
 ├── health_page.py      「数据健康」页面（来源成功率/耗时/最近失败 + 缓存覆盖/缺口 + 完整性 + 主动探测）
@@ -493,6 +493,7 @@ tracker/
 ├── charting.py         K线渲染（plotly CLI HTML + lightweight-charts 页面组件：蜡烛/均线/指标/对比/单序列参考线）
 ├── ah_premium.py       AH 溢价率（A+H 股票对目录 / A/H+历史汇率对齐 / 溢价曲线与摘要, 基本面页 AH 子视图）
 ├── valuation.py        估值指标（PE/PB/股息率快照 + A股/港股/美股历史 PE/PB 曲线, 基本面页估值子视图）
+├── filings.py          最新财报链接（A股/北交所 巨潮资讯 / 港股 HKEXnews / 美股 SEC EDGAR / 澳股 ASX / 英股 Companies House / 日股 TDnet / 韩股 DART, 6h 进程缓存）
 ├── analytics.py        组合视图与指标（纯函数）
 ├── watchlist.py        自选配置存储门面（读写委托 storage，仅 I/O 归一）
 ├── services/           **独立用例层**（用例 = 取数 providers/fx + 纯函数计算 + 组装视图）
@@ -566,6 +567,20 @@ tests/                  单元测试（离线, mock）
 | **cn** | `.SS/.SZ/.BJ`（A/B股、北交所） | 长桥(可选前置) → **akshare 优先** → yfinance | 长桥(可选前置) → **akshare 优先** → yfinance |
 | **crypto** | `BASE-QUOTE`（`BTC-USD`） | **Binance API** → Gate.io 现货 → Hyperliquid 永续（仅USD系） → yfinance | **Binance klines** → Gate.io → Hyperliquid → yfinance |
 | **index** | `IX.<KEY>`（`IX.DXY` 美元指数 / `IX.VIX` 恐慌指数 / `IX.CSI300` 沪深 300 / `IX.AU` 黄金 · `IX.AG` 白银 · `IX.JD` 鸡蛋 · `IX.M` 豆粕 · `IX.A` 豆一 · `IX.B` 豆二 · `IX.LH` 生猪 · `IX.LC` 碳酸锂主力连续 / `IX.URANIUM` 铀现货价 · `IX.URANIUM_LT` 铀长协价 / `IX.CEMPI` 水泥价格指数 / `IX.HSI` 恒生指数 · `IX.HSTECH` 恒生科技指数 等恒生官网港股指数 / `IX.HSAHP` AH股溢价指数 …） | —（指数无实时行情, 不参与持仓聚合） | 中国指数 **akshare 优先** → yfinance；美股 SPX/NDX/DJI 有新浪兜底；水泥网/商品期货/恒生官网/Cameco 铀价为专属源（无兜底） |
+
+- **最新财报链接**：基本面页按代码直连官方披露库 —— A股/北交所走 akshare 巨潮资讯公告检索，港股走 HKEXnews 标题检索，澳股走 ASX 公告检索（按年 HTML），英股走 Companies House 公开网站（公司搜索 + filing history），日股走 Yahoo!ファイナンス 適時開示（TDnet PDF 镜像），韩股走 DART 公示检索（사업/반기/분기보고서），美股走 OpenBB SEC filings；只保留定期报告/业绩公告并给出原文 URL，零 API Key，结果缓存 6h（手动刷新可穿透）。覆盖范围为 A股/北交所、港股、美股、澳股、英股、日股、韩股；德/加/新/巴等市场因无公开 API 或接口反爬暂未接入，页面会显示具体原因，不会静默伪装成「无财报」
+- **最新财报链接覆盖范围**：
+
+  | 市场 | 状态 | 官方数据源 |
+  |---|---|---|
+  | A股 / 北交所 | ✅ 已接入 | 巨潮资讯 |
+  | 港股 | ✅ 已接入 | HKEXnews |
+  | 美股 | ✅ 已接入 | SEC EDGAR |
+  | 澳股 | ✅ 已接入 | ASX |
+  | 英股 | ✅ 已接入 | Companies House |
+  | 日股 | ✅ 已接入 | TDnet（Yahoo!ファイナンス镜像） |
+  | 韩股 | ✅ 已接入 | DART |
+  | 德 / 加 / 新 / 巴 | ❌ 暂未接入 | 无公开 API 或接口反爬；页面会显示具体原因 |
 
 - **回退顺序可视化编辑**：设置页「数据源 → 回退顺序」按 provider 分别拖动调整
   **实时行情** / **历史K线** 的逐代码源链（自动保存，也支持 ↑/↓ 与 Alt/Ctrl+↑/↓），

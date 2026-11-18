@@ -222,8 +222,13 @@ def render_kline_view(
     currency: str | None,
     indicators: dict | None = None,
     query_id: str | None = None,
+    overlay: dict | None = None,
 ) -> dict | None:
-    """K线图 + 摘要指标 (供 K线页面与 CLI 内嵌使用, 纯渲染无取数)."""
+    """K线图 + 摘要指标 (供 K线页面与 CLI 内嵌使用, 纯渲染无取数).
+
+    overlay: 可选叠加曲线 (指数页的金银比/金油比), 由 charting.kline_payload
+    画在独立左侧价轴, 不改变蜡烛/均线价格轴。
+    """
     # 数据驱动兜底: 请求周期细于数据原生粒度 (周K源请求日K等) 时降级到原生粒度,
     # 防止细粒度周期把粗粒度数据伪装成日K展示 (标题/payload 用生效周期标注)
     period = charting.resolve_period(kdf, period)
@@ -243,6 +248,7 @@ def render_kline_view(
             period=period,
             indicators=indicators,
             query_id=query_id,
+            overlay=overlay,
         ),
         height=680,
     )

@@ -681,6 +681,9 @@ def _base_payload(
         "macd": None,
         "rsi": None,
         "kdj": None,
+        # 单只K线的可选叠加曲线 (如指数页的金银比/金油比): 独立左侧价轴.
+        # 固定给出 None, 前端按字段存在性读取, 避免模式切换时进 undefined 分支.
+        "overlay": None,
         "options": _lwc_options(),
     }
     if precision is not None:
@@ -701,6 +704,7 @@ def kline_payload(
     init_bars: int = 140,
     indicators: dict | None = None,
     query_id: str | None = None,
+    overlay: dict | None = None,
 ) -> dict:
     """生成传给 K线组件 (st.components.v2) 的数据 payload.
 
@@ -710,6 +714,8 @@ def kline_payload(
     indicators: 可选, 键为指标名 (macd/rsi/kdj/boll), 值为参数 dict;
                 如 {"macd": {"fast": 12, "slow": 26, "signal": 9}, "rsi": {"period": 14}}.
     query_id: 查询标识 (如代码), 变化时组件丢弃视口锚点回退初始区间.
+    overlay: 可选叠加曲线 (如 build_ratio_series 生成的比率线): 画在独立左侧
+             价轴, 不改变蜡烛/均线的右侧价格轴。
     """
     df = clean_ohlc(df)
     if df.empty:
@@ -839,6 +845,7 @@ def kline_payload(
             "macd": macd_data,
             "rsi": rsi_data,
             "kdj": kdj_data,
+            "overlay": overlay,
             "candleOpts": {
                 "upColor": up,
                 "downColor": down,

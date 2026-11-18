@@ -19,6 +19,9 @@ futures_main_sina 新浪主力连续 (如 AU0=黄金, LC0=碳酸锂), 返回全�
 Cameco 官网铀价 (IX.URANIUM/URANIUM_LT, 目录条目带 cameco 字段): 服务端渲染的
 月度表格 (UxC + TradeTech 月末行业均价), 免登录但只有月频且无开高低 → 平K线;
 页面改版由解析异常显式报错兜住, 无第二数据源。
+派生比率指数 (IX.GOLDSILVER/GOLDOIL, 目录条目带 ratio 字段): 没有独立行情源,
+按预设从两条腿 (COMEX 黄金/白银、WTI 原油) 取数后相除得到点位序列, 返回
+平K线; 两条腿的日期对齐/精度与均值口径统一见 tracker.index_ratios。
 """
 
 from __future__ import annotations
@@ -322,9 +325,7 @@ def _yf_history(
     kwargs = {"symbol": yf_symbol, "provider": "yfinance", "start_date": start_date}
     if end_date:
         kwargs["end_date"] = end_date
-    res = with_timeout(
-        _obb().equity.price.historical, _YF_HISTORY_TIMEOUT, **kwargs
-    )
+    res = with_timeout(_obb().equity.price.historical, _YF_HISTORY_TIMEOUT, **kwargs)
     return openbb_history_frame(res, ensure_volume=True)
 
 
@@ -342,9 +343,7 @@ def _ak_futures_history(
     symbol = _catalog(p)["futures"]
     # 底层 requests.get 无 timeout: TCP 半开时可挂到分钟级, 而 index-kline
     # 跑在主线程 → 整条命令卡死无提示
-    raw = with_timeout(
-        lambda: _ak().futures_main_sina(symbol=symbol), _AK_HIST_TIMEOUT
-    )
+    raw = with_timeout(lambda: _ak().futures_main_sina(symbol=symbol), _AK_HIST_TIMEOUT)
     if raw is None or raw.empty:
         raise RuntimeError(f"主力连续 {symbol}: akshare 返回空数据")
     df = raw.rename(
@@ -403,6 +402,49 @@ _AK_US_SINA = {
 }
 
 
+# ---------- 派生比率指数 (金银比 / 金油比) ----------
+
+
+def _ratio_history(
+    p: ParsedSymbol, start_date: str, end_date: str | None = None
+) -> pd.DataFrame:
+    """派生比率指数 → 平K线 (open=high=low=close, volume=0).
+
+    比率没有原生开高低: 两条腿分别走各自的指数源链取到日线, 相除后得到
+    点位序列; 周/月K由上层 resample_ohlc 聚合出区间高低。比率结果是派生
+    数据, 但对外与普通指数一致 (IX.<KEY>), 由 prices.get_index_history
+    按 index: 前缀缓存, 不额外引入独立行情源。
+    """
+    from .. import index_ratios
+    from ..symbols import parse as _parse
+
+    preset_key = _catalog(p).get("ratio")
+    preset = index_ratios.PRESET_BY_KEY.get(preset_key or "")
+    if preset is None:
+        raise ValueError(f"{p.yahoo}: 未配置比率预设")
+    provider = IndexProvider()
+    frames: dict[str, pd.DataFrame] = {}
+    for leg in preset.symbols:
+        frames[leg] = provider.fetch_history(_parse(leg), start_date, end_date)
+    curve = index_ratios.build_ratio_curve(frames, preset.key, period="daily")
+    rows = curve.get("data") or []
+    if not rows:
+        raise RuntimeError(f"{p.yahoo}: 比率序列无有效数据")
+    df = pd.DataFrame(
+        {
+            "date": pd.to_datetime([r["time"] for r in rows]),
+            "close": [float(r["value"]) for r in rows],
+        }
+    )
+    df["open"] = df["high"] = df["low"] = df["close"]
+    df["volume"] = 0.0
+    return _slice_range(
+        df[["date", "open", "high", "low", "close", "volume"]],
+        start_date,
+        end_date,
+    )
+
+
 class IndexProvider(Provider):
     """宏观/风险指数域: 中国指数 akshare 优先, 其余 yfinance 主源 + 新浪兜底.
 
@@ -441,8 +483,11 @@ class IndexProvider(Provider):
         def cm():
             return _cameco_history(p, start_date, end_date)
 
+        def rt():
+            return _ratio_history(p, start_date, end_date)
+
         # 健康观测按 source id 归并; 这些是局部 lambda 样式的包装函数,
-        # 函数名 (ak/yf/cc/hs/ft/cm) 无法反推来源, 显式打标。
+        # 函数名 (ak/yf/cc/hs/ft/cm/rt) 无法反推来源, 显式打标。
         for _fn, _sid in (
             (ak, "akshare"),
             (yf, "yfinance"),
@@ -450,9 +495,13 @@ class IndexProvider(Provider):
             (hs, "hsi"),
             (ft, "akshare"),
             (cm, "cameco"),
+            (rt, "ratio"),
         ):
             _fn.__source_id__ = _sid
 
+        # 派生比率指数: 目录带 ratio 字段, 由两条腿计算 (无独立行情源)
+        if _catalog(p).get("ratio"):
+            return [rt]
         # Cameco 铀价: 目录带 cameco 字段, 月频专属源 (无第二数据源)
         if _catalog(p).get("cameco"):
             return [cm]

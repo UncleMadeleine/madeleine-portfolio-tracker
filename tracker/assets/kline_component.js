@@ -21,7 +21,9 @@ export default function (component) {
   var isCompare = CFG.mode === 'compare';
   var isCrypto = CFG.mode === 'crypto';
   var candle = null, volSeries = null, tracks = [], indSeries = [], ratioSeries = null;
+  var overlaySeries = null;
   var ratio = CFG.ratio || null;
+  var overlay = CFG.overlay || null;
 
   function addLine(color, data) {
     var s = chart.addSeries(LC.LineSeries, {
@@ -154,6 +156,33 @@ export default function (component) {
         }
       }
     } catch (e) {}
+
+    // 可选叠加曲线 (指数页: 金银比/金油比): 独立左侧价轴, 不挤压蜡烛价格轴.
+    // 比率与点位量级不同, 只有独立价轴才能在同一时间轴上同时读清。
+    if (overlay && overlay.data && overlay.data.length) {
+      var ovPrec = overlay.precision != null ? overlay.precision : 5;
+      overlaySeries = chart.addSeries(LC.LineSeries, {
+        color: overlay.color || '#ff5da2', lineWidth: 2,
+        priceScaleId: 'left',
+        priceLineVisible: false, lastValueVisible: false,
+        crosshairMarkerVisible: true, crosshairMarkerRadius: 3,
+        priceFormat: { type: 'price', precision: ovPrec, minMove: Math.pow(10, -ovPrec) }
+      });
+      overlaySeries.setData(overlay.data);
+      if (overlay.mean != null) {
+        overlaySeries.createPriceLine({
+          price: overlay.mean, color: '#8b949e', lineWidth: 1, lineStyle: 2,
+          axisLabelVisible: true, title: '均值'
+        });
+      }
+      try {
+        chart.applyOptions({ leftPriceScale: { visible: true } });
+        chart.priceScale('left').applyOptions({
+          scaleMargins: { top: 0.1, bottom: 0.1 },
+          borderColor: 'rgba(120,140,180,0.25)'
+        });
+      } catch (e) {}
+    }
   }
 
   var timeIdx = {};
@@ -309,6 +338,22 @@ export default function (component) {
     if (vol != null) { h += ' 量' + span(fv(vol)); }
     maVals.forEach(function (m) { h += ' ' + span(m.name + ' ' + fp(m.value), m.color); });
     if (indVals) { indVals.forEach(function (t) { h += ' ' + span(t.name + ' ' + fp2(t.value), t.color); }); }
+    if (overlaySeries && overlay) {
+      var ovPrec = overlay.precision != null ? overlay.precision : 5;
+      var ovVal = null;
+      if (param && param.seriesData) {
+        var ov = param.seriesData.get(overlaySeries);
+        ovVal = ov ? ov.value : null;
+      }
+      if (ovVal == null) { ovVal = valAt({ data: overlay.data }, bar.time); }
+      h += '<br>' + span('叠加 ' + overlay.name, overlay.color || '#ff5da2')
+        + ' ' + span(fpn(ovVal, ovPrec));
+      if (ovVal != null && overlay.mean) {
+        var ovDev = (ovVal / overlay.mean - 1) * 100;
+        h += ' ' + span('(均值 ' + fpn(overlay.mean, ovPrec) + ', 较均值 '
+          + (ovDev >= 0 ? '+' : '') + ovDev.toFixed(2) + '%)', '#8b949e');
+      }
+    }
     legend.innerHTML = h;
   }
   chart.subscribeCrosshairMove(show);
@@ -496,10 +541,15 @@ export default function (component) {
         });
       });
     } else {
-      add(['time', 'open', 'high', 'low', 'close', 'volume']);
+      var header = ['time', 'open', 'high', 'low', 'close', 'volume'];
+      if (overlay) { header.push(overlay.name || 'overlay'); }
+      add(header);
       CFG.candles.forEach(function (b, i) {
-        add([tstr(b.time), b.open, b.high, b.low, b.close,
-          CFG.volume[i] ? CFG.volume[i].value : '']);
+        var row = [tstr(b.time), b.open, b.high, b.low, b.close,
+          CFG.volume[i] ? CFG.volume[i].value : ''];
+        // 叠加曲线按「≤ 当日」对齐到蜡烛日期 (交易日历不同也不会错位)
+        if (overlay) { row.push(valAt({ data: overlay.data }, tstr(b.time))); }
+        add(row);
       });
     }
     return rows.join('\n');

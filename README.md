@@ -26,7 +26,7 @@ Madeleine Portfolio Tracker 是一款**本地优先**的投资组合追踪工具
 - **长桥 (LongPort) 行情接入** — 可选行情/历史/持仓源（OAuth 登录），自带 PB (calc_indexes 实时口径) 反推每股净资产，失败自动回退默认数据源
 - **EODHD 付费源 (BYOK)** — 自备 token 的增强源：历史 K 线默认在 yfinance 之前（拆股+分红复权），实时行情默认仅在默认源失败时兜底（`quotes=primary` 时走 `s=` 批量，每批 15 个代码）；PB/市值可用 EODHD fundamentals 补/替换 yfinance；LSE 便士折算、`.IL` 豁免、按交易所映射 EODHD ticker；未配置 token 时完全不影响免费链路
 - **K 线蜡烛图** — 日K / 周K / 月K，MA 均线，成交量，MACD / RSI / KDJ / 布林带，滑动模式默认加载上市以来全量历史
-- **宏观/风险指数K线** — 独立 IX.<KEY> 代码规范（美元指数 / VIX / 沪深 300 / 商品期货主力连续（黄金·白银·鸡蛋·豆粕·豆一·豆二·生猪·碳酸锂）/ 铀现货与长协价（Cameco 月度 U3O8）/ 水泥网建材指数 / 恒生官网港股指数（恒生指数·国企·恒生科技·红筹·恒生综合·恒指波幅 等共 12 个）/ 恒生AH股溢价指数 等，共 51 个，`index-kline --list` 可查全部），独立页面与 `index-kline` 子命令，独立 provider 源链
+- **宏观/风险指数K线** — 独立 IX.<KEY> 代码规范（美元指数 / VIX / 沪深 300 / 商品期货主力连续（黄金·白银·鸡蛋·豆粕·豆一·豆二·生猪·碳酸锂）/ COMEX 黄金·白银与 WTI·布伦特原油 / 金银比 IX.GOLDSILVER·金油比 IX.GOLDOIL 派生指数 / 铀现货与长协价（Cameco 月度 U3O8）/ 水泥网建材指数 / 恒生官网港股指数（恒生指数·国企·恒生科技·红筹·恒生综合·恒指波幅 等共 12 个）/ 恒生AH股溢价指数 等，共 57 个，`index-kline --list` 可查全部），独立页面与 `index-kline` 子命令，独立 provider 源链；金银比/金油比可直接当作指数查询，也可叠加在其它指数K线上（左侧独立纵轴）
 - **多股对比** — 任意代码同坐标系折线对比，归一化（起点=100）跨币种跨量级比较
 - **财经日历** — 持仓/自选的本月与下月财报、预约披露、除权除息/派息事件（yfinance 单票 + akshare 整批，长桥可选兜底），独立页面与 `calendar` 子命令；支持导出 iCalendar (`.ics`) 到 Apple 日历 / Google Calendar / Outlook；A股只请求窗口内可能命中的报表期、按范围跳过无关板块，取数并发执行；首屏先展示磁盘缓存并后台刷新，服务进程内置保温线程按默认范围周期预热缓存，冷启动带 A股整批/海外单票进度条
 - **首屏性能** — 组合与日历均采用 stale-while-revalidate：先渲染 30 分钟 / 7 天内的旧缓存秒开，后台静默重取；仅在完全无缓存时阻塞取数（组合/日历均显示实时进度条）；行情/汇率/日历均有进程级保温线程周期刷新磁盘缓存，且保温服务已抽成无 Streamlit 依赖的 `tracker/services/warm.py`，CLI 可用 `tracker warm` 一次性预热或 `--interval` 常驻保温
@@ -89,7 +89,7 @@ tracker-ui                        # pip 安装后 (等价, 参数透传给 strea
 
 - **组合** (`/`) — 持仓编辑、明细表、资产配置（按市场 / 按币种 / 按代码三张饼图，按代码为市值 Top 20 + 其他 + 持仓市值 Top 15 柱图）、净值走势、自选提醒
 - **K线** (`/kline`) — 任意代码 K 线查询（支持按代码或名称模糊搜索）+ 多股走势对比 + 加密货币对比（K线页子功能）
-- **指数K线** (`/index`) — 宏观/风险指数查询（IX.<KEY> 分组下拉，分组随目录维护；CLI `index-kline --list` 可查全部已收录指数）
+- **指数K线** (`/index`) — 宏观/风险指数查询（IX.<KEY> 分组下拉，分组随目录维护；CLI `index-kline --list` 可查全部已收录指数）；金银比 `IX.GOLDSILVER` / 金油比 `IX.GOLDOIL` 是可直接选择的派生指数（两条腿相除，无原生开高低），也可作为叠加曲线画在其它指数K线上，使用左侧独立价轴
 - **基本面** (`/fundamentals`) — 顶部切换「估值指标 / AH 溢价」：
   - **估值指标** — 任意 A股/港股/美股代码，最新 PE(TTM)、PB、股息率、5 年平均股息率（OpenBB/yfinance，6h 缓存）；最近财报官方原文链接（A股/北交所 巨潮资讯、港股 HKEXnews、美股 SEC EDGAR、澳股 ASX、英股 Companies House、日股 TDnet、韩股 DART，6h 缓存；其它市场明确显示未接入原因）；历史 PE/PB 曲线按近 3/6/12/24/36/60 个月展示，并给出区间均值/高低点/分位（百度股市通，6h 缓存）
   - **AH 溢价** — 可选 A+H 股票对（东财目录，失败退回内置常见股票对，也可手动输入代码），按近 3/6/12/24/36/60 个月展示 A 股收盘 ÷ (H 股收盘 × 历史汇率) − 1，0% 为两地同价
@@ -146,6 +146,7 @@ python -m tracker.cli kline 0700.HK --period weekly --open
 python -m tracker.cli index-kline IX.DXY --months 12      # 美元指数
 python -m tracker.cli index-kline IX.VIX --period weekly  # 恐慌指数 周K
 python -m tracker.cli index-kline IX.AU --months 24       # 黄金主力连续（商品期货同理: IX.AG/JD/M/A/B/LH/LC）
+python -m tracker.cli index-kline IX.GOLDSILVER --months 24  # 金银比（派生指数; 金油比 IX.GOLDOIL）
 python -m tracker.cli index-kline IX.URANIUM --months 60  # 铀现货价（Cameco 月K; 长协 IX.URANIUM_LT）
 python -m tracker.cli index-kline --list                 # 全部已收录指数（按分组）
 python -m tracker.cli index-kline --list --json          # 机器可读目录（code/name/group）
@@ -955,7 +956,7 @@ A **local-first** portfolio tracker supporting **A-shares / B-shares / Beijing S
 - **EODHD BYOK (optional paid source)** — bring your own token; EOD history primary by default (split+dividend adjusted), quotes fallback-only by default (`quotes=primary` batches 15 symbols per `s=` request); PB/market-cap can use EODHD fundamentals (`fundamentals=fallback` fills only missing fields); LSE pence handling, per-exchange ticker mapping, zero impact when unconfigured
 - **Optional WebDAV sync** — keep `portfolio.json` / `watchlist.json` on a WebDAV directory (Nextcloud, Synology, etc.) and share them across devices; ETag-conditional pull/push, local cache fallback when offline, and conflict archives instead of silent overwrites. Disabled by default (`webdav.json`), with `tracker webdav status|pull|push`
 - **K-line charts** — daily/weekly/monthly, MA overlays, volume, MACD/RSI/KDJ/Bollinger; slide mode loads full listing history by default
-- **Macro/risk index K-lines** — dedicated `IX.<KEY>` symbol space (USD index, VIX, CSI 300, commodity main-continuous futures — gold, silver, eggs, soybean meal, soybeans, hogs, lithium carbonate — uranium spot/long-term (Cameco monthly), cement indices, ...), separate page & `index-kline` subcommand, dedicated provider source chain
+- **Macro/risk index K-lines** — dedicated `IX.<KEY>` symbol space (USD index, VIX, CSI 300, commodity main-continuous futures — gold, silver, eggs, soybean meal, soybeans, hogs, lithium carbonate — COMEX gold/silver and WTI/Brent crude, derived gold/silver `IX.GOLDSILVER` and gold/oil `IX.GOLDOIL` indices (two-leg ratio, point-only), uranium spot/long-term (Cameco monthly), cement indices, ...), separate page & `index-kline` subcommand, dedicated provider source chain; the ratio indices can be queried directly or overlaid on another index on a separate left price axis
 - **Multi-symbol comparison** — same-coordinate overlay normalized to 100, optional ratio line with history-FX adjustment; plus a crypto-only sub-tab on the K-line page (independent per-coin candle panes, raw prices, shared time axis)
 - **Fundamentals** — valuation sub-view for any A-share/HK/US stock: latest PE(TTM), PB, dividend yield and 5-year average yield, plus historical PE/PB curves and percentile (Baidu via akshare); the AH-premium sub-view retains the original A+H curve: A-share close ÷ (H-share close × historical HKD/CNY FX) − 1, selectable pair/range, 0% parity reference line, range high/low/mean/percentile summary (dedicated `/fundamentals` page)
 - **Financial calendar** — earnings, scheduled disclosures, ex-dividend/record dates for holdings & watchlist over the current and next months (yfinance per-symbol + akshare bulk, optional LongPort fallback), dedicated page & `calendar` subcommand; export to iCalendar (`.ics`) for Apple Calendar / Google Calendar / Outlook; only probabilistically relevant A-share report periods/boards are fetched, requests run concurrently, and a process-level warmer (also exposed as `tracker warm`) keeps the disk cache fresh for the default scope

@@ -10,9 +10,10 @@ import pandas as pd
 import streamlit as st
 
 from . import settings, theme
+from .issues import render_issue_summary
 from .kline_page import render_kline_view
 
-from tracker import charting, prices
+from tracker import charting, index_ratios, prices
 from tracker.symbols import INDEX_CATALOG, index_groups, index_label
 
 
@@ -92,6 +93,55 @@ def render_index_page() -> None:
         else f"该指数数据源为{charting.PERIOD_LABELS[native]}, 更细周期不可用",
         key="index_period",
     )
+    # 可选叠加比率曲线 (默认关闭): 金银比 / 金油比, 独立左侧价轴.
+    # 两条腿均取美元计价的指数域代码 (COMEX 黄金/白银、WTI 原油), 无需汇率换算。
+    ratio_label = st.selectbox(
+        "叠加比率",
+        index_ratios.ratio_option_labels(),
+        index=0,
+        key="index_ratio",
+        help="在指数K线上叠加一条比率曲线 (独立左侧纵轴): "
+        "金银比 = COMEX 黄金 ÷ COMEX 白银, 金油比 = COMEX 黄金 ÷ WTI 原油; "
+        "两条腿均为 Yahoo 美元计价连续合约 (换月跳空属正常构造)",
+    )
+    ratio_preset = index_ratios.preset_for_label(ratio_label)
+    main_ratio_preset = index_ratios.preset_for_index(yahoo)
+    if (
+        ratio_preset is not None
+        and main_ratio_preset is not None
+        and ratio_preset.key == main_ratio_preset.key
+    ):
+        st.caption("当前指数本身就是该比率, 叠加曲线已忽略。")
+        ratio_preset = None
+    overlay = None
+    if ratio_preset is not None:
+        ratio_frames: dict[str, pd.DataFrame] = {}
+        ratio_issues: list[str] = []
+        with st.spinner(f"拉取 {ratio_preset.label} 两条腿数据..."):
+            for leg in ratio_preset.symbols:
+                try:
+                    leg_df = cached_index_kline(leg, imonths)
+                except Exception as e:  # noqa: BLE001 - 单腿失败只影响叠加线
+                    ratio_issues.append(f"{leg}: {e}")
+                    continue
+                if isinstance(leg_df, pd.DataFrame) and not leg_df.empty:
+                    ratio_frames[leg] = leg_df
+                else:
+                    ratio_issues.append(f"{leg}: 无有效K线数据")
+        render_issue_summary(
+            ratio_issues,
+            noun="叠加比率取数问题",
+            details_label="查看失败明细",
+            key="index_ratio_issues",
+        )
+        if len(ratio_frames) == len(ratio_preset.symbols):
+            try:
+                overlay = index_ratios.build_ratio_curve(
+                    ratio_frames, ratio_preset.key, period=iperiod
+                )
+            except ValueError as e:
+                st.warning(f"叠加比率: {e}")
+
     render_kline_view(
         kdf,
         f"{index_label(key)} ({yahoo})",
@@ -100,4 +150,22 @@ def render_index_page() -> None:
         show_volume=False,
         green_up=settings.green_up(),
         currency=None,  # 指数以点数/%计价, 不标货币
+        overlay=overlay,
     )
+    if main_ratio_preset is not None:
+        st.caption(
+            f"派生比率指数 {yahoo} = {main_ratio_preset.formula}; "
+            "比率没有原生开高低, 日K按收盘点位绘制 (周/月K聚合区间高低)。"
+        )
+    if overlay:
+        prec = int(overlay["precision"])
+        cur_v = float(overlay["data"][-1]["value"])
+        mean_v = float(overlay["mean"])
+        dev = (cur_v / mean_v - 1) * 100 if mean_v else 0.0
+        st.caption(
+            f"叠加曲线 {ratio_preset.label} = {ratio_preset.formula}"
+            f" ({overlay['name']}); 当前 {cur_v:.{prec}f}"
+            f" · 均值 {mean_v:.{prec}f} · 较均值 {dev:+.2f}%"
+            " · 使用左侧独立纵轴, 虚线为区间均值; "
+            "两条腿为美元计价连续合约, 换月跳空属正常构造。"
+        )

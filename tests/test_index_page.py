@@ -38,10 +38,18 @@ def _fake_index_history(symbol, months=12, **kw):
 def index_app(monkeypatch):
     from tracker.ui import kline_page
 
+    chart: dict = {}
+
+    def _capture_chart(**kw):
+        chart.update(kw)
+        return None
+
     monkeypatch.setattr(prices, "get_index_history", _fake_index_history)
-    monkeypatch.setattr(kline_page, "_KLINE_CHART", lambda **kw: None)
+    monkeypatch.setattr(kline_page, "_KLINE_CHART", _capture_chart)
     index_page.cached_index_kline.clear()
-    return AppTest.from_string(_SCRIPT, default_timeout=30).run()
+    app = AppTest.from_string(_SCRIPT, default_timeout=30).run()
+    app._chart = chart
+    return app
 
 
 def test_no_query_button(index_app):
@@ -94,6 +102,36 @@ def test_weekly_only_index_hides_daily_option(index_app):
     assert period_box.value == "weekly"
     assert period_box.help == "该指数数据源为周K, 更细周期不可用"
     assert len(app.metric) == 4  # 图表摘要照常渲染
+
+
+def test_ratio_select_defaults_to_none(index_app):
+    """叠加比率默认「无」: 不额外取数, 也不改变原有K线 payload."""
+    ratio_box = index_app.selectbox(key="index_ratio")
+    assert ratio_box.options == ["无", "金银比", "金油比"]
+    assert ratio_box.value == "无"
+    assert index_app._chart["data"]["overlay"] is None
+
+
+def test_ratio_index_is_selectable_like_normal_index(index_app):
+    """金银比/金油比作为派生指数出现在下拉框, 可直接查询渲染."""
+    symbol_box = index_app.selectbox(key="index_symbol")
+    gold_silver = next(o for o in symbol_box.options if "金银比" in o)
+    symbol_box.select(gold_silver).run()
+    assert len(index_app.metric) == 4
+    assert "金银比" in index_app._chart["data"]["title"]
+    # 选中的就是比率本身时, 叠加控件默认「无」, 不重复画同一条线
+    assert index_app._chart["data"]["overlay"] is None
+
+
+def test_gold_oil_ratio_overlay_embedded(index_app):
+    """选择金油比: 拉取 COMEX 黄金/WTI 两条腿, 比率线写入 overlay (左侧独立轴)."""
+    index_app.selectbox(key="index_ratio").set_value("金油比").run()
+    assert len(index_app.metric) == 4
+    overlay = index_app._chart["data"]["overlay"]
+    assert overlay["numerator"] == "IX.XAU"
+    assert overlay["denominator"] == "IX.WTI"
+    assert overlay["data"]
+    assert any("叠加曲线 金油比" in c.value for c in index_app.caption)
 
 
 def test_daily_ok_index_keeps_daily_default(monkeypatch):

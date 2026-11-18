@@ -199,6 +199,10 @@ INDEX_GROUPS: dict[str, dict[str, dict[str, str]]] = {
         "AU": {"name": "黄金主力连续", "futures": "AU0", "currency": "元/克"},
         # 上期所白银主连 AG0: 元/千克
         "AG": {"name": "白银主力连续", "futures": "AG0", "currency": "元/千克"},
+        # COMEX 黄金/白银 (Yahoo 连续合约, 美元/盎司): 与上期所人民币品种分开收录,
+        # 两条腿同币种同单位, 供「金银比」曲线直接相除 (见 tracker.index_ratios)。
+        "XAU": {"name": "COMEX 黄金", "yf": "GC=F", "currency": "美元/盎司"},
+        "XAG": {"name": "COMEX 白银", "yf": "SI=F", "currency": "美元/盎司"},
     },
     "商品/农产品": {
         # 大商所鸡蛋主连 JD0: 元/500千克
@@ -215,9 +219,28 @@ INDEX_GROUPS: dict[str, dict[str, dict[str, str]]] = {
     "商品/新能源": {
         "LC": {"name": "碳酸锂主力连续", "futures": "LC0", "currency": "元/吨"},
     },
+    # 派生比率指数 (ratio 字段, 见 providers/index.py 的 _ratio_history):
+    # 没有原生开高低, 由两条腿收盘价相除得到点位序列 (平K线, 周/月K由上层
+    # 重采样聚合); 比率本身无单位, currency 仅作展示占位。
+    "商品/比率": {
+        "GOLDSILVER": {
+            "name": "金银比",
+            "ratio": "gold_silver",
+            "currency": "倍",
+        },
+        "GOLDOIL": {
+            "name": "金油比 (WTI)",
+            "ratio": "gold_oil",
+            "currency": "倍",
+        },
+    },
     # Cameco 官网铀价 (见 providers/index.py): 月末 UxC + TradeTech 行业均价,
     # 月频且不发布开高低 → 平K线。cameco 字段选择序列: spot=现货 / lt=长协。
     "商品/能源": {
+        # WTI / 布伦特原油 (Yahoo 连续合约, 美元/桶): WTI 同时作为「金油比」
+        # 的分母 (分子为 COMEX 黄金, 两者均以美元计价)。
+        "WTI": {"name": "WTI 原油", "yf": "CL=F", "currency": "美元/桶"},
+        "BRENT": {"name": "布伦特原油", "yf": "BZ=F", "currency": "美元/桶"},
         "URANIUM": {
             "name": "铀现货价 U3O8",
             "cameco": "spot",

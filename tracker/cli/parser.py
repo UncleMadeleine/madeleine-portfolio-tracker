@@ -680,6 +680,7 @@ def _add_index_kline_parser(sub: argparse.ArgumentParser) -> None:
             "示例:\n"
             "  tracker index-kline IX.DXY --months 12\n"
             "  tracker index-kline IX.VIX --period weekly --json\n"
+            "  tracker index-kline IX.GOLDSILVER --months 24\n"
             "  tracker index-kline IX.URANIUM --months 60\n"
             "  tracker index-kline IX.CSI300 --list\n"
         ),

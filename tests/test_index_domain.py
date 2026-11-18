@@ -642,6 +642,106 @@ def test_index_groups_cover_whole_catalog():
     assert set(INDEX_GROUPS) == set(index_groups())
 
 
+def test_ratio_presets_reference_known_usd_indices():
+    """金银比/金油比预设: 两条腿必须是已收录指数, 且同用美元报价."""
+    from tracker import index_ratios
+
+    labels = [p.label for p in index_ratios.RATIO_PRESETS]
+    assert labels == ["金银比", "金油比"]
+    for preset in index_ratios.RATIO_PRESETS:
+        assert preset.numerator in {f"IX.{k}" for k in INDEX_CATALOG}
+        assert preset.denominator in {f"IX.{k}" for k in INDEX_CATALOG}
+        assert preset.numerator != preset.denominator
+        # 比率不引入汇率调整: 两条腿都以美元计价
+        assert "美元" in INDEX_CATALOG[preset.numerator[3:]]["currency"]
+        assert "美元" in INDEX_CATALOG[preset.denominator[3:]]["currency"]
+        # 同时提供可像普通指数一样查询的派生代码
+        code = index_ratios.DERIVED_INDEX_BY_PRESET[preset.key]
+        assert INDEX_CATALOG[code[3:]]["ratio"] == preset.key
+        assert index_ratios.preset_for_index(code) is preset
+
+
+def test_ratio_catalog_entries_use_exclusive_ratio_source():
+    """派生比率指数 (IX.GOLDSILVER/IX.GOLDOIL): 目录合法且只走 ratio 源."""
+    ratio_keys = [k for k, e in INDEX_CATALOG.items() if "ratio" in e]
+    assert ratio_keys == ["GOLDSILVER", "GOLDOIL"]
+    for key in ratio_keys:
+        p = parse(f"IX.{key}")
+        assert p.type == "index"
+        assert p.market is Market.INDEX
+        entry = INDEX_CATALOG[key]
+        assert not ({"ak", "yf", "ccement", "futures", "hsi", "cameco"} & set(entry))
+        chains = IndexProvider().history_sources(p, "2025-01-01", None)
+        assert [f.__name__ for f in chains] == ["rt"]
+
+
+def test_ratio_history_builds_flat_ohlc(monkeypatch):
+    """派生比率: 两条腿相除 → 平K线 (open=high=low=close), 供指数页/CLI 直接查询."""
+    from tracker.providers import index as idx_mod
+
+    dates = pd.date_range("2025-01-01", periods=3, freq="D")
+
+    def _flat(vals):
+        return pd.DataFrame(
+            {
+                "date": dates,
+                "open": vals,
+                "high": vals,
+                "low": vals,
+                "close": vals,
+                "volume": 0.0,
+            }
+        )
+
+    def fake_yf(p, start_date, end_date=None):
+        return {
+            "IX.XAU": _flat([2000.0, 2010.0, 2020.0]),
+            "IX.XAG": _flat([20.0, 20.0, 20.0]),
+        }[p.yahoo]
+
+    monkeypatch.setattr(idx_mod, "_yf_history", fake_yf)
+    df = idx_mod._ratio_history(parse("IX.GOLDSILVER"), "2025-01-01", None)
+    assert list(df.columns) == ["date", "open", "high", "low", "close", "volume"]
+    assert df["close"].tolist() == pytest.approx([100.0, 100.5, 101.0])
+    assert (df["open"] == df["high"]).all()
+    assert (df["high"] == df["low"]).all()
+    assert (df["low"] == df["close"]).all()
+    assert (df["volume"] == 0).all()
+
+
+def test_build_ratio_curve_uses_preset_legs():
+    """预设计算走 build_ratio_series: 返回可直接挂到 K线 overlay 的 payload."""
+    from tracker import index_ratios
+
+    dates = pd.date_range("2025-01-01", periods=5, freq="D")
+
+    def _flat(vals):
+        return pd.DataFrame(
+            {
+                "date": dates,
+                "open": vals,
+                "high": vals,
+                "low": vals,
+                "close": vals,
+                "volume": 0.0,
+            }
+        )
+
+    frames = {
+        "IX.XAU": _flat([2000.0, 2010.0, 2020.0, 2030.0, 2040.0]),
+        "IX.XAG": _flat([20.0, 20.0, 20.0, 20.0, 20.0]),
+    }
+    curve = index_ratios.build_ratio_curve(frames, "gold_silver")
+    assert curve["name"] == "IX.XAU / IX.XAG"
+    assert curve["numerator"] == "IX.XAU"
+    assert curve["denominator"] == "IX.XAG"
+    assert curve["data"][0]["value"] == pytest.approx(100.0)
+    assert curve["mean"] == pytest.approx(101.0, abs=1e-3)
+
+    with pytest.raises(ValueError, match="未知的比率预设"):
+        index_ratios.build_ratio_curve(frames, "missing")
+
+
 def test_index_catalog_flattening_preserves_entries():
     """平铺目录条目与分组定义完全一致 (派生不丢字段)."""
     from tracker.symbols import INDEX_GROUPS

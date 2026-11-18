@@ -288,6 +288,19 @@ class TestKlineComponent:
         p = charting.kline_payload(_mk_df(), "AAPL", show_volume=False)
         assert p["volume"] == []
 
+    def test_overlay_default_none_and_embeds_ratio_curve(self):
+        """单只K线可选叠加曲线: 默认 None, 传入后原样写进 payload."""
+        assert charting.kline_payload(_mk_df(), "AAPL")["overlay"] is None
+        overlay = {
+            "name": "IX.XAU / IX.XAG",
+            "color": charting.RATIO_COLOR,
+            "precision": 2,
+            "mean": 80.0,
+            "data": [{"time": "2025-01-06", "value": 80.0}],
+        }
+        p = charting.kline_payload(_mk_df(), "IX.DXY", overlay=overlay)
+        assert p["overlay"] == overlay
+
     def test_green_up_palette(self):
         p = charting.kline_payload(_mk_df(), "AAPL", green_up=True)
         assert p["up"] == charting.INTL_UP_COLOR
@@ -297,6 +310,14 @@ class TestKlineComponent:
         js = charting.kline_component_js()
         assert "window.LightweightCharts" in js
         assert "export default function" in js
+
+    def test_component_js_supports_kline_overlay_curve(self):
+        """单只K线叠加比率线: 独立左侧价轴 + 均值线 + 图例显示."""
+        js = charting.kline_component_js()
+        assert "overlaySeries" in js
+        assert "CFG.overlay" in js
+        assert "叠加 " in js
+        assert "priceScaleId: 'left'" in js
 
     def test_component_js_supports_trackpad_pinch_zoom(self):
         """触控板双指捏合: ctrl+wheel (Chromium/Firefox) 与 Safari gesture 事件."""

@@ -59,6 +59,8 @@ def test_yahoo_to_eodhd_mapping():
         "SAP.DU": "SAP.DU",
         "SAP.HM": "SAP.HM",
         "SAP.MU": "SAP.MU",
+        "PRX.AS": "PRX.AS",
+        "ASML.AS": "ASML.AS",
         "BP.L": "BP.LSE",
         "BP.AL": "BP.LSE",
         "KAP.IL": "KAP.LSE",

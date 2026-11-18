@@ -114,6 +114,7 @@ def test_parse_hk_rmb_counter_currency():
 def test_parse_all_markets():
     assert parse("SAP.DE").market is Market.DE
     assert parse("SAP.F").market is Market.DE
+    assert parse("PRX.AS").market is Market.NL
     assert parse("BP.L").market is Market.GB
     assert parse("LSEG.L").market is Market.GB
     assert parse("BP.IL").market is Market.GB
@@ -203,6 +204,22 @@ def test_parse_singapore_alias_and_normalization():
     # .SG 不再误判德股 (回归: 德股仅 .DE/.F/.BE/.DU/.HM/.MU)
     assert parse("SAP.SG").market is Market.SG
     assert parse("SAP.SG").currency == "SGD"
+
+
+def test_parse_netherlands_euronext():
+    """荷兰 Euronext 阿姆斯特丹: .AS (PRX.AS Prosus / ASML.AS 阿斯麦), EUR 计价。"""
+    p = parse("PRX.AS")
+    assert p.yahoo == "PRX.AS"
+    assert p.market is Market.NL
+    assert p.currency == "EUR"
+    assert p.market_label == "荷兰股"
+    assert p.type == "global"
+    assert p.ak_code is None
+    assert normalize("prx.as") == "PRX.AS"
+    assert normalize(" PRX.as ") == "PRX.AS"
+    # ASML 在美股另有 ADR 裸代码, 两者是不同场所, 不做互转
+    assert parse("ASML.AS").market is Market.NL
+    assert parse("ASML").market is Market.US
 
 
 def test_parse_unknown_suffix():

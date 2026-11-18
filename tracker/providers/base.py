@@ -205,6 +205,7 @@ def resolve(type_or_market) -> Provider:
         "US",
         "HK",
         "DE",
+        "NL",
         "GB",
         "CA",
         "AU",

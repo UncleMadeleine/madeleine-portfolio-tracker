@@ -150,6 +150,9 @@ def test_contract_spec_all_markets():
         ("82318.HK", ContractSpec("82318", "SEHK", "")),
         ("9804.HK", ContractSpec("9804", "SEHK", "")),
         ("SAP.DE", ContractSpec("SAP", "IBIS", "EUR")),
+        # 荷兰 Euronext 阿姆斯特丹: IBKR 交易所代号 AEB, 合约 symbol 与 Yahoo 一致
+        ("PRX.AS", ContractSpec("PRX", "AEB", "EUR")),
+        ("ASML.AS", ContractSpec("ASML", "AEB", "EUR")),
         ("BP.L", ContractSpec("BP.", "LSE", "GBP")),
         ("LSEG.L", ContractSpec("LSEG.", "LSE", "GBP")),
         # LSE 国际挂盘 (IOB): .IL symbol 不带尾点, 币种混杂 (KAP=USD) 故留空
@@ -317,6 +320,10 @@ def test_ibkr_to_yahoo_mappings():
         (("200012", "SZSE", "", "HKD"), "200012.SZ"),
         (("SAP", "IBIS", "", "EUR"), "SAP.DE"),
         (("SAP", "FWB", "", "EUR"), "SAP.DE"),
+        # 荷兰 Euronext 阿姆斯特丹: AEB (primaryExchange) / AMS / XAMS → .AS
+        (("PRX", "AEB", "", "EUR"), "PRX.AS"),
+        (("PRX", "SMART", "AEB", "EUR"), "PRX.AS"),
+        (("ASML", "XAMS", "", "EUR"), "ASML.AS"),
         (("BP", "LSE", "", "GBX"), "BP.L"),
         (("LSEG", "LSE", "", "GBP"), "LSEG.L"),
         # LSE 合约 symbol 带尾点 (contract_spec 产出 "LSEG."): 不剥掉会拼出 LSEG..L
@@ -443,6 +450,7 @@ def test_get_quotes_ibkr_skips_cn_and_crypto():
     assert ibkr_mod._claims_global(parse("AAPL"))
     assert ibkr_mod._claims_global(parse("0700.HK"))
     assert ibkr_mod._claims_global(parse("SAP.DE"))
+    assert ibkr_mod._claims_global(parse("PRX.AS"))
     assert not ibkr_mod._claims_global(parse("600519.SS"))
     assert not ibkr_mod._claims_global(parse("000001.SZ"))
     assert not ibkr_mod._claims_global(parse("830799.BJ"))

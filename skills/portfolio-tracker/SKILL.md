@@ -5,7 +5,7 @@ description: Use when the user asks to check or manage their investment portfoli
 
 # Madeleine Portfolio Tracker CLI
 
-本地多市场投资组合追踪 (A股/B股/北交所/港股/美股/德股/英股/加股/澳股/新加坡股/巴西股 + 加密货币 + 宏观/风险指数)。
+本地多市场投资组合追踪 (A股/B股/北交所/港股/美股/德股/荷兰股/英股/加股/澳股/新加坡股/巴西股 + 加密货币 + 宏观/风险指数)。
 数据层抽象为 **provider 层** (`tracker/providers/`): 四个市场域各一个 provider —
 全球股票 (美股/港股, 长桥→IBKR→yfinance→港股 akshare 兜底)、A股/B股 (.SS/.SZ/.BJ, akshare 固定优先→yfinance)、
 加密货币 (`BASE-QUOTE` 连字符代码, Binance 优先→Gate.io→Hyperliquid(仅USD系)→yfinance; 数据源偏好 settings.json `crypto_source` 或 CLI `--crypto-source`, 默认 auto=默认链, 指定源前置失败自动回落),
@@ -83,6 +83,7 @@ tracker-ui          # pip 安装后起 Streamlit 页面 (等价 streamlit run tr
 | 北交所 | `.BJ` | `830799.BJ` | CNY | cn | |
 | 港股 | `.HK` | `0700.HK` (4位补零) | HKD / CNY / USD | global | 多柜台: 人民币柜台 `8` 开头 5 位码以 CNY 计价 (如 `82318.HK` 中国平安-R); 美元柜台只属于 ETF 三柜台, 代码 `09xxx`/`41xxx` (如 `9804.HK` PP越南-U / `09070.HK` 平安香港高息-U / `09188.HK` 华夏沪深三百-U) 以 USD 计价。美元柜台币种由数据源自报, 不能按代码形态推导 (`normalize` 剥前导零后 `9070.HK` 与 `9988.HK` 阿里同形) |
 | 德股 | `.DE` 等 | `SAP.DE` | EUR | global | `.F`/`.BE`/`.DU`/`.HM`/`.MU` |
+| 荷兰股 | `.AS` | `PRX.AS` | EUR | global | Euronext 阿姆斯特丹 (XAMS), 如 `PRX.AS` Prosus / `ASML.AS` 阿斯麦; IBKR 交易所代号 `AEB` |
 | 英股 | `.L` | `BP.L` | GBP | global | Yahoo 报价为便士, 系统自动 ÷100; `.IL`=LSE 国际挂盘 (IOB, 如 `KAP.IL` Kazatomprom GDR, **USD 计价**), `.AL` 同属伦交所 |
 | 加股 | `.TO` 等 | `RY.TO` | CAD | global | `.V`/`.CN`/`.NE` |
 | 澳股 | `.AX` | `BHP.AX` | AUD | global | |
@@ -193,7 +194,7 @@ Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致);
   - 优先级: 显式 path > env `IBKR_CONFIG=/path` > 数据目录 `ibkr.json` > 包内模板兜底
   - 缺字段自动继承模板/兜底值; 所有下划线开头的键 (`_comment`/`_说明`) 被忽略
   - Gateway 端口由 `mode` 决定 (paper=4002 / live=4001), 显式 `"port"` 优先, env `IBKR_MODE` 可临时覆盖
-  - `exchanges` 键名与 `contract_spec` 读取的一致: US/HK/CN_SH/CN_STAR/CN_SZ/BJ/DE/GB/GB_IOB
+  - `exchanges` 键名与 `contract_spec` 读取的一致: US/HK/CN_SH/CN_STAR/CN_SZ/BJ/DE/NL/GB/GB_IOB
     (LSE 国际挂盘 IOB, 默认 `IOB`, 对应 `.IL` 后缀)/CA/CA_V/CA_CN/CA_NE/AU/SG/BR;
     删除某个键即用内置默认路由
   - **开发 IBKR 相关功能前必读 `docs/ibkr-readonly-api.md`**: 本项目只用只读 API

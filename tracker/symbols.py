@@ -12,6 +12,7 @@ class Market(str, Enum):
     CN = "CN"
     HK = "HK"
     DE = "DE"
+    NL = "NL"
     GB = "GB"
     CA = "CA"
     AU = "AU"
@@ -29,6 +30,7 @@ MARKET_META: dict[Market, dict[str, str]] = {
     Market.CN: {"label": "A股", "currency": "CNY"},
     Market.HK: {"label": "港股", "currency": "HKD"},
     Market.DE: {"label": "德股", "currency": "EUR"},
+    Market.NL: {"label": "荷兰股", "currency": "EUR"},
     Market.GB: {"label": "英股", "currency": "GBP"},
     Market.CA: {"label": "加股", "currency": "CAD"},
     Market.AU: {"label": "澳股", "currency": "AUD"},
@@ -53,6 +55,10 @@ _SUFFIX_MARKET: dict[str, Market] = {
     "DU": Market.DE,
     "HM": Market.DE,
     "MU": Market.DE,
+    # 荷兰 (Euronext Amsterdam, XAMS): Yahoo 规范后缀 .AS (PRX.AS Prosus /
+    # ASML.AS 阿斯麦 / AD.AS 阿霍德), 以欧元计价。ASML 在美股另有裸代码 ADR,
+    # 两者是不同交易场所, 不做互转
+    "AS": Market.NL,
     "L": Market.GB,
     "IL": Market.GB,
     "AL": Market.GB,
@@ -555,7 +561,7 @@ def normalize(symbol: str) -> str:
 def type_for_symbol(yahoo: str) -> str:
     """自定义后缀规范 → 权威域标记 (唯一推导规则, 供配置打标与导入使用).
 
-    global: 裸代码 (美股, 含 BRK-B 类别股 / WFC-PL 优先股) 与 .HK/.DE/.L/.TO/.AX
+    global: 裸代码 (美股, 含 BRK-B 类别股 / WFC-PL 优先股) 与 .HK/.DE/.AS/.L/.TO/.AX
             等全球股票后缀
     cn:     .SS/.SZ (沪深 A/B 股) 与 .BJ (北交所)
     crypto: BASE-QUOTE 连字符格式 (计价货币为法币/稳定币/主流币本位)

@@ -810,7 +810,7 @@ def render_portfolio_page() -> None:
         )
         with st.expander(":material/edit_note: 持仓管理", expanded=True):
             st.caption(
-                "代码规范: AAPL · SAP.DE · BP.L · RY.TO · BHP.AX · 0700.HK · 600519.SS · BTC-USD"
+                "代码规范: AAPL · SAP.DE · PRX.AS · BP.L · RY.TO · BHP.AX · 0700.HK · 600519.SS · BTC-USD"
             )
             df_h = pd.DataFrame(
                 portfolio.get("holdings", []),
@@ -1116,7 +1116,7 @@ def render_portfolio_page() -> None:
         # K线页仍残留被删代码 (quick_symbols 未更新), 用户点 pill 会查已删除的标的
         set_quick_symbols([])
         st.info(
-            "在左侧添加持仓或自选股并保存。支持 A股/港股/美股/德股/英股/加股/澳股/新加坡股/加密货币。"
+            "在左侧添加持仓或自选股并保存。支持 A股/港股/美股/德股/荷兰股/英股/加股/澳股/新加坡股/加密货币。"
         )
         st.stop()
 

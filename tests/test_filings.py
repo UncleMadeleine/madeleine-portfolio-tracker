@@ -486,6 +486,7 @@ def test_every_stock_market_is_classified():
 
 def test_unavailable_reason_for_other_markets():
     assert "Bundesanzeiger" in (filings.unavailable_reason("SAP.DE") or "")
+    assert "AFM" in (filings.unavailable_reason("PRX.AS") or "")
     assert "SEDAR" in (filings.unavailable_reason("SHOP.TO") or "")
     assert "SGX" in (filings.unavailable_reason("D05.SI") or "")
     assert "CVM" in (filings.unavailable_reason("PETR4.SA") or "")

@@ -60,6 +60,7 @@ FILINGS_SUPPORTED: frozenset[Market] = frozenset(
 #: 项目支持行情、但暂未接入财报链接的市场 → 原因 (页面直接展示, 避免误解)
 FILINGS_UNAVAILABLE: dict[Market, str] = {
     Market.DE: "德国联邦公报 Bundesanzeiger 无公开 API",
+    Market.NL: "荷兰 AFM 无公开财报检索 API",
     Market.CA: "加拿大 SEDAR+ 无公开 API 且有反爬",
     Market.SG: "SGX 公告 API 有访问限制",
     Market.BR: "巴西 CVM 无公开披露 API",

@@ -970,7 +970,7 @@ def render_kline_controls(
         "代码",
         value="",
         key="kline_symbol",
-        placeholder="如: AAPL · 600519.SS · 0700.HK · SAP.DE · BP.L · BTC-USD",
+        placeholder="如: AAPL · 600519.SS · 0700.HK · SAP.DE · PRX.AS · BP.L · BTC-USD",
     )
     kmode = st.segmented_control(
         "查询模式",
@@ -1059,8 +1059,8 @@ def render_kline_controls(
 
     st.caption(
         "代码规范: 美股 AAPL · A股 600519.SS · 港股 0700.HK · 德股 SAP.DE · "
-        "英股 BP.L · 加股 RY.TO · 澳股 BHP.AX · 日股 9984.T · 韩股 005930.KS · "
-        "新加坡 D05.SI · 加密货币 BTC-USD"
+        "荷兰股 PRX.AS · 英股 BP.L · 加股 RY.TO · 澳股 BHP.AX · 日股 9984.T · "
+        "韩股 005930.KS · 新加坡 D05.SI · 加密货币 BTC-USD"
     )
 
     def _pick_symbol(code, pill_key):

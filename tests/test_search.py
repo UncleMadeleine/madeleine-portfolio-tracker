@@ -164,6 +164,25 @@ def test_global_search_code_pass_through(monkeypatch, no_ibkr):
     assert res[0].type == "global"
 
 
+def test_global_search_netherlands_code(monkeypatch, no_ibkr):
+    """荷兰 .AS 代码可直查 (PRX.AS Prosus); yf 召回同样可认领。"""
+    import tracker.providers.global_stocks as gs
+    from tracker.providers import PROVIDERS
+
+    monkeypatch.setattr(
+        gs, "_yf_search", lambda q: [{"symbol": "PRX.AS", "name": "PROSUS"}]
+    )
+    res = PROVIDERS["global"].search("Prosus", limit=5)
+    assert res[0].code == "PRX.AS"
+    assert res[0].market == "荷兰股"
+    assert res[0].type == "global"
+
+    monkeypatch.setattr(gs, "_yf_search", lambda q: [])
+    res = PROVIDERS["global"].search("PRX.AS", limit=5)
+    assert res[0].code == "PRX.AS"
+    assert res[0].market == "荷兰股"
+
+
 def test_global_search_numeric_hits_hk(monkeypatch, no_ibkr):
     """纯数字查询走东财 suggest 补零命中港股: 700/00700 → 0700.HK 腾讯控股。"""
     import tracker.providers.em_suggest as em

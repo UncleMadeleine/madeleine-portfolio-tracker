@@ -80,6 +80,7 @@ _EXCHANGE_BY_SUFFIX = {
     "IL": "LSE",
     "AL": "LSE",
     "DE": "XETRA",
+    "AS": "AS",
     "F": "F",
     "DU": "DU",
     "HM": "HM",  # 汉堡交易所 (HA 是汉诺威, 不是 Yahoo 的 .HM)

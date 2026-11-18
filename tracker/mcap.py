@@ -3,7 +3,7 @@
 口径分域 (与 provider 分域一致, 数据源固定不走源链偏好):
 - cn 域 (A股/北交所): 东财估值分析 ak.stock_value_em — 真实日频历史总市值
   (CNY, 含总股本变动), 2018 年至今; B股/em 覆盖不到的自动近似兜底
-- global 域 (美股/港股/德英加澳日韩新巴): yfinance 历史股本 get_shares_full
+- global 域 (美股/港股/德荷英加澳日韩新巴): yfinance 历史股本 get_shares_full
   × 历史收盘价 (能反映真实增发/回购; 股本落在已知事件上按日期前向填充)
 - 股本/估值历史不可得时近似兜底: mcap_t = 当前市值 × price_t / price_now
   (只含价格维度, 不反映股本变动; source="approx" 供调用方标注)

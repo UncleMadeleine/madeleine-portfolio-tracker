@@ -1,8 +1,9 @@
-"""全球股票 provider: 美股/港股/德英加澳/日韩 (IBKR 优先 → EODHD 可选 → yfinance → 港股 akshare 兜底).
+"""全球股票 provider: 美股/港股/德荷英加澳/日韩 (IBKR 优先 → EODHD 可选 → yfinance → 港股 akshare 兜底).
 
 覆盖市场: 裸代码=美股, .HK=港股, .DE/.F/.BE/.DU/.HM/.MU=德股,
-.L/.IL/.AL=英股, .TO/.V/.CN/.NE=加股, .AX=澳股, .SI=新加坡 (SGX, .SG 别名归一),
-.T=日股 (东京, .JP 别名归一), .KS/.KQ=韩股 (KOSPI/KOSDAQ)。
+.AS=荷兰股 (Euronext Amsterdam), .L/.IL/.AL=英股, .TO/.V/.CN/.NE=加股,
+.AX=澳股, .SI=新加坡 (SGX, .SG 别名归一), .T=日股 (东京, .JP 别名归一),
+.KS/.KQ=韩股 (KOSPI/KOSDAQ)。
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ _AK_FAIL_TTL = 15.0
 
 
 def _market_label(yahoo: str) -> str:
-    """规范代码 → 市场标签 (港股/美股/德股…); 供搜索结果展示。"""
+    """规范代码 → 市场标签 (港股/美股/德股/荷兰股…); 供搜索结果展示。"""
     from ..symbols import MARKET_META, parse
 
     try:

@@ -270,6 +270,10 @@ def contract_spec(p: ParsedSymbol, exchanges: dict | None = None) -> ContractSpe
         return ContractSpec(code.lstrip("0") or code, ex.get("HK", "SEHK"), "")
     if p.market is Market.DE:
         return ContractSpec(code, ex.get("DE", "IBIS"), "EUR")
+    if p.market is Market.NL:
+        # 荷兰 Euronext Amsterdam (XAMS): IBKR 交易所代号 AEB, 欧元计价,
+        # 合约 symbol 与 Yahoo 一致 (PRX / ASML / AD)
+        return ContractSpec(code, ex.get("NL", "AEB"), "EUR")
     if p.market is Market.GB:
         if suffix == "IL":
             # LSE 国际挂盘 (IOB): Yahoo 后缀 .IL (KAP.IL Kazatomprom GDR)。IOB 合约
@@ -392,7 +396,7 @@ def quote_from_ticker(yahoo_symbol: str, ticker) -> Quote | None:
 
 
 def _claims_global(p: ParsedSymbol) -> bool:
-    """IBKR 认领范围: 全球域 (美股/港股/德英加澳新/日韩).
+    """IBKR 认领范围: 全球域 (美股/港股/德荷英加澳新/日韩).
 
     A股/B股/北交所始终走 akshare→yfinance (CNY 实时价, 分域记账规范);
     crypto/index 无 IBKR 合约。不认领的交回调用方默认链。
@@ -591,9 +595,15 @@ def ibkr_to_yahoo(
         return f"{code.zfill(4)}.HK"
     # 仅德国交易所 (IBIS/Xetra, FWB/法兰克福, GETX, SWB/斯图加特等) 映射 .DE;
     # 不再用裸 ccy=="EUR" 兜底 —— 那会把泛欧所 (SBF/AEB/EBR/MTA) 也错映射到
-    # 一个错误或不存在的德国代码, 本项目只支持德股, 其余欧元所应落 None 进 skipped
+    # 一个错误或不存在的德国代码。欧元所中已支持德股 (.DE) 与荷兰股 (.AS),
+    # 其余 (巴黎/布鲁塞尔/米兰/马德里等) 仍落 None 进 skipped
     if exkey in ("IBIS", "IBISX", "FWB", "GETX", "GETXEX", "SWB"):
         return f"{sym}.DE"
+    # 荷兰 Euronext Amsterdam: IBKR 代号 AEB (primaryExchange), 部分链路报
+    # AMS/XAMS; Yahoo 规范后缀 .AS。不能落进欧元所 "不支持" 分支, 否则
+    # 阿姆斯特丹持仓全部进 skipped
+    if exkey in ("AEB", "AMS", "XAMS"):
+        return f"{sym}.AS"
     # LSE 国际挂盘 (IOB, International Order Book): Kazatomprom GDR (KAP.IL) 等
     # 国际板证券, Yahoo 规范后缀 .IL。必须前置于下面的 GBP / USD 兜底分支:
     # IOB 合约币种混杂 (KAP=USD, 亦有 GBP/EUR 计价线), 按 ccy 落进 GBP 分支会

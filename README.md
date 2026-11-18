@@ -8,7 +8,7 @@
 
 ## 项目目标
 
-1. **投资组合追踪** — 多数据源接入 A股 / B股 / 北交所 / 港股 / 美股 / 德股 / 英股 / 加股 / 澳股 / 日股 / 韩股 / 新加坡股 / 巴西股 / 加密货币
+1. **投资组合追踪** — 多数据源接入 A股 / B股 / 北交所 / 港股 / 美股 / 德股 / 荷兰股 / 英股 / 加股 / 澳股 / 日股 / 韩股 / 新加坡股 / 巴西股 / 加密货币
 2. **Watchlist 管理** — 多列表归属 + 两级阈值提醒 (价格 / 市净率 PB / 总市值 mcap 三指标)
 3. **按代码或名称查询** — 模糊搜索代码/名称，一键查看 K 线与基本数据
 4. **双前端** — 人类用 Streamlit UI；Agent（hermes / openclaw 等）用统一 CLI，全部子命令支持 `--json`，解决手机上查看的问题
@@ -273,6 +273,7 @@ python -m tracker.cli warm --json              # 预热缓存（可 --interval �
 | 北交所 | `.BJ` | `830799.BJ` | CNY | cn | |
 | 港股 | `.HK` | `0700.HK` `82318.HK` `9804.HK` | HKD / CNY / USD | global | **4 位补零**（不足 4 位补前导零，`00700.HK` 自动归一）；多柜台模型下同一标的有独立代码：人民币柜台为 `8` 开头 5 位码（如 `82318.HK` 中国平安-R，以 **CNY** 计价）、美元柜台为 `09xxx`/`41xxx`（如 `9804.HK` PP越南-U、`09070.HK` 平安香港高息-U、`09188.HK` 华夏沪深三百-U，以 **USD** 计价），原样支持、不截断。美元柜台只属于 ETF 的港元/人民币/美元三柜台，股票的港币-人民币双柜台没有美元柜台；其币种由数据源自报（长桥 `static_info`/IBKR 合约/yfinance），**不能按代码形态推导** —— `normalize` 剥前导零后 `09070.HK`→`9070.HK` 与 `9988.HK` 阿里同形 |
 | 德股 | `.DE` 等 | `SAP.DE` | EUR | global | `.F` `.BE` `.DU` `.HM` `.MU` 均可 |
+| 荷兰股 | `.AS` | `PRX.AS` `ASML.AS` | EUR | global | Euronext 阿姆斯特丹（XAMS）；`PRX.AS` = Prosus，`AD.AS` = 阿霍德；IBKR 交易所代号 `AEB` |
 | 英股 | `.L` | `BP.L` | GBP | global | Yahoo 报价单位为便士（GBp），系统自动 ÷100 换算为英镑；`.AL` 同属伦交所；`.IL` = LSE 国际挂盘 IOB（如 `KAP.IL` Kazatomprom GDR，**USD 计价**，不做便士折算） |
 | 加股 | `.TO` 等 | `RY.TO` | CAD | global | `.V`（TSXV）`.CN` `.NE` 均可 |
 | 澳股 | `.AX` | `BHP.AX` | AUD | global | |
@@ -564,7 +565,7 @@ tests/                  单元测试（离线, mock）
 
 | type | 覆盖代码 | 实时行情优先级 | 历史K线优先级 |
 |----------|----------|----------------|----------------|
-| **global** | 裸代码（美股）、`.HK/.DE/.L/.TO/.AX/.T/.KS/.KQ/.SI/.SA…` | IBKR(可选, 优先) → 长桥(可选) → **EODHD(可选, primary 时)** → yfinance 批量 → 港股 akshare → EODHD(可选, fallback) | IBKR(可选) → 长桥(可选) → **EODHD(可选, primary)** → yfinance（港股可 `--akshare` 翻转） → EODHD(可选, fallback) |
+| **global** | 裸代码（美股）、`.HK/.DE/.AS/.L/.TO/.AX/.T/.KS/.KQ/.SI/.SA…` | IBKR(可选, 优先) → 长桥(可选) → **EODHD(可选, primary 时)** → yfinance 批量 → 港股 akshare → EODHD(可选, fallback) | IBKR(可选) → 长桥(可选) → **EODHD(可选, primary)** → yfinance（港股可 `--akshare` 翻转） → EODHD(可选, fallback) |
 | **cn** | `.SS/.SZ/.BJ`（A/B股、北交所） | 长桥(可选前置) → **akshare 优先** → yfinance | 长桥(可选前置) → **akshare 优先** → yfinance |
 | **crypto** | `BASE-QUOTE`（`BTC-USD`） | **Binance API** → Gate.io 现货 → Hyperliquid 永续（仅USD系） → yfinance | **Binance klines** → Gate.io → Hyperliquid → yfinance |
 | **index** | `IX.<KEY>`（`IX.DXY` 美元指数 / `IX.VIX` 恐慌指数 / `IX.CSI300` 沪深 300 / `IX.AU` 黄金 · `IX.AG` 白银 · `IX.JD` 鸡蛋 · `IX.M` 豆粕 · `IX.A` 豆一 · `IX.B` 豆二 · `IX.LH` 生猪 · `IX.LC` 碳酸锂主力连续 / `IX.URANIUM` 铀现货价 · `IX.URANIUM_LT` 铀长协价 / `IX.CEMPI` 水泥价格指数 / `IX.HSI` 恒生指数 · `IX.HSTECH` 恒生科技指数 等恒生官网港股指数 / `IX.HSAHP` AH股溢价指数 …） | —（指数无实时行情, 不参与持仓聚合） | 中国指数 **akshare 优先** → yfinance；美股 SPX/NDX/DJI 有新浪兜底；水泥网/商品期货/恒生官网/Cameco 铀价为专属源（无兜底） |
@@ -663,7 +664,7 @@ python -m tracker.cli import ibkr --overwrite        # 覆盖全部持仓
 - 自动将 IBKR 账户股票持仓转换为规范代码并写入 `portfolio.json`
 - 保留原有 `base_currency`；`avg_cost` 取自 IBKR（合约货币每股均价，含佣金）；英股（LSE 主板/AIM）IBKR 与行情同以便士报价，已自动 ÷100 折成英镑（`.IL` 国际挂盘币种由 IBKR 自报，不折算）
 - 无法映射为规范代码的标的（权证/期权/基金等）会跳过并在控制台提示
-- 反向映射规则：`SEHK + CNY/CNH → .SS/.SZ`（沪深港通，6 位代码；`8` 开头 5 位为港股人民币柜台，归 `.HK`）；`SHSE + USD → .SS (B股)`；`SZSE + HKD → .SZ (B股)`；`SEHK + HKD/USD → .HK`（USD 为港股美元柜台）；`IBIS/FWB/GETX/SWB + EUR → .DE`（仅认德国交易所，泛欧所落 skipped）；`IOB → .IL`（LSE 国际挂盘，如 `KAP.IL` Kazatomprom GDR；币种 USD/GBP/EUR 混杂，不能落进 GBP/USD 兜底拼出 `KAP.L` 或裸 `KAP`）；`LSE + GBP/GBX → .L`；`TSE + CAD → .TO`；`TSXV + CAD → .V`；`CSE + CAD → .CN`；`NEO/NEOE + CAD → .NE`；`ASX + AUD → .AX`；`TSEJ/XJPX + JPY → .T`（东京；裸 `TSE` 是多伦多，不进东京分支）；`KRX/KSE + KRW → .KS`（KOSPI）；`KOSDAQ/XKOS → .KQ`（必须前置判定，否则 KOSDAQ 落进 KRW 兜底被误归 `.KS`）；`SGX/SES → .SI`（SGD 与 USD 计价证券均归 `.SI`）；`B3/BVMF/BOVESPA + BRL → .SA`；`SMART + USD → 原码`
+- 反向映射规则：`SEHK + CNY/CNH → .SS/.SZ`（沪深港通，6 位代码；`8` 开头 5 位为港股人民币柜台，归 `.HK`）；`SHSE + USD → .SS (B股)`；`SZSE + HKD → .SZ (B股)`；`SEHK + HKD/USD → .HK`（USD 为港股美元柜台）；`IBIS/FWB/GETX/SWB + EUR → .DE`（仅认德国交易所）；`AEB/AMS/XAMS → .AS`（荷兰 Euronext 阿姆斯特丹）；其余泛欧所（巴黎/布鲁塞尔/米兰/马德里等）落 skipped；`IOB → .IL`（LSE 国际挂盘，如 `KAP.IL` Kazatomprom GDR；币种 USD/GBP/EUR 混杂，不能落进 GBP/USD 兜底拼出 `KAP.L` 或裸 `KAP`）；`LSE + GBP/GBX → .L`；`TSE + CAD → .TO`；`TSXV + CAD → .V`；`CSE + CAD → .CN`；`NEO/NEOE + CAD → .NE`；`ASX + AUD → .AX`；`TSEJ/XJPX + JPY → .T`（东京；裸 `TSE` 是多伦多，不进东京分支）；`KRX/KSE + KRW → .KS`（KOSPI）；`KOSDAQ/XKOS → .KQ`（必须前置判定，否则 KOSDAQ 落进 KRW 兜底被误归 `.KS`）；`SGX/SES → .SI`（SGD 与 USD 计价证券均归 `.SI`）；`B3/BVMF/BOVESPA + BRL → .SA`；`SMART + USD → 原码`
 - 兼容入口：`python -m tracker.cli sync` / `python -m tracker.ibkr_sync`（缺省**追加合并**，与 `import ibkr`/`import file` 一致；`--overwrite` 才覆盖全部，`--append` 为兼容 no-op）
 - 所有写入路径（CLI/页面/导入）统一走 `storage.edit_*` 锁内读-改-写：并发保存不会互相覆盖（`flock` 跨进程 + 进程内 `RLock`，锁文件 `<path>.lock` 持久保留）
 

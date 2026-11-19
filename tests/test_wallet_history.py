@@ -6,6 +6,7 @@ from datetime import date, datetime
 
 import pytest
 
+from tracker import wallet_evm
 from tracker import wallet_history as wh
 
 
@@ -205,7 +206,7 @@ class TestRoutescan:
         raise AssertionError(url)
 
     def test_normalizes_holdings_transfers_and_fees(self, monkeypatch):
-        monkeypatch.setattr(wh, "_http_json", self._fake_http)
+        monkeypatch.setattr(wallet_evm, "_http_json", self._fake_http)
         ledger = wh.fetch_ledger(
             "eth",
             ADDR,
@@ -268,8 +269,8 @@ class TestRoutescan:
                 }
             raise AssertionError(url)
 
-        monkeypatch.setattr(wh, "_http_json", fake)
-        ledger = wh._fetch_evm_routescan(
+        monkeypatch.setattr(wallet_evm, "_http_json", fake)
+        ledger = wallet_evm._fetch_evm_routescan(
             1,
             "eth",
             ADDR,
@@ -317,8 +318,8 @@ class TestBlockscout:
                 return {"coin_balance": "0"}
             raise AssertionError(url)
 
-        monkeypatch.setattr(wh, "_http_json", fake)
-        ledger = wh._fetch_evm_blockscout(
+        monkeypatch.setattr(wallet_evm, "_http_json", fake)
+        ledger = wallet_evm._fetch_evm_blockscout(
             "https://example.invalid",
             "eth",
             ADDR,
@@ -391,8 +392,8 @@ class TestEtherscanLike:
         raise AssertionError(action)
 
     def test_normalizes_and_handles_empty_internal(self, monkeypatch):
-        monkeypatch.setattr(wh, "_http_json", self._fake_http)
-        ledger = wh._fetch_evm_etherscan_like(
+        monkeypatch.setattr(wallet_evm, "_http_json", self._fake_http)
+        ledger = wallet_evm._fetch_evm_etherscan_like(
             "https://example/api",
             "eth",
             ADDR,

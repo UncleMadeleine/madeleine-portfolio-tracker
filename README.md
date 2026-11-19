@@ -526,7 +526,8 @@ tracker/
 ├── ibkr_sync.py        IBKR 持仓导入兼容入口（委托 importer，等价 import ibkr，缺省追加合并）
 ├── ashare_sync.py      A股券商文件解析 + 兼容入口（等价 import file，缺省追加合并）
 ├── wallet.py           链上钱包余额查询（EVM 五链 + TRON + Solana, 只读）
-├── wallet_history.py   链上钱包历史余额回放（Routescan / Blockscout / Etherscan / Snowtrace / TronGrid / Solana RPC）
+├── wallet_history.py   链上钱包历史余额回放（回放算法 / TronGrid / Solana RPC）
+├── wallet_evm.py       EVM 浏览器适配器（Routescan / Blockscout / Etherscan 兼容）
 └── wallet_nav.py       钱包净值曲线（历史余额 × 历史币价 × 历史汇率）
 数据目录（$TRACKER_HOME > 源码树仓库根 > 平台用户目录, 规则见 tracker/paths.py;
 pip 安装后用户数据不再写进 site-packages, 升级/重装不丢）:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 import threading
 from concurrent.futures import Future
 
@@ -42,6 +43,25 @@ def first_column(df, *names: str):
         if name in by_name:
             return by_name[name]
     return None
+
+
+def _read_umask() -> int:
+    """在模块导入时读取一次进程 umask.
+
+    os.umask 没有只读接口, 只能「先设再还原」; 这一步不是原子的, 两个线程
+    同时读取会互相覆盖。文件权限依赖它, 故只在导入阶段取一次。
+    """
+    cur = os.umask(0o022)
+    os.umask(cur)
+    return cur
+
+
+_UMASK = _read_umask()
+
+
+def current_umask() -> int:
+    """当前进程 umask (导入时缓存, 运行时不再改动全局状态)."""
+    return _UMASK
 
 
 def _strip_tz(value):

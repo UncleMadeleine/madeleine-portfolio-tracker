@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .. import __version__ as VERSION  # noqa: F401  (单一版本来源, 经 cli 再导出)
 from ..symbols import canonical, parse
+from ..util import current_umask as _current_umask
 from ..util import records as _util_records
 
 
@@ -134,13 +135,6 @@ def atomic_write_text(path: str | Path, text: str) -> None:
         except OSError:
             pass
         raise
-
-
-def _current_umask() -> int:
-    """读取当前 umask (os.umask 是读-写原子对, 取完立刻还原)。"""
-    cur = os.umask(0o022)
-    os.umask(cur)
-    return cur
 
 
 def _is_na(v) -> bool:

@@ -39,6 +39,7 @@ from pathlib import Path
 from . import config
 from .paths import data_home, var_dir
 from .util import as_bool as _as_bool
+from .util import current_umask as _umask
 
 CONFIG_ENV = "TRACKER_WEBDAV_CONFIG"
 CONFIG_NAME = "webdav.json"
@@ -88,7 +89,7 @@ class WebDAVConflict(WebDAVError):
 # 进程内自动拉取节流: (url, name, local_path) -> monotonic 时间
 _last_pull: dict[tuple[str, str, str], float] = {}
 _sync_lock = threading.RLock()
-_umask_cache: int | None = None
+
 
 
 # ---------------------------------------------------------------------------
@@ -260,15 +261,6 @@ def _ensure_collection(cfg: dict) -> None:
 # ---------------------------------------------------------------------------
 # 本地原子写 / 状态文件
 # ---------------------------------------------------------------------------
-
-
-def _umask() -> int:
-    global _umask_cache
-    if _umask_cache is None:
-        cur = os.umask(0o022)
-        os.umask(cur)
-        _umask_cache = cur
-    return _umask_cache
 
 
 def _atomic_write(path: Path, payload: bytes) -> None:

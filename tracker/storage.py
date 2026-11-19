@@ -32,6 +32,7 @@ from .source_order import CRYPTO_SOURCE_PREFERS as CRYPTO_SOURCES
 from .symbols import parse, type_for_symbol
 from .rules import metric_for_entry as rules_metric_for_entry
 from .util import as_bool as _as_bool
+from .util import current_umask as _umask
 
 # 数据文件锚定数据目录 (TRACKER_HOME > 源码树仓库根 > 平台用户目录, 见 paths.py:
 # pip 安装后不再写进 site-packages; 源码树跑法与旧版完全一致)
@@ -287,26 +288,6 @@ def _write_json(data: dict, path: str | Path) -> None:
         except OSError:
             pass
         raise
-
-
-def _read_umask() -> int:
-    """在模块导入时读取一次进程 umask.
-
-    os.umask 没有只读接口, 只能「先设再还原」, 这一步不是原子的: 两个线程
-    同时读取会互相覆盖, 最终可能把进程 umask 永久改成 022 (本应 077)。
-    文件锁/数据文件权限都依赖它, 故只在单线程的 import 阶段取一次。
-    """
-    cur = os.umask(0o022)
-    os.umask(cur)
-    return cur
-
-
-_UMASK = _read_umask()
-
-
-def _umask() -> int:
-    """当前进程 umask (导入时缓存, 运行时不再改动全局状态)。"""
-    return _UMASK
 
 
 def _require_entry_list(data: dict, key: str, path: str | Path) -> list:

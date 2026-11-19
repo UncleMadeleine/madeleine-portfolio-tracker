@@ -27,6 +27,7 @@ from pathlib import Path
 
 from .paths import data_home
 from .util import finite_float as _num
+from .util import normalize_dates as _normalize_dates
 
 _LOCK = threading.Lock()
 
@@ -411,16 +412,6 @@ def _fx_series(currency: str, base: str, start: str, end: str, index):
     if rate is None or not math.isfinite(float(rate)) or float(rate) <= 0:
         return None
     return pd.Series(float(rate), index=index, dtype=float)
-
-
-def _normalize_dates(values):
-    """日期列 → 无时区、归一到 00:00 的 datetime (跨数据源对齐用)."""
-    import pandas as pd
-
-    dates = pd.to_datetime(values, errors="coerce")
-    if getattr(dates.dt, "tz", None) is not None:
-        dates = dates.dt.tz_localize(None)
-    return dates.dt.normalize()
 
 
 def backfill(

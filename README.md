@@ -504,7 +504,10 @@ tracker/
 ├── search.py           搜索聚合层：search_grouped() 按域调 provider.search() 保持分组；纯在线接口，失败即该域空结果 + 合法代码直查兜底
 ├── fx.py               汇率：CFETS（akshare）优先，yfinance 货币对兜底（直对/逆对/USD 桥）
 ├── cache.py            行情/基本面 SQLite 磁盘缓存（实时 5 分钟 / K线 30 分钟 / 基本面 + 估值/财报快照 6 小时）
-├── charting.py         K线渲染（plotly CLI HTML + lightweight-charts 页面组件：蜡烛/均线/指标/对比/单序列参考线）
+├── charting.py         K线渲染门面（再导出，保持既有 API）
+├── charting_core.py    OHLC 清洗 / 均线 / 技术指标 / 重采样 / 摘要（无 plotly）
+├── charting_plotly.py  plotly 蜡烛图与 CLI HTML 导出（plotly 惰性导入）
+├── charting_payload.py lightweight-charts 页面 payload（K线/对比/比例线/加密货币）
 ├── ah_premium.py       AH 溢价率（A+H 股票对目录 / A/H+历史汇率对齐 / 溢价曲线与摘要, 基本面页 AH 子视图）
 ├── valuation.py        估值指标（PE/PB/股息率快照 + A股/港股/美股历史 PE/PB 曲线, 6h 内存+磁盘缓存; A/H 失败时东财实时兜底, 其它市场 EODHD 兜底）
 ├── filings.py          最新财报链接（A股/北交所 巨潮资讯 / 港股 HKEXnews / 美股 SEC EDGAR / 澳股 ASX / 英股 Companies House / 日股 TDnet / 韩股 DART, 6h 内存+磁盘缓存）

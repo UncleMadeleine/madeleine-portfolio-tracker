@@ -19,27 +19,10 @@ from . import theme
 
 from tracker import health
 
-_STATUS_ICON = {
-    "ok": "✅",
-    "degraded": "⚠️",
-    "down": "❌",
-    "idle": "·",
-    "unknown": "?",
-}
-_STATUS_TEXT = {
-    "ok": "正常",
-    "degraded": "降级",
-    "down": "异常",
-    "idle": "未使用",
-    "unknown": "无数据",
-}
-_KIND_TEXT = {
-    "quote": "行情",
-    "history": "K线",
-    "fx": "汇率",
-    "calendar": "日历",
-    "other": "其它",
-}
+_STATUS_ICON = health.STATUS_ICON
+_STATUS_TEXT = health.STATUS_TEXT
+_KIND_TEXT = health.KIND_TEXT
+_age = health.age_text
 _QUOTE_STATUS_TEXT = {
     "fresh": "新鲜",
     "stale": "陈旧",
@@ -47,19 +30,6 @@ _QUOTE_STATUS_TEXT = {
     "expired": "过期",
     "missing": "缺失",
 }
-
-
-def _age(seconds: float | None) -> str:
-    if seconds is None:
-        return "—"
-    seconds = max(0.0, float(seconds))
-    if seconds < 60:
-        return f"{seconds:.0f}s"
-    if seconds < 3600:
-        return f"{seconds / 60:.0f}m"
-    if seconds < 86400:
-        return f"{seconds / 3600:.1f}h"
-    return f"{seconds / 86400:.1f}d"
 
 
 def _time(ts: float | None, now: float) -> str:

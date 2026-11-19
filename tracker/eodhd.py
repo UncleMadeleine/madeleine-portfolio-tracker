@@ -42,6 +42,7 @@ from . import config
 from .config import load_json_object, merge_config, resolve_config_path
 from .paths import TEMPLATES_DIR, data_home
 from .symbols import Market, ParsedSymbol, parse as _parse_symbol
+from .util import as_bool as _as_bool
 from .util import finite_float as _number
 
 if TYPE_CHECKING:  # 仅类型标注; 运行时惰性导入避免 provider 包循环
@@ -114,18 +115,6 @@ def _env_token() -> str | None:
         if v and v.strip():
             return v.strip()
     return None
-
-
-def _as_bool(v, default: bool) -> bool:
-    if isinstance(v, bool):
-        return v
-    if isinstance(v, str):
-        s = v.strip().lower()
-        if s in ("1", "true", "yes", "on"):
-            return True
-        if s in ("0", "false", "no", "off"):
-            return False
-    return default
 
 
 def _str_list(v) -> list[str]:

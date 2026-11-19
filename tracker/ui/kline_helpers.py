@@ -5,16 +5,13 @@ from __future__ import annotations
 import streamlit as st
 
 from tracker import charting
-from tracker.symbols import parse, type_for_symbol
+from tracker.symbols import canonical, type_for_symbol
 
 from . import settings
 
 
 def normalize_or_none(s: str) -> str | None:
-    try:
-        return parse(s).yahoo
-    except ValueError:
-        return None
+    return canonical(s)
 
 
 def _normalize_selection(sel_raw, *, crypto_only: bool = False):

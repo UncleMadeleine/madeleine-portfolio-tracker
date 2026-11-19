@@ -227,6 +227,15 @@ def _fill_fundamentals(out: dict[str, dict], missing: list[str]) -> None:
             out[s] = _empty_metrics()
 
 
+def _fetch_metric(
+    symbols: list[str], field: str, refresh: bool
+) -> dict[str, float | None]:
+    """读缓存 + 补缺失后按 field 取值 (PB/市值共用的批量入口)."""
+    out, missing = _load_cached(symbols, refresh=refresh, field=field)
+    _fill_fundamentals(out, missing)
+    return {s: out.get(s, {}).get(field) for s in dict.fromkeys(symbols)}
+
+
 def fetch_book_values(
     symbols: list[str], refresh: bool = False
 ) -> dict[str, float | None]:
@@ -236,9 +245,7 @@ def fetch_book_values(
     失败静默返回 None (调用方按「PB 缺失」降级, 不抛异常)。
     refresh=True 跳过缓存读取 (显式强制刷新, 穿透负缓存)。
     """
-    out, missing = _load_cached(symbols, refresh=refresh, field="book_value")
-    _fill_fundamentals(out, missing)
-    return {s: out.get(s, {}).get("book_value") for s in dict.fromkeys(symbols)}
+    return _fetch_metric(symbols, "book_value", refresh)
 
 
 def fetch_market_caps(
@@ -250,6 +257,4 @@ def fetch_market_caps(
     crypto 与无数据源标的静默返回 None (调用方按「市值缺失」降级)。
     refresh=True 跳过缓存读取 (显式强制刷新, 穿透负缓存)。
     """
-    out, missing = _load_cached(symbols, refresh=refresh, field="market_cap")
-    _fill_fundamentals(out, missing)
-    return {s: out.get(s, {}).get("market_cap") for s in dict.fromkeys(symbols)}
+    return _fetch_metric(symbols, "market_cap", refresh)

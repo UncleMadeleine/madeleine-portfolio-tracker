@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 from .. import __version__ as VERSION  # noqa: F401  (单一版本来源, 经 cli 再导出)
-from ..symbols import parse
+from ..symbols import canonical, parse
 from ..util import records as _util_records
 
 
@@ -41,10 +41,7 @@ def _records(df) -> list[dict]:
 def _sym(e: dict) -> str:
     """归一化条目中的 symbol 为 Yahoo 代码."""
     raw = str(e.get("symbol", "")).strip()
-    try:
-        return parse(raw).yahoo
-    except ValueError:
-        return raw.upper()
+    return canonical(raw) or raw.upper()
 
 
 def _print_json(payload) -> None:
@@ -75,10 +72,8 @@ def normalize_targets(symbols) -> set[str]:
     """删除命令的代码归一化: 非法输入保留大写原串, 便于精确报告未找到."""
     targets: set[str] = set()
     for s in symbols:
-        try:
-            targets.add(parse(s).yahoo)
-        except ValueError:
-            targets.add(s.strip().upper())
+        raw = str(s).strip()
+        targets.add(canonical(raw) or raw.upper())
     return targets
 
 

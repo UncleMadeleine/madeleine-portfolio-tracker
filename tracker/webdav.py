@@ -38,6 +38,7 @@ from pathlib import Path
 
 from . import config
 from .paths import data_home, var_dir
+from .util import as_bool as _as_bool
 
 CONFIG_ENV = "TRACKER_WEBDAV_CONFIG"
 CONFIG_NAME = "webdav.json"
@@ -93,21 +94,6 @@ _umask_cache: int | None = None
 # ---------------------------------------------------------------------------
 # 配置
 # ---------------------------------------------------------------------------
-
-
-def _as_bool(value, default: bool = False) -> bool:
-    """手改配置的布尔值宽松归一 (与 storage._as_bool 口径一致)."""
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, int) and value in (0, 1):
-        return bool(value)
-    if isinstance(value, str):
-        s = value.strip().lower()
-        if s in ("true", "1", "yes", "on"):
-            return True
-        if s in ("false", "0", "no", "off", ""):
-            return False
-    return default
 
 
 def config_path(explicit: str | Path | None = None) -> Path:

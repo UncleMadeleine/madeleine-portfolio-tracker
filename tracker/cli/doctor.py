@@ -10,42 +10,13 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from .. import health
 from ._common import _finish_with_error, _print_json
 
-_STATUS_ICON = {
-    "ok": "✅",
-    "degraded": "⚠️",
-    "down": "❌",
-    "idle": "·",
-    "unknown": "?",
-}
-_STATUS_TEXT = {
-    "ok": "正常",
-    "degraded": "降级",
-    "down": "异常",
-    "idle": "未使用",
-    "unknown": "无数据",
-}
-_KIND_TEXT = {
-    "quote": "行情",
-    "history": "K线",
-    "fx": "汇率",
-    "calendar": "日历",
-    "other": "其它",
-}
-
-
-def _age(seconds: float | None) -> str:
-    if seconds is None:
-        return "—"
-    seconds = max(0.0, float(seconds))
-    if seconds < 60:
-        return f"{seconds:.0f}s"
-    if seconds < 3600:
-        return f"{seconds / 60:.0f}m"
-    if seconds < 86400:
-        return f"{seconds / 3600:.1f}h"
-    return f"{seconds / 86400:.1f}d"
+_STATUS_ICON = health.STATUS_ICON
+_STATUS_TEXT = health.STATUS_TEXT
+_KIND_TEXT = health.KIND_TEXT
+_age = health.age_text
 
 
 def _time(ts: float | None) -> str:
@@ -61,8 +32,6 @@ def build_report(
     probe_symbols=None,
 ) -> dict:
     """汇总健康/覆盖/完整性/缓存/保温状态; 实现见 ``health.report``."""
-    from .. import health
-
     return health.report(
         window_hours, with_probe=with_probe, probe_symbols=probe_symbols
     )

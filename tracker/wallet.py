@@ -238,6 +238,8 @@ _CHAIN_CONFIG: dict[str, dict[str, Any]] = {
 }
 
 _SUPPORTED_CHAINS = set(_CHAIN_CONFIG)
+#: 链代码 → 展示名 (CLI 钱包净值 / 导入页 / 钱包净值页共用)
+CHAIN_LABELS = {key: str(cfg["label"]) for key, cfg in _CHAIN_CONFIG.items()}
 
 # ERC-20 balanceOf 签名
 _ERC20_BALANCE_SIG = bytes.fromhex("70a08231")

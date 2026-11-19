@@ -48,6 +48,7 @@ from typing import Any, Callable
 
 from . import config
 from .paths import TEMPLATES_DIR, data_home
+from .util import finite_float as _to_float
 
 CONFIG_NAME = "wallet_history.json"
 CONFIG_ENV = "TRACKER_WALLET_HISTORY_CONFIG"
@@ -322,6 +323,14 @@ def _parse_ts(value: Any) -> int | None:
     return int(dt.timestamp())
 
 
+def _oldest_ts(rows: list[dict]) -> int | None:
+    """一批转账记录里最早的时间戳 (用于分页提前停止判断)."""
+    return min(
+        (t for t in (_parse_ts(x.get("timestamp")) for x in rows) if t),
+        default=None,
+    )
+
+
 def _day_start_ts(day: date) -> int:
     return int(datetime.combine(day, time.min, tzinfo=timezone.utc).timestamp())
 
@@ -333,14 +342,6 @@ def _day_end_ts(day: date) -> int:
 
 def _utc_day(ts: int) -> date:
     return datetime.fromtimestamp(int(ts), tz=timezone.utc).date()
-
-
-def _to_float(value: Any) -> float | None:
-    try:
-        f = float(value)
-    except (TypeError, ValueError):
-        return None
-    return f if math.isfinite(f) else None
 
 
 def _raw_to_amount(raw: Any, decimals: Any) -> float | None:
@@ -658,10 +659,7 @@ def _routescan_pages(
         if not next_url:
             break
         if stop_ts is not None and chunk:
-            oldest = min(
-                (t for t in (_parse_ts(x.get("timestamp")) for x in chunk) if t),
-                default=None,
-            )
+            oldest = _oldest_ts(chunk)
             if oldest is not None and oldest < stop_ts:
                 break
         if page == int(cfg["max_pages"]) - 1:
@@ -845,10 +843,7 @@ def _blockscout_pages(
         if not params:
             break
         if stop_ts is not None and chunk:
-            oldest = min(
-                (t for t in (_parse_ts(x.get("timestamp")) for x in chunk) if t),
-                default=None,
-            )
+            oldest = _oldest_ts(chunk)
             if oldest is not None and oldest < stop_ts:
                 break
         if page == int(cfg["max_pages"]) - 1:

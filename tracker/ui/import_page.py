@@ -20,15 +20,6 @@ from tracker.storage import CorruptDataError
 from tracker.ui import theme
 from tracker.ui.issues import render_issue_summary
 
-_CHAIN_LABELS = {
-    "eth": "Ethereum",
-    "bsc": "BNB Chain",
-    "polygon": "Polygon",
-    "arbitrum": "Arbitrum",
-    "avalanche": "Avalanche",
-    "tron": "TRON",
-    "solana": "Solana",
-}
 _MODE_LABELS = {
     importer.MODE_APPEND: "追加合并",
     importer.MODE_OVERWRITE: "覆盖全部",
@@ -217,7 +208,7 @@ def _wallet_section(mode: str, on_saved) -> None:
     w_chain = st.selectbox(
         "链",
         sorted(wallet_mod._SUPPORTED_CHAINS),
-        format_func=lambda c: _CHAIN_LABELS.get(c, c),
+        format_func=lambda c: wallet_mod.CHAIN_LABELS.get(c, c),
         key="imp_wallet_chain",
     )
     w_addr = st.text_input(

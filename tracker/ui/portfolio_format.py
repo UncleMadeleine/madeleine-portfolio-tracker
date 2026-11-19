@@ -6,7 +6,7 @@ import pandas as pd
 import plotly.express as px
 
 from tracker.analytics import by_symbol
-from tracker.symbols import parse
+from tracker.symbols import canonical, parse
 
 from . import settings as S, theme
 
@@ -22,10 +22,8 @@ def fmt(v, digits: int = 2) -> str:
 
 def _norm_sym(sym: str) -> str:
     """代码 → Yahoo 规范形式; 无法识别时退回原始大写 (调用方随后报错)."""
-    try:
-        return parse(sym).yahoo
-    except ValueError:
-        return sym.strip().upper()
+    raw = sym.strip()
+    return canonical(raw) or raw.upper()
 
 
 def _selected_symbols(event, frame: pd.DataFrame) -> list[str]:

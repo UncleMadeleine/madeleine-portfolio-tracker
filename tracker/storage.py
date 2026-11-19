@@ -30,6 +30,7 @@ from . import webdav as _webdav
 from .paths import data_home
 from .symbols import parse, type_for_symbol
 from .rules import metric_for_entry as rules_metric_for_entry
+from .util import as_bool as _as_bool
 
 # 数据文件锚定数据目录 (TRACKER_HOME > 源码树仓库根 > 平台用户目录, 见 paths.py:
 # pip 安装后不再写进 site-packages; 源码树跑法与旧版完全一致)
@@ -324,6 +325,23 @@ def _require_entry_list(data: dict, key: str, path: str | Path) -> list:
             f"实际类型: {type(raw).__name__})"
         )
     return raw
+
+
+def _validate_watchlists(data: dict, path: str | Path) -> None:
+    """校验 watchlist.json 结构: 旧式单列表或分组对象; 畸形抛 CorruptDataError."""
+    if "watchlist" in data:
+        _require_entry_list(data, "watchlist", path)
+        return
+    groups = data.get("watchlists")
+    if groups is None:
+        return
+    if not isinstance(groups, dict) or any(
+        not isinstance(v, list) or any(not isinstance(e, dict) for e in v)
+        for v in groups.values()
+    ):
+        raise CorruptDataError(
+            f"{path} 的 watchlists 结构畸形 (应为 对象→对象数组)"
+        )
 
 
 def _stamp_type(row: dict) -> dict:
@@ -629,22 +647,7 @@ def _load_watchlist_file(p: Path) -> dict:
     if not p.exists():
         return {"watchlist": []}
 
-    def _validate(d: dict) -> None:
-        if "watchlist" in d:
-            _require_entry_list(d, "watchlist", p)
-            return
-        if "watchlists" not in d:
-            return
-        groups = d["watchlists"]
-        if not isinstance(groups, dict) or any(
-            not isinstance(v, list) or any(not isinstance(e, dict) for e in v)
-            for v in groups.values()
-        ):
-            raise CorruptDataError(
-                f"{p} 的 watchlists 结构畸形 (应为 对象→对象数组)"
-            )
-
-    raw = _read_json_or_recover(p, _validate)
+    raw = _read_json_or_recover(p, lambda d: _validate_watchlists(d, p))
     if "watchlist" in raw:
         entries = []
         for e in _require_entry_list(raw, "watchlist", p):
@@ -653,14 +656,6 @@ def _load_watchlist_file(p: Path) -> dict:
             entries.append(normalize_watch_entry(e))
         return {"watchlist": dedupe_watch_entries(entries)}
     if "watchlists" in raw:
-        groups = raw["watchlists"]
-        if not isinstance(groups, dict) or any(
-            not isinstance(v, list) or any(not isinstance(e, dict) for e in v)
-            for v in groups.values()
-        ):
-            raise CorruptDataError(
-                f"{p} 的 watchlists 结构畸形 (应为 对象→对象数组)"
-            )
         merged: dict[str, dict] = {}
         for name, lst in raw["watchlists"].items():
             for e in lst:
@@ -738,24 +733,11 @@ def save_watchlist(data: dict, path: str | Path | None = None) -> None:
         if p.exists():
             # 与 save_portfolio 一致: 损坏文件不静默当 {} 覆盖掉已有数据。
             # 本次显式提供 watchlist 时旧值会被整键覆盖, 无需校验。
-            def _validate(d: dict) -> None:
-                if "watchlist" in d:
-                    _require_entry_list(d, "watchlist", p)
-                    return
-                groups = d.get("watchlists")
-                if groups is None:
-                    return
-                if not isinstance(groups, dict) or any(
-                    not isinstance(v, list)
-                    or any(not isinstance(e, dict) for e in v)
-                    for v in groups.values()
-                ):
-                    raise CorruptDataError(
-                        f"{p} 的 watchlists 结构畸形 (应为 对象→对象数组)"
-                    )
-
             merged = _read_json_or_recover(
-                p, None if "watchlist" in data else _validate
+                p,
+                None
+                if "watchlist" in data
+                else lambda d: _validate_watchlists(d, p),
             )
         else:
             merged = {}
@@ -800,21 +782,6 @@ DEFAULT_SETTINGS = {
     # 空 = 沿用历史默认链, 见 tracker.source_order。
     "source_order": {},
 }
-
-
-def _as_bool(value, default: bool = False) -> bool:
-    """手改 settings.json 的布尔值宽松归一: "false"/0 不能被 bool() 当 True."""
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, int) and value in (0, 1):
-        return bool(value)
-    if isinstance(value, str):
-        s = value.strip().lower()
-        if s in ("true", "1", "yes", "on"):
-            return True
-        if s in ("false", "0", "no", "off", ""):
-            return False
-    return default
 
 
 def load_settings(path: str | Path | None = None) -> dict:

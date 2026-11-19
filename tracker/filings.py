@@ -183,14 +183,22 @@ def _hk_date(value: object) -> str:
     return f"{y}-{int(mo):02d}-{int(d):02d}"
 
 
-def _finalize(items: list[Filing], limit: int) -> list[Filing]:
-    """按日期倒序, 同标题去重, 每种报告最多保留最近两期."""
+def _finalize(
+    items: list[Filing], limit: int, *, same_day: bool = False
+) -> list[Filing]:
+    """按日期倒序去重, 每种报告最多保留最近两期.
+
+    same_day=False: 同 (标题, 日期) 去重;
+    same_day=True:  同 (类型, 日期) 去重 —— ASX / Companies House / TDnet /
+    DART 同一天常同时发多份同类型公告 (英文/日文、原件/更正、集团/母公司),
+    只保留最先出现的一条。
+    """
     ordered = sorted(items, key=lambda f: f.date, reverse=True)
     seen: set[tuple[str, str]] = set()
     counts: dict[str, int] = {}
     out: list[Filing] = []
     for item in ordered:
-        key = (item.title, item.date)
+        key = (item.kind, item.date) if same_day else (item.title, item.date)
         if key in seen:
             continue
         seen.add(key)
@@ -202,25 +210,7 @@ def _finalize(items: list[Filing], limit: int) -> list[Filing]:
 
 
 def _finalize_same_day(items: list[Filing], limit: int) -> list[Filing]:
-    """按 (类型, 日期) 去重, 每种报告最多保留最近两期.
-
-    用于 ASX / Companies House / TDnet / DART: 同一天常同时发多份同类型
-    公告 (英文/日文、原件/更正、集团/母公司), 只保留最先出现的一条。
-    """
-    ordered = sorted(items, key=lambda f: f.date, reverse=True)
-    seen: set[tuple[str, str]] = set()
-    counts: dict[str, int] = {}
-    out: list[Filing] = []
-    for item in ordered:
-        key = (item.kind, item.date)
-        if key in seen:
-            continue
-        seen.add(key)
-        if counts.get(item.kind, 0) >= _LIMIT_PER_KIND:
-            continue
-        counts[item.kind] = counts.get(item.kind, 0) + 1
-        out.append(item)
-    return out[: max(1, int(limit))]
+    return _finalize(items, limit, same_day=True)
 
 
 # ---------- A股 / 北交所: 巨潮资讯 ----------
@@ -468,37 +458,51 @@ def _au_filings_from_html(text: str, limit: int = 6) -> list[Filing]:
     return _finalize_same_day(out, limit)
 
 
-def _au_filings(code: str, limit: int) -> list[Filing]:
-    import datetime as _dt
+def _fetch_concurrent(items, max_workers: int, worker) -> list[Filing]:
+    """并发执行 worker(item); 全部失败时抛第一个错误 (不缓存空结果).
+
+    单页/单年/单类公告失败只丢自己那一份, 不拖垮其它并发项。
+    """
     from concurrent.futures import ThreadPoolExecutor
 
-    year = _dt.date.today().year
     errors: list[BaseException] = []
 
-    def _one(y: int) -> list[Filing]:
+    def _one(item) -> list[Filing]:
         try:
-            resp = _get(
-                f"{_ASX_BASE}/asx/v2/statistics/announcements.do",
-                {
-                    "by": "asxCode",
-                    "asxCode": code,
-                    "timeframe": "Y",
-                    "year": str(y),
-                },
-            )
-            return _au_filings_from_html(resp.text, limit)
-        except Exception as e:  # noqa: BLE001 - 两年并发, 单年失败不拖垮另一年
+            return worker(item)
+        except Exception as e:  # noqa: BLE001 - 单任务失败不影响其它任务
             errors.append(e)
             return []
 
     out: list[Filing] = []
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        for items in pool.map(_one, (year, year - 1)):
-            out.extend(items)
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        for items_ in pool.map(_one, items):
+            out.extend(items_)
     if not out and errors:
-        # 两年都失败: 抛出错误而不是缓存空结果 (下轮仍可重试)
         raise errors[0]
-    return _finalize_same_day(out, limit)
+    return out
+
+
+def _au_filings(code: str, limit: int) -> list[Filing]:
+    import datetime as _dt
+
+    year = _dt.date.today().year
+
+    def _year(y: int) -> list[Filing]:
+        resp = _get(
+            f"{_ASX_BASE}/asx/v2/statistics/announcements.do",
+            {
+                "by": "asxCode",
+                "asxCode": code,
+                "timeframe": "Y",
+                "year": str(y),
+            },
+        )
+        return _au_filings_from_html(resp.text, limit)
+
+    return _finalize_same_day(
+        _fetch_concurrent((year, year - 1), 2, _year), limit
+    )
 
 
 # ---------- 英股: Companies House ----------
@@ -683,31 +687,18 @@ def _uk_filings_from_html(text: str, limit: int = 6) -> list[Filing]:
 
 
 def _uk_filings(symbol: str, limit: int) -> list[Filing]:
-    from concurrent.futures import ThreadPoolExecutor
-
     number = _uk_company_number(symbol)
     if not number:
         return []
-    errors: list[BaseException] = []
 
-    def _one(page: int) -> list[Filing]:
-        try:
-            resp = _get(
-                f"{_UK_BASE}/company/{number}/filing-history",
-                {"page": page},
-            )
-            return _uk_filings_from_html(resp.text, limit)
-        except Exception as e:  # noqa: BLE001 - 多页并发, 单页失败不拖垮其它页
-            errors.append(e)
-            return []
+    def _page(page: int) -> list[Filing]:
+        resp = _get(
+            f"{_UK_BASE}/company/{number}/filing-history",
+            {"page": page},
+        )
+        return _uk_filings_from_html(resp.text, limit)
 
-    out: list[Filing] = []
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        for items in pool.map(_one, (1, 2, 3, 4)):
-            out.extend(items)
-    if not out and errors:
-        raise errors[0]
-    return _finalize_same_day(out, limit)
+    return _finalize_same_day(_fetch_concurrent((1, 2, 3, 4), 4, _page), limit)
 
 
 # ---------- 日股: Yahoo!ファイナンス / TDnet ----------
@@ -744,28 +735,14 @@ def _jp_filings_from_html(text: str, limit: int = 6) -> list[Filing]:
 
 
 def _jp_filings(code: str, limit: int) -> list[Filing]:
-    from concurrent.futures import ThreadPoolExecutor
+    def _page(page: int) -> list[Filing]:
+        resp = _get(
+            f"{_JP_BASE}/quote/{code}.T/disclosure",
+            {"page": page},
+        )
+        return _jp_filings_from_html(resp.text, limit)
 
-    errors: list[BaseException] = []
-
-    def _one(page: int) -> list[Filing]:
-        try:
-            resp = _get(
-                f"{_JP_BASE}/quote/{code}.T/disclosure",
-                {"page": page},
-            )
-            return _jp_filings_from_html(resp.text, limit)
-        except Exception as e:  # noqa: BLE001 - 多页并发, 单页失败不拖垮其它页
-            errors.append(e)
-            return []
-
-    out: list[Filing] = []
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        for items in pool.map(_one, (1, 2, 3, 4)):
-            out.extend(items)
-    if not out and errors:
-        raise errors[0]
-    return _finalize_same_day(out, limit)
+    return _finalize_same_day(_fetch_concurrent((1, 2, 3, 4), 4, _page), limit)
 
 
 # ---------- 韩股: DART 公示检索 ----------
@@ -821,7 +798,6 @@ def _post(url: str, data: dict, *, referer: str = "") -> object:
 
 def _kr_filings(code: str, limit: int) -> list[Filing]:
     import datetime as _dt
-    from concurrent.futures import ThreadPoolExecutor
 
     end = _dt.date.today()
     start = end - _dt.timedelta(days=1100)
@@ -830,9 +806,8 @@ def _kr_filings(code: str, limit: int) -> list[Filing]:
         ("반기보고서", "半年度报告"),
         ("분기보고서", "季度报告"),
     )
-    errors: list[BaseException] = []
 
-    def _one(report: tuple[str, str]) -> list[Filing]:
+    def _report(report: tuple[str, str]) -> list[Filing]:
         report_name, kind = report
         data = {
             "currentPage": 1,
@@ -861,24 +836,14 @@ def _kr_filings(code: str, limit: int) -> list[Filing]:
             "reportName2": report_name,
             "tocSrch2": "",
         }
-        try:
-            resp = _post(
-                f"{_DART_BASE}/dsab007/detailSearch.ax",
-                data,
-                referer=f"{_DART_BASE}/dsab007/main.do",
-            )
-            return _kr_filings_from_html(resp.text, kind, limit)
-        except Exception as e:  # noqa: BLE001 - 三种报告并发, 单类失败不拖垮其它
-            errors.append(e)
-            return []
+        resp = _post(
+            f"{_DART_BASE}/dsab007/detailSearch.ax",
+            data,
+            referer=f"{_DART_BASE}/dsab007/main.do",
+        )
+        return _kr_filings_from_html(resp.text, kind, limit)
 
-    out: list[Filing] = []
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        for items in pool.map(_one, reports):
-            out.extend(items)
-    if not out and errors:
-        raise errors[0]
-    return _finalize_same_day(out, limit)
+    return _finalize_same_day(_fetch_concurrent(reports, 3, _report), limit)
 
 
 # ---------- 美股: SEC EDGAR ----------

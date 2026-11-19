@@ -15,18 +15,9 @@ import pandas as pd
 
 from .. import wallet_history
 from ..storage import PORTFOLIO_PATH as DEFAULT_PORTFOLIO, load_portfolio
+from ..wallet import CHAIN_LABELS
 from ..wallet_nav import compute_wallet_nav
 from ._common import _finish_with_error
-
-_CHAIN_LABELS = {
-    "eth": "Ethereum",
-    "bsc": "BNB Chain",
-    "polygon": "Polygon",
-    "arbitrum": "Arbitrum One",
-    "avalanche": "Avalanche C-Chain",
-    "tron": "TRON",
-    "solana": "Solana",
-}
 
 
 def _print_table(result: dict) -> None:
@@ -34,7 +25,7 @@ def _print_table(result: dict) -> None:
     base = result.get("base") or "USD"
     chain = result.get("chain") or ""
     print(
-        f"链: {_CHAIN_LABELS.get(chain, chain)} ({chain}) · "
+        f"链: {CHAIN_LABELS.get(chain, chain)} ({chain}) · "
         f"地址: {result.get('address')}"
     )
     print(

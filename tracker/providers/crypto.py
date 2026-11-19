@@ -155,26 +155,27 @@ def _obb():
     return obb
 
 
-def binance_pair(p: ParsedSymbol) -> str:
-    """BTC-USD → BTCUSDT 形态的 Binance 交易对符号."""
+_PAIR_QUOTE_ALIASES = {"USD": "USDT", "USDT": "USDT", "USDC": "USDC", "BUSD": "BUSD"}
+
+
+def _pair_parts(p: ParsedSymbol) -> tuple[str, str]:
+    """BTC-USD → (BASE, QUOTE) 大写形态 (USD 统一映射为 USDT)."""
     base, _, quote = p.yahoo.rpartition("-")
     if not base:
         raise ValueError(f"无效加密货币代码: {p.yahoo}")
-    q = {"USD": "USDT", "USDT": "USDT", "USDC": "USDC", "BUSD": "BUSD"}.get(
-        quote.upper(), quote.upper()
-    )
-    return f"{base.upper()}{q}"
+    return base.upper(), _PAIR_QUOTE_ALIASES.get(quote.upper(), quote.upper())
+
+
+def binance_pair(p: ParsedSymbol) -> str:
+    """BTC-USD → BTCUSDT 形态的 Binance 交易对符号."""
+    base, quote = _pair_parts(p)
+    return f"{base}{quote}"
 
 
 def gate_pair(p: ParsedSymbol) -> str:
     """BTC-USD → BTC_USDT 形态的 Gate.io 现货交易对 (计价货币映射与 binance_pair 一致)."""
-    base, _, quote = p.yahoo.rpartition("-")
-    if not base:
-        raise ValueError(f"无效加密货币代码: {p.yahoo}")
-    q = {"USD": "USDT", "USDT": "USDT", "USDC": "USDC", "BUSD": "BUSD"}.get(
-        quote.upper(), quote.upper()
-    )
-    return f"{base.upper()}_{q}"
+    base, quote = _pair_parts(p)
+    return f"{base}_{quote}"
 
 
 def _gate_get(path: str, params: dict | None = None):

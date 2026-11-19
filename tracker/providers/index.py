@@ -70,14 +70,6 @@ def _flat_ohlc(df: pd.DataFrame) -> pd.DataFrame:
     return out[["date", "open", "high", "low", "close", "volume"]]
 
 
-def _flat_ohlc(df: pd.DataFrame) -> pd.DataFrame:
-    """点位序列 (仅 date/close) → 平K线 (open=high=low=close, volume=0)."""
-    out = df.copy()
-    out["open"] = out["high"] = out["low"] = out["close"]
-    out["volume"] = 0.0
-    return out[["date", "open", "high", "low", "close", "volume"]]
-
-
 def _slice_range(
     df: pd.DataFrame, start_date: str, end_date: str | None
 ) -> pd.DataFrame:

@@ -25,8 +25,8 @@ from .. import prices
 from .. import storage
 from ..cache import CACHE_TTL, STALE_TTL
 from ..fx import get_fx_rates
-from ..symbols import parse
-from .watchlist import entries_for, merge_entries
+from ..symbols import canonical
+from .watchlist import entries_for
 
 logger = logging.getLogger(__name__)
 
@@ -162,20 +162,14 @@ def _symbols_from_rows(rows) -> list[str]:
     """持仓/自选行 → 规范 Yahoo 代码 (去重保序; 无法识别的静默跳过)."""
     out: list[str] = []
     for row in rows:
-        raw = str((row or {}).get("symbol") or "").strip()
-        if not raw:
-            continue
-        try:
-            yahoo = parse(raw).yahoo
-        except ValueError:
-            continue
-        if yahoo not in out:
+        yahoo = canonical((row or {}).get("symbol"))
+        if yahoo and yahoo not in out:
             out.append(yahoo)
     return out
 
 
-def _read_scope(portfolio_path=None, watchlist_path=None) -> tuple[dict, list[str]]:
-    """读磁盘持仓/自选; 读盘失败时返回空 scope (调用方按无数据处理)."""
+def _load_scope(portfolio_path=None, watchlist_path=None) -> tuple[dict, dict]:
+    """读磁盘持仓/自选; 单侧读盘失败时按空数据继续 (不阻断另一侧保温)."""
     try:
         portfolio = storage.load_portfolio(
             portfolio_path or storage.PORTFOLIO_PATH
@@ -188,9 +182,21 @@ def _read_scope(portfolio_path=None, watchlist_path=None) -> tuple[dict, list[st
         )
     except Exception:  # noqa: BLE001
         watch = {}
+    return portfolio, watch
+
+
+def _scope_symbols(portfolio: dict, watch: dict, extra_symbols=()) -> list[str]:
+    """持仓 + 全部自选 (+ 额外代码) → 规范 Yahoo 代码."""
     holdings = [h for h in portfolio.get("holdings", []) if h.get("symbol")]
-    watch_rows = [w for w in merge_entries(watch) if w.get("symbol")]
-    return portfolio, _symbols_from_rows([*holdings, *watch_rows])
+    watch_rows = [w for w in entries_for(watch, None) if w.get("symbol")]
+    extra = [{"symbol": s} for s in extra_symbols]
+    return _symbols_from_rows([*holdings, *watch_rows, *extra])
+
+
+def _read_scope(portfolio_path=None, watchlist_path=None) -> tuple[dict, list[str]]:
+    """读磁盘持仓/自选; 读盘失败时返回空 scope (调用方按无数据处理)."""
+    portfolio, watch = _load_scope(portfolio_path, watchlist_path)
+    return portfolio, _scope_symbols(portfolio, watch)
 
 
 def disk_refresh_plan(
@@ -373,22 +379,8 @@ def calendar_scope_symbols(
     extra_symbols=(),
 ) -> list[str]:
     """磁盘上的默认预热范围: 持仓 + 全部自选 (与页面「持仓+自选」同口径)."""
-    try:
-        portfolio = storage.load_portfolio(
-            portfolio_path or storage.PORTFOLIO_PATH
-        )
-    except Exception:  # noqa: BLE001
-        portfolio = {}
-    try:
-        watch = storage.load_watchlist(
-            watchlist_path or storage.WATCHLIST_PATH
-        )
-    except Exception:  # noqa: BLE001
-        watch = {}
-    holdings = [h for h in portfolio.get("holdings", []) if h.get("symbol")]
-    watch_rows = [w for w in entries_for(watch, None) if w.get("symbol")]
-    extra = [{"symbol": s} for s in extra_symbols]
-    return _symbols_from_rows([*holdings, *watch_rows, *extra])
+    portfolio, watch = _load_scope(portfolio_path, watchlist_path)
+    return _scope_symbols(portfolio, watch, extra_symbols)
 
 
 def calendar_warm_plan(

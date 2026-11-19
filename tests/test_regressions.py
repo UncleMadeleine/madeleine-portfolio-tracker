@@ -262,7 +262,7 @@ def test_disk_refresh_plan_normalizes_symbols(monkeypatch):
     monkeypatch.setattr(
         warm_mod.storage, "load_watchlist", lambda *a, **k: {"watchlist": []}
     )
-    monkeypatch.setattr(warm_mod, "merge_entries", lambda w: [])
+    monkeypatch.setattr(warm_mod, "entries_for", lambda w, name: [])
     quote = Quote(
         symbol="600519.SS",
         name="贵州茅台",

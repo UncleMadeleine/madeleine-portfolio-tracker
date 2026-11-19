@@ -30,7 +30,11 @@ from contextlib import contextmanager
 
 __all__ = [
     "DISABLE_ENV",
+    "KIND_TEXT",
     "RETENTION_SECONDS",
+    "STATUS_ICON",
+    "STATUS_TEXT",
+    "age_text",
     "coverage",
     "flush",
     "integrity",
@@ -42,6 +46,44 @@ __all__ = [
     "span",
     "summary",
 ]
+
+# 健康状态的中文展示口径 (CLI doctor 与 Streamlit 健康页共用)
+STATUS_ICON = {
+    "ok": "✅",
+    "degraded": "⚠️",
+    "down": "❌",
+    "idle": "·",
+    "unknown": "?",
+}
+STATUS_TEXT = {
+    "ok": "正常",
+    "degraded": "降级",
+    "down": "异常",
+    "idle": "未使用",
+    "unknown": "无数据",
+}
+KIND_TEXT = {
+    "quote": "行情",
+    "history": "K线",
+    "fx": "汇率",
+    "calendar": "日历",
+    "other": "其它",
+}
+
+
+def age_text(seconds: float | None) -> str:
+    """秒数 → 紧凑年龄文案 (s/m/h/d); None 显示为 —."""
+    if seconds is None:
+        return "—"
+    seconds = max(0.0, float(seconds))
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    if seconds < 3600:
+        return f"{seconds / 60:.0f}m"
+    if seconds < 86400:
+        return f"{seconds / 3600:.1f}h"
+    return f"{seconds / 86400:.1f}d"
+
 
 #: 显式关闭记录 (测试/只读数据目录): 置 1 后 span/record 直接 no-op
 DISABLE_ENV = "TRACKER_HEALTH_DISABLE"

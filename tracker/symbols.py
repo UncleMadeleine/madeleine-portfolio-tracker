@@ -719,3 +719,18 @@ def parse(symbol: str) -> ParsedSymbol:
             f"代码必须是字符串 (得到 {type(symbol).__name__}: {symbol!r})"
         )
     return _parse_cached(symbol)
+
+
+def canonical(symbol: object) -> str | None:
+    """宽松输入的 Yahoo 规范代码; 空值/无法识别返回 None.
+
+    与 parse() 的区别是不抛异常, 供展示/合并等「尽力归一」路径使用
+    (parse 失败时调用方自行决定退回原串还是跳过)。
+    """
+    raw = ("" if symbol is None else str(symbol)).strip()
+    if not raw:
+        return None
+    try:
+        return parse(raw).yahoo
+    except ValueError:
+        return None

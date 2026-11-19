@@ -13,17 +13,8 @@ import streamlit as st
 
 from tracker import storage, wallet_history
 from tracker.ui import theme
+from tracker.wallet import CHAIN_LABELS
 from tracker.wallet_nav import compute_wallet_nav
-
-_CHAIN_LABELS = {
-    "eth": "Ethereum",
-    "bsc": "BNB Chain",
-    "polygon": "Polygon",
-    "arbitrum": "Arbitrum One",
-    "avalanche": "Avalanche C-Chain",
-    "tron": "TRON",
-    "solana": "Solana",
-}
 
 _CHAIN_NOTES = {
     "eth": "Routescan / Blockscout, 零 API Key",
@@ -190,8 +181,8 @@ def render_wallet_page() -> None:
         c1, c2, c3, c4 = st.columns([1.1, 2.1, 0.9, 1.2], vertical_alignment="bottom")
         chain = c1.selectbox(
             "链",
-            list(_CHAIN_LABELS),
-            format_func=lambda c: _CHAIN_LABELS.get(c, c),
+            list(CHAIN_LABELS),
+            format_func=lambda c: CHAIN_LABELS.get(c, c),
             key="wallet_nav_chain",
         )
         address = c2.text_input(

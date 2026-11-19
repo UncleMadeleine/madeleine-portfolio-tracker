@@ -23,6 +23,25 @@ def finite_float(value: object) -> float | None:
     return f if math.isfinite(f) else None
 
 
+def as_bool(value: object, default: bool = False) -> bool:
+    """宽松布尔归一: 手改 JSON 的 "false"/0/"" 不能被 bool() 当 True.
+
+    storage / webdav / eodhd 读取配置时共用同一口径, 避免各写一份后
+    "0"/"off"/空串的处理逐渐漂移。
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        s = value.strip().lower()
+        if s in ("true", "1", "yes", "on"):
+            return True
+        if s in ("false", "0", "no", "off", ""):
+            return False
+    return default
+
+
 def records(df) -> list[dict]:
     """DataFrame → records (NaN/NaT 转 None 便于 JSON 序列化).
 

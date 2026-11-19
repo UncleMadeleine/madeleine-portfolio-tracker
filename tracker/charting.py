@@ -241,6 +241,22 @@ def _price_precision(med: float) -> int:
     return min(10, max(4, math.ceil(-math.log10(med)) + 3))
 
 
+def _candle_rows(dates, df: pd.DataFrame, digits: int) -> list[dict]:
+    """OHLC DataFrame → lightweight-charts 蜡烛行 (按 digits 位取整)."""
+    return [
+        {
+            "time": t,
+            "open": round(float(o), digits),
+            "high": round(float(h), digits),
+            "low": round(float(lo), digits),
+            "close": round(float(c), digits),
+        }
+        for t, o, h, lo, c in zip(
+            dates, df["open"], df["high"], df["low"], df["close"]
+        )
+    ]
+
+
 def _to_line_data(dates: pd.Series, srs: pd.Series, precision: int = 6) -> list[dict]:
     """将 pandas Series 转为 lightweight-charts line data [{time, value}, ...], 跳过 NaN/inf.
 
@@ -728,16 +744,7 @@ def kline_payload(
     med = float(df["close"].median())
     precision = _price_precision(med)
     nd = max(6, precision)
-    candles = [
-        {
-            "time": t,
-            "open": round(float(o), nd),
-            "high": round(float(h), nd),
-            "low": round(float(lo), nd),
-            "close": round(float(c), nd),
-        }
-        for t, o, h, lo, c in zip(dates, df["open"], df["high"], df["low"], df["close"])
-    ]
+    candles = _candle_rows(dates, df, nd)
     up_vol, down_vol = _rgba(up, 0.55), _rgba(down, 0.55)
     # 指数等标的无成交量语义 (全 0): 省略成交量序列, 副图不渲染全零柱
     has_volume = bool((df["volume"] != 0).any())
@@ -1192,18 +1199,7 @@ def crypto_compare_payload(
         # 对外声明的 priceFormat.precision (否则溢出统计, UI 显示的位数是空的)。
         precision = _price_precision(float(d["close"].median()))
         nd = max(6, precision)
-        candles = [
-            {
-                "time": t,
-                "open": round(float(o), nd),
-                "high": round(float(h), nd),
-                "low": round(float(lo), nd),
-                "close": round(float(c), nd),
-            }
-            for t, o, h, lo, c in zip(
-                dates, d["open"], d["high"], d["low"], d["close"]
-            )
-        ]
+        candles = _candle_rows(dates, d, nd)
         if not candles:
             continue
         coins.append(

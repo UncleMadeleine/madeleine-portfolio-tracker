@@ -33,6 +33,7 @@ from tracker.services import warm as warm_mod
 from tracker.services.watchlist import entries_for
 from tracker.symbols import parse
 from tracker.ui import theme
+from tracker.ui.progress import FetchProgress
 from tracker.watchlist import load_watchlist
 
 # 月历单元格单日最多展示的事件数 (超出折叠: 单元格内省略, 日程/明细表看全集)
@@ -161,34 +162,12 @@ def _fetch_calendar_with_progress(
     symbols: tuple[str, ...], months: int, use_longport: bool, refresh: bool
 ):
     """阻塞取数 + 进度条 (冷启动/手动刷新路径)."""
-    bar = st.progress(
-        0.0, text=f"准备拉取 {len(symbols)} 只代码的财经日历..."
-    )
-    last = {"frac": -1.0, "at": 0.0}
-
-    def _on_progress(done, total, label) -> None:
-        total = max(int(total or 0), int(done or 0), 1)
-        frac = min(max(float(done) / total, 0.0), 1.0)
-        now = time.monotonic()
-        # 逐代码回调可能上百次: 增幅 <1% 且距上次 <0.2s 时跳过, 防刷爆前端
-        if (
-            frac < 1.0
-            and frac - last["frac"] < 0.01
-            and now - last["at"] < 0.2
-        ):
-            return
-        last["frac"], last["at"] = frac, now
-        text = f"日历取数 {done}/{total}"
-        if label:
-            text += f" · {label}"
-        bar.progress(frac, text=text)
-
-    try:
+    with FetchProgress(
+        "日历取数", f"准备拉取 {len(symbols)} 只代码的财经日历..."
+    ) as progress:
         return _fetch_calendar(
-            symbols, months, use_longport, refresh, progress=_on_progress
+            symbols, months, use_longport, refresh, progress=progress
         )
-    finally:
-        bar.empty()
 
 
 def _apply_names(data: dict) -> dict:

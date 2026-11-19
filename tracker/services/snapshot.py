@@ -11,7 +11,7 @@ import pandas as pd
 from .. import prices
 from ..analytics import build_view, summarize
 from ..fx import get_fx_rates
-from ..symbols import parse
+from ..symbols import canonical
 from ..util import records
 from .watchlist import build_watchlist_view, entries_for, triggered_entries
 
@@ -70,12 +70,10 @@ def take_snapshot(
     if holdings:
         # 只对持仓实际涉及的币种取汇率; 自选股不做换算,
         # 把自选币种混进来会造成虚假的「汇率缺失」告警
-        holding_syms = set()
-        for h in holdings:
-            try:
-                holding_syms.add(parse(str(h["symbol"])).yahoo)
-            except ValueError:
-                holding_syms.add(str(h["symbol"]).strip().upper())
+        holding_syms = {
+            canonical(str(h["symbol"])) or str(h["symbol"]).strip().upper()
+            for h in holdings
+        }
         currencies = sorted(
             {q.currency for k, q in quotes.items() if k in holding_syms}
         )

@@ -9,7 +9,7 @@ from .. import events as events_mod
 from ..ics import build_ics
 from ..services.watchlist import entries_for
 from ..storage import load_portfolio
-from ..symbols import parse
+from ..symbols import canonical, parse
 from ..watchlist import load_watchlist
 from ._common import (  # noqa: F401 - months_arg 兼容旧导入路径
     _finish_with_error,
@@ -31,10 +31,8 @@ def _scope_symbols(args) -> tuple[list[str], dict[str, str]]:
     if args.symbols:
         syms: list[str] = []
         for s in args.symbols:
-            try:
-                syms.append(parse(s).yahoo)
-            except ValueError:
-                syms.append(str(s).strip().upper())
+            raw = str(s).strip()
+            syms.append(canonical(raw) or raw.upper())
         return syms, {}
     try:
         portfolio = load_portfolio(args.portfolio)

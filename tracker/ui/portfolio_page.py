@@ -30,7 +30,7 @@ from tracker import cache as cache_mod, nav, prices, storage
 from tracker.analytics import build_view, summarize
 from tracker.fx import get_fx_rates
 from tracker.storage import CorruptDataError, DataFileLocked
-from tracker.symbols import parse
+from tracker.symbols import canonical, parse
 from tracker.util import finite_float
 from tracker.services import warm as warm_mod
 from .portfolio_format import (
@@ -56,6 +56,7 @@ from tracker.watchlist import (
 )
 from tracker.ui import settings as S, theme
 from tracker.ui.issues import render_issue_summary
+from tracker.ui.progress import FetchProgress
 from tracker.ui.kline_page import set_quick_symbols
 
 WATCHLIST_PATH = storage.WATCHLIST_PATH
@@ -120,10 +121,7 @@ def _editor_holdings_signature(rows) -> list[tuple[str, float | None, float | No
         raw = str(h.get("symbol") or "").strip()
         if not raw:
             continue
-        try:
-            sym = parse(raw).yahoo
-        except ValueError:
-            sym = raw.upper()
+        sym = canonical(raw) or raw.upper()
         sig.append(
             (
                 sym,
@@ -253,40 +251,17 @@ def _fetch_quotes_with_progress(
     首屏。进度按已结算代码数推进 (批量返回、逐代码成功/失败都计入), 避免
     大组合 (数百自选) 冷启动时页面只转一个无信息量的 spinner。
     """
-    bar = st.progress(
-        0.0, text="拉取行情 (首次加载需初始化数据引擎)..."
-    )
-    last = {"frac": -1.0, "at": 0.0}
-
-    def _on_progress(done, total, label) -> None:
-        total = max(int(total or 0), int(done or 0), 1)
-        frac = min(max(float(done) / total, 0.0), 1.0)
-        now = time.monotonic()
-        # 大组合逐代码回调可达数百次: 进度增幅 <1% 且距上次 <0.2s 时跳过,
-        # 避免把 Streamlit 增量消息刷爆 (完成时 frac=1 仍必刷)。
-        if (
-            frac < 1.0
-            and frac - last["frac"] < 0.01
-            and now - last["at"] < 0.2
-        ):
-            return
-        last["frac"], last["at"] = frac, now
-        text = f"拉取行情 {done}/{total}"
-        if label:
-            text += f" · {label}"
-        bar.progress(frac, text=text)
-
-    try:
+    with FetchProgress(
+        "拉取行情", "拉取行情 (首次加载需初始化数据引擎)..."
+    ) as progress:
         return prices.get_quotes(
             list(fetchable),
             prefer_akshare=prefer_akshare,
             use_ibkr=use_ibkr,
             use_longport=use_longport,
             crypto_source=crypto_source,
-            progress=_on_progress,
+            progress=progress,
         )
-    finally:
-        bar.empty()
 
 
 def _load_quotes_cached(

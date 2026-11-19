@@ -347,10 +347,13 @@ _AK_QUOTE_HEADERS = {
 }
 _AK_QUOTE_TIMEOUT = 8.0
 # 东财字段码: f43=最新价 f57=代码 f58=名称 f60=昨收
-#              f116=总市值 f167=市净率 f170=涨跌幅(%) f172=报价币种
+#              f116=总市值 f162=市盈率(动) f167=市净率 f170=涨跌幅(%)
+#              f172=报价币种
 # f172 必须取: 港股有 USD/CNY 计价柜台 (如 09188/82318), 只按代码后缀
 # 推断会把 USD 价格当 HKD 乘汇率, 市值差约 7.8 倍。
-_AK_QUOTE_FIELDS = "f43,f57,f58,f60,f116,f167,f170,f172"
+# f162 口径是「动态 PE」, 不是 TTM (实测 A 股可用, 部分港股返回 "-"):
+# 单独写入 Quote.pe_dynamic, 不与估值页的 pe_ttm 混用。
+_AK_QUOTE_FIELDS = "f43,f57,f58,f60,f116,f162,f167,f170,f172"
 
 # 单代码行情进程内缓存 (短 TTL): 同一代码紧接着的重复请求 (UI 渲染 + 后台
 # 刷新) 只发一次; per-key 单飞去重并发首拉; 失败写短 TTL 占位防反复打东财
@@ -475,6 +478,7 @@ def _akshare_quote(p: ParsedSymbol) -> Quote:
         raise RuntimeError(f"{p.yahoo}: akshare 无有效最新价 ({d.get('f43')!r})")
     pb = _ak_num(d.get("f167"))
     market_cap = _ak_num(d.get("f116"))
+    pe_dynamic = _ak_num(d.get("f162"))
     # 东财自报币种 (f172): 港股 USD/CNY 柜台不能按后缀推断成 HKD。
     # 但 A股/B股/北交所的 f172 是 "-" (币种由代码推导, B 股还可能被泛化),
     # 必须用 parse 的权威币种; 不校验会把 "-" 写进行情缓存, 汇率链随后把
@@ -493,6 +497,7 @@ def _akshare_quote(p: ParsedSymbol) -> Quote:
         currency=currency,
         book_value=price / pb if pb is not None and pb > 0 else None,
         market_cap=market_cap if market_cap is not None and market_cap > 0 else None,
+        pe_dynamic=pe_dynamic if pe_dynamic is not None and pe_dynamic > 0 else None,
         source="akshare",
     )
 

@@ -69,6 +69,8 @@ KIND_TEXT = {
     "calendar": "日历",
     "other": "其它",
 }
+#: 估值快照 / 财报链接的磁盘缓存 TTL (与 valuation/filings 的 6h 对齐)
+FUNDAMENTALS_TTL = 6 * 3600
 
 
 def age_text(seconds: float | None) -> str:
@@ -504,7 +506,7 @@ def coverage(now: float | None = None) -> dict:
     """
     from . import cache as cache_mod
     from . import storage
-    from .symbols import is_currency_code, parse, valuation_currency
+    from .symbols import Market, is_currency_code, parse, valuation_currency
 
     now = time.time() if now is None else float(now)
     result: dict = {
@@ -512,6 +514,16 @@ def coverage(now: float | None = None) -> dict:
                     "fresh": 0, "stale": 0, "old": 0, "expired": 0,
                     "missing": 0},
         "fx": {"base": None, "needed": 0, "missing": []},
+        "fundamentals": {
+            "total": 0,
+            "snapshot_fresh": 0,
+            "snapshot_stale": 0,
+            "snapshot_missing": 0,
+            "filings_fresh": 0,
+            "filings_stale": 0,
+            "filings_missing": 0,
+            "gaps": [],
+        },
         "gaps": [],
         "items": [],
         "errors": [],
@@ -564,6 +576,22 @@ def coverage(now: float | None = None) -> dict:
     quotes, ages = cache_mod.get_cached_with_age(symbols, ttl=RETENTION_SECONDS)
     ohlc_ages = cache_mod.ohlc_freshness(symbols, now=now)
 
+    # 基本面只对股票有意义 (crypto/index 无 PE/PB/财报): 估值快照与财报链接
+    # 都是按需取数, 这里只看磁盘缓存年龄, 不联网、不触发补数。
+    stock_symbols: list[str] = []
+    for sym in symbols:
+        try:
+            if parse(sym).market not in (Market.CRYPTO, Market.INDEX):
+                stock_symbols.append(sym)
+        except ValueError:
+            continue
+    snap_ages = cache_mod.json_cache_freshness(
+        [f"valuation_snapshot:{s}" for s in stock_symbols], now=now
+    )
+    filing_ages = cache_mod.json_cache_freshness(
+        [f"filings:{s}" for s in stock_symbols], now=now
+    )
+
     counts = result["symbols"]
     counts["total"] = len(symbols)
     counts["holdings"] = sum(1 for v in by_symbol.values() if v["holding"])
@@ -588,6 +616,10 @@ def coverage(now: float | None = None) -> dict:
             "quote_status": q_status,
             "ohlc_age_seconds": o_age,
             "ohlc_status": o_status,
+            "valuation_age_seconds": snap_ages.get(
+                f"valuation_snapshot:{sym}"
+            ),
+            "filings_age_seconds": filing_ages.get(f"filings:{sym}"),
         }
         items.append(item)
         # 自选只在「缓存存在但过期」时算缺口: 自选列表很长, 没打开过就必然
@@ -615,6 +647,49 @@ def coverage(now: float | None = None) -> dict:
                 }
             )
 
+    fund = result["fundamentals"]
+    fund["total"] = len(stock_symbols)
+    for sym in stock_symbols:
+        meta = by_symbol[sym]
+        s_age = snap_ages.get(f"valuation_snapshot:{sym}")
+        f_age = filing_ages.get(f"filings:{sym}")
+        if s_age is None:
+            fund["snapshot_missing"] += 1
+        elif s_age <= FUNDAMENTALS_TTL:
+            fund["snapshot_fresh"] += 1
+        else:
+            fund["snapshot_stale"] += 1
+        if f_age is None:
+            fund["filings_missing"] += 1
+        elif f_age <= FUNDAMENTALS_TTL:
+            fund["filings_fresh"] += 1
+        else:
+            fund["filings_stale"] += 1
+
+        # 估值快照：持仓缺了会影响「贵不贵」的判断, 算缺口; 自选只报
+        # 「缓存已过期」, 不把从未打开过的 600 只自选全列成噪音。
+        f_reasons = []
+        if meta["holding"]:
+            if s_age is None:
+                f_reasons.append("未取过估值快照")
+            elif s_age > FUNDAMENTALS_TTL:
+                f_reasons.append(f"估值快照已 {s_age / 3600:.1f} 小时未更新")
+        elif s_age is not None and s_age > FUNDAMENTALS_TTL:
+            f_reasons.append(f"估值快照已 {s_age / 3600:.1f} 小时未更新")
+        if f_reasons:
+            fund["gaps"].append(
+                {
+                    "symbol": sym,
+                    "kind": (
+                        "持仓+自选"
+                        if meta["holding"] and meta["watchlist"]
+                        else ("持仓" if meta["holding"] else "自选")
+                    ),
+                    "reasons": f_reasons,
+                    "snapshot_age_seconds": s_age,
+                }
+            )
+
     items.sort(
         key=lambda x: (
             {"missing": 0, "expired": 1, "old": 2, "stale": 3, "fresh": 4}.get(
@@ -625,6 +700,7 @@ def coverage(now: float | None = None) -> dict:
     )
     result["items"] = items
     result["gaps"].sort(key=lambda x: x["symbol"])
+    result["fundamentals"]["gaps"].sort(key=lambda x: x["symbol"])
 
     # 汇率: 持仓/自选涉及的非基础货币都需要一条汇率; 缓存里没有即缺口
     # 指数/收益率的「币种」是点/% 等占位符, 不是可兑换货币: 不参与汇率缺口

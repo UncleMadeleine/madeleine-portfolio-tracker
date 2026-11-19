@@ -259,6 +259,46 @@ class TestBatchReads:
         assert "g:MISSING" not in out
         assert cache_mod.get_calendar_row("g:AAPL") == out["g:AAPL"]
 
+    def test_json_cache_ttl_and_prefix_clear(self):
+        cache_mod.set_json_cached("valuation_snapshot:AAPL", {"pe": 10})
+        cache_mod.set_json_cached("filings:AAPL", {"items": []})
+        assert cache_mod.get_json_cached("valuation_snapshot:AAPL", ttl=3600) == {
+            "pe": 10
+        }
+
+        # 过期的快照按未命中处理
+        with cache_mod._connection() as con:
+            con.execute(
+                "UPDATE json_cache SET fetched_at=? WHERE key=?",
+                (time.time() - 7200, "valuation_snapshot:AAPL"),
+            )
+            con.commit()
+        assert cache_mod.get_json_cached("valuation_snapshot:AAPL", ttl=3600) is None
+
+        # 前缀清理只影响对应业务, 不误删财报链接
+        assert cache_mod.clear_json_cache("valuation_snapshot:") == 1
+        assert cache_mod.get_json_cached("filings:AAPL", ttl=3600) == {"items": []}
+
+        # 全量 clear 也要清掉快照缓存
+        cache_mod.set_json_cached("filings:AAPL", {"items": []})
+        assert cache_mod.clear() >= 1
+        assert cache_mod.get_json_cached("filings:AAPL", ttl=3600) is None
+
+    def test_json_cache_freshness_distinguishes_missing_and_stale(self):
+        cache_mod.set_json_cached("k:new", {"v": 1})
+        cache_mod.set_json_cached("k:old", {"v": 2})
+        with cache_mod._connection() as con:
+            con.execute(
+                "UPDATE json_cache SET fetched_at=? WHERE key=?",
+                (time.time() - 4000, "k:old"),
+            )
+            con.commit()
+
+        ages = cache_mod.json_cache_freshness(["k:new", "k:old", "k:missing"])
+        assert ages["k:new"] < 60
+        assert ages["k:old"] > 3600
+        assert "k:missing" not in ages
+
 
 def test_ensure_db_does_not_quarantine_locked_database(tmp_path, monkeypatch):
     """database is locked 属瞬时错误: 不能把正在使用的库 os.replace 隔离."""

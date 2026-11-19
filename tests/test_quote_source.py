@@ -112,3 +112,79 @@ def test_orchestration_preserves_provider_source(monkeypatch):
 
     quotes, _errors, _notes = orch.get_quotes(["AAPL"], use_longport=True)
     assert quotes["AAPL"].source == "longport"
+
+
+def test_dynamic_pe_round_trips_through_cache():
+    set_cached(
+        {
+            "600519.SS": Quote(
+                symbol="600519.SS",
+                name="贵州茅台",
+                price=1460.0,
+                prev_close=1450.0,
+                change_pct=0.7,
+                currency="CNY",
+                book_value=217.0,
+                market_cap=1.8e12,
+                pe_dynamic=21.24,
+                source="akshare",
+            )
+        }
+    )
+    q = get_cached(["600519.SS"])["600519.SS"]
+    assert q.pe_dynamic == 21.24
+    # 后续 yfinance 写入不带 pe_dynamic 时, 旧值不会被抹掉
+    set_cached(
+        {
+            "600519.SS": Quote(
+                symbol="600519.SS",
+                name="贵州茅台",
+                price=1461.0,
+                prev_close=1460.0,
+                change_pct=0.1,
+                currency="CNY",
+                source="yfinance",
+            )
+        }
+    )
+    assert get_cached(["600519.SS"])["600519.SS"].pe_dynamic == 21.24
+
+    # akshare/东财 再次取数返回 "-" (无盈利/无数据) 时应清掉旧值
+    set_cached(
+        {
+            "600519.SS": Quote(
+                symbol="600519.SS",
+                name="贵州茅台",
+                price=1461.0,
+                prev_close=1460.0,
+                change_pct=0.1,
+                currency="CNY",
+                source="akshare",
+            )
+        }
+    )
+    assert get_cached(["600519.SS"])["600519.SS"].pe_dynamic is None
+
+
+def test_akshare_quote_reads_dynamic_pe(monkeypatch):
+    from tracker.providers import global_stocks as gs
+    from tracker.symbols import parse
+
+    monkeypatch.setattr(
+        gs,
+        "_ak_quote_raw",
+        lambda p: {
+            "f43": 10.0,
+            "f58": "测试",
+            "f60": 9.9,
+            "f170": 1.01,
+            "f167": 2.0,
+            "f116": 1.0e9,
+            "f162": 8.5,
+            "f172": "-",
+        },
+    )
+    q = gs._akshare_quote(parse("600519.SS"))
+    assert q.pe_dynamic == 8.5
+    assert q.book_value == 5.0
+    assert q.market_cap == 1.0e9

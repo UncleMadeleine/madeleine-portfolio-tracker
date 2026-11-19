@@ -1,6 +1,6 @@
 ---
 name: portfolio-tracker
-description: Use when the user asks to check or manage their investment portfolio, holdings, watchlist, stock prices, price-threshold alerts, exchange rates, historical NAV, wallet NAV, on-chain wallet history, IBKR sync, Longport (长桥) quotes/positions/login, EODHD (BYOK) status/config, data-source health / data doctor, online provider contracts, or quote cache in this repo (madeleine-portfolio-tracker). Trigger keywords: 持仓, 组合, 自选, watchlist, 股票, 行情, 报价, quote, 汇率, fx, IBKR, 长桥, longport, EODHD, BYOK, 快照, snapshot, 净值, nav, 历史净值, 钱包净值, wallet-nav, 链上钱包, 钱包历史, 缓存, 缓存保温, 预热, warm, 数据健康, doctor, 成功率, 契约测试, K线, kline, 指数, index, 导入, import, 搜索, search, 对比, compare. Operate it through the CLI `python -m tracker.cli <子命令>` (alias `python -m tracker`). Also covers editing portfolio.json / watchlist.json / ibkr.json / longport.json / eodhd.json / wallet_history.json and the Yahoo symbol conventions.
+description: Use when the user asks to check or manage their investment portfolio, holdings, watchlist, stock prices, price-threshold alerts, exchange rates, historical NAV, wallet NAV, on-chain wallet history, fundamentals / valuation (PE, PB, dividend yield, filings), IBKR sync, Longport (长桥) quotes/positions/login, EODHD (BYOK) status/config, data-source health / data doctor, online provider contracts, or quote cache in this repo (madeleine-portfolio-tracker). Trigger keywords: 持仓, 组合, 自选, watchlist, 股票, 行情, 报价, quote, 基本面, fundamentals, 估值, PE, PB, 股息率, 财报, filings, 汇率, fx, IBKR, 长桥, longport, EODHD, BYOK, 快照, snapshot, 净值, nav, 历史净值, 钱包净值, wallet-nav, 链上钱包, 钱包历史, 缓存, 缓存保温, 预热, warm, 数据健康, doctor, 成功率, 契约测试, K线, kline, 指数, index, 导入, import, 搜索, search, 对比, compare. Operate it through the CLI `python -m tracker.cli <子命令>` (alias `python -m tracker`). Also covers editing portfolio.json / watchlist.json / ibkr.json / longport.json / eodhd.json / wallet_history.json and the Yahoo symbol conventions.
 ---
 
 # Madeleine Portfolio Tracker CLI
@@ -40,6 +40,7 @@ tracker-ui          # pip 安装后起 Streamlit 页面 (等价 streamlit run tr
 | `nav` | 历史净值 (读取/保存/回填) | `nav`, `nav --days 30 --json`, `nav --save`, `nav --backfill --days 365`, `nav --backfill --dry-run` |
 | `wallet-nav` | 钱包历史净值 (链上转账回放) | `wallet-nav eth 0x... --days 90`, `wallet-nav tron T... --base CNY --json`, `wallet-nav solana H... --max-assets 20` |
 | `quote` | 实时行情 | `quote AAPL 600519.SS`, `quote AAPL --refresh` (跳过 5min 磁盘/负缓存) |
+| `fundamentals` | 基本面: 估值快照 / 历史 PE·PB / 最新财报链接 | `fundamentals 601398.SS`, `fundamentals AAPL --filings --json`, `fundamentals 0700.HK --history pe --months 60` |
 | `watchlist` | 自选管理 list/add/remove/triggered/import-longport | `watchlist list`, `watchlist triggered` (只输出到达阈值的自选), `watchlist triggered --json`, `watchlist add TSLA --list 科技 --upper1 420`, `watchlist import-longport --dry-run` (长桥自选导入, 分组→列表, 代码归一) |
 | `portfolio` | 持仓管理 list/add/remove/set-base | `portfolio list`, `portfolio add AAPL --quantity 10 --avg-cost 180`, `portfolio set-base USD` |
 | `fx` | 汇率 | `fx USD CNY` |
@@ -59,7 +60,7 @@ tracker-ui          # pip 安装后起 Streamlit 页面 (等价 streamlit run tr
 | `import-wallet` | 链上钱包导入 (兼容入口→import wallet; 缺省只查询, `--add`/`--overwrite` 才写盘) | `import-wallet eth 0x... --add` |
 | `cache` | 行情磁盘缓存 | `cache info`, `cache clear` |
 | `warm` | 主动预热/保温行情、汇率、日历 (不依赖前端进程) | `warm`, `warm --symbols AAPL TSLA`, `warm --calendar-only --json`, `warm --interval 300` (常驻) |
-| `doctor` | 数据健康体检 (来源成功率/耗时/最近失败 + 持仓自选缓存缺口 + 本地完整性) | `doctor`, `doctor --window 72`, `doctor --json`, `doctor --probe` (主动联网), `doctor --clear-events`; 总体异常退出码 1 |
+| `doctor` | 数据健康体检 (来源成功率/耗时/最近失败 + 持仓自选行情/K线/汇率/基本面缓存缺口 + 本地完整性) | `doctor`, `doctor --window 72`, `doctor --json`, `doctor --probe` (主动联网), `doctor --clear-events`; 总体异常退出码 1 |
 | `init` | 首次使用: 模板落地到数据目录 | `init`, `init --force` |
 
 `--help` 查看每个子命令的完整参数: `python -m tracker.cli snapshot --help`; `-v/--version` 看版本。
@@ -379,10 +380,17 @@ Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致);
    同图叠加比值线 (具体比值不归一化, 独立纵轴, 虚线=区间均值),
    跨币种默认原币比值, 可切换「汇率调整」。
 
-   **基本面页 (`/fundamentals`, 仅 UI)**: 第一期是单只 A+H 股票的 AH 溢价率曲线,
-   口径 `A股收盘 ÷ (H股收盘 × HKD→CNY 历史汇率) − 1` (正值=A 股溢价, 0%=同价)。
-   股票对目录来自东财 AH 比价 (失败退回内置常见对), 也可手动输入 A/H 代码;
-   A/H 历史都优先 akshare 前复权, H 休市日取最近收盘。暂未提供 CLI 子命令。
+   **基本面 (`/fundamentals` 页面 + `fundamentals` CLI)**:
+   - 估值指标: 任意股票的最新 PE(TTM)/PB/股息率/5 年平均股息率、最近财报官方原文链接
+     (A股/北交所/港股/美股/澳股/英股/日股/韩股), 以及 A股/港股/美股历史 PE/PB 曲线与分位。
+     CLI 与页面同源: `fundamentals 601398.SS`, `fundamentals AAPL --filings --json`,
+     `fundamentals 0700.HK --history pe --months 60`。估值/财报快照落 SQLite `json_cache` (6h),
+     进程重启不重复回源; `--refresh` 穿透缓存。yfinance 失败时 A/H 用东财实时行情兜底
+     (现价/PB/市值 + 动态 PE), 其它市场在配置 EODHD 时用 EODHD 基本面兜底;
+     动态 PE 作为独立字段 `pe_dynamic` / 「PE (动态)」展示, 不与 PE(TTM) 混用。
+   - AH 溢价: 单只 A+H 股票的溢价率曲线, 口径 `A股收盘 ÷ (H股收盘 × HKD→CNY 历史汇率) − 1`
+     (正值=A 股溢价, 0%=同价)。股票对目录来自东财 AH 比价 (失败退回内置常见对), 也可手动输入
+     A/H 代码; A/H 历史都优先 akshare 前复权, H 休市日取最近收盘。AH 子视图仅 UI。
 
 9. **IBKR / 长桥同步 / 导入持仓** (IBKR 需本机 Gateway 在线; 长桥需先 `longport-login`, 无凭据则报错回退):
    ```

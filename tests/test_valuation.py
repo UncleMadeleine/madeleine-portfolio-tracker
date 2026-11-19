@@ -69,6 +69,137 @@ class TestSnapshot:
         valuation.fetch_snapshot("601398.SS", refresh=True)
         assert calls == ["601398.SS", "601398.SS"]
 
+    def test_snapshot_disk_cache_survives_memory_clear(self, monkeypatch):
+        calls = []
+
+        def fake_fetch(symbol):
+            calls.append(symbol)
+            return {"pe_ratio": 9.0}
+
+        monkeypatch.setattr(valuation, "_fetch_metrics_row", fake_fetch)
+        valuation.clear_cache()
+        a = valuation.fetch_snapshot("AAPL")
+        # 模拟进程重启: 只清内存, 磁盘 6h 快照仍应命中
+        valuation.clear_cache()
+        b = valuation.fetch_snapshot("AAPL")
+        assert a.pe_ttm == b.pe_ttm == 9.0
+        assert calls == ["AAPL"]
+        # 显式 refresh 必须穿透磁盘快照
+        valuation.fetch_snapshot("AAPL", refresh=True)
+        assert calls == ["AAPL", "AAPL"]
+
+    def test_snapshot_falls_back_to_eodhd(self, monkeypatch):
+        import tracker.eodhd as eodhd
+
+        def boom(symbol):
+            raise RuntimeError("yfinance unavailable")
+
+        monkeypatch.setattr(valuation, "_fetch_metrics_row", boom)
+        monkeypatch.setattr(eodhd, "available", lambda cfg=None: True)
+        monkeypatch.setattr(
+            eodhd,
+            "fundamentals",
+            lambda symbol, path=None: {
+                "pe_ratio": 33.15,
+                "forward_pe": 30.77,
+                "price_to_book": 60.72,
+                "dividend_yield": 0.0034,
+                "payout_ratio": 0.127,
+                "eps_ttm": 6.6,
+                "book_value": 7.36,
+                "market_cap": 5.0e12,
+                "currency": "USD",
+            },
+        )
+        valuation.clear_cache()
+        snap = valuation.fetch_snapshot("AAPL")
+        assert snap.source == "eodhd"
+        assert snap.pe_ttm == pytest.approx(33.15)
+        assert snap.pb == pytest.approx(60.72)
+        assert snap.dividend_yield_pct == pytest.approx(0.34)
+        assert snap.payout_ratio_pct == pytest.approx(12.7)
+
+    def test_snapshot_does_not_call_eodhd_when_yfinance_works(self, monkeypatch):
+        import tracker.eodhd as eodhd
+
+        monkeypatch.setattr(
+            valuation, "_fetch_metrics_row", lambda symbol: {"pe_ratio": 10.0}
+        )
+        monkeypatch.setattr(
+            eodhd,
+            "fundamentals",
+            lambda *a, **kw: pytest.fail("EODHD should not be called"),
+        )
+        valuation.clear_cache()
+        assert valuation.fetch_snapshot("AAPL").pe_ttm == 10.0
+
+    def test_snapshot_enriched_with_cached_dynamic_pe(self, monkeypatch):
+        from tracker.prices import Quote
+
+        monkeypatch.setattr(
+            valuation, "_fetch_metrics_row", lambda symbol: {"pe_ratio": 10.0}
+        )
+        monkeypatch.setattr(
+            valuation.cache_mod,
+            "get_cached",
+            lambda symbols, ttl=300: {
+                "AAPL": Quote(
+                    symbol="AAPL",
+                    name="Apple",
+                    price=100.0,
+                    prev_close=99.0,
+                    change_pct=1.0,
+                    currency="USD",
+                    pe_dynamic=9.5,
+                )
+            },
+        )
+        valuation.clear_cache()
+        snap = valuation.fetch_snapshot("AAPL")
+        assert snap.pe_ttm == pytest.approx(10.0)
+        assert snap.pe_dynamic == pytest.approx(9.5)
+
+    def test_snapshot_falls_back_to_akshare_for_cn(self, monkeypatch):
+        import tracker.eodhd as eodhd
+        from tracker.prices import Quote
+
+        def boom(symbol):
+            raise RuntimeError("yfinance unavailable")
+
+        class FakeQuote(Quote):
+            pass
+
+        monkeypatch.setattr(valuation, "_fetch_metrics_row", boom)
+        monkeypatch.setattr(eodhd, "available", lambda cfg=None: False)
+        monkeypatch.setattr(
+            "tracker.prices.get_quotes",
+            lambda symbols, **kw: (
+                {
+                    "600519.SS": FakeQuote(
+                        symbol="600519.SS",
+                        name="贵州茅台",
+                        price=100.0,
+                        prev_close=99.0,
+                        change_pct=1.0,
+                        currency="CNY",
+                        book_value=50.0,
+                        market_cap=1.0e12,
+                        pe_dynamic=21.24,
+                        source="akshare",
+                    )
+                },
+                {},
+                [],
+            ),
+        )
+        valuation.clear_cache()
+        snap = valuation.fetch_snapshot("600519.SS")
+        assert snap.source == "akshare"
+        assert snap.pe_ttm is None
+        assert snap.pe_dynamic == pytest.approx(21.24)
+        assert snap.pb == pytest.approx(2.0)
+        assert snap.market_cap == pytest.approx(1.0e12)
+
     def test_crypto_rejected(self):
         with pytest.raises(ValueError, match="估值指标"):
             valuation.fetch_snapshot("BTC-USD")

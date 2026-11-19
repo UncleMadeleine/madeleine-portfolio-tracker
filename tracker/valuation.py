@@ -8,12 +8,16 @@
     PE/PB 的历史序列。这里不做提醒规则, 也不改组合快照。
 
 数据源:
-  - 最新快照: OpenBB `equity.fundamental.metrics(provider="yfinance")`。
+  - 最新快照: OpenBB `equity.fundamental.metrics(provider="yfinance")`;
+    yfinance 不可用时, 若配置了 EODHD (BYOK), 回退到一次
+    `eodhd.fundamentals` (只补快照字段, 不额外发请求)。
     yfinance 的 `dividendYield` 是百分数 (3.68 = 3.68%), 而 OpenBB 只对
     `dividend_yield_5y_avg` 做了 /100 归一, 两个口径不同, 读取时分别处理。
   - 历史 PE/PB: akshare 百度股市通 (A股/港股/美股)。百度接口按
     「近一年/近三年/…」返回日频估值, 这里再按用户选择的月数截断;
     结果写入通用 series_cache (6h), 切换页面/进程不重复拉取。
+  - 快照落 json_cache (6h): 进程重启/CLI 与页面切换不再重复回源;
+    refresh=True 跳过内存与磁盘缓存。
 
 负值口径: PE/PB 为负 (亏损/负净资产) 时视为「无意义」返回 None, 历史曲线
 同样只保留 >0 的点 —— 否则曲线会跨 0 轴, 分位/均值也会被负值污染。
@@ -24,16 +28,18 @@ from __future__ import annotations
 import math
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, replace
 
 import pandas as pd
 
 from . import cache as cache_mod
-from .symbols import Market, normalize, parse
+from .symbols import Market, ParsedSymbol, normalize, parse
 from .util import with_timeout
 
 #: 最新快照缓存 (秒); 估值倍数是低频报表数据, 6h 足够
 _SNAPSHOT_TTL = 21600
+#: json_cache 里的快照前缀 (与 filings: 等其它业务隔离, 便于按前缀清理)
+_SNAPSHOT_KEY = "valuation_snapshot:"
 #: 历史估值曲线缓存 (秒)
 _HISTORY_TTL = 21600
 #: akshare 百度接口没有内置 timeout, 用守护线程硬超时避免页面卡死
@@ -65,6 +71,8 @@ class ValuationSnapshot:
     market_label: str
     currency: str
     pe_ttm: float | None = None
+    #: 东财实时「市盈率(动)」(Quote.pe_dynamic); 与 PE(TTM) 口径不同, 单独展示
+    pe_dynamic: float | None = None
     forward_pe: float | None = None
     pb: float | None = None
     dividend_yield_pct: float | None = None
@@ -75,6 +83,31 @@ class ValuationSnapshot:
     market_cap: float | None = None
     source: str = "yfinance"
     fetched_at: float = 0.0
+
+
+def normalize_stock_input(raw: str) -> str:
+    """宽松股票代码输入 → Yahoo 规范代码 (估值页 / CLI 共用).
+
+    支持 601398 (补 .SS) / 1398 (补 .HK) 这类纯数字简写; 带后缀或美股
+    ticker 走统一 normalize。空输入/畸形代码/非股票市场抛 ValueError。
+    """
+    from . import ah_premium
+
+    s = str(raw or "").strip()
+    if not s:
+        raise ValueError("股票代码不能为空")
+    if "." not in s and s.isdigit():
+        symbol = (
+            ah_premium.normalize_a_symbol(s)
+            if len(s) == 6
+            else ah_premium.normalize_h_symbol(s)
+        )
+    else:
+        symbol = normalize(s)
+    p = parse(symbol)
+    if p.market in (Market.CRYPTO, Market.INDEX):
+        raise ValueError(f"{p.yahoo}: 估值指标仅支持股票, 不支持 {p.market_label}")
+    return p.yahoo
 
 
 def _finite(value: object) -> float | None:
@@ -145,6 +178,30 @@ def _snapshot_from_metrics(
     )
 
 
+def _snapshot_payload(snap: ValuationSnapshot) -> dict:
+    """ValuationSnapshot → 可 JSON 序列化的 dict (字段名与 dataclass 一致)."""
+    return {f.name: getattr(snap, f.name) for f in fields(ValuationSnapshot)}
+
+
+def _snapshot_from_payload(payload: object) -> ValuationSnapshot | None:
+    """json_cache 载荷 → ValuationSnapshot; 缺字段/类型损坏返回 None."""
+    if not isinstance(payload, dict):
+        return None
+    names = {f.name for f in fields(ValuationSnapshot)}
+    kwargs = {k: v for k, v in payload.items() if k in names}
+    try:
+        return ValuationSnapshot(**kwargs)
+    except (TypeError, ValueError):
+        return None
+
+
+def _snapshot_from_disk(symbol: str) -> ValuationSnapshot | None:
+    """读 6h 磁盘快照; 损坏/过期按未命中处理."""
+    return _snapshot_from_payload(
+        cache_mod.get_json_cached(f"{_SNAPSHOT_KEY}{symbol}", ttl=_SNAPSHOT_TTL)
+    )
+
+
 def _fetch_metrics_row(symbol: str) -> dict:
     """OpenBB yfinance metrics → 第一行 dict; 无结果时抛 RuntimeError."""
     from .providers.global_stocks import _obb
@@ -160,22 +217,139 @@ def _fetch_metrics_row(symbol: str) -> dict:
     raise RuntimeError(f"{symbol}: 数据源未返回估值指标")
 
 
+def _fetch_eodhd_snapshot(
+    p: ParsedSymbol, *, fetched_at: float
+) -> ValuationSnapshot:
+    """EODHD 基本面 → 估值快照 (yfinance 失败时的可选兜底).
+
+    EODHD 的比例字段是小数 (0.0034 = 0.34%), 统一用 _fraction_or_percent /
+    _percent 归一; 只有配置了 token 且 yfinance 确实失败时才会走到这里,
+    不会为正常快照额外消耗 EODHD 额度。
+    """
+    from . import eodhd as eodhd_mod
+
+    data = eodhd_mod.fundamentals(p.yahoo)
+    return ValuationSnapshot(
+        symbol=p.yahoo,
+        market_label=p.market_label,
+        currency=str(data.get("currency") or p.currency),
+        pe_ttm=_positive(data.get("pe_ratio")),
+        forward_pe=_positive(data.get("forward_pe")),
+        pb=_positive(data.get("price_to_book")),
+        dividend_yield_pct=_fraction_or_percent(data.get("dividend_yield")),
+        dividend_yield_5y_avg_pct=None,
+        payout_ratio_pct=_percent(data.get("payout_ratio")),
+        eps_ttm=_positive(data.get("eps_ttm")),
+        book_value=_positive(data.get("book_value")),
+        market_cap=_positive(data.get("market_cap")),
+        source="eodhd",
+        fetched_at=fetched_at,
+    )
+
+
+def _with_dynamic_pe(snap: ValuationSnapshot) -> ValuationSnapshot:
+    """用行情缓存里的东财实时 PE(动) 补充快照 (无则原样返回).
+
+    只读 5 分钟行情缓存, 不发网络请求; 组合页/自选页先打开时, 估值页可以
+    顺带看到更实时的动态 PE。PE(TTM) 保持原口径, 两者不互相覆盖。
+    """
+    try:
+        q = cache_mod.get_cached([snap.symbol]).get(snap.symbol)
+    except Exception:  # noqa: BLE001 - 缓存读失败不影响估值快照
+        return snap
+    pe = getattr(q, "pe_dynamic", None) if q is not None else None
+    if pe is None or pe == snap.pe_dynamic:
+        return snap
+    return replace(snap, pe_dynamic=pe)
+
+
+def _fetch_akshare_snapshot(
+    p: ParsedSymbol, *, fetched_at: float
+) -> ValuationSnapshot:
+    """A/H 股 yfinance 失败时的免费实时兜底: 东财现价 + PB/市值/PE(动).
+
+    东财 push2 不提供 TTM 口径, 因此 pe_ttm 留空, 只写 pe_dynamic;
+    页面会把它单独显示为「PE (动)」, 不冒充 PE(TTM)。
+    """
+    from . import prices
+
+    quotes, errors, _notes = prices.get_quotes([p.yahoo], prefer_akshare=True)
+    q = quotes.get(p.yahoo)
+    if q is None:
+        raise RuntimeError(errors.get(p.yahoo) or f"{p.yahoo}: akshare 行情不可用")
+    pb = (
+        q.price / q.book_value
+        if q.book_value is not None and q.book_value > 0 and q.price > 0
+        else None
+    )
+    return ValuationSnapshot(
+        symbol=p.yahoo,
+        market_label=p.market_label,
+        currency=q.currency,
+        pb=pb,
+        market_cap=q.market_cap,
+        pe_dynamic=getattr(q, "pe_dynamic", None),
+        source="akshare",
+        fetched_at=fetched_at,
+    )
+
+
 def fetch_snapshot(symbol: str, *, refresh: bool = False) -> ValuationSnapshot:
-    """取单只股票的最新估值快照 (6h 进程内缓存; refresh=True 穿透)."""
+    """取单只股票的最新估值快照 (内存 + 磁盘 6h; refresh=True 穿透)."""
     p = parse(normalize(symbol))
     if p.market in (Market.CRYPTO, Market.INDEX):
         raise ValueError(f"{p.yahoo}: 估值指标仅支持股票, 不支持 {p.market_label}")
 
     now = time.time()
-    with _snapshot_lock:
-        hit = _snapshot_cache.get(p.yahoo)
-    if hit is not None and not refresh and now - hit[0] < _SNAPSHOT_TTL:
-        return hit[1]
+    if not refresh:
+        with _snapshot_lock:
+            hit = _snapshot_cache.get(p.yahoo)
+        if hit is not None and now - hit[0] < _SNAPSHOT_TTL:
+            return hit[1]
 
-    data = _fetch_metrics_row(p.yahoo)
-    snap = _snapshot_from_metrics(p.yahoo, data, fetched_at=now)
+        # 进程重启 / CLI 与页面切换: 先吃 6h 磁盘快照, 避免重复回源。
+        disk = _snapshot_from_disk(p.yahoo)
+        if disk is not None:
+            # 磁盘快照可能是在行情缓存为空时写入的; 若现在有实时 PE(动),
+            # 顺带补上 (只改内存返回值, 不回写磁盘, 保持 6h 快照不变)。
+            disk = _with_dynamic_pe(disk)
+            # 内存新鲜度沿用原始抓取时间, 不能重置成 now: 否则会变相延长磁盘
+            # 快照的 6h TTL, 磁盘过期后内存仍继续命中。损坏的时间戳按 now 处理,
+            # 避免后续 `now - fetched_at` 直接抛 TypeError。
+            ts = _finite(disk.fetched_at) or now
+            with _snapshot_lock:
+                _snapshot_cache[p.yahoo] = (ts, disk)
+            return disk
+
+    try:
+        data = _fetch_metrics_row(p.yahoo)
+    except Exception as primary_error:
+        # yfinance 失败时的兜底顺序:
+        #   A股/北交所/港股 → 东财实时 (免费, 有现价/PB/市值/PE动)
+        #   其它市场        → EODHD (BYOK, 有 PE/PB/股息等)
+        # 两个兜底都失败时抛回 yfinance 的原始异常, 保持页面/CLI 错误稳定。
+        snap = None
+        if p.market in (Market.CN, Market.BJ, Market.HK):
+            try:
+                snap = _fetch_akshare_snapshot(p, fetched_at=now)
+            except Exception:  # noqa: BLE001 - 继续尝试 EODHD
+                snap = None
+        if snap is None:
+            from . import eodhd as eodhd_mod
+
+            if not eodhd_mod.available():
+                raise
+            try:
+                snap = _fetch_eodhd_snapshot(p, fetched_at=now)
+            except Exception as eodhd_error:
+                raise primary_error from eodhd_error
+    else:
+        snap = _snapshot_from_metrics(p.yahoo, data, fetched_at=now)
+
+    snap = _with_dynamic_pe(snap)
     with _snapshot_lock:
         _snapshot_cache[p.yahoo] = (now, snap)
+    cache_mod.set_json_cached(f"{_SNAPSHOT_KEY}{p.yahoo}", _snapshot_payload(snap))
     return snap
 
 

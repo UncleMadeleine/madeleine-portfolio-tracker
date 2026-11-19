@@ -659,8 +659,25 @@ def test_eodhd_fundamentals_parses_sections(tmp_path, monkeypatch):
     calls = _mock_json(
         monkeypatch,
         {
-            "Highlights": {"BookValue": 7.36, "MarketCapitalization": 5.0e12},
-            "General": {"CurrencyCode": "USD", "Name": "Apple Inc."},
+            "Highlights": {
+                "BookValue": 7.36,
+                "MarketCapitalization": 5.0e12,
+                "PERatio": 33.15,
+                "ReturnOnEquityTTM": 0.412,
+                "ProfitMargin": 0.2731,
+                "DividendYield": 0.0034,
+                "DilutedEpsTTM": 6.6,
+            },
+            "General": {
+                "CurrencyCode": "USD",
+                "Name": "Apple Inc.",
+                "Sector": "Technology",
+                "Industry": "Consumer Electronics",
+            },
+            "Valuation": {"ForwardPE": 30.77, "PriceBookMRQ": 60.72},
+            "SharesStats": {"SharesOutstanding": 1.47e10},
+            "SplitsDividends": {"PayoutRatio": 0.127},
+            "Technicals": {"Beta": 1.2},
         },
     )
     f = eodhd.fundamentals("AAPL", p)
@@ -668,8 +685,23 @@ def test_eodhd_fundamentals_parses_sections(tmp_path, monkeypatch):
     assert f["market_cap"] == 5.0e12
     assert f["currency"] == "USD"
     assert f["name"] == "Apple Inc."
+    assert f["pe_ratio"] == 33.15
+    assert f["forward_pe"] == 30.77
+    assert f["price_to_book"] == 60.72
+    assert f["roe"] == pytest.approx(0.412)
+    assert f["profit_margin"] == pytest.approx(0.2731)
+    # EODHD 的股息率是小数 (0.0034 = 0.34%), 保持原样, 由调用方归一
+    assert f["dividend_yield"] == pytest.approx(0.0034)
+    assert f["payout_ratio"] == pytest.approx(0.127)
+    assert f["eps_ttm"] == pytest.approx(6.6)
+    assert f["sector"] == "Technology"
+    assert f["industry"] == "Consumer Electronics"
+    assert f["shares_outstanding"] == pytest.approx(1.47e10)
+    assert f["beta"] == pytest.approx(1.2)
     assert calls[0][0] == "v1.1/fundamentals/AAPL.US"
-    assert calls[0][1]["filter"] == "Highlights,General"
+    assert calls[0][1]["filter"] == (
+        "Highlights,General,Valuation,SharesStats,SplitsDividends,Technicals"
+    )
 
 
 def test_eodhd_fundamentals_missing_fields_are_none(tmp_path, monkeypatch):
@@ -678,6 +710,11 @@ def test_eodhd_fundamentals_missing_fields_are_none(tmp_path, monkeypatch):
     f = eodhd.fundamentals("AAPL", p)
     assert f["book_value"] is None
     assert f["market_cap"] is None
+    assert f["pe_ratio"] is None
+    assert f["forward_pe"] is None
+    assert f["roe"] is None
+    assert f["dividend_yield"] is None
+    assert f["sector"] is None
 
 
 def test_fundamentals_primary_uses_eodhd_before_openbb(monkeypatch):

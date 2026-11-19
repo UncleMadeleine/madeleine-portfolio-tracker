@@ -114,6 +114,32 @@ def _print_human(report: dict) -> None:
     for err in cov.get("errors") or []:
         print(f"  ⚠️ {err}")
 
+    fund = cov.get("fundamentals") or {}
+    if fund.get("total"):
+        print("\n--- 基本面缓存 (只读) ---")
+        print(
+            f"  股票 {fund['total']} 只: 估值快照 新鲜 {fund['snapshot_fresh']}"
+            f" / 过期 {fund['snapshot_stale']}"
+            f" / 未取 {fund['snapshot_missing']}"
+        )
+        print(
+            f"  财报链接: 新鲜 {fund['filings_fresh']}"
+            f" / 过期 {fund['filings_stale']}"
+            f" / 未取 {fund['filings_missing']}"
+        )
+        fgaps = fund.get("gaps") or []
+        if fgaps:
+            print(f"  缺口 {len(fgaps)} 项 (前 8):")
+            for item in fgaps[:8]:
+                print(
+                    f"    - {item['symbol']} [{item['kind']}]: "
+                    f"{'; '.join(item['reasons'])}"
+                )
+            if len(fgaps) > 8:
+                print(f"    … 另有 {len(fgaps) - 8} 项")
+        else:
+            print("  ✅ 持仓都有估值快照，已缓存的自选也没有过期")
+
     print("\n--- 缓存 ---")
     info = report["cache"]
     print(

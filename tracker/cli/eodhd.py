@@ -50,8 +50,25 @@ def _print_probe(result: dict) -> None:
     f = result.get("fundamentals")
     if f:
         print(
-            f"  基本面: BVPS {f['book_value']} / 市值 {f['market_cap']} {f['currency'] or ''}"
+            f"  基本面: BVPS {f.get('book_value')} / 市值 {f.get('market_cap')}"
+            f" {f.get('currency') or ''}"
         )
+        ratios = [
+            ("PE", f.get("pe_ratio")),
+            ("PB", f.get("price_to_book")),
+            ("ROE", f.get("roe")),
+            ("股息率", f.get("dividend_yield")),
+        ]
+        bits = []
+        for label, value in ratios:
+            if value is None:
+                continue
+            if label in ("ROE", "股息率"):
+                bits.append(f"{label} {float(value) * 100:.2f}%")
+            else:
+                bits.append(f"{label} {float(value):.2f}")
+        if bits:
+            print(f"  估值: {' · '.join(bits)}")
     for err in result.get("errors") or []:
         print(f"  ❌ {err}")
 

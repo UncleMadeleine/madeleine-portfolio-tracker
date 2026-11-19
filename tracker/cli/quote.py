@@ -43,6 +43,7 @@ def cmd_quote(args) -> None:
                     "currency": q.currency,
                     "prev_close": q.prev_close,
                     "change_pct": q.change_pct,
+                    "pe_dynamic": getattr(q, "pe_dynamic", None),
                     "source": getattr(q, "source", None),
                 }
             )
@@ -56,9 +57,14 @@ def cmd_quote(args) -> None:
             continue
         chg = f" ({r['change_pct']:+.2f}%)" if r["change_pct"] is not None else ""
         src = f" [{r['source']}]" if r.get("source") else ""
+        pe = (
+            f"  PE(动) {r['pe_dynamic']:.2f}"
+            if r.get("pe_dynamic") is not None
+            else ""
+        )
         print(
             f"  {r['symbol']:>12}  {r['price']:,.3f} {r['currency']}"
-            f"{chg}{src}  {r['name'] or ''}"
+            f"{chg}{pe}{src}  {r['name'] or ''}"
         )
     for n in notes:
         print(f"  ℹ {n}")

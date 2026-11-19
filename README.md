@@ -32,11 +32,11 @@ Madeleine Portfolio Tracker 是一款**本地优先**的投资组合追踪工具
 - **首屏性能** — 组合与日历均采用 stale-while-revalidate：先渲染 30 分钟 / 7 天内的旧缓存秒开，后台静默重取；仅在完全无缓存时阻塞取数（组合/日历均显示实时进度条）；行情/汇率/日历均有进程级保温线程周期刷新磁盘缓存，且保温服务已抽成无 Streamlit 依赖的 `tracker/services/warm.py`，CLI 可用 `tracker warm` 一次性预热或 `--interval` 常驻保温
 - **历史净值曲线** — 每日组合快照落独立 SQLite（`nav_history.db`，与行情缓存分离），组合页画总市值 + 成本走势；支持 `nav --save` 手动存档、组合页每次渲染自动 upsert、`nav --backfill` 按当前持仓 × 历史收盘价回填近似历史（含历史汇率折算）
 - **链上钱包净值曲线** — `wallet-nav` / 「钱包净值」页按**链上转账记录回放历史余额**（不是「当前余额 × 历史价」），再按历史币价与历史汇率折算成每日净值；Ethereum / Avalanche / TRON / Solana 零 API Key，Polygon / Arbitrum / BSC 可配 Etherscan V2 key 或自定义浏览器
-- **基本面分析** — 估值指标子视图：任意 A股/港股/美股的最新 PE(TTM)、PB、股息率、5 年平均股息率，最近财报官方原文链接（已接入 A股/北交所 巨潮资讯 / 港股 HKEXnews / 美股 SEC EDGAR / 澳股 ASX / 英股 Companies House / 日股 TDnet / 韩股 DART；德/加/新/巴等市场会明确提示未接入及原因），以及历史 PE/PB 曲线与自身历史分位（百度股市通）；AH 溢价子视图保留单只 A+H 股票的溢价率曲线：A 股收盘 ÷ (H 股收盘 × 历史汇率) − 1，支持任意 A+H 股票对 / 范围切换，0% 同价参考线 + 区间高低点/均值/分位摘要（独立页面 `/fundamentals`）
-- **数据健康观测** — provider 热路径记录每次真实回源的来源/成功失败/耗时（缓存命中不计）到 `health_events`；`tracker doctor` 与「数据健康」页聚合成功率、p50/p95、最近失败，并从持仓/自选视角列出**行情缺失/过期、持仓无 K线、汇率缺失**等「页面还能开但数字可能已经不准」的缺口；`doctor --probe` 可主动打一次真实行情/汇率；总体异常时退出码 1，可接告警脚本。事件保留 7 天 / 最多 2 万条，`cache clear` 不会误删排障线索
+- **基本面分析** — 估值指标子视图：任意 A股/港股/美股的最新 PE(TTM)、PB、股息率、5 年平均股息率，最近财报官方原文链接（已接入 A股/北交所 巨潮资讯 / 港股 HKEXnews / 美股 SEC EDGAR / 澳股 ASX / 英股 Companies House / 日股 TDnet / 韩股 DART；德/加/新/巴等市场会明确提示未接入及原因），以及历史 PE/PB 曲线与自身历史分位（百度股市通）；AH 溢价子视图保留单只 A+H 股票的溢价率曲线：A 股收盘 ÷ (H 股收盘 × 历史汇率) − 1，支持任意 A+H 股票对 / 范围切换，0% 同价参考线 + 区间高低点/均值/分位摘要（独立页面 `/fundamentals`）；同一能力提供 `fundamentals` 子命令（快照 / 历史 PE·PB / 财报链接，全部 `--json`），估值与财报快照落盘 6h（进程重启不重复回源）；A股/港股 yfinance 失败时用东财实时行情兜底（现价/PB/市值 + 动态 PE），其它市场在配置了 EODHD 时用 EODHD 基本面兜底；行情缓存中的东财动态 PE 会作为独立字段 `PE(动态)` 展示，不与 PE(TTM) 混用
+- **数据健康观测** — provider 热路径记录每次真实回源的来源/成功失败/耗时（缓存命中不计）到 `health_events`；`tracker doctor` 与「数据健康」页聚合成功率、p50/p95、最近失败，并从持仓/自选视角列出**行情缺失/过期、持仓无 K线、汇率缺失**等「页面还能开但数字可能已经不准」的缺口；同时只读检查**基本面缓存覆盖**（估值快照 / 财报链接的新鲜、过期、未取，持仓缺口单列）；`doctor --probe` 可主动打一次真实行情/汇率；总体异常时退出码 1，可接告警脚本。事件保留 7 天 / 最多 2 万条，`cache clear` 不会误删排障线索
 - **线上契约测试** — `tests/test_provider_contract_live.py`（`@pytest.mark.network`，默认不跑）真实调用各域代表代码，断言价格为有限正数、币种规范、历史日期升序/收盘为正、汇率为正；离线侧另有源链归名与坏数据拒绝测试，数据源改字段时能第一时间红
 - **Streamlit 可视化页面** — 组合明细 / 资产配置 / 自选提醒 / K线查询（含多股走势对比）/ 指数K线 / 基本面分析 / 日历 / 钱包净值 / 数据健康 / 设置
-- **统一 CLI** — 25 个子命令（快照、净值、钱包净值、报价、持仓、自选、监控报告、导出、汇率、历史、K线、日历、搜索、对比、指数K线、导入、长桥登录、EODHD 自检、WebDAV 同步、同步、钱包导入、缓存管理、缓存保温 `warm`、数据健康 `doctor`、初始化），全部支持机器可读输出（`--json`，`report`/`export` 为 `-f json`）；`warm` 可一次性预热或 `--interval` 常驻，不依赖 Streamlit 进程
+- **统一 CLI** — 26 个子命令（快照、净值、钱包净值、报价、基本面、持仓、自选、监控报告、导出、汇率、历史、K线、日历、搜索、对比、指数K线、导入、长桥登录、EODHD 自检、WebDAV 同步、同步、钱包导入、缓存管理、缓存保温 `warm`、数据健康 `doctor`、初始化），全部支持机器可读输出（`--json`，`report`/`export` 为 `-f json`）；`warm` 可一次性预热或 `--interval` 常驻，不依赖 Streamlit 进程
 - **链上钱包导入** — EVM 五链 + TRON + Solana 共七条链地址余额只读查询，一键写入持仓
 - **A股券商持仓导入** — 解析券商客户端导出的 CSV/Excel 持仓文件
 
@@ -93,6 +93,7 @@ tracker-ui                        # pip 安装后 (等价, 参数透传给 strea
 - **基本面** (`/fundamentals`) — 顶部切换「估值指标 / AH 溢价」：
   - **估值指标** — 任意 A股/港股/美股代码，最新 PE(TTM)、PB、股息率、5 年平均股息率（OpenBB/yfinance，6h 缓存）；最近财报官方原文链接（A股/北交所 巨潮资讯、港股 HKEXnews、美股 SEC EDGAR、澳股 ASX、英股 Companies House、日股 TDnet、韩股 DART，6h 缓存；其它市场明确显示未接入原因）；历史 PE/PB 曲线按近 3/6/12/24/36/60 个月展示，并给出区间均值/高低点/分位（百度股市通，6h 缓存）
   - **AH 溢价** — 可选 A+H 股票对（东财目录，失败退回内置常见股票对，也可手动输入代码），按近 3/6/12/24/36/60 个月展示 A 股收盘 ÷ (H 股收盘 × 历史汇率) − 1，0% 为两地同价
+  - 与页面同源的 CLI：`tracker fundamentals <代码> [--history pe|pb] [--filings] [--json]`；估值快照与财报链接均落 SQLite `json_cache`（6h），进程重启后首屏/CLI 不再重复回源
 - **日历** (`/calendar`) — 持仓/自选的财报、预约披露、除权除息/派息事件月历（窗口与范围可切），可一键导出 `.ics` 导入本地日历
 - **钱包净值** (`/wallet`) — 只读查询单个链上地址：按窗口内转账/交易回放每日余额，再按历史币价与历史汇率折算成净值曲线
 - **导入** (`/import`) — IBKR 账户 / 长桥账户 / 链上钱包 / A股券商文件导入
@@ -218,6 +219,11 @@ python -m tracker.cli import longport --dry-run        # 长桥账户持仓预�
 python -m tracker.cli longport-login                       # OAuth 浏览器授权登录（token 自动缓存刷新）
 python -m tracker.cli quote AAPL 0700.HK --longport --json # 指定子命令走长桥行情
 
+# 基本面 (估值快照 / 历史 PE·PB / 最新财报原文链接)
+python -m tracker.cli fundamentals 601398.SS              # PE/PB/股息率快照
+python -m tracker.cli fundamentals AAPL --filings --json  # 快照 + 最新财报原文链接
+python -m tracker.cli fundamentals 0700.HK --history pe --months 60
+
 # EODHD (BYOK: 自备 token, 可选付费源; 未配置时不影响免费链路)
 python -m tracker.cli eodhd status                         # 查看是否可用 / token 掩码 / 角色
 python -m tracker.cli eodhd test AAPL 0700.HK --json       # 实打一次行情 + 最近 7 天历史 + 基本面
@@ -244,6 +250,7 @@ python -m pytest -m network tests/test_provider_contract_live.py -q
 ```bash
 python -m tracker.cli snapshot --json          # 持仓 + 自选 + 阈值触发，一次拿全
 python -m tracker.cli quote 0700.HK --json     # 单/多代码实时行情
+python -m tracker.cli fundamentals 601398.SS --json  # 估值快照 (可加 --filings / --history pe)
 python -m tracker.cli watchlist list --json    # 自选 + 行情 + 触发状态
 python -m tracker.cli watchlist triggered --json  # 只含到达阈值的条目 (triggered/count)
 python -m tracker.cli kline AAPL --json        # K 线数据（不生成图表）
@@ -447,8 +454,8 @@ tracker/ui/           Streamlit 页面包（streamlit run tracker/ui/app.py / �
 tracker/
 ├── __main__.py         python -m tracker 入口（转发到 cli）
 ├── paths.py            数据目录解析（TRACKER_HOME > 仓库根 > 平台用户目录）+ 包内资源定位
-├── health.py           数据健康观测（回源事件记录/聚合、缓存覆盖、完整性体检、主动探测）
-├── cli/                CLI 包（python -m tracker.cli，24 个子命令各一个模块）
+├── health.py           数据健康观测（回源事件记录/聚合、行情/K线/汇率/基本面缓存覆盖、完整性体检、主动探测）
+├── cli/                CLI 包（python -m tracker.cli，26 个子命令各一个模块）
 │   ├── __init__.py       argparse 注册与分发
 │   ├── _common.py        JSON 序列化 / 代码归一化 / 原子写 / 错误退出
 │   ├── __main__.py       python -m tracker.cli 入口
@@ -459,6 +466,7 @@ tracker/
 │   ├── nav.py            历史净值（读取 / 保存今日快照 / 按当前持仓回填）
 │   ├── wallet_nav.py     钱包历史净值（链上转账回放 + 历史币价/汇率折算）
 │   ├── quote.py          实时行情
+│   ├── fundamentals.py   基本面快照 / 历史 PE·PB / 最新财报链接（--json）
 │   ├── watchlist.py      自选管理（list/add/remove/triggered/import-longport）与阈值提醒
 │   ├── portfolio.py      持仓管理（list/add/remove/set-base）
 │   ├── report.py         自选监控报告（md/csv/json）
@@ -491,11 +499,11 @@ tracker/
 ├── prices.py           行情门面（历史 API 保持不变, 全部路由到 providers）
 ├── search.py           搜索聚合层：search_grouped() 按域调 provider.search() 保持分组；纯在线接口，失败即该域空结果 + 合法代码直查兜底
 ├── fx.py               汇率：CFETS（akshare）优先，yfinance 货币对兜底（直对/逆对/USD 桥）
-├── cache.py            行情/基本面 SQLite 磁盘缓存（实时 5 分钟 / K线 30 分钟 / 基本面 6 小时）
+├── cache.py            行情/基本面 SQLite 磁盘缓存（实时 5 分钟 / K线 30 分钟 / 基本面 + 估值/财报快照 6 小时）
 ├── charting.py         K线渲染（plotly CLI HTML + lightweight-charts 页面组件：蜡烛/均线/指标/对比/单序列参考线）
 ├── ah_premium.py       AH 溢价率（A+H 股票对目录 / A/H+历史汇率对齐 / 溢价曲线与摘要, 基本面页 AH 子视图）
-├── valuation.py        估值指标（PE/PB/股息率快照 + A股/港股/美股历史 PE/PB 曲线, 基本面页估值子视图）
-├── filings.py          最新财报链接（A股/北交所 巨潮资讯 / 港股 HKEXnews / 美股 SEC EDGAR / 澳股 ASX / 英股 Companies House / 日股 TDnet / 韩股 DART, 6h 进程缓存）
+├── valuation.py        估值指标（PE/PB/股息率快照 + A股/港股/美股历史 PE/PB 曲线, 6h 内存+磁盘缓存; A/H 失败时东财实时兜底, 其它市场 EODHD 兜底）
+├── filings.py          最新财报链接（A股/北交所 巨潮资讯 / 港股 HKEXnews / 美股 SEC EDGAR / 澳股 ASX / 英股 Companies House / 日股 TDnet / 韩股 DART, 6h 内存+磁盘缓存）
 ├── analytics.py        组合视图与指标（纯函数）
 ├── watchlist.py        自选配置存储门面（读写委托 storage，仅 I/O 归一）
 ├── services/           **独立用例层**（用例 = 取数 providers/fx + 纯函数计算 + 组装视图）
@@ -845,7 +853,7 @@ python -m tracker.cli import wallet polygon 0x... --tokenlist my_tokens.json
 ## Agent / CLI 集成
 
 本仓库的双前端设计：Streamlit 给人看，CLI 给 Agent 用。hermes / openclaw 等手机 Agent 只需执行
-`python -m tracker.cli <子命令> --json` 即可获取与页面完全一致的数据（持仓/自选/行情/K线/汇率/导出），
+`python -m tracker.cli <子命令> --json` 即可获取与页面完全一致的数据（持仓/自选/行情/基本面/K线/汇率/导出），
 无需打开浏览器。建议 Agent 默认使用 `snapshot --json` 作为「现在怎么样了」的一站式入口。
 
 CLI 不再依赖前端进程做缓存保温：`python -m tracker.cli warm` 可按磁盘持仓/自选预热一次，

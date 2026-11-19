@@ -496,3 +496,49 @@ def test_unavailable_reason_for_other_markets():
     assert filings.unavailable_reason("BP.L") is None
     assert filings.unavailable_reason("7203.T") is None
     assert filings.unavailable_reason("005930.KS") is None
+
+
+def _fake_us(monkeypatch, calls, count=2):
+    def fake(symbol, limit):
+        calls.append((symbol, limit))
+        return [
+            filings.Filing(
+                title=f"2025 年年度报告 {i}",
+                date="2026-03-28",
+                url=f"https://www.sec.gov/{symbol}/{i}",
+                kind="年度报告",
+                source="SEC EDGAR",
+            )
+            for i in range(min(count, limit))
+        ]
+
+    monkeypatch.setattr(filings, "_us_filings", fake)
+
+
+def test_fetch_filings_disk_cache_survives_memory_clear(monkeypatch):
+    calls: list[tuple[str, int]] = []
+    _fake_us(monkeypatch, calls)
+    filings.clear_cache()
+
+    first = filings.fetch_filings("AAPL")
+    # 模拟进程重启: 只清内存, 6h 磁盘缓存仍应命中
+    filings.clear_cache()
+    second = filings.fetch_filings("AAPL")
+
+    assert [f.title for f in second] == [f.title for f in first]
+    assert calls == [("AAPL", 6)]
+    # 强制刷新穿透磁盘
+    filings.fetch_filings("AAPL", refresh=True)
+    assert calls == [("AAPL", 6), ("AAPL", 6)]
+
+
+def test_fetch_filings_larger_limit_misses_smaller_cache(monkeypatch):
+    calls: list[tuple[str, int]] = []
+    _fake_us(monkeypatch, calls)
+    filings.clear_cache()
+
+    assert len(filings.fetch_filings("MSFT", limit=1)) == 1
+    filings.clear_cache()
+    # 缓存只有 1 条, 本次要 6 条: 不能把残缺结果当完整缓存
+    assert len(filings.fetch_filings("MSFT", limit=6)) == 2
+    assert calls == [("MSFT", 1), ("MSFT", 6)]

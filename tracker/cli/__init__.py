@@ -5,6 +5,7 @@
   nav       历史净值 (读取 / 保存今日快照 / 按当前持仓回填)
   wallet-nav 钱包历史净值 (链上转账回放 + 历史币价/汇率折算)
   quote     查询单个或多个代码实时行情
+  fundamentals 基本面: 估值快照 / 历史 PE·PB / 最新财报原文链接
   watchlist 自选股管理 (list / add / remove / triggered) 与阈值提醒
   portfolio 持仓管理 (list / add / remove / set-base)
   report    导出自选监控阈值报告 (md / csv / json)

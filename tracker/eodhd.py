@@ -13,8 +13,10 @@ API token, 因此所有开关与凭据都放在数据目录的 `eodhd.json` (或
 字段与口径:
   - 行情: /api/real-time/{ticker}; close 为最新价, previousClose 为昨收,
     change_p 已是百分数 (0.63 = +0.63%), 不需要再 ×100
-  - 基本面: /api/v1.1/fundamentals/{ticker}?filter=Highlights,General;
-    Highlights.BookValue → 每股净资产, Highlights.MarketCapitalization → 总市值
+  - 基本面: /api/v1.1/fundamentals/{ticker}?filter=Highlights,General,Valuation,
+    SharesStats,SplitsDividends,Technicals; 一次请求同时解析 PB/市值之外的
+    PE、ROE、利润率、股息率、EV/EBITDA 等字段 (EODHD 按 10 calls/请求计费,
+    多取 section 不增加调用次数, 只是载荷变大)
   - 历史: /api/eod/{ticker}; 默认用 adjusted_close (拆股+分红复权) 作为 close,
     并把 open/high/low 按同一比例缩放, 保证 K 线连续且不破坏 OHLC 关系;
     config `adjustment: raw` 可切回不复权
@@ -604,12 +606,22 @@ def history(
     return df
 
 
-def fundamentals(symbol: str | ParsedSymbol, path: str | Path | None = None) -> dict:
-    """EODHD 基本面 (PB 用的每股净资产 + 总市值, 当地货币).
+def _text(value) -> str | None:
+    """任意字段 → 去空白字符串; 空值/空串返回 None."""
+    text = str(value or "").strip()
+    return text or None
 
-    只取 Highlights/General 两个 section (filter= 只减少载荷, 不减少计费;
-    EODHD 基本面接口按 10 API calls/请求计费)。
-    字段缺失时返回 None 而不是抛错 (与 tracker.fundamentals 的降级语义一致)。
+
+def fundamentals(symbol: str | ParsedSymbol, path: str | Path | None = None) -> dict:
+    """EODHD 基本面快照 (PB/市值 + 估值/盈利/股息字段, 当地货币).
+
+    一次请求取 Highlights/General/Valuation/SharesStats/SplitsDividends/
+    Technicals 六个 section (filter= 只减少载荷, 不减少计费; EODHD 基本面
+    接口按 10 API calls/请求计费)。字段缺失时返回 None 而不是抛错, 与
+    tracker.fundamentals 的降级语义一致。
+
+    比例口径保持 EODHD 原样 (小数): dividend_yield=0.0034 表示 0.34%,
+    profit_margin=0.2731 表示 27.31%; 由调用方按展示口径归一。
     """
     p = symbol if isinstance(symbol, ParsedSymbol) else _parse_symbol(symbol)
     cfg = load_config(path)
@@ -620,7 +632,13 @@ def fundamentals(symbol: str | ParsedSymbol, path: str | Path | None = None) -> 
         raise RuntimeError(f"{p.yahoo}: EODHD 不支持该交易所")
     data = _http_json(
         f"v1.1/fundamentals/{ticker}",
-        {"fmt": "json", "filter": "Highlights,General"},
+        {
+            "fmt": "json",
+            "filter": (
+                "Highlights,General,Valuation,SharesStats,"
+                "SplitsDividends,Technicals"
+            ),
+        },
         cfg,
     )
     if not isinstance(data, dict):
@@ -629,14 +647,69 @@ def fundamentals(symbol: str | ParsedSymbol, path: str | Path | None = None) -> 
         raise RuntimeError(
             f"{p.yahoo}: EODHD 基本面错误: {data.get('error') or data.get('message')}"
         )
-    hl = data.get("Highlights") if isinstance(data.get("Highlights"), dict) else {}
-    gen = data.get("General") if isinstance(data.get("General"), dict) else {}
+
+    def _section(name: str) -> dict:
+        value = data.get(name)
+        return value if isinstance(value, dict) else {}
+
+    hl = _section("Highlights")
+    gen = _section("General")
+    val = _section("Valuation")
+    shares = _section("SharesStats")
+    div = _section("SplitsDividends")
+    tech = _section("Technicals")
+
+    eps = _number(hl.get("DilutedEpsTTM"))
+    if eps is None:
+        eps = _number(hl.get("EarningsShare"))
+    dividend_yield = _number(hl.get("DividendYield"))
+    if dividend_yield is None:
+        dividend_yield = _number(div.get("ForwardAnnualDividendYield"))
+
     return {
         "symbol": p.yahoo,
         "book_value": _number(hl.get("BookValue")),
         "market_cap": _positive(hl.get("MarketCapitalization")),
-        "currency": str(gen.get("CurrencyCode") or "").strip() or None,
-        "name": str(gen.get("Name") or "").strip() or None,
+        "currency": _text(gen.get("CurrencyCode")),
+        "name": _text(gen.get("Name")),
+        # 估值
+        "pe_ratio": _positive(val.get("TrailingPE")) or _positive(hl.get("PERatio")),
+        "forward_pe": _positive(val.get("ForwardPE")),
+        "peg_ratio": _positive(hl.get("PEGRatio")),
+        "price_to_book": _positive(val.get("PriceBookMRQ")),
+        "price_to_sales": _positive(val.get("PriceSalesTTM")),
+        "enterprise_value": _positive(val.get("EnterpriseValue")),
+        "ev_to_revenue": _positive(val.get("EnterpriseValueRevenue")),
+        "ev_to_ebitda": _positive(val.get("EnterpriseValueEbitda")),
+        # 盈利 / 成长
+        "eps_ttm": eps,
+        "roe": _number(hl.get("ReturnOnEquityTTM")),
+        "roa": _number(hl.get("ReturnOnAssetsTTM")),
+        "profit_margin": _number(hl.get("ProfitMargin")),
+        "operating_margin": _number(hl.get("OperatingMarginTTM")),
+        "revenue_ttm": _number(hl.get("RevenueTTM")),
+        "revenue_per_share_ttm": _number(hl.get("RevenuePerShareTTM")),
+        "gross_profit_ttm": _number(hl.get("GrossProfitTTM")),
+        "ebitda": _number(hl.get("EBITDA")),
+        "revenue_growth_yoy": _number(hl.get("QuarterlyRevenueGrowthYOY")),
+        "earnings_growth_yoy": _number(hl.get("QuarterlyEarningsGrowthYOY")),
+        "target_price": _positive(hl.get("WallStreetTargetPrice")),
+        "most_recent_quarter": _text(hl.get("MostRecentQuarter")),
+        # 股息
+        "dividend_share": _number(hl.get("DividendShare")),
+        "dividend_yield": dividend_yield,
+        "payout_ratio": _number(div.get("PayoutRatio")),
+        # 股本 / 风险
+        "shares_outstanding": _positive(shares.get("SharesOutstanding")),
+        "shares_float": _positive(shares.get("SharesFloat")),
+        "beta": _number(tech.get("Beta")),
+        # 分类
+        "sector": _text(gen.get("Sector")),
+        "industry": _text(gen.get("Industry")),
+        "gics_sector": _text(gen.get("GicSector")),
+        "gics_industry": _text(gen.get("GicIndustry")),
+        "country": _text(gen.get("CountryName")),
+        "fiscal_year_end": _text(gen.get("FiscalYearEnd")),
         "source": "eodhd",
     }
 
@@ -687,10 +760,23 @@ def probe(symbol: str, path: str | Path | None = None) -> dict:
     try:
         f = fundamentals(symbol, path)
         out["fundamentals"] = {
-            "book_value": f["book_value"],
-            "market_cap": f["market_cap"],
-            "currency": f["currency"],
-            "source": f["source"],
+            key: f.get(key)
+            for key in (
+                "book_value",
+                "market_cap",
+                "pe_ratio",
+                "forward_pe",
+                "price_to_book",
+                "eps_ttm",
+                "roe",
+                "profit_margin",
+                "dividend_yield",
+                "payout_ratio",
+                "currency",
+                "sector",
+                "industry",
+                "source",
+            )
         }
     except Exception as e:  # noqa: BLE001 - 自检报告所有失败项
         out["errors"].append(f"基本面: {e}")

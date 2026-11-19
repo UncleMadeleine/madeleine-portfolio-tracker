@@ -267,3 +267,49 @@ def test_source_distribution_reads_cache():
     dist = cache_mod.source_distribution()
     assert dist["yfinance"]["total"] == 2
     assert dist["akshare"]["total"] == 1
+
+
+def test_coverage_reports_fundamentals_gaps_for_holdings_only():
+    """基本面缺口: 持仓缺快照要报; 自选只在缓存过期时报, 不把从未取过算噪音."""
+    storage.save_portfolio(
+        {
+            "base_currency": "CNY",
+            "holdings": [
+                {"symbol": "AAPL", "quantity": 1, "avg_cost": 100},
+                {"symbol": "0700.HK", "quantity": 10, "avg_cost": 300},
+            ],
+        },
+        storage.PORTFOLIO_PATH,
+    )
+    storage.save_watchlist(
+        {
+            "watchlist": [
+                {"symbol": "MSFT"},
+                {"symbol": "TSLA"},
+                {"symbol": "BTC-USD"},
+            ]
+        },
+        storage.WATCHLIST_PATH,
+    )
+    cache_mod.set_json_cached("valuation_snapshot:AAPL", {"pe_ttm": 30.0})
+    cache_mod.set_json_cached("filings:AAPL", {"limit": 6, "items": []})
+    cache_mod.set_json_cached("valuation_snapshot:TSLA", {"pe_ttm": 200.0})
+    # TSLA 的快照已过期 (7 小时前)
+    with cache_mod._connection() as con:
+        con.execute(
+            "UPDATE json_cache SET fetched_at=? WHERE key=?",
+            (time.time() - 7 * 3600, "valuation_snapshot:TSLA"),
+        )
+        con.commit()
+
+    cov = health.coverage()
+    fund = cov["fundamentals"]
+    assert fund["total"] == 4  # AAPL / 0700.HK / MSFT / TSLA; BTC 被排除
+    assert fund["snapshot_fresh"] == 1
+    assert fund["snapshot_missing"] == 2
+    assert fund["snapshot_stale"] == 1
+    assert fund["filings_fresh"] == 1
+    assert fund["filings_missing"] == 3
+    assert [g["symbol"] for g in fund["gaps"]] == ["0700.HK", "TSLA"]
+    assert any("未取过估值快照" in r for r in fund["gaps"][0]["reasons"])
+    assert any("已 7.0 小时未更新" in r for r in fund["gaps"][1]["reasons"])

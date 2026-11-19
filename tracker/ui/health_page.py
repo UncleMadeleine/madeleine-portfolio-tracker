@@ -164,6 +164,49 @@ def _render_coverage(report: dict) -> None:
     else:
         st.caption("✅ 持仓与自选的行情、持仓 K线缓存均无缺口。")
 
+    fund = cov.get("fundamentals") or {}
+    if fund.get("total"):
+        st.markdown(
+            f"**基本面缓存** (股票 {fund['total']} 只; 估值/财报 TTL 6 小时, 只读缓存)"
+        )
+        f1, f2, f3 = st.columns(3)
+        f1.metric(
+            "估值快照新鲜",
+            fund["snapshot_fresh"],
+            help="6 小时内取过且仍在缓存中",
+        )
+        f2.metric(
+            "估值未取/过期",
+            fund["snapshot_missing"] + fund["snapshot_stale"],
+            delta=(
+                None
+                if fund["snapshot_missing"] + fund["snapshot_stale"] == 0
+                else "可打开基本面页取数"
+            ),
+            delta_color="off",
+        )
+        f3.metric(
+            "财报链接缓存",
+            fund["filings_fresh"] + fund["filings_stale"],
+            help=f"未取 {fund['filings_missing']} 只",
+        )
+        fgaps = fund.get("gaps") or []
+        if fgaps:
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {
+                            "代码": g["symbol"],
+                            "类型": g["kind"],
+                            "原因": "; ".join(g["reasons"]),
+                        }
+                        for g in fgaps
+                    ]
+                ),
+                hide_index=True,
+                use_container_width=True,
+            )
+
     with st.expander(f"逐代码明细 ({len(cov.get('items') or [])})"):
         items = cov.get("items") or []
         if items:
@@ -180,6 +223,8 @@ def _render_coverage(report: dict) -> None:
                             ),
                             "行情年龄": _age(i["quote_age_seconds"]),
                             "K线年龄": _age(i["ohlc_age_seconds"]),
+                            "估值年龄": _age(i.get("valuation_age_seconds")),
+                            "财报年龄": _age(i.get("filings_age_seconds")),
                         }
                         for i in items
                     ]

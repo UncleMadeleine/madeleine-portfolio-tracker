@@ -22,7 +22,6 @@ import streamlit as st
 from . import settings, theme
 
 from tracker import ah_premium, charting, filings, valuation
-from tracker.symbols import Market, normalize, parse
 
 # 与 K线页共用组件实现, 但用独立注册名: 同一 Streamlit 进程内不同组件实例
 # 各自持有 DOM/视口状态, 避免与 K线页的图表互相影响。
@@ -139,25 +138,8 @@ def _fmt_snapshot_time(ts: float) -> str:
 
 
 def _normalize_valuation_input(raw: str) -> str:
-    """宽松代码输入 → Yahoo 规范代码.
-
-    支持 601398 (补 .SS) / 1398 (补 .HK) 这类纯数字简写; 带后缀或美股
-    ticker 走统一 normalize。空输入/畸形代码抛 ValueError。
-    """
-    s = str(raw or "").strip()
-    if not s:
-        raise ValueError("股票代码不能为空")
-    if "." not in s and s.isdigit():
-        if len(s) == 6:
-            symbol = ah_premium.normalize_a_symbol(s)
-        else:
-            symbol = ah_premium.normalize_h_symbol(s)
-    else:
-        symbol = normalize(s)
-    p = parse(symbol)
-    if p.market in (Market.CRYPTO, Market.INDEX):
-        raise ValueError(f"{p.yahoo}: 估值指标仅支持股票, 不支持 {p.market_label}")
-    return p.yahoo
+    """宽松代码输入 → Yahoo 规范代码 (实现与 CLI 共用 valuation)."""
+    return valuation.normalize_stock_input(raw)
 
 
 def render_fundamentals_page() -> None:
@@ -192,6 +174,12 @@ def _render_valuation_metrics(snap: valuation.ValuationSnapshot) -> None:
             _fmt_ratio(snap.pe_ttm),
             help="滚动市盈率 = 股价 ÷ 最近 12 个月每股收益; 亏损时无意义显示 —",
         )
+        if snap.pe_dynamic is not None:
+            st.metric(
+                "PE (动态)",
+                _fmt_ratio(snap.pe_dynamic),
+                help="东财实时口径 (市盈率动), A 股/港股可用; 与 PE(TTM) 不可直接比较",
+            )
         st.metric(
             "PB",
             _fmt_ratio(snap.pb),
@@ -218,9 +206,19 @@ def _render_valuation_metrics(snap: valuation.ValuationSnapshot) -> None:
     if snap.payout_ratio_pct is not None:
         bits.append(f"派息率 {_fmt_pct(snap.payout_ratio_pct)}")
     st.caption(" · ".join(bits))
+    source_label = {
+        "yfinance": "OpenBB / yfinance",
+        "eodhd": "EODHD",
+        "akshare": "东财实时",
+    }.get(snap.source, snap.source or "未知")
     st.caption(
-        f"快照时间 {_fmt_snapshot_time(snap.fetched_at)} · 数据源 {snap.source} "
-        "(OpenBB)。PE/PB 为负 (亏损/负净资产) 时按「无意义」显示 —。"
+        f"快照时间 {_fmt_snapshot_time(snap.fetched_at)} · 数据源 {source_label}。"
+        "PE/PB 为负 (亏损/负净资产) 时按「无意义」显示 —。"
+        + (
+            " PE (动态) 是东财实时口径, 与 PE(TTM) 不可直接比较。"
+            if snap.pe_dynamic is not None
+            else ""
+        )
     )
 
 

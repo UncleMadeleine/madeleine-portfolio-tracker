@@ -204,6 +204,52 @@ def _add_quote_parser(sub: argparse.ArgumentParser) -> None:
     p_q.add_argument("--json", action="store_true")
     p_q.set_defaults(func=_cmd(".quote", "cmd_quote"))
 
+
+def _add_fundamentals_parser(sub: argparse.ArgumentParser) -> None:
+    # ---- fundamentals ----
+    p_f = sub.add_parser(
+        "fundamentals",
+        help="基本面: 估值快照 / 历史 PE·PB / 最新财报原文链接",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "示例:\n"
+            "  tracker fundamentals 601398.SS                 # PE/PB/股息率快照\n"
+            "  tracker fundamentals AAPL --filings            # 附带最近财报原文链接\n"
+            "  tracker fundamentals 0700.HK --history pe --months 60\n"
+            "  tracker fundamentals 600519.SS --json          # Agent 机器可读输出\n"
+        ),
+    )
+    p_f.add_argument(
+        "symbols",
+        nargs="+",
+        metavar="<代码>",
+        help="股票代码, 如 601398.SS / 1398 / 0700.HK / AAPL",
+    )
+    p_f.add_argument(
+        "--history",
+        choices=("pe", "pb"),
+        help="附带历史估值曲线 (A股/港股/美股; 默认不取)",
+    )
+    p_f.add_argument(
+        "--months",
+        type=positive_int,
+        default=36,
+        help="历史曲线范围 (月, 默认 36; 仅 --history 时生效)",
+    )
+    p_f.add_argument(
+        "--filings",
+        action="store_true",
+        help="附带最近财报官方原文链接",
+    )
+    p_f.add_argument(
+        "--refresh",
+        action="store_true",
+        help="忽略估值/财报/历史缓存, 强制重新取数",
+    )
+    p_f.add_argument("--json", action="store_true", help="输出 JSON")
+    p_f.set_defaults(func=_cmd(".fundamentals", "cmd_fundamentals"))
+
+
 def _add_watchlist_parser(sub: argparse.ArgumentParser) -> None:
     # ---- watchlist ----
     p_w = sub.add_parser(
@@ -1170,6 +1216,7 @@ _SUBCOMMAND_REGISTRARS = (
     _add_nav_parser,
     _add_wallet_nav_parser,
     _add_quote_parser,
+    _add_fundamentals_parser,
     _add_watchlist_parser,
     _add_portfolio_parser,
     _add_report_parser,
@@ -1211,6 +1258,7 @@ def build_parser() -> argparse.ArgumentParser:
             "示例:\n"
             "  python -m tracker.cli snapshot --json\n"
             "  python -m tracker.cli quote AAPL 600519.SS\n"
+            "  python -m tracker.cli fundamentals AAPL --json\n"
             "  python -m tracker.cli watchlist add AAPL --upper1 250\n"
             "  python -m tracker.cli portfolio add AAPL --quantity 10 --avg-cost 180\n"
             "  python -m tracker.cli export -f md -o snapshot.md\n"

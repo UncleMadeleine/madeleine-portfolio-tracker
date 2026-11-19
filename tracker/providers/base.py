@@ -96,6 +96,9 @@ class Quote:
     # 实际命中数据源 (longport/ibkr/eodhd/yfinance/akshare/binance/gate.io/hyperliquid/cache);
     # 由取数链路打标, 缓存命中项从磁盘缓存恢复, 供前端「数据来源」列展示
     source: str | None = None
+    # 东财实时「市盈率(动)」(f162): 与 PE(TTM) 口径不同, 单独字段保存,
+    # 不能直接覆盖估值页的 pe_ttm; 部分港股/无盈利标的返回 "-" → None。
+    pe_dynamic: float | None = None
 
 
 class Provider:

@@ -112,6 +112,7 @@ def _create_schema(con) -> None:
             currency TEXT,
             book_value REAL,
             market_cap REAL,
+            pe_dynamic REAL,
             source TEXT,
             fetched_at REAL
         )
@@ -124,6 +125,10 @@ def _create_schema(con) -> None:
         pass
     try:
         con.execute("ALTER TABLE quotes ADD COLUMN market_cap REAL")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        con.execute("ALTER TABLE quotes ADD COLUMN pe_dynamic REAL")
     except sqlite3.OperationalError:
         pass
     try:
@@ -178,6 +183,17 @@ def _create_schema(con) -> None:
     con.execute(
         """
         CREATE TABLE IF NOT EXISTS calendar_cache (
+            key TEXT PRIMARY KEY,
+            payload TEXT NOT NULL,
+            fetched_at REAL NOT NULL
+        )
+        """
+    )
+    # 通用 JSON 快照缓存: 估值快照 / 财报链接等「结构化但非 DataFrame」结果。
+    # 与 series_cache 分开是为了按业务前缀独立清理, 且载荷不是 (date, close)。
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS json_cache (
             key TEXT PRIMARY KEY,
             payload TEXT NOT NULL,
             fetched_at REAL NOT NULL
@@ -671,12 +687,12 @@ def get_cached_with_age(
     ages: dict[str, float] = {}
     for chunk in _chunks(list(symbols)):
         rows = _read_all(
-            f"SELECT symbol, name, price, prev_close, change_pct, currency, book_value, market_cap, source, fetched_at "
+            f"SELECT symbol, name, price, prev_close, change_pct, currency, book_value, market_cap, pe_dynamic, source, fetched_at "
             f"FROM quotes "
             f"WHERE symbol IN ({','.join('?' * len(chunk))}) AND fetched_at > ?",
             [*chunk, now - ttl],
         )
-        for sym, name, price, prev, chg, ccy, bv, mc, src, fetched_at in rows:
+        for sym, name, price, prev, chg, ccy, bv, mc, pe_dyn, src, fetched_at in rows:
             if price is not None and math.isfinite(price) and price > 0:
                 quote_ccy = _normalize_quote_currency(sym, ccy)
                 if quote_ccy is None:
@@ -690,6 +706,7 @@ def get_cached_with_age(
                     currency=quote_ccy,
                     book_value=_finite_opt(bv),
                     market_cap=_finite_opt(mc),
+                    pe_dynamic=_finite_opt(pe_dyn),
                     source=str(src) if src else None,
                 )
                 ages[sym] = max(0.0, now - float(fetched_at or now))
@@ -732,14 +749,15 @@ def set_cached(quotes: dict[str, "Quote"]) -> None:
                 quote_ccy,
                 _finite_opt(q.book_value),
                 _finite_opt(getattr(q, "market_cap", None)),
+                _finite_opt(getattr(q, "pe_dynamic", None)),
                 getattr(q, "source", None),
                 now,
             )
         )
     _execute_write(
         """
-        INSERT INTO quotes (symbol, name, price, prev_close, change_pct, currency, book_value, market_cap, source, fetched_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO quotes (symbol, name, price, prev_close, change_pct, currency, book_value, market_cap, pe_dynamic, source, fetched_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(symbol) DO UPDATE SET
             -- 名称与基本面字段同样 COALESCE: yfinance/OpenBB 路径常回 name=None,
             -- 无条件覆盖会把上一轮 akshare/长桥/条目写入的中文名抹成 NULL
@@ -749,6 +767,12 @@ def set_cached(quotes: dict[str, "Quote"]) -> None:
             prev_close=excluded.prev_close, change_pct=excluded.change_pct,
             currency=excluded.currency, book_value=COALESCE(excluded.book_value, quotes.book_value),
             market_cap=COALESCE(excluded.market_cap, quotes.market_cap),
+            -- 动态 PE: akshare/东财是权威口径, 它返回 "-" 时要清掉旧值;
+            -- 其它源 (yfinance/长桥) 不提供该字段, 不能把东财值抹成 NULL。
+            pe_dynamic=CASE
+                WHEN excluded.source = 'akshare' THEN excluded.pe_dynamic
+                ELSE COALESCE(excluded.pe_dynamic, quotes.pe_dynamic)
+            END,
             source=excluded.source, fetched_at=excluded.fetched_at
         """,
         rows,
@@ -977,6 +1001,75 @@ def set_series_cached(key: str, df: pd.DataFrame) -> None:
     )
 
 
+# ---------- 通用 JSON 快照缓存 (估值快照 / 财报链接) ----------
+
+
+def get_json_cached(key: str, ttl: float):
+    """读取 JSON 快照缓存; 未命中/过期/载荷损坏返回 None.
+
+    快照属低频数据 (估值/财报 6h), 与行情/序列缓存共库但独立表;
+    读失败按无缓存处理, 不影响上层重新取数。
+    """
+    _ensure_db()
+    row = _read_one(
+        "SELECT payload FROM json_cache WHERE key=? AND fetched_at > ?",
+        (key, time.time() - ttl),
+    )
+    if row is None:
+        return None
+    try:
+        return json.loads(row[0])
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def set_json_cached(key: str, value) -> None:
+    """写入 JSON 快照缓存 (调用方负责保证 value 可 JSON 序列化)."""
+    _ensure_db()
+    try:
+        payload = json.dumps(value, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        return
+    _execute_write(
+        """
+        INSERT INTO json_cache (key, payload, fetched_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+            payload=excluded.payload, fetched_at=excluded.fetched_at
+        """,
+        (key, payload, time.time()),
+    )
+
+
+def clear_json_cache(prefix: str = "") -> int:
+    """按 key 前缀清 JSON 快照缓存; prefix 为空时清空整表."""
+    _ensure_db()
+
+    def _delete() -> int:
+        with _lock, _connection() as con:
+            if prefix:
+                # 前缀里的 % / _ 按字面量处理, 避免 "valuation:" 这类 key
+                # 被 LIKE 通配符误伤到别的业务前缀。
+                escaped = (
+                    prefix.replace("\\", "\\\\")
+                    .replace("%", "\\%")
+                    .replace("_", "\\_")
+                )
+                n = con.execute(
+                    "DELETE FROM json_cache WHERE key LIKE ? ESCAPE '\\'",
+                    (escaped + "%",),
+                ).rowcount
+            else:
+                n = con.execute("DELETE FROM json_cache").rowcount
+            con.commit()
+            return n
+
+    try:
+        return _with_schema_retry(_delete)
+    except sqlite3.Error:
+        return 0
+
+
 # ---------- 数据源健康事件 (取数成功率 / 耗时 / 最近失败) ----------
 
 
@@ -1078,6 +1171,31 @@ def ohlc_freshness(symbols: list[str], now: float | None = None) -> dict[str, fl
         for sym, ts in rows:
             if ts is not None:
                 out[str(sym)] = max(0.0, now - float(ts))
+    return out
+
+
+def json_cache_freshness(
+    keys: list[str], now: float | None = None
+) -> dict[str, float]:
+    """给定 json_cache key 的年龄 (秒); 无缓存者不在返回值中.
+
+    与 get_json_cached 不同, 这里不应用 TTL: 供 doctor 区分「从未取过」
+    (不在返回值) 与「取过但已过期」(年龄 > TTL)。
+    """
+    unique = list(dict.fromkeys(keys))
+    if not unique:
+        return {}
+    now = time.time() if now is None else now
+    out: dict[str, float] = {}
+    for chunk in _chunks(unique):
+        rows = _read_all(
+            f"SELECT key, fetched_at FROM json_cache "
+            f"WHERE key IN ({','.join('?' * len(chunk))})",
+            list(chunk),
+        )
+        for key, ts in rows:
+            if ts is not None:
+                out[str(key)] = max(0.0, now - float(ts))
     return out
 
 
@@ -1233,10 +1351,11 @@ def clear() -> int:
             n_fx = con.execute("DELETE FROM fx_rates").rowcount
             n_series = con.execute("DELETE FROM series_cache").rowcount
             n_cal = con.execute("DELETE FROM calendar_cache").rowcount
+            n_json = con.execute("DELETE FROM json_cache").rowcount
             con.commit()
             n_fund = con.execute("DELETE FROM fundamentals").rowcount
             con.commit()
-            return n_quotes + n_ohlc + n_fund + n_fx + n_series + n_cal
+            return n_quotes + n_ohlc + n_fund + n_fx + n_series + n_cal + n_json
 
     try:
         return _with_schema_retry(_delete_all)

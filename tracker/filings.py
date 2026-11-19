@@ -26,8 +26,9 @@ import json
 import re
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
+from . import cache as cache_mod
 from .symbols import Market, normalize, parse
 
 _TTL = 21600  # 秒 (6h): 财报属低频披露数据
@@ -144,7 +145,10 @@ _US_FORMS = {
 }
 
 _cache_lock = threading.Lock()
-_cache: dict[str, tuple[float, tuple["Filing", ...]]] = {}
+# (抓取时间, 结果, 抓取时的 limit): limit 用于避免「先取 2 条、后要 6 条」
+# 时把 2 条当成完整缓存。磁盘缓存 json_cache 里存同样结构。
+_cache: dict[str, tuple[float, tuple["Filing", ...], int]] = {}
+_KEY = "filings:"
 
 
 @dataclass(frozen=True)
@@ -908,10 +912,38 @@ def unavailable_reason(symbol: str) -> str | None:
     return FILINGS_UNAVAILABLE.get(p.market, "该市场暂无公开财报链接源")
 
 
+def _payload(items: list[Filing], limit: int) -> dict:
+    """财报列表 → json_cache 载荷 (带上本次 limit, 供更大 limit 判未命中)."""
+    return {"limit": int(limit), "items": [asdict(f) for f in items]}
+
+
+def _from_payload(payload: object, limit: int) -> list[Filing] | None:
+    """json_cache 载荷 → Filing 列表; 缓存结果不足 limit 时返回 None."""
+    if not isinstance(payload, dict):
+        return None
+    try:
+        cached_limit = int(payload.get("limit") or 0)
+    except (TypeError, ValueError):
+        return None
+    if cached_limit < limit:
+        # 之前只缓存了更少的条数: 本次需要更多, 按未命中重新取。
+        return None
+    out: list[Filing] = []
+    for row in payload.get("items") or []:
+        if not isinstance(row, dict):
+            return None
+        data = {
+            key: str(row.get(key) or "")
+            for key in ("title", "date", "url", "kind", "source")
+        }
+        out.append(Filing(**data))
+    return out[:limit]
+
+
 def fetch_filings(
     symbol: str, *, limit: int = 6, refresh: bool = False
 ) -> list[Filing]:
-    """取单只股票最近的财报链接 (进程内缓存 6h; refresh=True 穿透)."""
+    """取单只股票最近的财报链接 (内存 + 磁盘缓存 6h; refresh=True 穿透)."""
     p = parse(normalize(symbol))
     if p.market not in FILINGS_SUPPORTED:
         raise ValueError(
@@ -923,8 +955,16 @@ def fetch_filings(
     if not refresh:
         with _cache_lock:
             hit = _cache.get(p.yahoo)
-        if hit is not None and now - hit[0] < _TTL:
+        if hit is not None and now - hit[0] < _TTL and hit[2] >= limit:
             return list(hit[1])[:limit]
+
+        cached = _from_payload(
+            cache_mod.get_json_cached(f"{_KEY}{p.yahoo}", ttl=_TTL), limit
+        )
+        if cached is not None:
+            with _cache_lock:
+                _cache[p.yahoo] = (now, tuple(cached), limit)
+            return cached
 
     if p.market in (Market.CN, Market.BJ):
         items = _cn_filings(p.ak_code or p.yahoo.split(".")[0], limit)
@@ -942,7 +982,8 @@ def fetch_filings(
         items = _us_filings(p.yahoo, limit)
 
     with _cache_lock:
-        _cache[p.yahoo] = (now, tuple(items))
+        _cache[p.yahoo] = (now, tuple(items), limit)
+    cache_mod.set_json_cached(f"{_KEY}{p.yahoo}", _payload(list(items), limit))
     return items
 
 

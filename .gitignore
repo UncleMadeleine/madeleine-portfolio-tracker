@@ -30,6 +30,8 @@ portfolio.json
 portfolio.json.bak
 watchlist.json
 watchlist.json.bak
+# 外部同步工具生成的带日期备份 (如 watchlist.json.bak-20261119)
+*.bak-*
 settings.json
 # save_*/edit_* 的跨进程写锁空文件 (见 storage._file_lock: 故意永不删除)
 portfolio.json.lock

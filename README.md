@@ -454,7 +454,9 @@ tracker/ui/           Streamlit 页面包（streamlit run tracker/ui/app.py / �
 tracker/
 ├── __main__.py         python -m tracker 入口（转发到 cli）
 ├── paths.py            数据目录解析（TRACKER_HOME > 仓库根 > 平台用户目录）+ 包内资源定位
-├── health.py           数据健康观测（回源事件记录/聚合、行情/K线/汇率/基本面缓存覆盖、完整性体检、主动探测）
+├── health.py           数据健康观测门面（再导出，保持既有 API）
+├── health_record.py    span / record / flush 与健康展示常量（provider 热路径）
+├── health_report.py    成功率聚合 / 缓存覆盖 / 完整性体检 / 主动探测
 ├── cli/                CLI 包（python -m tracker.cli，26 个子命令各一个模块）
 │   ├── __init__.py       argparse 注册与分发
 │   ├── _common.py        JSON 序列化 / 代码归一化 / 原子写 / 错误退出

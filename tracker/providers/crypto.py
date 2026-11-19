@@ -16,17 +16,17 @@ import time
 
 import pandas as pd
 
-from ..deps import openbb as _obb
 from ..deps import requests as _requests
 from ..source_order import CRYPTO_SOURCE_PREFERS
 from ..symbols import ParsedSymbol
 from ..util import finite_float as _finite_opt, with_timeout
-from .base import Provider, Quote, SymbolEntry, openbb_history_frame, ordered_sources
+from .base import Provider, Quote, SymbolEntry, ordered_sources
+from .stock_yahoo import openbb_history
 
 _BINANCE_HOSTS = ("https://api.binance.com", "https://data-api.binance.vision")
 _HTTP_TIMEOUT = 8.0
 _YF_QUOTE_TIMEOUT = 5.0
-_YF_HISTORY_TIMEOUT = 60.0
+
 _KLINES_LIMIT = 1000
 # Gate.io candlesticks 单请求数据点硬上限 (超出直接 HTTP 400, 与 limit 无关)
 _GATE_MAX_POINTS = 1000
@@ -469,14 +469,7 @@ def _gate_history(
 
 def _yf_history(p: ParsedSymbol, start_date: str, end_date: str | None) -> pd.DataFrame:
     """yfinance (OpenBB) 历史降级: equity.price.historical 支持 crypto."""
-    obb_mod = _obb()
-    kwargs = {"symbol": p.yahoo, "provider": "yfinance", "start_date": start_date}
-    if end_date:
-        kwargs["end_date"] = end_date
-    res = with_timeout(
-        obb_mod.equity.price.historical, _YF_HISTORY_TIMEOUT, **kwargs
-    )
-    return openbb_history_frame(res)
+    return openbb_history(p.yahoo, start_date, end_date)
 
 
 class CryptoProvider(Provider):

@@ -32,12 +32,12 @@ import json
 import pandas as pd
 
 from ..deps import akshare as _ak
-from ..deps import openbb as _obb
 from ..deps import requests as _requests
 from ..symbols import INDEX_CATALOG, ParsedSymbol, index_key
 from ..util import with_timeout
-from .base import Provider, openbb_history_frame, ordered_sources
+from .base import Provider, ordered_sources
 from .stock_akshare import _AK_HIST_TIMEOUT
+from .stock_yahoo import openbb_history
 
 __all__ = ["IndexProvider"]
 
@@ -248,7 +248,6 @@ _CAMECO_HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 _CAMECO_TIMEOUT = 30.0
-_YF_HISTORY_TIMEOUT = 60.0
 
 
 def _cameco_history(
@@ -298,12 +297,9 @@ def _cameco_history(
 def _yf_history(
     p: ParsedSymbol, start_date: str, end_date: str | None = None
 ) -> pd.DataFrame:
-    yf_symbol = _catalog(p)["yf"]
-    kwargs = {"symbol": yf_symbol, "provider": "yfinance", "start_date": start_date}
-    if end_date:
-        kwargs["end_date"] = end_date
-    res = with_timeout(_obb().equity.price.historical, _YF_HISTORY_TIMEOUT, **kwargs)
-    return openbb_history_frame(res, ensure_volume=True)
+    return openbb_history(
+        _catalog(p)["yf"], start_date, end_date, ensure_volume=True
+    )
 
 
 # ---------- akshare 源 (新浪商品期货主力连续) ----------

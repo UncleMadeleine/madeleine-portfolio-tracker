@@ -117,33 +117,19 @@ def _fx_series(
 ) -> pd.Series:
     """1 USD → 基础货币 的历史折算序列; 缺历史时退回即期汇率."""
     base = (base or "USD").upper()
-    if base == "USD":
-        return pd.Series(1.0, index=index, dtype=float)
-    df = fx_mod.get_fx_history(
-        "USD", base, start.isoformat(), end.isoformat(), refresh=refresh
+    series = fx_mod.fx_series(
+        "USD",
+        base,
+        index,
+        start.isoformat(),
+        end.isoformat(),
+        refresh=refresh,
     )
-    if df is not None and not df.empty and "close" in df.columns:
-        s = df[["date", "close"]].copy()
-        s["date"] = pd.to_datetime(s["date"], errors="coerce")
-        if getattr(s["date"].dt, "tz", None) is not None:
-            s["date"] = s["date"].dt.tz_localize(None)
-        s["date"] = s["date"].dt.normalize()
-        s["close"] = pd.to_numeric(s["close"], errors="coerce")
-        s = s.dropna(subset=["date", "close"]).drop_duplicates("date", keep="last")
-        if not s.empty:
-            return (
-                s.set_index("date")["close"]
-                .reindex(index)
-                .ffill()
-                .bfill()
-                .astype(float)
-            )
-    rate = fx_mod.get_rate("USD", base)
-    if rate is None or not math.isfinite(float(rate)) or float(rate) <= 0:
+    if series is None:
         raise wallet_history.WalletHistoryError(
             f"缺少 USD→{base} 历史汇率, 无法折算钱包净值"
         )
-    return pd.Series(float(rate), index=index, dtype=float)
+    return series
 
 
 def compute_wallet_nav(

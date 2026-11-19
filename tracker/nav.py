@@ -390,28 +390,9 @@ def _holdings_by_symbol(portfolio: dict) -> tuple[dict[str, dict], list[str]]:
 
 def _fx_series(currency: str, base: str, start: str, end: str, index):
     """某币种 → 基础货币的历史折算序列 (失败回退当前即期汇率)."""
-    import pandas as pd
-
     from . import fx as fx_mod
 
-    currency = (currency or "").upper()
-    base = (base or "").upper()
-    if currency == base:
-        return pd.Series(1.0, index=index, dtype=float)
-    df = fx_mod.get_fx_history(currency, base, start, end)
-    if df is not None and not df.empty and "close" in df.columns:
-        s = df.copy()
-        s["date"] = _normalize_dates(s["date"])
-        s["close"] = pd.to_numeric(s["close"], errors="coerce")
-        s = s.dropna(subset=["date", "close"]).drop_duplicates("date", keep="last")
-        if not s.empty:
-            series = s.set_index("date")["close"].reindex(index)
-            # 历史汇率缺失日 (周末/两地假期) 用最近已知值; 序列起点之前用首个值
-            return series.ffill().bfill()
-    rate = fx_mod.get_rate(currency, base)
-    if rate is None or not math.isfinite(float(rate)) or float(rate) <= 0:
-        return None
-    return pd.Series(float(rate), index=index, dtype=float)
+    return fx_mod.fx_series(currency, base, index, start, end)
 
 
 def backfill(

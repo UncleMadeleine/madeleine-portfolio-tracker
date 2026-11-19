@@ -415,7 +415,9 @@ def test_crypto_yf_history_fallback_does_not_nameerror(monkeypatch):
                 def historical(**kw):
                     return FakeRes()
 
-    monkeypatch.setattr(crypto_mod, "_obb", lambda: FakeObb)
+    from tracker.providers import stock_yahoo
+
+    monkeypatch.setattr(stock_yahoo, "_obb", lambda: FakeObb)
     df = crypto_mod._yf_history(parse("BTC-USD"), "2026-01-01", None)
     assert list(df.columns) == ["date", "open", "high", "low", "close", "volume"]
     assert len(df) == 2

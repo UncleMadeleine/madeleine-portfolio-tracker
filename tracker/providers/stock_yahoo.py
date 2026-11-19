@@ -216,16 +216,27 @@ def _yahoo_quote_currency(yahoo: str) -> str:
         return ""
 
 
-def _yahoo_history(
-    p: ParsedSymbol, start_date: str, end_date: str | None = None
+def openbb_history(
+    symbol: str,
+    start_date: str,
+    end_date: str | None = None,
+    *,
+    ensure_volume: bool = False,
 ) -> pd.DataFrame:
-    kwargs = {"symbol": p.yahoo, "provider": "yfinance", "start_date": start_date}
+    """OpenBB equity.price.historical 的通用包装 (股票/指数/加密共用)."""
+    kwargs = {"symbol": symbol, "provider": "yfinance", "start_date": start_date}
     if end_date:
         kwargs["end_date"] = end_date
     # _obb() 在计时区外求值 (冷启动 import 不计入预算); 网络调用硬超时,
     # 避免半开连接/OpenBB 内部重试把 CLI/页面主线程无限挂住。
     res = with_timeout(_obb().equity.price.historical, _HISTORY_TIMEOUT, **kwargs)
-    df = openbb_history_frame(res)
+    return openbb_history_frame(res, ensure_volume=ensure_volume)
+
+
+def _yahoo_history(
+    p: ParsedSymbol, start_date: str, end_date: str | None = None
+) -> pd.DataFrame:
+    df = openbb_history(p.yahoo, start_date, end_date)
     if p.market is Market.GB:
         # LSE 惯例: 便士报价 (GBp/GBX, is_pence 命中) 或币种未知时 ÷100 折成
         # 英镑; 真正的英镑报价 (Yahoo 报 "GBP", 如 VUSA.L/VWRL.L 的 ETF) 与

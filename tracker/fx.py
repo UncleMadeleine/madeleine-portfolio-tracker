@@ -11,6 +11,7 @@ from .deps import akshare as _ak
 from .deps import openbb as _obb
 from .symbols import is_currency_code, valuation_currency
 from .util import finite_float as _finite
+from .util import normalize_dates
 from .util import with_timeout
 
 _PAIR_TTL = 600
@@ -242,6 +243,46 @@ def get_fx_history(src: str, dst: str, start_date, end_date=None, refresh: bool 
             return None
     _fx_hist_cache[key] = (now, df)
     return df.copy()
+
+
+def fx_series(
+    currency: str,
+    base: str,
+    index,
+    start,
+    end,
+    *,
+    refresh: bool = False,
+):
+    """某币种 → 基础货币的历史折算序列; 失败回退即期汇率.
+
+    返回 pd.Series (index 对齐, 缺失日 ffill/bfill); 无历史且即期也拿不到
+    时返回 None, 由调用方决定报错还是跳过。供历史净值回填 / 钱包净值共用。
+    """
+    import pandas as pd
+
+    currency = (currency or "").upper()
+    base = (base or "").upper()
+    if currency == base:
+        return pd.Series(1.0, index=index, dtype=float)
+    df = get_fx_history(currency, base, start, end, refresh=refresh)
+    if df is not None and not df.empty and "close" in df.columns:
+        s = df[["date", "close"]].copy()
+        s["date"] = normalize_dates(s["date"])
+        s["close"] = pd.to_numeric(s["close"], errors="coerce")
+        s = s.dropna(subset=["date", "close"]).drop_duplicates("date", keep="last")
+        if not s.empty:
+            return (
+                s.set_index("date")["close"]
+                .reindex(index)
+                .ffill()
+                .bfill()
+                .astype(float)
+            )
+    rate = get_rate(currency, base)
+    if rate is None or not math.isfinite(float(rate)) or float(rate) <= 0:
+        return None
+    return pd.Series(float(rate), index=index, dtype=float)
 
 
 def get_fx_rates(

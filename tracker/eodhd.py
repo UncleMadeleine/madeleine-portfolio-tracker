@@ -42,6 +42,7 @@ import pandas as pd
 
 from . import config
 from .config import load_json_object, merge_config, resolve_config_path
+from .http import HTTPError, request_json, scrub
 from .paths import TEMPLATES_DIR, data_home
 from .symbols import Market, ParsedSymbol, parse as _parse_symbol
 from .util import as_bool as _as_bool
@@ -376,43 +377,36 @@ def _quote_currency_and_price(
 
 def _scrub(text: str, token: str) -> str:
     """错误信息脱敏: requests 的异常串里可能带完整 URL (含 api_token)."""
-    s = str(text)
-    if token:
-        s = s.replace(token, "***")
-    return re.sub(r"(api_token=)[^&\s\"']+", r"\1***", s)
+    return scrub(text, (token,))
 
 
 def _http_json(path: str, params: dict, cfg: dict):
     """GET JSON; 4xx/5xx 转可读 RuntimeError, 且绝不把 token 带进异常."""
-    try:
-        import requests
-    except ImportError as e:  # pragma: no cover - requests 是通行依赖
-        raise RuntimeError("未安装 requests, 无法访问 EODHD") from e
     token = str(cfg.get("token") or "")
     url = f"{cfg['base_url'].rstrip('/')}/{path.lstrip('/')}"
-    try:
-        resp = requests.get(
-            url, params={**params, "api_token": token}, timeout=cfg["timeout"]
-        )
-    except Exception as e:  # noqa: BLE001 - 网络异常统一转可读错误
-        raise RuntimeError(f"EODHD 请求失败: {_scrub(e, token)}") from e
-    code = int(getattr(resp, "status_code", 0) or 0)
     hints = {
         401: "认证失败 (401): token 无效或缺失",
         403: "无权限 (403): 当前套餐未覆盖该接口/标的",
         404: "未收录该代码 (404): 检查 EODHD ticker 映射",
         429: "请求过多 (429): 触发 EODHD 限流, 稍后重试",
     }
-    if code in hints:
-        raise RuntimeError(f"EODHD {hints[code]}")
-    if code >= 400:
-        body = _scrub(getattr(resp, "text", "")[:200], token)
-        raise RuntimeError(f"EODHD HTTP {code}: {body}".strip())
     try:
-        return resp.json()
-    except ValueError as e:
-        body = _scrub(getattr(resp, "text", "")[:200], token)
-        raise RuntimeError(f"EODHD 返回非 JSON: {body}".strip()) from e
+        return request_json(
+            "GET",
+            url,
+            params={**params, "api_token": token},
+            timeout=float(cfg["timeout"]),
+        )
+    except HTTPError as e:
+        if e.status in hints:
+            raise RuntimeError(f"EODHD {hints[e.status]}") from e
+        if e.status is not None and e.status >= 400:
+            body = _scrub(e.body[:200], token)
+            raise RuntimeError(f"EODHD HTTP {e.status}: {body}".strip()) from e
+        if str(e).startswith("返回非 JSON"):
+            body = _scrub(e.body[:200], token)
+            raise RuntimeError(f"EODHD 返回非 JSON: {body}".strip()) from e
+        raise RuntimeError(f"EODHD 请求失败: {_scrub(e, token)}") from e
 
 
 # ---------------------------------------------------------------------------

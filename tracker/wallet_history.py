@@ -41,7 +41,6 @@ from __future__ import annotations
 
 import math
 import os
-import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
@@ -49,6 +48,7 @@ from typing import Any
 from . import config
 from .chains import CHAIN_CONFIG as _CHAIN_CONFIG
 from .chains import EVM_CHAIN_ID as _EVM_CHAIN_ID
+from .http import HTTPError, request_json, scrub
 from .paths import TEMPLATES_DIR, data_home
 from .util import finite_float as _to_float
 
@@ -71,11 +71,7 @@ _SECRETS: set[str] = set()
 
 def _scrub(text: Any) -> str:
     """错误信息脱敏: 不把 API key / apikey 查询参数带进 CLI/UI 输出."""
-    s = str(text)
-    for secret in _SECRETS:
-        if secret:
-            s = s.replace(secret, "***")
-    return re.sub(r"(apikey=)[^&\s\"']+", r"\1***", s, flags=re.IGNORECASE)
+    return scrub(text, _SECRETS)
 
 
 #: 兼容旧代码/测试的别名
@@ -252,32 +248,25 @@ def _http_json(
 ) -> Any:
     """GET JSON; 网络/HTTP/JSON 错误统一转 WalletHistoryError."""
     try:
-        import requests
-    except ImportError as e:  # pragma: no cover - requests 是通行依赖
-        raise WalletHistoryError("未安装 requests, 无法访问链上浏览器") from e
-    clean = {k: v for k, v in (params or {}).items() if v is not None}
-    try:
-        resp = requests.get(
+        return request_json(
+            "GET",
             url,
-            params=clean,
+            params=params,
             timeout=timeout,
             headers={"User-Agent": "madeleine-tracker", **(headers or {})},
         )
-    except Exception as e:  # noqa: BLE001 - 网络异常统一转可读错误
-        raise WalletHistoryError(f"请求失败: {_scrub(e)}") from e
-    code = int(getattr(resp, "status_code", 0) or 0)
-    if code >= 400:
-        body = _scrub(getattr(resp, "text", "") or "")[:200]
-        if code == 403:
+    except HTTPError as e:
+        if e.status == 403:
             raise WalletHistoryError(
                 "HTTP 403 (浏览器接口被 Cloudflare 拦截或需要 API Key)"
-            )
-        raise WalletHistoryError(f"HTTP {code}: {body}".strip())
-    try:
-        return resp.json()
-    except ValueError as e:
-        body = _scrub(getattr(resp, "text", "") or "")[:200]
-        raise WalletHistoryError(f"返回非 JSON: {body}".strip()) from e
+            ) from e
+        if e.status is not None and e.status >= 400:
+            body = _scrub(e.body)[:200]
+            raise WalletHistoryError(f"HTTP {e.status}: {body}".strip()) from e
+        if str(e).startswith("返回非 JSON"):
+            body = _scrub(e.body)[:200]
+            raise WalletHistoryError(f"返回非 JSON: {body}".strip()) from e
+        raise WalletHistoryError(_scrub(e)) from e
 
 
 def _parse_ts(value: Any) -> int | None:

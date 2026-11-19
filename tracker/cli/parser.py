@@ -9,13 +9,10 @@ from __future__ import annotations
 import argparse
 import importlib
 
+from ..source_order import CRYPTO_SOURCE_PREFERS as CRYPTO_SOURCE_CHOICES
 from ..storage import PORTFOLIO_PATH as DEFAULT_PORTFOLIO
 from ..watchlist import DEFAULT_WATCHLIST
 from ._common import VERSION, months_arg
-
-# 加密货币域数据源偏好 (与 tracker.storage.CRYPTO_SOURCES 同一组取值):
-# auto = 默认链, 其余指定源前置, 链内其余源按默认相对顺序兜底
-CRYPTO_SOURCE_CHOICES = ("auto", "binance", "gate", "hyperliquid", "yfinance")
 
 
 def _cmd(module: str, name: str):
@@ -26,6 +23,30 @@ def _cmd(module: str, name: str):
 
     _run.__name__ = name
     return _run
+
+
+def _add_json_arg(p: argparse.ArgumentParser, help: str = "输出 JSON") -> None:
+    """注册统一的 --json 开关 (各子命令 help 可覆盖)."""
+    p.add_argument("--json", action="store_true", help=help)
+
+
+def _add_quote_source_flags(
+    p: argparse.ArgumentParser,
+    *,
+    akshare: bool = True,
+    ibkr: bool = True,
+    longport: bool = True,
+    akshare_help: str = "A股/港股优先走 akshare",
+    ibkr_help: str = "优先使用 IBKR 行情 (需 IB Gateway)",
+    longport_help: str = "优先使用长桥行情 (需 longport.json)",
+) -> None:
+    """注册行情源偏好开关 (按子命令需要裁剪)."""
+    if akshare:
+        p.add_argument("--akshare", action="store_true", help=akshare_help)
+    if ibkr:
+        p.add_argument("--ibkr", action="store_true", help=ibkr_help)
+    if longport:
+        p.add_argument("--longport", action="store_true", help=longport_help)
 
 
 def _add_crypto_source_arg(p: argparse.ArgumentParser) -> None:
@@ -77,15 +98,9 @@ def _add_snapshot_parser(sub: argparse.ArgumentParser) -> None:
         "--watchlist", default=None, help="只查看某个子自选列表 (默认全部)"
     )
     p_snap.add_argument("--base", default=None, help="覆盖基础货币, 如 USD")
-    p_snap.add_argument("--akshare", action="store_true", help="A股/港股优先走 akshare")
-    p_snap.add_argument(
-        "--ibkr", action="store_true", help="优先使用 IBKR 行情 (需 IB Gateway)"
-    )
-    p_snap.add_argument(
-        "--longport", action="store_true", help="优先使用长桥行情 (需 longport.json)"
-    )
+    _add_quote_source_flags(p_snap)
     _add_crypto_source_arg(p_snap)
-    p_snap.add_argument("--json", action="store_true", help="输出 JSON")
+    _add_json_arg(p_snap, "输出 JSON")
     p_snap.add_argument(
         "--save",
         action="store_true",
@@ -125,11 +140,9 @@ def _add_nav_parser(sub: argparse.ArgumentParser) -> None:
     mode.add_argument("--save", action="store_true", help="保存今日快照")
     mode.add_argument("--backfill", action="store_true", help="按当前持仓回填历史")
     p_nav.add_argument("--dry-run", action="store_true", help="回填只预览不写库")
-    p_nav.add_argument("--akshare", action="store_true", help="A股/港股优先走 akshare")
-    p_nav.add_argument("--ibkr", action="store_true", help="优先使用 IBKR 行情")
-    p_nav.add_argument("--longport", action="store_true", help="优先使用长桥行情")
+    _add_quote_source_flags(p_nav)
     _add_crypto_source_arg(p_nav)
-    p_nav.add_argument("--json", action="store_true", help="输出 JSON")
+    _add_json_arg(p_nav, "输出 JSON")
     p_nav.set_defaults(func=_cmd(".nav", "cmd_nav"))
 
 
@@ -173,7 +186,7 @@ def _add_wallet_nav_parser(sub: argparse.ArgumentParser) -> None:
     )
     _add_crypto_source_arg(p_wn)
     p_wn.add_argument("--refresh", action="store_true", help="强制刷新历史行情缓存")
-    p_wn.add_argument("--json", action="store_true", help="输出 JSON")
+    _add_json_arg(p_wn, "输出 JSON")
     p_wn.set_defaults(func=_cmd(".wallet_nav", "cmd_wallet_nav"))
 
 
@@ -192,16 +205,14 @@ def _add_quote_parser(sub: argparse.ArgumentParser) -> None:
         ),
     )
     p_q.add_argument("symbols", nargs="+", help="Yahoo 代码, 如 AAPL 600519.SS BTC-USD")
-    p_q.add_argument("--akshare", action="store_true")
-    p_q.add_argument("--ibkr", action="store_true")
-    p_q.add_argument("--longport", action="store_true")
+    _add_quote_source_flags(p_q)
     _add_crypto_source_arg(p_q)
     p_q.add_argument(
         "--refresh",
         action="store_true",
         help="忽略 5min 磁盘行情缓存与失败负缓存, 强制重新取数",
     )
-    p_q.add_argument("--json", action="store_true")
+    _add_json_arg(p_q)
     p_q.set_defaults(func=_cmd(".quote", "cmd_quote"))
 
 
@@ -246,7 +257,7 @@ def _add_fundamentals_parser(sub: argparse.ArgumentParser) -> None:
         action="store_true",
         help="忽略估值/财报/历史缓存, 强制重新取数",
     )
-    p_f.add_argument("--json", action="store_true", help="输出 JSON")
+    _add_json_arg(p_f, "输出 JSON")
     p_f.set_defaults(func=_cmd(".fundamentals", "cmd_fundamentals"))
 
 
@@ -299,9 +310,7 @@ def _add_watchlist_parser(sub: argparse.ArgumentParser) -> None:
     )
     p_w.add_argument("--name", help="显示名称 (如 苹果); 不填则沿用行情返回的名称")
     p_w.add_argument("--note", help="备注")
-    p_w.add_argument("--akshare", action="store_true")
-    p_w.add_argument("--ibkr", action="store_true")
-    p_w.add_argument("--longport", action="store_true")
+    _add_quote_source_flags(p_w)
     _add_crypto_source_arg(p_w)
     p_w.add_argument(
         "--dry-run",
@@ -314,7 +323,7 @@ def _add_watchlist_parser(sub: argparse.ArgumentParser) -> None:
         action="store_true",
         help="import-longport: 清空现有自选后写入",
     )
-    p_w.add_argument("--json", action="store_true", help="输出 JSON")
+    _add_json_arg(p_w, "输出 JSON")
     p_w.add_argument(
         "--no-quotes", action="store_true", help="list 时不拉行情, 仅展示配置"
     )
@@ -351,7 +360,7 @@ def _add_portfolio_parser(sub: argparse.ArgumentParser) -> None:
         "--currency",
         help="基础货币 (set-base 时指定, 如 CNY/USD); 也可作为位置参数: set-base USD",
     )
-    p_p.add_argument("--json", action="store_true", help="输出 JSON")
+    _add_json_arg(p_p, "输出 JSON")
     p_p.set_defaults(func=_cmd(".portfolio", "cmd_portfolio"))
 
 def _add_report_parser(sub: argparse.ArgumentParser) -> None:
@@ -387,9 +396,7 @@ def _add_report_parser(sub: argparse.ArgumentParser) -> None:
         default="default",
         help="列表内排序方式",
     )
-    p_r.add_argument("--akshare", action="store_true")
-    p_r.add_argument("--ibkr", action="store_true")
-    p_r.add_argument("--longport", action="store_true")
+    _add_quote_source_flags(p_r)
     _add_crypto_source_arg(p_r)
     p_r.add_argument(
         "--output", "-o", default=None, help="输出文件路径 (缺省打印到终端)"
@@ -427,13 +434,7 @@ def _add_export_parser(sub: argparse.ArgumentParser) -> None:
         "--watchlist", "-w", default=None, help="只导出某个子自选列表 (默认全部)"
     )
     p_e.add_argument("--base", default=None, help="覆盖基础货币, 如 USD")
-    p_e.add_argument("--akshare", action="store_true", help="A股/港股优先走 akshare")
-    p_e.add_argument(
-        "--ibkr", action="store_true", help="优先使用 IBKR 行情 (需 IB Gateway)"
-    )
-    p_e.add_argument(
-        "--longport", action="store_true", help="优先使用长桥行情 (需 longport.json)"
-    )
+    _add_quote_source_flags(p_e)
     _add_crypto_source_arg(p_e)
     p_e.add_argument(
         "--output", "-o", default=None, help="输出文件路径 (缺省打印到终端)"
@@ -455,9 +456,13 @@ def _add_fx_parser(sub: argparse.ArgumentParser) -> None:
     )
     p_fx.add_argument("base", help="基础货币, 如 USD")
     p_fx.add_argument("currencies", nargs="*", help="目标货币, 缺省常用币种")
-    p_fx.add_argument("--ibkr", action="store_true", help="优先使用 IBKR 汇率")
-    p_fx.add_argument("--longport", action="store_true", help="预留: 长桥暂不支持汇率")
-    p_fx.add_argument("--json", action="store_true")
+    _add_quote_source_flags(
+        p_fx,
+        akshare=False,
+        ibkr_help="优先使用 IBKR 汇率",
+        longport_help="预留: 长桥暂不支持汇率",
+    )
+    _add_json_arg(p_fx)
     p_fx.set_defaults(func=_cmd(".fx", "cmd_fx"))
 
 def _add_history_parser(sub: argparse.ArgumentParser) -> None:
@@ -478,15 +483,9 @@ def _add_history_parser(sub: argparse.ArgumentParser) -> None:
     p_h.add_argument(
         "--rows", type=positive_int, default=10, help="表格模式打印最近 N 行"
     )
-    p_h.add_argument("--akshare", action="store_true")
-    p_h.add_argument(
-        "--ibkr", action="store_true", help="优先使用 IBKR 行情 (需 IB Gateway)"
-    )
-    p_h.add_argument(
-        "--longport", action="store_true", help="优先使用长桥行情 (需 longport.json)"
-    )
+    _add_quote_source_flags(p_h)
     _add_crypto_source_arg(p_h)
-    p_h.add_argument("--json", action="store_true")
+    _add_json_arg(p_h)
     p_h.set_defaults(func=_cmd(".history", "cmd_history"))
 
 def _add_kline_parser(sub: argparse.ArgumentParser) -> None:
@@ -521,13 +520,7 @@ def _add_kline_parser(sub: argparse.ArgumentParser) -> None:
     )
     p_k.add_argument("--no-volume", action="store_true", help="隐藏成交量副图")
     p_k.add_argument("--refresh", action="store_true", help="忽略缓存强制刷新")
-    p_k.add_argument("--akshare", action="store_true")
-    p_k.add_argument(
-        "--ibkr", action="store_true", help="优先使用 IBKR 行情 (需 IB Gateway)"
-    )
-    p_k.add_argument(
-        "--longport", action="store_true", help="优先使用长桥行情 (需 longport.json)"
-    )
+    _add_quote_source_flags(p_k)
     _add_crypto_source_arg(p_k)
     p_k.add_argument(
         "--output",
@@ -541,7 +534,7 @@ def _add_kline_parser(sub: argparse.ArgumentParser) -> None:
         action="store_true",
         help="生成后自动在浏览器打开",
     )
-    p_k.add_argument("--json", action="store_true", help="输出 JSON 数据 (不生成图表)")
+    _add_json_arg(p_k, "输出 JSON 数据 (不生成图表)")
     p_k.set_defaults(func=_cmd(".kline", "cmd_kline"))
 
 def _add_calendar_parser(sub: argparse.ArgumentParser) -> None:
@@ -596,7 +589,7 @@ def _add_calendar_parser(sub: argparse.ArgumentParser) -> None:
     p_cal.add_argument(
         "-o", "--output", default=None, help="与 --ics 配合, 写入文件 (缺省打印到 stdout)"
     )
-    p_cal.add_argument("--json", action="store_true", help="输出 JSON")
+    _add_json_arg(p_cal, "输出 JSON")
     p_cal.set_defaults(func=_cmd(".calendar", "cmd_calendar"))
 
 def _add_search_parser(sub: argparse.ArgumentParser) -> None:
@@ -622,11 +615,7 @@ def _add_search_parser(sub: argparse.ArgumentParser) -> None:
         action="store_true",
         help="宽松解析: 合法代码直接归一, 其余取最佳匹配 (≤1 条/次)",
     )
-    p_s.add_argument(
-        "--json",
-        action="store_true",
-        help="输出 JSON (results[].code 可直接喂取数命令)",
-    )
+    _add_json_arg(p_s, "输出 JSON (results[].code 可直接喂取数命令)")
     p_s.set_defaults(func=_cmd(".search", "cmd_search"))
 
 def _add_compare_parser(sub: argparse.ArgumentParser) -> None:
@@ -687,17 +676,11 @@ def _add_compare_parser(sub: argparse.ArgumentParser) -> None:
         default=None,
         help="市值对比 (--metric mcap) 统一折算币种 (默认组合基础货币, 如 CNY/USD)",
     )
-    p_cmp.add_argument("--akshare", action="store_true")
+    _add_quote_source_flags(p_cmp)
     p_cmp.add_argument(
         "--refresh",
         action="store_true",
         help="忽略 K线/市值/基本面/汇率缓存与负缓存, 强制重新取数",
-    )
-    p_cmp.add_argument(
-        "--ibkr", action="store_true", help="优先使用 IBKR 行情 (需 IB Gateway)"
-    )
-    p_cmp.add_argument(
-        "--longport", action="store_true", help="优先使用长桥行情 (需 longport.json)"
     )
     _add_crypto_source_arg(p_cmp)
     p_cmp.add_argument(
@@ -712,9 +695,7 @@ def _add_compare_parser(sub: argparse.ArgumentParser) -> None:
         action="store_true",
         help="生成后自动在浏览器打开",
     )
-    p_cmp.add_argument(
-        "--json", action="store_true", help="输出 JSON (每代码归一化序列 + 区间涨跌)"
-    )
+    _add_json_arg(p_cmp, "输出 JSON (每代码归一化序列 + 区间涨跌)")
     p_cmp.set_defaults(func=_cmd(".compare", "cmd_compare"))
 
 def _add_index_kline_parser(sub: argparse.ArgumentParser) -> None:
@@ -767,7 +748,7 @@ def _add_index_kline_parser(sub: argparse.ArgumentParser) -> None:
         action="store_true",
         help="生成后自动在浏览器打开",
     )
-    p_ik.add_argument("--json", action="store_true", help="输出 JSON 数据 (不生成图表)")
+    _add_json_arg(p_ik, "输出 JSON 数据 (不生成图表)")
     p_ik.set_defaults(func=_cmd(".index_kline", "cmd_index_kline"))
 
 def _add_import_parser(sub: argparse.ArgumentParser) -> None:
@@ -817,7 +798,7 @@ def _add_import_parser(sub: argparse.ArgumentParser) -> None:
         "--overwrite", action="store_true", help="覆盖全部持仓 (缺省追加合并)"
     )
     p_i_ibkr.add_argument("--dry-run", action="store_true", help="仅预览, 不写入")
-    p_i_ibkr.add_argument("--json", action="store_true", help="输出 JSON")
+    _add_json_arg(p_i_ibkr, "输出 JSON")
     p_i_ibkr.set_defaults(func=_cmd(".importer", "cmd_import"))
 
     p_i_lp = imp_sub.add_parser(
@@ -839,7 +820,7 @@ def _add_import_parser(sub: argparse.ArgumentParser) -> None:
         "--overwrite", action="store_true", help="覆盖全部持仓 (缺省追加合并)"
     )
     p_i_lp.add_argument("--dry-run", action="store_true", help="仅预览, 不写入")
-    p_i_lp.add_argument("--json", action="store_true", help="输出 JSON")
+    _add_json_arg(p_i_lp, "输出 JSON")
     p_i_lp.set_defaults(func=_cmd(".importer", "cmd_import"))
 
     p_i_wallet = imp_sub.add_parser(
@@ -874,7 +855,7 @@ def _add_import_parser(sub: argparse.ArgumentParser) -> None:
         "--overwrite", action="store_true", help="覆盖全部持仓 (缺省追加合并)"
     )
     p_i_wallet.add_argument("--dry-run", action="store_true", help="仅查询预览, 不写入")
-    p_i_wallet.add_argument("--json", action="store_true", help="输出 JSON")
+    _add_json_arg(p_i_wallet, "输出 JSON")
     p_i_wallet.set_defaults(func=_cmd(".importer", "cmd_import"))
 
     p_i_file = imp_sub.add_parser(
@@ -896,7 +877,7 @@ def _add_import_parser(sub: argparse.ArgumentParser) -> None:
         "--overwrite", action="store_true", help="覆盖全部持仓 (缺省追加合并)"
     )
     p_i_file.add_argument("--dry-run", action="store_true", help="仅预览, 不写入")
-    p_i_file.add_argument("--json", action="store_true", help="输出 JSON")
+    _add_json_arg(p_i_file, "输出 JSON")
     p_i_file.set_defaults(func=_cmd(".importer", "cmd_import"))
 
 def _add_sync_parser(sub: argparse.ArgumentParser) -> None:
@@ -931,7 +912,7 @@ def _add_sync_parser(sub: argparse.ArgumentParser) -> None:
         action="store_true",
         help="覆盖全部持仓 (清空后重写)",
     )
-    p_sync.add_argument("--json", action="store_true")
+    _add_json_arg(p_sync)
     p_sync.set_defaults(func=_cmd(".sync", "cmd_sync"))
 
 def _add_longport_login_parser(sub: argparse.ArgumentParser) -> None:
@@ -946,11 +927,7 @@ def _add_longport_login_parser(sub: argparse.ArgumentParser) -> None:
             "之后 import longport / --longport 行情即可用, 无需重复登录。"
         ),
     )
-    p_lp.add_argument(
-        "--json",
-        action="store_true",
-        help="JSON 模式: 不自动开浏览器, 只输出授权 URL (status.ok)",
-    )
+    _add_json_arg(p_lp, "JSON 模式: 不自动开浏览器, 只输出授权 URL (status.ok)")
     p_lp.add_argument(
         "--output",
         "-o",
@@ -982,7 +959,7 @@ def _add_eodhd_parser(sub: argparse.ArgumentParser) -> None:
     p_eod.add_argument(
         "--config", default=None, help="eodhd.json 路径 (默认数据目录/eodhd.json)"
     )
-    p_eod.add_argument("--json", action="store_true", help="输出 JSON")
+    _add_json_arg(p_eod, "输出 JSON")
     p_eod.set_defaults(func=_cmd(".eodhd", "cmd_eodhd"))
 
 def _add_import_wallet_parser(sub: argparse.ArgumentParser) -> None:
@@ -1025,7 +1002,7 @@ def _add_import_wallet_parser(sub: argparse.ArgumentParser) -> None:
         action="store_true",
         help="覆盖全部持仓 (与 --add 互斥, 指定即写入)",
     )
-    p_wallet.add_argument("--json", action="store_true", help="输出 JSON")
+    _add_json_arg(p_wallet, "输出 JSON")
     p_wallet.set_defaults(func=_cmd(".wallet", "cmd_import_wallet"))
 
 def _add_cache_parser(sub: argparse.ArgumentParser) -> None:
@@ -1042,7 +1019,7 @@ def _add_cache_parser(sub: argparse.ArgumentParser) -> None:
         ),
     )
     p_c.add_argument("action", nargs="?", choices=["info", "clear"], default="info")
-    p_c.add_argument("--json", action="store_true")
+    _add_json_arg(p_c)
     p_c.set_defaults(func=_cmd(".cache", "cmd_cache"))
 
 
@@ -1090,7 +1067,7 @@ def _add_warm_parser(sub: argparse.ArgumentParser) -> None:
         action="store_true",
         help="忽略行情 5min 磁盘缓存强制刷新",
     )
-    p_w.add_argument("--json", action="store_true", help="输出 JSON")
+    _add_json_arg(p_w, "输出 JSON")
     p_w.set_defaults(func=_cmd(".warm", "cmd_warm"))
 
 
@@ -1137,7 +1114,7 @@ def _add_doctor_parser(sub: argparse.ArgumentParser) -> None:
         action="store_true",
         help="清空健康事件记录 (排障后重置)",
     )
-    p_doc.add_argument("--json", action="store_true", help="输出 JSON")
+    _add_json_arg(p_doc, "输出 JSON")
     p_doc.set_defaults(func=_cmd(".doctor", "cmd_doctor"))
 
 
@@ -1167,7 +1144,7 @@ def _add_webdav_parser(sub: argparse.ArgumentParser) -> None:
         "--check", action="store_true", help="联网检查远端文件 (HEAD, 失败回退 GET)"
     )
     wd_status.add_argument("--config", default=None, help="webdav.json 路径")
-    wd_status.add_argument("--json", action="store_true", help="输出 JSON")
+    _add_json_arg(wd_status, "输出 JSON")
     wd_status.set_defaults(func=_cmd(".webdav", "cmd_webdav"))
 
     for action, help_text in (
@@ -1188,7 +1165,7 @@ def _add_webdav_parser(sub: argparse.ArgumentParser) -> None:
             help="pull: 远端覆盖本地 (本地版本先存档); push: 本地覆盖远端",
         )
         p.add_argument("--config", default=None, help="webdav.json 路径")
-        p.add_argument("--json", action="store_true", help="输出 JSON")
+        _add_json_arg(p, "输出 JSON")
         p.set_defaults(func=_cmd(".webdav", "cmd_webdav"))
 
 
@@ -1208,7 +1185,7 @@ def _add_init_parser(sub: argparse.ArgumentParser) -> None:
     p_init.add_argument(
         "--force", action="store_true", help="用模板覆盖已存在的配置文件"
     )
-    p_init.add_argument("--json", action="store_true", help="输出 JSON")
+    _add_json_arg(p_init, "输出 JSON")
     p_init.set_defaults(func=_cmd(".init", "cmd_init"))
 
 

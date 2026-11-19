@@ -22,6 +22,9 @@ import streamlit as st
 from . import settings, theme
 
 from tracker import ah_premium, charting, filings, valuation
+from tracker.util import format_pct as _fmt_pct
+from tracker.util import format_price as _fmt_price
+from tracker.util import format_ratio as _fmt_ratio
 
 # 与 K线页共用组件实现, 但用独立注册名: 同一 Streamlit 进程内不同组件实例
 # 各自持有 DOM/视口状态, 避免与 K线页的图表互相影响。
@@ -110,25 +113,6 @@ def _pair_label(pair: ah_premium.AHPair) -> str:
     # 标签保持稳定 (不含实时溢价): 目录每小时刷新时溢价数值会变, 若进标签
     # 会让当前选中项匹配不上而回落到默认股票对
     return f"{pair.name} · {pair.a_symbol} / {pair.h_symbol}"
-
-
-def _fmt_price(value: float) -> str:
-    """价格精度随量级 (与 K线摘要同口径的简化版)."""
-    v = float(value)
-    if v >= 100:
-        return f"{v:,.2f}"
-    if v >= 1:
-        return f"{v:,.3f}"
-    return f"{v:.4f}"
-
-
-def _fmt_ratio(value: float | None) -> str:
-    """PE/PB 倍数: 无意义/缺失统一显示破折号 (不把 None 显示成 0)."""
-    return "—" if value is None else f"{float(value):.2f}"
-
-
-def _fmt_pct(value: float | None) -> str:
-    return "—" if value is None else f"{float(value):.2f}%"
 
 
 def _fmt_snapshot_time(ts: float) -> str:

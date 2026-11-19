@@ -28,7 +28,9 @@ import pandas as pd
 
 from . import fx as fx_mod
 from . import prices
+from .deps import akshare as _ak
 from .symbols import Market, normalize, parse
+from .util import first_column as _column
 from .util import with_timeout
 
 _PAIR_TTL = 3600  # 秒; AH 比价列表是低频参考数据
@@ -69,13 +71,6 @@ _FALLBACK_PAIRS: tuple[tuple[str, str, str], ...] = (
 
 # 默认选中的股票对 (存在时优先): 大盘、流动性好, 适合作为页面首屏
 _DEFAULT_NAMES = ("工商银行", "建设银行", "中国平安", "招商银行")
-
-
-def _ak():
-    """惰性导入 akshare (CLI 冷启动 / 测试无网时不拖慢模块导入)."""
-    import akshare as ak
-
-    return ak
 
 
 def _digits(value: object) -> str:
@@ -133,15 +128,6 @@ def normalize_h_symbol(raw: object) -> str:
 
 def _fallback_pairs() -> list[AHPair]:
     return [AHPair(name, a, h) for name, a, h in _FALLBACK_PAIRS]
-
-
-def _column(df: pd.DataFrame, *names: str) -> str | None:
-    """按候选列名找列 (数据源列名偶有空格/别名漂移)."""
-    by_name = {str(c).strip(): c for c in df.columns}
-    for n in names:
-        if n in by_name:
-            return by_name[n]
-    return None
 
 
 def _parse_pair_rows(df: pd.DataFrame) -> list[AHPair]:

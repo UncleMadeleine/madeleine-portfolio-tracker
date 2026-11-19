@@ -20,13 +20,13 @@ import math
 from concurrent.futures import ThreadPoolExecutor
 
 from . import cache as cache_mod
+from .deps import openbb as _obb
 
 _METRICS_TTL = 21600  # 秒 (6h); book_value 属低频报表数据
 
+
 def _fund_metrics(symbols: list[str]) -> dict[str, dict[str, float | None]]:
     """OpenBB fundamental.metrics 批量拉取 → {symbol: {book_value, market_cap}}."""
-    from .providers.global_stocks import _obb
-
     ob = _obb()
     out: dict[str, dict[str, float | None]] = {}
     wanted = set(symbols)

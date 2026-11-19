@@ -23,6 +23,7 @@ from .issues import render_issue_summary
 from tracker import charting, fx, mcap, prices, search
 from tracker.providers import PROVIDERS
 from tracker.symbols import parse, type_for_symbol
+from tracker.util import normalize_dates as _naive_dates
 
 # 快捷入口: 持仓/自选可能很长, 单只查询页只展示前 N 个 (数量/成本顺序, 无行情排序)
 QUICK_SYMBOLS_LIMIT = 10
@@ -356,17 +357,6 @@ def render_compare_chart(data: dict, *, height: int = 560) -> None:
 def render_crypto_compare_chart(data: dict, *, height: int = 560) -> None:
     """加密货币K线对比图: 复用 K线组件 (每币一个窗格蜡烛图), data 由 crypto_compare_payload 生成."""
     _KLINE_CHART(key="crypto_compare_chart", data=data, height=height)
-
-
-def _naive_dates(s: pd.Series) -> pd.Series:
-    """日期列统一剥时区 (naive 原样返回): 跨 frame 直接 min() 比较时
-    tz-naive 与 tz-aware 混用会抛 TypeError 把整页打死 (磁盘 OHLC 缓存往返回填
-    的是字符串→naive, 个别数据源可能给 aware)。"""
-    d = pd.to_datetime(s)
-    try:
-        return d.dt.tz_localize(None)
-    except TypeError:
-        return d
 
 
 def _build_ratio_payload(

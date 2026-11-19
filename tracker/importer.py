@@ -27,17 +27,11 @@ from .storage import (
     edit_portfolio,
     load_portfolio,
 )
-from .symbols import canonical
+from .util import canonical_or_upper as _norm_sym
 
 MODE_APPEND = "append"
 MODE_OVERWRITE = "overwrite"
 IMPORT_MODES = (MODE_APPEND, MODE_OVERWRITE)
-
-
-def _norm_sym(symbol: str) -> str:
-    """代码 → Yahoo 规范形式; 无法识别时退回原始大写."""
-    raw = str(symbol).strip()
-    return canonical(raw) or raw.upper()
 
 
 def normalize_row(row: dict) -> dict:

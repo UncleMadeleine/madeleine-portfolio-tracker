@@ -26,6 +26,7 @@ from .. import storage
 from ..cache import CACHE_TTL, STALE_TTL
 from ..fx import get_fx_rates
 from ..symbols import canonical
+from .refresh import RefreshCoordinator
 from .watchlist import entries_for
 
 logger = logging.getLogger(__name__)
@@ -48,11 +49,15 @@ REFRESH_TICK = 60.0
 #: _refresh_done_at 保留的最近完成记录数 (超出按时间戳淘汰, 防长驻服务内存增长)
 REFRESH_HISTORY = 64
 
-_refresh_lock = threading.Lock()
-#: key → 是否正在刷新 (进程内跨会话共享: 同数据面多个标签页只发一次网络)
-_refresh_inflight: set[tuple] = set()
-#: key → 最近一次刷新完成时间戳 (看门狗据此 rerun / 节流重试 / 周期保温)
-_refresh_done_at: dict[tuple, float] = {}
+_quote_coordinator = RefreshCoordinator(
+    name="quote-refresh",
+    min_interval=REFRESH_MIN_INTERVAL,
+    history=REFRESH_HISTORY,
+)
+# 兼容旧调用方/测试直接观察协调器内部状态 (与类内是同一组对象)
+_refresh_lock = _quote_coordinator.lock
+_refresh_inflight = _quote_coordinator.inflight
+_refresh_done_at = _quote_coordinator.done_at
 
 _refresher_lock = threading.Lock()
 _refresher_started = False
@@ -73,62 +78,35 @@ def refresh_key(plan: dict) -> tuple:
 
 def refresh_state(key: tuple) -> tuple[bool, float | None]:
     """返回 (是否正在刷新, 最近完成时间戳)."""
-    with _refresh_lock:
-        return key in _refresh_inflight, _refresh_done_at.get(key)
+    return _quote_coordinator.state(key)
 
 
 def start_refresh(key: tuple, plan: dict) -> bool:
     """启动一次后台刷新 (行情 + 汇率); 返回是否真正发起.
 
-    同 key 不并发 (多标签页/连续 rerun 只发一次网络) + 最短重试间隔 (刷新
-    失败后避免看门狗高频重试)。线程内只跑纯取数链路 (providers/akshare +
-    SQLite, 不碰任何 st.* API): st.cache_data 依赖 ScriptRunner 上下文, 后台
-    线程调用会炸; 磁盘缓存的读取在 get_quotes/get_fx_rates 内部, 新鲜项
-    仍秒回不发网络。
+    同 key 不并发 + 最短重试间隔由 RefreshCoordinator 统一处理。线程内只跑
+    纯取数链路 (providers/akshare + SQLite, 不碰任何 st.* API):
+    st.cache_data 依赖 ScriptRunner 上下文, 后台线程调用会炸; 磁盘缓存的
+    读取在 get_quotes/get_fx_rates 内部, 新鲜项仍秒回不发网络。
     """
     q_args = plan.get("quotes")
     f_args = plan.get("fx")
-    now = time.time()
-    with _refresh_lock:
-        if key in _refresh_inflight:
-            return False
-        if now - _refresh_done_at.get(key, 0.0) < REFRESH_MIN_INTERVAL:
-            return False
-        _refresh_inflight.add(key)
-        # 长驻服务里键会随切范围/改持仓无限累积: 只留最近 N 个
-        if len(_refresh_done_at) > REFRESH_HISTORY:
-            for old in sorted(_refresh_done_at, key=_refresh_done_at.get)[
-                : len(_refresh_done_at) - REFRESH_HISTORY
-            ]:
-                _refresh_done_at.pop(old, None)
 
     def _run() -> None:
-        try:
-            if q_args:
-                symbols, prefer_akshare, use_ibkr, use_longport, crypto_source = q_args
-                prices.get_quotes(
-                    list(symbols),
-                    prefer_akshare=prefer_akshare,
-                    use_ibkr=use_ibkr,
-                    use_longport=use_longport,
-                    crypto_source=crypto_source,
-                )
-            if f_args:
-                base, currencies, use_ibkr = f_args
-                get_fx_rates(base, list(currencies), use_ibkr=use_ibkr)
-        except Exception:  # noqa: BLE001 - 刷新失败: 陈旧数据继续展示, 下轮重试
-            # 静默 pass 会让持续失败退化成无诊断的热循环 (每轮重试都视为
-            # "完成"), 至少留下日志痕迹定位是哪个数据面刷不动
-            logger.warning(
-                "后台刷新失败 (key=%s), 下轮重试", key, exc_info=True
+        if q_args:
+            symbols, prefer_akshare, use_ibkr, use_longport, crypto_source = q_args
+            prices.get_quotes(
+                list(symbols),
+                prefer_akshare=prefer_akshare,
+                use_ibkr=use_ibkr,
+                use_longport=use_longport,
+                crypto_source=crypto_source,
             )
-        finally:
-            with _refresh_lock:
-                _refresh_inflight.discard(key)
-                _refresh_done_at[key] = time.time()
+        if f_args:
+            base, currencies, use_ibkr = f_args
+            get_fx_rates(base, list(currencies), use_ibkr=use_ibkr)
 
-    threading.Thread(target=_run, name="quote-refresh", daemon=True).start()
-    return True
+    return _quote_coordinator.start(key, _run)
 
 
 def cache_age(symbols=(), fx=None) -> float:
@@ -308,9 +286,16 @@ CAL_WARM_FIRST_DELAY = 60.0
 CAL_WARM_MONTHS = 2
 CAL_WARM_USE_LONGPORT = False
 
-_cal_refresh_lock = threading.Lock()
-_cal_refresh_inflight: set[tuple] = set()
-_cal_refresh_done_at: dict[tuple, float] = {}
+_cal_coordinator = RefreshCoordinator(
+    name="calendar-refresh",
+    min_interval=CAL_REFRESH_MIN_INTERVAL,
+    history=CAL_REFRESH_HISTORY,
+    log_label="日历后台刷新",
+)
+# 兼容旧调用方/测试直接观察协调器内部状态 (与类内是同一组对象)
+_cal_refresh_lock = _cal_coordinator.lock
+_cal_refresh_inflight = _cal_coordinator.inflight
+_cal_refresh_done_at = _cal_coordinator.done_at
 
 _cal_refresher_lock = threading.Lock()
 _cal_refresher_started = False
@@ -321,8 +306,7 @@ def calendar_key(symbols, months: int, use_longport: bool) -> tuple:
 
 
 def calendar_refresh_state(key: tuple) -> tuple[bool, float | None]:
-    with _cal_refresh_lock:
-        return key in _cal_refresh_inflight, _cal_refresh_done_at.get(key)
+    return _cal_coordinator.state(key)
 
 
 def _fetch_calendar(symbols, months: int, use_longport: bool):
@@ -343,33 +327,9 @@ def start_calendar_refresh(
     与组合页同款协调器: 同 key 不并发 (多标签页只发一次), 失败后按最短
     间隔节流。线程内只走 events → SQLite, 不碰任何 st.* API。
     """
-    now = time.time()
-    with _cal_refresh_lock:
-        if key in _cal_refresh_inflight:
-            return False
-        if now - _cal_refresh_done_at.get(key, 0.0) < CAL_REFRESH_MIN_INTERVAL:
-            return False
-        _cal_refresh_inflight.add(key)
-        if len(_cal_refresh_done_at) > CAL_REFRESH_HISTORY:
-            for old in sorted(_cal_refresh_done_at, key=_cal_refresh_done_at.get)[
-                : len(_cal_refresh_done_at) - CAL_REFRESH_HISTORY
-            ]:
-                _cal_refresh_done_at.pop(old, None)
-
-    def _run() -> None:
-        try:
-            _fetch_calendar(symbols, months, use_longport)
-        except Exception:  # noqa: BLE001 - 旧数据继续展示, 下轮再试
-            logger.warning(
-                "日历后台刷新失败 (key=%s), 下轮重试", key, exc_info=True
-            )
-        finally:
-            with _cal_refresh_lock:
-                _cal_refresh_inflight.discard(key)
-                _cal_refresh_done_at[key] = time.time()
-
-    threading.Thread(target=_run, name="calendar-refresh", daemon=True).start()
-    return True
+    return _cal_coordinator.start(
+        key, lambda: _fetch_calendar(symbols, months, use_longport)
+    )
 
 
 def calendar_scope_symbols(

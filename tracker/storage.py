@@ -28,6 +28,7 @@ except ImportError:  # pragma: no cover - 平台相关
 
 from . import webdav as _webdav
 from .paths import data_home
+from .source_order import CRYPTO_SOURCE_PREFERS as CRYPTO_SOURCES
 from .symbols import parse, type_for_symbol
 from .rules import metric_for_entry as rules_metric_for_entry
 from .util import as_bool as _as_bool
@@ -771,7 +772,7 @@ SCHEME_CN = "cn"
 SCHEME_INTL = "intl"
 # 加密货币域数据源偏好: auto = 默认链 (Binance→Gate.io→Hyperliquid→yfinance),
 # 其余值把对应源前置 (链内其余源按默认相对顺序兜底)
-CRYPTO_SOURCES = ("auto", "binance", "gate", "hyperliquid", "yfinance")
+
 DEFAULT_SETTINGS = {
     "color_scheme": SCHEME_CN,
     "prefer_akshare": False,

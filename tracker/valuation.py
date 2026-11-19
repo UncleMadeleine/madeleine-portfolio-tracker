@@ -33,7 +33,12 @@ from dataclasses import dataclass, fields, replace
 import pandas as pd
 
 from . import cache as cache_mod
+from .deps import openbb as _obb
 from .symbols import Market, ParsedSymbol, normalize, parse
+from .util import finite_float as _finite
+from .util import first_column as _column
+from .util import non_negative_float as _non_negative
+from .util import positive_float as _positive
 from .util import with_timeout
 
 #: 最新快照缓存 (秒); 估值倍数是低频报表数据, 6h 足够
@@ -108,25 +113,6 @@ def normalize_stock_input(raw: str) -> str:
     if p.market in (Market.CRYPTO, Market.INDEX):
         raise ValueError(f"{p.yahoo}: 估值指标仅支持股票, 不支持 {p.market_label}")
     return p.yahoo
-
-
-def _finite(value: object) -> float | None:
-    """任意值 → 有限 float; 缺失/非数字/NaN/Inf 返回 None."""
-    try:
-        f = float(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return None
-    return f if math.isfinite(f) else None
-
-
-def _positive(value: object) -> float | None:
-    f = _finite(value)
-    return f if f is not None and f > 0 else None
-
-
-def _non_negative(value: object) -> float | None:
-    f = _finite(value)
-    return f if f is not None and f >= 0 else None
 
 
 def _percent(value: object) -> float | None:
@@ -204,8 +190,6 @@ def _snapshot_from_disk(symbol: str) -> ValuationSnapshot | None:
 
 def _fetch_metrics_row(symbol: str) -> dict:
     """OpenBB yfinance metrics → 第一行 dict; 无结果时抛 RuntimeError."""
-    from .providers.global_stocks import _obb
-
     ob = _obb()
     res = ob.equity.fundamental.metrics(symbol=symbol, provider="yfinance")
     for item in res.results:
@@ -365,15 +349,6 @@ def history_supported(symbol: str) -> bool:
         return parse(normalize(symbol)).market in _HISTORY_MARKETS
     except ValueError:
         return False
-
-
-def _column(df: pd.DataFrame, *names: str) -> str | None:
-    """按候选列名找列 (百度接口偶有列名漂移)."""
-    by_name = {str(c).strip(): c for c in df.columns}
-    for n in names:
-        if n in by_name:
-            return by_name[n]
-    return None
 
 
 def _baidu_request(

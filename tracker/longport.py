@@ -35,6 +35,7 @@ from .paths import TEMPLATES_DIR, data_home
 from .providers.base import Quote
 from .symbols import Market, _is_us_preferred, parse, type_for_symbol
 from .symbol_migrations import migrate_symbol
+from .util import finite_float as _f
 
 # 用户真实配置落数据目录 (源码树即仓库根; pip 安装后 ~/.tracker/longport.json);
 # 模板随包分发, env LONGPORT_CONFIG 优先于两者
@@ -336,14 +337,6 @@ def unavailable_reason() -> str | None:
 # ---------------------------------------------------------------------------
 # 行情 / 历史
 # ---------------------------------------------------------------------------
-
-
-def _f(v) -> float | None:
-    try:
-        f = float(v)
-    except (TypeError, ValueError):
-        return None
-    return f if math.isfinite(f) else None
 
 
 def _currency_for(yahoo: str) -> str:

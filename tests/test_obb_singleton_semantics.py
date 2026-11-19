@@ -18,7 +18,7 @@ import time
 
 import pytest
 
-from tracker.providers import global_stocks as gs
+from tracker import deps as gs
 from tracker.util import with_timeout
 
 
@@ -98,7 +98,7 @@ def test_obb_singleton_imports_once(monkeypatch):
 
     def worker():
         barrier.wait()
-        results.append(gs._obb())
+        results.append(gs.openbb())
 
     threads = [threading.Thread(target=worker) for _ in range(8)]
     for t in threads:
@@ -128,7 +128,7 @@ def test_obb_singleton_does_not_cache_failure(monkeypatch):
 
     for _ in range(2):
         with pytest.raises(ImportError):
-            gs._obb()
+            gs.openbb()
 
     assert gs._obb_singleton is None
     assert calls["n"] == 2, "失败不得缓存, 每次都应重新尝试"

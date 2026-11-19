@@ -31,30 +31,15 @@ import json
 
 import pandas as pd
 
+from ..deps import akshare as _ak
+from ..deps import openbb as _obb
+from ..deps import requests as _requests
 from ..symbols import INDEX_CATALOG, ParsedSymbol, index_key
 from ..util import with_timeout
 from .base import Provider, openbb_history_frame, ordered_sources
 from .global_stocks import _AK_HIST_TIMEOUT
 
 __all__ = ["IndexProvider"]
-
-
-def _obb():
-    from openbb import obb
-
-    return obb
-
-
-def _ak():
-    import akshare as ak
-
-    return ak
-
-
-def _requests():
-    import requests
-
-    return requests
 
 
 def _catalog(p: ParsedSymbol) -> dict:

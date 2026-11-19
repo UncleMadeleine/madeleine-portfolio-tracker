@@ -15,31 +15,15 @@ from datetime import datetime
 import pandas as pd
 
 from .. import filings, valuation
+from ..util import format_pct as _fmt_pct
+from ..util import format_price as _fmt_price
+from ..util import format_ratio as _fmt_ratio
 from ._common import _finish_with_error, _print_json, _records
 
 _METRICS = {
     "pe": valuation.METRIC_PE,
     "pb": valuation.METRIC_PB,
 }
-
-
-def _fmt_ratio(value: float | None) -> str:
-    return "—" if value is None else f"{float(value):.2f}"
-
-
-def _fmt_pct(value: float | None) -> str:
-    return "—" if value is None else f"{float(value):.2f}%"
-
-
-def _fmt_price(value: float | None) -> str:
-    if value is None:
-        return "—"
-    v = float(value)
-    if v >= 100:
-        return f"{v:,.2f}"
-    if v >= 1:
-        return f"{v:,.3f}"
-    return f"{v:.4f}"
 
 
 def _fmt_cap(value: float | None) -> str:

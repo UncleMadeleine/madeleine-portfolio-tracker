@@ -14,6 +14,9 @@ import time
 
 import pandas as pd
 
+from ..deps import akshare as _ak
+from ..deps import openbb as _obb
+from ..deps import requests as _requests
 from ..symbols import Market, ParsedSymbol, is_currency_code, is_pence
 from ..util import with_timeout
 from .base import Provider, Quote, SymbolEntry, openbb_history_frame, ordered_sources
@@ -59,44 +62,6 @@ def _yf_search(query: str) -> list[dict]:
         if sym and name:
             out.append({"symbol": sym, "name": name})
     return out
-
-
-_obb_singleton = None
-_obb_lock = threading.Lock()
-
-
-def _obb():
-    """OpenBB 单例 (线程安全缓存).
-
-    首次 `from openbb import obb` 有冷启动开销 (本机实测 5.5s), 之后是进程内
-    单例。价值在于让批量/历史/汇率/crypto 路径共用一次初始化, 而不是省下单次
-    调用的时间。
-
-    注意: 冷启动并不吃掉 _QUOTE_TIMEOUT 的预算。`with_timeout(fn, t, *args)`
-    的实参在调用它之前就已在主线程求值完毕, daemon 线程只执行已解析的可调用
-    对象, 所以 `_obb()` 无论写在哪里都在计时区外。曾以为「把 _obb() 移出
-    with_timeout 就能修好首次超时」——那是错的, 那样改动语义上无效。
-
-    真正的超时风险是首次 quote 本身慢 (实测 4.5s, 阈值 5.0s, 余量仅 0.5s),
-    属临界竞态; 单例化缩小了它, 没有消除它。
-
-    失败行为与原来一致: openbb 未安装/导入异常时 import 语句本身抛错,
-    单例保持 None, 下次调用重试 (不缓存失败)。
-    """
-    global _obb_singleton
-    if _obb_singleton is None:
-        with _obb_lock:
-            if _obb_singleton is None:
-                from openbb import obb
-
-                _obb_singleton = obb
-    return _obb_singleton
-
-
-def _ak():
-    import akshare as ak
-
-    return ak
 
 
 def _pick(d: dict, *keys):
@@ -361,12 +326,6 @@ _AK_QUOTE_TTL = 5.0
 _ak_quote_cache: dict[str, tuple[float, dict | None]] = {}
 _ak_quote_lock = threading.Lock()
 _ak_quote_inflight: dict[str, threading.Lock] = {}
-
-
-def _requests():
-    import requests
-
-    return requests
 
 
 def _ak_secid(p: ParsedSymbol) -> str:

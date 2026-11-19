@@ -37,6 +37,8 @@ from dataclasses import dataclass
 __all__ = [
     "DOMAIN_ORDER",
     "CHANNEL_ORDER",
+    "CRYPTO_SOURCE_PREFERS",
+    "CRYPTO_SOURCE_ORDER",
     "CATALOG",
     "DOMAIN_META",
     "SOURCE_META",
@@ -56,6 +58,12 @@ __all__ = [
 DOMAIN_ORDER = ("global", "cn", "crypto", "index")
 CHANNEL_ORDER = ("quote", "history")
 
+#: 加密货币域源偏好 (CLI --crypto-source / settings.crypto_source 的唯一取值表).
+#: auto = 默认链, 其余把指定源前置, 链内其余源按默认相对顺序兜底。
+CRYPTO_SOURCE_PREFERS = ("auto", "binance", "gate", "hyperliquid", "yfinance")
+#: 去掉 auto 后的真实源顺序 (供 CATALOG / provider 源链派生).
+CRYPTO_SOURCE_ORDER = tuple(s for s in CRYPTO_SOURCE_PREFERS if s != "auto")
+
 #: 每个域、每个通道可排序的数据源 (IBKR/长桥按位置批量或单码执行)
 CATALOG: dict[str, dict[str, tuple[str, ...]]] = {
     "global": {
@@ -67,8 +75,8 @@ CATALOG: dict[str, dict[str, tuple[str, ...]]] = {
         "history": ("longport", "akshare", "yfinance"),
     },
     "crypto": {
-        "quote": ("binance", "gate", "hyperliquid", "yfinance"),
-        "history": ("binance", "gate", "hyperliquid", "yfinance"),
+        "quote": CRYPTO_SOURCE_ORDER,
+        "history": CRYPTO_SOURCE_ORDER,
     },
     "index": {
         "quote": (),

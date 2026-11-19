@@ -20,6 +20,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .deps import requests as _requests
+
 # ---------------------------------------------------------------------------
 # 内置 tokenlist (contract_address → symbol, decimals)
 # 覆盖 ETH / BSC / Polygon / Arbitrum / Avalanche 五条 EVM 链的主流 ERC-20
@@ -259,12 +261,6 @@ _SOL_WSOL_MINT = "So11111111111111111111111111111111111111112"
 # ---------------------------------------------------------------------------
 # HTTP helpers
 # ---------------------------------------------------------------------------
-
-
-def _requests():
-    import requests
-
-    return requests
 
 
 def _rpc_post(url: str, payload: dict, timeout: float = 10.0) -> Any:

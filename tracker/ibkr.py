@@ -13,7 +13,6 @@ env IBKR_MODE > 文件 mode > 默认 paper; 文件里显式 "port" 优先于模�
 
 from __future__ import annotations
 
-import math
 import os
 import threading
 import time
@@ -28,6 +27,7 @@ from .paths import TEMPLATES_DIR, data_home
 from .providers.base import Quote
 from .symbols import Market, ParsedSymbol, is_pence, type_for_symbol
 from .symbol_migrations import migrate_symbol
+from .util import finite_float as _f
 
 # 用户真实配置落数据目录 (源码树即仓库根; pip 安装后 ~/.tracker/ibkr.json);
 # 模板随包分发, env IBKR_CONFIG 优先于两者
@@ -317,14 +317,6 @@ def contract_spec(p: ParsedSymbol, exchanges: dict | None = None) -> ContractSpe
             return ContractSpec(code, ex.get("KR_KQ", "KOSDAQ"), "KRW")
         return ContractSpec(code, ex.get("KR", "KRX"), "KRW")
     raise ValueError(f"不支持的市场: {p.market}")
-
-
-def _f(v) -> float | None:
-    try:
-        f = float(v)
-    except (TypeError, ValueError):
-        return None
-    return f if math.isfinite(f) else None
 
 
 def _is_pence_quote(yahoo_symbol: str, raw_ccy: str) -> bool:

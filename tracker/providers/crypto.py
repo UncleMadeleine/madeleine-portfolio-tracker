@@ -16,6 +16,9 @@ import time
 
 import pandas as pd
 
+from ..deps import openbb as _obb
+from ..deps import requests as _requests
+from ..source_order import CRYPTO_SOURCE_PREFERS
 from ..symbols import ParsedSymbol
 from ..util import finite_float as _finite_opt, with_timeout
 from .base import Provider, Quote, SymbolEntry, openbb_history_frame, ordered_sources
@@ -31,9 +34,9 @@ _GATE_MAX_POINTS = 1000
 # 加密货币域可选数据源 (settings crypto_source / CLI --crypto-source):
 # auto = 默认链 (Binance→Gate.io→Hyperliquid→yfinance), 其余把指定源前置,
 # 链内其余源按默认相对顺序兜底。索引与下方两个源链构造顺序一致 (单一定义点).
-CRYPTO_SOURCE_PREFERS = ("auto", "binance", "gate", "hyperliquid", "yfinance")
-# 源偏好 → 源链中的位置索引; 从 CRYPTO_SOURCE_PREFERS 派生 (唯一权威顺序),
-# 新增数据源只改上面一处。gate.io 为 gate 的常见别名 (双写, 与 storage 一致)
+# 源偏好 → 源链中的位置索引; 从 source_order.CRYPTO_SOURCE_PREFERS 派生
+# (唯一权威顺序), 新增数据源只改 source_order 一处。
+# gate.io 为 gate 的常见别名 (双写, 与 storage 一致)
 _CRYPTO_SOURCE_INDEX = {
     src: i for i, src in enumerate(s for s in CRYPTO_SOURCE_PREFERS if s != "auto")
 }
@@ -141,18 +144,6 @@ def _hl_history(p: ParsedSymbol, start_date: str, end_date: str | None) -> pd.Da
         raise RuntimeError(f"{coin}: Hyperliquid 无历史K线")
     df["date"] = pd.to_datetime(df["date"])
     return df
-
-
-def _requests():
-    import requests
-
-    return requests
-
-
-def _obb():
-    from openbb import obb
-
-    return obb
 
 
 _PAIR_QUOTE_ALIASES = {"USD": "USDT", "USDT": "USDT", "USDC": "USDC", "BUSD": "BUSD"}

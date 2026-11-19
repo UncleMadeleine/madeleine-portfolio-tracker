@@ -7,7 +7,10 @@ import time
 from datetime import date, timedelta
 
 from . import health
+from .deps import akshare as _ak
+from .deps import openbb as _obb
 from .symbols import is_currency_code, valuation_currency
+from .util import finite_float as _finite
 from .util import with_timeout
 
 _PAIR_TTL = 600
@@ -23,12 +26,6 @@ _cfets_cache: tuple[float, dict[str, float]] = (0.0, {})
 # 历史汇率 (比例线汇率调整用): 6 小时进程内缓存, 键含起止日期
 _FX_HIST_TTL = 6 * 3600
 _fx_hist_cache: dict[tuple[str, str, str, str], tuple[float, object]] = {}
-
-
-def _obb():
-    from openbb import obb
-
-    return obb
 
 
 def _yahoo_pair(pair: str) -> float | None:
@@ -86,7 +83,7 @@ def _cfets_table() -> dict[str, float]:
     now = time.time()
     if _cfets_cache[1] and now - _cfets_cache[0] < _CFETS_TTL:
         return _cfets_cache[1]
-    import akshare as ak
+    ak = _ak()
 
     with health.span("fx", "cfets", "CNY") as sp:
         df = with_timeout(ak.fx_spot_quote, _CFETS_TIMEOUT)
@@ -127,12 +124,6 @@ def _cfets_rate(src: str, dst: str) -> float | None:
         return None
     r = table[src] / table[dst]
     return r if math.isfinite(r) else None
-
-
-def _finite(r: float | None) -> float | None:
-    if r is not None and math.isfinite(r):
-        return r
-    return None
 
 
 def get_rate(src: str, dst: str, use_ibkr: bool = False) -> float | None:

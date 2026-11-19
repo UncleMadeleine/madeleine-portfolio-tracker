@@ -47,6 +47,8 @@ from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 
 from . import cache as cache_mod
+from .deps import akshare as _akshare
+from .deps import yfinance as _yf
 from .symbols import parse
 from .events_cn import (
     _cn_code_to_yahoo,  # noqa: F401 - 兼容既有导入/测试
@@ -324,7 +326,7 @@ def _to_date(v) -> date | None:
 
 def _yf_calendar_rows(symbol: str) -> list[dict]:
     """yf.Ticker(symbol).calendar → 原始事件行 (不含窗口过滤)."""
-    import yfinance as yf
+    yf = _yf()
 
     cal = with_timeout(lambda: yf.Ticker(symbol).calendar, _YF_TIMEOUT)
     if not isinstance(cal, dict):
@@ -629,13 +631,6 @@ def _fetch_cn_cached(
     if reporter is not None:
         reporter.step(step_label)
     return evs, None, meta
-
-
-def _akshare():
-    """惰性导入 akshare: 缓存命中/首屏 cache_only 路径不应付冷启动成本."""
-    import akshare
-
-    return akshare
 
 
 def _fetch_cn_yysj_board(

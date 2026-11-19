@@ -46,6 +46,7 @@ from .paths import TEMPLATES_DIR, data_home
 from .symbols import Market, ParsedSymbol, parse as _parse_symbol
 from .util import as_bool as _as_bool
 from .util import finite_float as _number
+from .util import positive_float as _positive
 
 if TYPE_CHECKING:  # 仅类型标注; 运行时惰性导入避免 provider 包循环
     from .providers.base import Quote
@@ -412,11 +413,6 @@ def _http_json(path: str, params: dict, cfg: dict):
     except ValueError as e:
         body = _scrub(getattr(resp, "text", "")[:200], token)
         raise RuntimeError(f"EODHD 返回非 JSON: {body}".strip()) from e
-
-
-def _positive(v) -> float | None:
-    f = _number(v)
-    return f if f is not None and f > 0 else None
 
 
 # ---------------------------------------------------------------------------

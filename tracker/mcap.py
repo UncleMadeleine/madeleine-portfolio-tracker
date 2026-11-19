@@ -22,7 +22,10 @@ from dataclasses import dataclass
 import pandas as pd
 
 from . import cache as cache_mod
+from .deps import akshare as _ak
+from .deps import yfinance as _yf
 from .symbols import Market, is_pence, parse
+from .util import normalize_dates as _naive_dates
 from .util import with_timeout
 
 # 东财估值分析: 报表级低频数据, 6h 与 fundamentals 同口径
@@ -39,32 +42,6 @@ SOURCE_LABELS = {
     "shares": "历史股本×收盘价",
     "approx": "当前市值近似折算",
 }
-
-
-def _naive_dates(values) -> pd.Series:
-    """日期列统一为 naive Timestamp (字符串/aware/naive 混合输入均可).
-
-    K线缓存回填的是字符串→naive, 个别数据源给 tz-aware; 同一张对比图里
-    混用时 ``min()`` / ``bisect`` / 汇率按日查表都会抛 TypeError 或静默
-    全部不匹配 (整页崩/不折算)。剥时区只改显示口径, 不移动墙上日期。
-
-    逐元素剥时区后再交给 ``pd.to_datetime``: 直接对混合 aware/naive 的
-    列调用会把 aware 项静默转成 NaT, 丢失整段日期。
-    """
-    if isinstance(values, pd.Series):
-        clean = values.map(_strip_tz)
-    elif isinstance(values, pd.Index):
-        clean = values.map(_strip_tz)
-    else:
-        clean = pd.Series(values).map(_strip_tz)
-    return pd.to_datetime(clean, errors="coerce")
-
-
-def _strip_tz(value):
-    """单个日期值剥时区 (非 Timestamp 原样返回, 由 to_datetime 解析)."""
-    if isinstance(value, pd.Timestamp) and value.tzinfo is not None:
-        return value.tz_localize(None)
-    return value
 
 
 @dataclass
@@ -258,7 +235,7 @@ def _em_history(bare: str, refresh: bool = False) -> pd.DataFrame | None:
     hit = None if refresh else _cache_get(key, MCAP_EM_TTL)
     if hit is not None:
         return hit
-    import akshare as ak
+    ak = _ak()
 
     try:
         raw = with_timeout(ak.stock_value_em, _EM_TIMEOUT, symbol=bare)
@@ -327,9 +304,7 @@ def _shares_history(yahoo: str, refresh: bool = False) -> pd.DataFrame | None:
     if hit is not None:
         return hit
     try:
-        import yfinance as yf
-
-        ticker = yf.Ticker(yahoo)
+        ticker = _yf().Ticker(yahoo)
         srs = with_timeout(
             ticker.get_shares_full, _SHARES_TIMEOUT, start="1980-01-01"
         )

@@ -29,6 +29,9 @@ import time
 from dataclasses import asdict, dataclass
 
 from . import cache as cache_mod
+from .deps import openbb as _obb
+from .deps import requests as _requests
+from .deps import yfinance as _yf
 from .symbols import Market, normalize, parse
 
 _TTL = 21600  # 秒 (6h): 财报属低频披露数据
@@ -320,9 +323,7 @@ def _hk_filings_from_items(items, limit: int = 6) -> list[Filing]:
 
 
 def _get(url: str, params: dict | None = None):
-    import requests
-
-    resp = requests.get(
+    resp = _requests().get(
         url,
         params=params,
         timeout=_HTTP_TIMEOUT,
@@ -566,9 +567,7 @@ def _uk_company_name(symbol: str) -> str | None:
         from .util import with_timeout
 
         def _load_info():
-            import yfinance as yf
-
-            return yf.Ticker(symbol).info
+            return _yf().Ticker(symbol).info
 
         info = with_timeout(_load_info, 10.0) or {}
         name = info.get("longName") or info.get("shortName")
@@ -790,12 +789,12 @@ def _kr_filings_from_html(
 
 
 def _post(url: str, data: dict, *, referer: str = "") -> object:
-    import requests
-
     headers = {"User-Agent": _UA}
     if referer:
         headers["Referer"] = referer
-    resp = requests.post(url, data=data, timeout=_HTTP_TIMEOUT, headers=headers)
+    resp = _requests().post(
+        url, data=data, timeout=_HTTP_TIMEOUT, headers=headers
+    )
     resp.raise_for_status()
     return resp
 
@@ -876,7 +875,6 @@ def _us_filings_from_rows(rows, limit: int = 6) -> list[Filing]:
 
 
 def _us_filings(symbol: str, limit: int) -> list[Filing]:
-    from .providers.global_stocks import _obb
     from .util import with_timeout
 
     def _load():

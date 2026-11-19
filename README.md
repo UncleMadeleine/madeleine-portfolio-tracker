@@ -487,7 +487,8 @@ tracker/
 ├── nav.py              历史净值存储（独立 SQLite nav_history.db）+ 按当前持仓回填
 ├── symbols.py          自有代码规范、市场域识别、type_for_symbol() 权威域推导（唯一入口）
 ├── symbol_migrations.py 退市/改码 → 接替代码迁移表（长桥导入时自动迁移）
-├── util.py             with_timeout 硬超时等工具
+├── deps.py             可选/重型依赖统一懒加载（OpenBB 单例 / akshare / yfinance / requests）
+├── util.py             with_timeout / 数值归一 / 日期对齐 / 展示格式化等共享工具
 ├── providers/          **数据 provider 层**（按权威 type 域隔离）
 │   ├── base.py         Provider 基类 + Quote/SymbolEntry 数据结构 + resolve(type) 域路由
 │   ├── cn_stocks.py        A股/B股域（.SS/.SZ/.BJ）：akshare 固定优先, yfinance 兜底
@@ -507,6 +508,7 @@ tracker/
 ├── analytics.py        组合视图与指标（纯函数）
 ├── watchlist.py        自选配置存储门面（读写委托 storage，仅 I/O 归一）
 ├── services/           **独立用例层**（用例 = 取数 providers/fx + 纯函数计算 + 组装视图）
+│   ├── refresh.py        后台刷新协调器（同 key 去重 / 失败节流 / 完成记账；行情汇率与日历共用）
 │   ├── rules.py          阈值规则（纯函数：两级上下限状态判定 + 距离）
 │   ├── watchlist.py      自选视图组装 + 取数用例（watchlist list / report 复用）
 │   ├── snapshot.py       快照用例（take_snapshot / snapshot_json, 存储剥离）

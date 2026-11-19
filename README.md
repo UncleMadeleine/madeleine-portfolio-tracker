@@ -484,6 +484,8 @@ tracker/
 │   ├── cache.py          磁盘缓存管理（info / clear）
 │   └── warm.py           缓存保温/预热 CLI（一次预热 / --interval 常驻）
 ├── storage.py          所有 JSON 配置唯一读写口（portfolio/watchlist/settings, 原子写 + 损坏时尝试历史 .bak 恢复）
+├── webdav.py           WebDAV 同步算法（pull/push/冲突策略；配置与 HTTP 客户端见 webdav_client.py）
+├── webdav_client.py    WebDAV 配置解析 / 条件请求 / 原子写 / ETag 状态
 ├── nav.py              历史净值存储（独立 SQLite nav_history.db）+ 按当前持仓回填
 ├── symbols.py          自有代码规范、市场域识别、type_for_symbol() 权威域推导（唯一入口）
 ├── symbol_migrations.py 退市/改码 → 接替代码迁移表（长桥导入时自动迁移）

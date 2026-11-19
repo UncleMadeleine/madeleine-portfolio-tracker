@@ -47,6 +47,12 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Callable
 
 from . import config
+from .chains import CHAIN_CONFIG as _CHAIN_CONFIG
+from .chains import DEFAULT_BLOCKSCOUT as _DEFAULT_BLOCKSCOUT
+from .chains import ETHERSCAN_V2 as _ETHERSCAN_V2
+from .chains import EVM_CHAIN_ID as _EVM_CHAIN_ID
+from .chains import ROUTESCAN_CHAINS as _ROUTESCAN_CHAINS
+from .chains import SNOWTRACE as _SNOWTRACE
 from .paths import TEMPLATES_DIR, data_home
 from .util import finite_float as _to_float
 
@@ -62,28 +68,6 @@ DEFAULTS: dict[str, Any] = {
     "max_transactions": 1200,
     "timeout": 15.0,
 }
-
-#: EVM chain → Etherscan V2 chainid (Etherscan 兼容接口)
-_EVM_CHAIN_ID = {
-    "eth": 1,
-    "bsc": 56,
-    "polygon": 137,
-    "arbitrum": 42161,
-    "avalanche": 43114,
-}
-
-#: Routescan 公开 Data API 目前实际索引的公网链
-_ROUTESCAN_CHAINS = {"eth": 1, "avalanche": 43114}
-
-#: Blockscout 公开实例 (部分网络会触发 Cloudflare 人机校验, 失败自动换源)
-_DEFAULT_BLOCKSCOUT = {
-    "eth": "https://eth.blockscout.com",
-    "polygon": "https://polygon.blockscout.com",
-    "arbitrum": "https://arbitrum.blockscout.com",
-}
-
-_ETHERSCAN_V2 = "https://api.etherscan.io/v2/api"
-_SNOWTRACE = "https://api.snowtrace.io/api"
 
 #: 进程内收集需要脱敏的密钥 (浏览器 API key), 错误信息里统一替换为 ***
 _SECRETS: set[str] = set()
@@ -375,9 +359,7 @@ def _validate_chain_address(chain: str, address: str) -> tuple[str, str]:
 
 
 def _native_asset(chain: str) -> Asset:
-    from . import wallet
-
-    info = wallet._CHAIN_CONFIG[chain]
+    info = _CHAIN_CONFIG[chain]
     return Asset(
         key="native",
         symbol=str(info["native_symbol"]),
@@ -1315,7 +1297,7 @@ def _tron_get(path: str, cfg: dict) -> dict:
 
     try:
         body = wallet._tron_get(
-            wallet._CHAIN_CONFIG["tron"]["rpc"], path, float(cfg["timeout"])
+            _CHAIN_CONFIG["tron"]["rpc"], path, float(cfg["timeout"])
         )
     except RuntimeError as e:
         raise WalletHistoryError(f"TronGrid 请求失败: {e}") from e
@@ -1504,7 +1486,7 @@ def _fetch_tron(
 def _sol_rpc(method: str, params: list, cfg: dict) -> Any:
     from . import wallet
 
-    hosts = wallet._solana_rpc_hosts(wallet._CHAIN_CONFIG["solana"])
+    hosts = wallet._solana_rpc_hosts(_CHAIN_CONFIG["solana"])
     try:
         return wallet._try_rpc_hosts(
             hosts,

@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from tracker.providers import global_stocks as gs
+from tracker.providers import stock_yahoo as gs
 from tracker.symbols import parse
 
 

@@ -487,7 +487,7 @@ def test_ohlc_cache_rejects_payload_missing_price_columns(monkeypatch):
 
 
 def test_akshare_quote_uses_reported_currency(monkeypatch):
-    import tracker.providers.global_stocks as gs
+    import tracker.providers.stock_akshare as gs
 
     monkeypatch.setattr(
         gs,
@@ -503,7 +503,7 @@ def test_akshare_quote_uses_reported_currency(monkeypatch):
 
 def test_akshare_quote_a_share_ignores_placeholder_currency(monkeypatch):
     """东财 A 股 f172="-": 必须用代码权威币种, 不能污染行情缓存与汇率链."""
-    import tracker.providers.global_stocks as gs
+    import tracker.providers.stock_akshare as gs
 
     monkeypatch.setattr(
         gs,

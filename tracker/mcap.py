@@ -350,7 +350,7 @@ def _price_currency_for(p) -> str:
 
     parse() 对 .L/.IL 一律给 GBP, 但 LSE 主板/IOB 存在 USD/EUR 计价线
     (CSPX.L / VWRA.L / KAP.IL): 历史 K 线按实际报价币种保留 (见
-    providers/global_stocks._yahoo_history 的便士折算判据)。市值 = 股本 ×
+    providers/stock_yahoo._yahoo_history 的便士折算判据)。市值 = 股本 ×
     该价格, 币种必须与价格一致, 否则 compare --metric mcap 会拿 USD 数字按
     GBP 汇率折算 (约 1.3 倍偏差) 且不告警。
 
@@ -363,13 +363,13 @@ def _price_currency_for(p) -> str:
         # 人民币柜台 parse 已权威推导为 CNY, 不必发网络请求
         if p.currency != "HKD":
             return p.currency
-        from .providers.global_stocks import _yahoo_quote_currency
+        from .providers.stock_yahoo import _yahoo_quote_currency
 
         ccy = _yahoo_quote_currency(p.yahoo).strip().upper()
         return ccy or "HKD"
     if p.market is not Market.GB:
         return p.currency
-    from .providers.global_stocks import _yahoo_quote_currency
+    from .providers.stock_yahoo import _yahoo_quote_currency
 
     ccy = _yahoo_quote_currency(p.yahoo).strip()
     # 便士 (GBp/GBX) 的 K 线已按 LSE 惯例 ÷100 折成英镑; 未知币种同样按

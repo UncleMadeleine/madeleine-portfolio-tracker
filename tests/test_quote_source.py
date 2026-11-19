@@ -167,7 +167,7 @@ def test_dynamic_pe_round_trips_through_cache():
 
 
 def test_akshare_quote_reads_dynamic_pe(monkeypatch):
-    from tracker.providers import global_stocks as gs
+    from tracker.providers import stock_akshare as gs
     from tracker.symbols import parse
 
     monkeypatch.setattr(

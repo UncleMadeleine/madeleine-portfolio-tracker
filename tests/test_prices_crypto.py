@@ -43,7 +43,7 @@ def test_ak_quote_secid_market_segment():
     按代码首位判会错: 900xxx (沪B) 与 300xxx (创业板) 首位都非 6, 但东财把
     900xxx 归在上海段 1 —— 必须按交易所后缀判。
     """
-    from tracker.providers import global_stocks as gs
+    from tracker.providers import stock_akshare as gs
     from tracker.symbols import parse
 
     cases = {
@@ -66,7 +66,7 @@ def test_ak_quote_raw_single_flight_and_failure_placeholder(monkeypatch):
     """单代码行情: 并发首拉只发一次请求; 失败写短 TTL 占位 (不反复打东财)."""
     import time
 
-    import tracker.providers.global_stocks as gs
+    import tracker.providers.stock_akshare as gs
     from tracker.symbols import parse
 
     calls = {"n": 0, "fail": 0}
@@ -424,26 +424,26 @@ def test_crypto_yf_history_fallback_does_not_nameerror(monkeypatch):
 class TestProviderDomainIsolation:
     def test_batch_obb_failure_does_not_kill_other_domains(self, monkeypatch):
         """openbb 故障时批量路径返回空表 (逐代码源链兜底), 不向上抛连坐 cn/crypto 域."""
-        from tracker.providers import global_stocks
+        from tracker.providers import stock_yahoo
 
         def _boom():
             raise RuntimeError("cannot import name 'obb' from 'openbb'")
 
-        monkeypatch.setattr(global_stocks, "_obb", _boom)
-        out = global_stocks._yahoo_batch([parse("AAPL")])
+        monkeypatch.setattr(stock_yahoo, "_obb", _boom)
+        out = stock_yahoo._yahoo_batch([parse("AAPL")])
         assert out == {}
 
     def test_akshare_history_empty_raises_readable(self, monkeypatch):
         """akshare 无数据返回无列空表: 可读 RuntimeError, 不是裸 KeyError 'date'."""
-        from tracker.providers import global_stocks
+        from tracker.providers import stock_akshare
 
         class FakeAk:
             def stock_zh_a_hist(self, **kw):
                 return pd.DataFrame()
 
-        monkeypatch.setattr(global_stocks, "_ak", lambda: FakeAk())
+        monkeypatch.setattr(stock_akshare, "_ak", lambda: FakeAk())
         with pytest.raises(RuntimeError, match="无历史数据"):
-            global_stocks._akshare_history(parse("600519.SS"), "2026-01-01")
+            stock_akshare._akshare_history(parse("600519.SS"), "2026-01-01")
 
 
 def _fake_obb(df: pd.DataFrame):
@@ -479,7 +479,7 @@ def _lse_df() -> pd.DataFrame:
 
 def test_lse_gbp_quoted_history_not_divided(monkeypatch):
     """Yahoo 报 GBP 的是真英镑报价 (VUSA.L), 历史价不能再 ÷100."""
-    from tracker.providers import global_stocks as gs
+    from tracker.providers import stock_yahoo as gs
 
     monkeypatch.setattr(gs, "_obb", _fake_obb(_lse_df()))
     monkeypatch.setattr(gs, "_yahoo_quote_currency", lambda y: "GBP")
@@ -489,7 +489,7 @@ def test_lse_gbp_quoted_history_not_divided(monkeypatch):
 
 def test_lse_gbp_pence_history_still_divided(monkeypatch):
     """Yahoo 报 GBp 的仍是便士报价 (VOD.L), 历史价 ÷100 折成英镑."""
-    from tracker.providers import global_stocks as gs
+    from tracker.providers import stock_yahoo as gs
 
     monkeypatch.setattr(gs, "_obb", _fake_obb(_lse_df()))
     monkeypatch.setattr(gs, "_yahoo_quote_currency", lambda y: "GBp")

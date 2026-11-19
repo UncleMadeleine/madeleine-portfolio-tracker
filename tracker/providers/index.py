@@ -37,7 +37,7 @@ from ..deps import requests as _requests
 from ..symbols import INDEX_CATALOG, ParsedSymbol, index_key
 from ..util import with_timeout
 from .base import Provider, openbb_history_frame, ordered_sources
-from .global_stocks import _AK_HIST_TIMEOUT
+from .stock_akshare import _AK_HIST_TIMEOUT
 
 __all__ = ["IndexProvider"]
 

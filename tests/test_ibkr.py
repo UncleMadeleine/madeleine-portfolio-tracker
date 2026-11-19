@@ -527,14 +527,13 @@ def test_get_history_ibkr(monkeypatch):
 
     monkeypatch.setattr(ibkr_mod, "get_history_ibkr", fake_ibkr)
     import tracker.providers.global_stocks as global_stocks
+    import tracker.providers.stock_yahoo as stock_yahoo
 
-    monkeypatch.setattr(
-        global_stocks,
-        "_yahoo_history",
-        lambda p, start_date=None, end_date=None: (_ for _ in ()).throw(
-            AssertionError("不应调用 yahoo")
-        ),
-    )
+    def _no_yahoo(p, start_date=None, end_date=None):
+        raise AssertionError("不应调用 yahoo")
+
+    monkeypatch.setattr(global_stocks, "_yahoo_history", _no_yahoo)
+    monkeypatch.setattr(stock_yahoo, "_yahoo_history", _no_yahoo)
 
     df = prices_mod.get_history("AAPL", months=3, use_ibkr=True)
     assert len(df) == 2
@@ -557,11 +556,14 @@ def test_get_history_ibkr_fallback(monkeypatch):
     )
 
     monkeypatch.setattr(ibkr_mod, "get_history_ibkr", fake_ibkr)
-    import tracker.providers.global_stocks as gs
+    import tracker.providers.global_stocks as global_stocks
+    import tracker.providers.stock_yahoo as stock_yahoo
 
-    monkeypatch.setattr(
-        gs, "_yahoo_history", lambda p, start_date=None, end_date=None: yahoo_df
-    )
+    def _yahoo_df(p, start_date=None, end_date=None):
+        return yahoo_df
+
+    monkeypatch.setattr(global_stocks, "_yahoo_history", _yahoo_df)
+    monkeypatch.setattr(stock_yahoo, "_yahoo_history", _yahoo_df)
 
     df = prices_mod.get_history("AAPL", months=3, use_ibkr=True)
     assert len(df) == 2

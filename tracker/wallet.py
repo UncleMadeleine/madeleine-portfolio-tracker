@@ -20,6 +20,9 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .chains import CHAIN_CONFIG as _CHAIN_CONFIG
+from .chains import CHAIN_LABELS  # noqa: F401 - 兼容再导出
+from .chains import _SUPPORTED_CHAINS
 from .deps import requests as _requests
 
 # ---------------------------------------------------------------------------
@@ -154,94 +157,6 @@ _BUILTIN_TOKENLIST: dict[str, dict[str, dict[str, Any]]] = {
 # ---------------------------------------------------------------------------
 # 链 RPC 配置
 # ---------------------------------------------------------------------------
-
-_CHAIN_CONFIG: dict[str, dict[str, Any]] = {
-    "eth": {
-        "label": "Ethereum",
-        "native_symbol": "ETH",
-        "native_decimals": 18,
-        "rpc": [
-            "https://ethereum.publicnode.com",
-            "https://eth.drpc.org",
-            "https://eth.merkle.io",
-            "https://rpc.flashbots.net",
-        ],
-        "tokenlist": "eth",
-    },
-    "bsc": {
-        "label": "BNB Chain",
-        "native_symbol": "BNB",
-        "native_decimals": 18,
-        "rpc": [
-            "https://bsc-dataseed1.binance.org",
-            "https://bsc-dataseed2.binance.org",
-            "https://bsc.publicnode.com",
-        ],
-        "tokenlist": "bsc",
-    },
-    "polygon": {
-        "label": "Polygon",
-        "native_symbol": "MATIC",
-        "native_decimals": 18,
-        "rpc": [
-            "https://polygon-bor-rpc.publicnode.com",
-            "https://polygon.drpc.org",
-        ],
-        "tokenlist": "polygon",
-    },
-    "arbitrum": {
-        "label": "Arbitrum One",
-        "native_symbol": "ETH",
-        "native_decimals": 18,
-        "rpc": [
-            "https://arb1.arbitrum.io/rpc",
-            "https://arbitrum.publicnode.com",
-            "https://arbitrum.drpc.org",
-        ],
-        "tokenlist": "arbitrum",
-    },
-    "avalanche": {
-        "label": "Avalanche C-Chain",
-        "native_symbol": "AVAX",
-        "native_decimals": 18,
-        "rpc": [
-            "https://api.avax.network/ext/bc/C/rpc",
-            "https://avalanche-c-chain-rpc.publicnode.com",
-            "https://avalanche.drpc.org",
-        ],
-        "tokenlist": "avalanche",
-    },
-    "tron": {
-        "label": "TRON",
-        "native_symbol": "TRX",
-        "native_decimals": 6,
-        # TronGrid 兼容 HTTP API (GET /v1/accounts/{address}), 非 JSON-RPC
-        "rpc": [
-            "https://api.trongrid.io",
-            "https://api.tronstack.io",
-        ],
-        "tokenlist": "tron",
-        "kind": "tron",
-    },
-    "solana": {
-        "label": "Solana",
-        "native_symbol": "SOL",
-        "native_decimals": 9,
-        # 公共 JSON-RPC; getTokenAccountsByOwner 是索引调用, 部分节点付费,
-        # TRACKER_SOLANA_RPC 环境变量可前置一个自定义节点 (按序尝试)
-        "rpc": [
-            "https://api.mainnet-beta.solana.com",
-            "https://solana-rpc.publicnode.com",
-            "https://solana.api.onfinality.io/public",
-        ],
-        "tokenlist": "solana",
-        "kind": "solana",
-    },
-}
-
-_SUPPORTED_CHAINS = set(_CHAIN_CONFIG)
-#: 链代码 → 展示名 (CLI 钱包净值 / 导入页 / 钱包净值页共用)
-CHAIN_LABELS = {key: str(cfg["label"]) for key, cfg in _CHAIN_CONFIG.items()}
 
 # ERC-20 balanceOf 签名
 _ERC20_BALANCE_SIG = bytes.fromhex("70a08231")

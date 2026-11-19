@@ -351,7 +351,7 @@ def test_mcap_currency_follows_usd_quoted_lse(monkeypatch):
 
 def test_price_currency_pence_and_usd_lines(monkeypatch):
     """GBp 便士折成 GBP; 美元计价的 .IL (KAP.IL) 保留 USD."""
-    import tracker.providers.global_stocks as gs
+    import tracker.providers.stock_yahoo as gs
 
     monkeypatch.setattr(gs, "_yahoo_quote_currency", lambda y: "GBp")
     assert mcap._price_currency_for(parse("VOD.L")) == "GBP"
@@ -361,7 +361,7 @@ def test_price_currency_pence_and_usd_lines(monkeypatch):
 
 def test_price_currency_hk_usd_counter(monkeypatch):
     """港股美元柜台 (9188.HK) 的市值币种必须跟随报价币种 USD, 不是 HKD."""
-    import tracker.providers.global_stocks as gs
+    import tracker.providers.stock_yahoo as gs
 
     monkeypatch.setattr(gs, "_yahoo_quote_currency", lambda y: "USD")
     assert mcap._price_currency_for(parse("9188.HK")) == "USD"

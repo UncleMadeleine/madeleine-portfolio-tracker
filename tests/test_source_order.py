@@ -321,7 +321,8 @@ def test_akshare_before_yfinance_keeps_hk_out_of_batch(monkeypatch):
         return {}
 
     monkeypatch.setattr(
-        gs, "_akshare_quote", lambda p: _q(p.yahoo, "akshare")
+        "tracker.providers.stock_akshare._akshare_quote",
+        lambda p: _q(p.yahoo, "akshare"),
     )
     monkeypatch.setattr(orch, "_yahoo_batch", fake_yahoo)
     monkeypatch.setattr(orch.cache_mod, "get_cached", lambda *a, **k: {})
@@ -345,7 +346,7 @@ def test_akshare_failure_falls_through_to_yfinance(monkeypatch):
     def boom(_p):
         raise RuntimeError("akshare down")
 
-    monkeypatch.setattr(gs, "_akshare_quote", boom)
+    monkeypatch.setattr("tracker.providers.stock_akshare._akshare_quote", boom)
     monkeypatch.setattr(orch, "_yahoo_batch", fake_yahoo)
     monkeypatch.setattr(orch.cache_mod, "get_cached", lambda *a, **k: {})
     monkeypatch.setattr(orch.cache_mod, "set_cached", lambda *a, **k: None)
@@ -437,7 +438,7 @@ def test_history_ibkr_after_yfinance_is_not_called(monkeypatch):
     df = pd.DataFrame(
         [{"date": "2026-01-02", "open": 1, "high": 2, "low": 1, "close": 2}]
     )
-    monkeypatch.setattr(gs, "_yahoo_history", lambda *a, **k: df)
+    monkeypatch.setattr("tracker.providers.stock_yahoo._yahoo_history", lambda *a, **k: df)
     monkeypatch.setattr(
         "tracker.ibkr.get_history_ibkr",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("IBKR should be skipped")),
@@ -456,8 +457,7 @@ def test_history_ibkr_before_yfinance_is_used(monkeypatch):
         lambda *a, **k: ({"AAPL": df_ib}, None),
     )
     monkeypatch.setattr(
-        gs,
-        "_yahoo_history",
+        "tracker.providers.stock_yahoo._yahoo_history",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("yfinance should be skipped")),
     )
     out = orch.get_history("AAPL", months=1, use_ibkr=True)

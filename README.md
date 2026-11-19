@@ -488,9 +488,12 @@ tracker/
 ├── symbols.py          自有代码规范、市场域识别、type_for_symbol() 权威域推导（唯一入口）
 ├── symbol_migrations.py 退市/改码 → 接替代码迁移表（长桥导入时自动迁移）
 ├── deps.py             可选/重型依赖统一懒加载（OpenBB 单例 / akshare / yfinance / requests）
+├── chains.py           链元数据注册表（RPC / 原生币 / tokenlist / 浏览器 / EVM chain id）
 ├── util.py             with_timeout / 数值归一 / 日期对齐 / 展示格式化等共享工具
 ├── providers/          **数据 provider 层**（按权威 type 域隔离）
 │   ├── base.py         Provider 基类 + Quote/SymbolEntry 数据结构 + resolve(type) 域路由
+│   ├── stock_yahoo.py      Yahoo/OpenBB 股票行情与历史源（global/cn/index 共用）
+│   ├── stock_akshare.py    东财/akshare 股票行情与历史源（cn/全球港股兜底共用）
 │   ├── cn_stocks.py        A股/B股域（.SS/.SZ/.BJ）：akshare 固定优先, yfinance 兜底
 │   ├── global_stocks.py    全球股票域（美股/港股/欧股…）：yfinance 主源, 港股 akshare 兜底; 搜索走 IBKR → 东财 suggest → yfinance Search → 代码直查
 │   ├── crypto.py           加密货币域（BASE-QUOTE）：Binance → Gate.io → Hyperliquid(USD系) → yfinance

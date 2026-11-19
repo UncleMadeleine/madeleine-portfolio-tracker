@@ -14,12 +14,8 @@ from .em_suggest import (
     parse_symbol_safe,
     suggest_merged,
 )
-from .global_stocks import (
-    _akshare_history,
-    _akshare_quote,
-    _yahoo_history,
-    _yahoo_quote,
-)
+from .stock_akshare import _akshare_history, _akshare_quote
+from .stock_yahoo import _yahoo_history, _yahoo_quote
 
 
 class CNStocksProvider(Provider):

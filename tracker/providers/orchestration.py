@@ -22,7 +22,7 @@ from ..symbols import Market, ParsedSymbol, parse as _parse_symbol
 from .base import Quote, resolve
 from .crypto import CryptoProvider
 from .cn_stocks import CNStocksProvider
-from .global_stocks import _yahoo_batch
+from .stock_yahoo import _yahoo_batch
 from .index import IndexProvider
 
 __all__ = ["get_quotes", "get_history", "neg_clear_all"]
@@ -194,7 +194,8 @@ def _fetch_ordered_quotes(
     """
     from .. import eodhd as eodhd_mod
     from .. import source_order as so
-    from .global_stocks import _akshare_quote, _yahoo_quote
+    from .stock_akshare import _akshare_quote
+    from .stock_yahoo import _yahoo_quote
 
     if domain == "global" and prefer_akshare:
         order = so.prefer_akshare_order(order)
@@ -337,7 +338,8 @@ def _fetch_ordered_history(
 
     from .. import eodhd as eodhd_mod
     from .. import source_order as so
-    from .global_stocks import _akshare_history, _yahoo_history
+    from .stock_akshare import _akshare_history
+    from .stock_yahoo import _yahoo_history
 
     if p.type == "global" and prefer_akshare:
         order = so.prefer_akshare_order(order)

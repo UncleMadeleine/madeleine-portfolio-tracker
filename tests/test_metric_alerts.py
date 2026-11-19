@@ -444,7 +444,7 @@ class TestAkshareQuoteBookValue:
 
     def test_akshare_quote_backfills_bvps_from_pb(self, monkeypatch):
         """市净率 → 反推每股净资产填入 Quote (东财实时口径)."""
-        from tracker.providers import global_stocks as gs
+        from tracker.providers import stock_akshare as gs
         from tracker.symbols import parse
 
         monkeypatch.setattr(
@@ -459,7 +459,7 @@ class TestAkshareQuoteBookValue:
 
     def test_akshare_quote_pb_zero_or_missing(self, monkeypatch):
         """市净率缺失("-")/非正 → book_value=None (不除零, 回落 fundamentals)."""
-        from tracker.providers import global_stocks as gs
+        from tracker.providers import stock_akshare as gs
         from tracker.symbols import parse
 
         for pb in ("-", 0.0):
@@ -470,7 +470,7 @@ class TestAkshareQuoteBookValue:
 
     def test_akshare_quote_no_pb_field(self, monkeypatch):
         """接口未回市净率字段 → book_value=None, 不报错."""
-        from tracker.providers import global_stocks as gs
+        from tracker.providers import stock_akshare as gs
         from tracker.symbols import parse
 
         monkeypatch.setattr(
@@ -482,7 +482,7 @@ class TestAkshareQuoteBookValue:
 
     def test_akshare_quote_backfills_market_cap(self, monkeypatch):
         """总市值 (本地币种) → 填入 Quote.market_cap (港股现在也有)."""
-        from tracker.providers import global_stocks as gs
+        from tracker.providers import stock_akshare as gs
         from tracker.symbols import parse
 
         monkeypatch.setattr(
@@ -494,7 +494,7 @@ class TestAkshareQuoteBookValue:
 
     def test_akshare_quote_mcap_zero_or_missing(self, monkeypatch):
         """总市值缺失("-")/非正 → market_cap=None (回落 fundamentals)."""
-        from tracker.providers import global_stocks as gs
+        from tracker.providers import stock_akshare as gs
         from tracker.symbols import parse
 
         for mc in ("-", 0.0):
@@ -505,7 +505,7 @@ class TestAkshareQuoteBookValue:
 
     def test_akshare_quote_no_mcap_field(self, monkeypatch):
         """无总市值字段 (接口变化) → market_cap=None, 不报错."""
-        from tracker.providers import global_stocks as gs
+        from tracker.providers import stock_akshare as gs
         from tracker.symbols import parse
 
         monkeypatch.setattr(
@@ -517,7 +517,7 @@ class TestAkshareQuoteBookValue:
 
     def test_akshare_quote_suspended_symbol_raises(self, monkeypatch):
         """停牌/无成交: 东财最新价是 "-" → 抛错回退 yfinance, 不给 0/NaN 价."""
-        from tracker.providers import global_stocks as gs
+        from tracker.providers import stock_akshare as gs
         from tracker.symbols import parse
 
         monkeypatch.setattr(
@@ -528,7 +528,7 @@ class TestAkshareQuoteBookValue:
 
     def test_akshare_quote_unavailable_raises(self, monkeypatch):
         """接口失败 (None) → 抛可读错误, 由源链降级。"""
-        from tracker.providers import global_stocks as gs
+        from tracker.providers import stock_akshare as gs
         from tracker.symbols import parse
 
         monkeypatch.setattr(gs, "_ak_quote_raw", lambda p: None)

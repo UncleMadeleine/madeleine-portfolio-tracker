@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from tracker.providers.global_stocks import _quote_from_dump
+from tracker.providers.stock_yahoo import _quote_from_dump
 from tracker.symbols import parse
 
 

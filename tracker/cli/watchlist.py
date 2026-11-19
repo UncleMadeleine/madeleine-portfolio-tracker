@@ -40,6 +40,8 @@ def watchlist_add(args) -> None:
             found = next((e for e in entries if _sym(e) == p.yahoo), None)
             if found is None:
                 e: dict = {"symbol": p.yahoo, "lists": lists or ["默认"]}
+                if args.name is not None:
+                    e["name"] = args.name
                 if args.metric is not None:
                     e["metric"] = args.metric
                 if args.upper1 is not None:
@@ -60,6 +62,7 @@ def watchlist_add(args) -> None:
                     if name not in cur:
                         cur.append(name)
                 for key, val in (
+                    ("name", args.name),
                     ("metric", args.metric),
                     ("upper_1", args.upper1),
                     ("upper_2", args.upper2),

@@ -296,7 +296,7 @@ Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致);
 
 4. **加自选 + 设阈值** (记住用 `--list` 指定归属列表, 阈值按基准指标解释; `--metric` 可选 price/pb/mcap):
    ```
-   .venv/bin/python -m tracker.cli watchlist add NVDA --list 科技,美股 --upper1 260 --note 关注
+   .venv/bin/python -m tracker.cli watchlist add NVDA --list 科技,美股 --name 英伟达 --upper1 260 --note 关注
    .venv/bin/python -m tracker.cli watchlist add 600036.SS --metric pb --upper1 1.2 --note 银行
    .venv/bin/python -m tracker.cli watchlist add AAPL --metric mcap --upper1 4000000000000 --note 市值
    ```

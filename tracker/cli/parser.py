@@ -262,7 +262,7 @@ def _add_watchlist_parser(sub: argparse.ArgumentParser) -> None:
             "  tracker watchlist triggered                     # 只输出到达阈值的自选\n"
             "  tracker watchlist triggered --json              # JSON: triggered 数组\n"
             "  tracker watchlist list --no-quotes             # 仅展示配置\n"
-            "  tracker watchlist add AAPL --list 科技 --upper1 250 --note 苹果\n"
+            "  tracker watchlist add AAPL --list 科技 --name 苹果 --upper1 250\n"
             "  tracker watchlist add 600519.SS --list 白酒 --lower1 1500\n"
             "  tracker watchlist add 600036.SS --metric pb --upper1 1.2 --lower1 0.8\n"
             "  tracker watchlist add AAPL --metric mcap --upper1 4000000000000\n"
@@ -297,6 +297,7 @@ def _add_watchlist_parser(sub: argparse.ArgumentParser) -> None:
         default=None,
         help="阈值基准指标: price=现价 (默认) / pb=市净率 / mcap=总市值",
     )
+    p_w.add_argument("--name", help="显示名称 (如 苹果); 不填则沿用行情返回的名称")
     p_w.add_argument("--note", help="备注")
     p_w.add_argument("--akshare", action="store_true")
     p_w.add_argument("--ibkr", action="store_true")

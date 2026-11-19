@@ -50,6 +50,42 @@ class TestWatchlistCli:
             }
         ]
 
+    def test_add_writes_name(self, tmp_path, capsys):
+        """--name 落盘到条目 name 字段 (此前 add 从不写 name)."""
+        f = tmp_path / "w.json"
+        f.write_text(json.dumps({"watchlist": []}), encoding="utf-8")
+        _run(
+            capsys,
+            "watchlist",
+            "add",
+            "AAPL",
+            "--file",
+            str(f),
+            "--name",
+            "苹果",
+            "--note",
+            "关注",
+        )
+        e = _load(f)["watchlist"][0]
+        assert e["name"] == "苹果"
+        assert e["note"] == "关注"
+
+    def test_add_updates_name_on_existing(self, tmp_path, capsys):
+        """已存在条目: --name 覆盖旧名, 未指定时保留原值."""
+        f = tmp_path / "w.json"
+        f.write_text(
+            json.dumps(
+                {"watchlist": [{"symbol": "TSLA", "lists": ["科技"], "name": "特斯拉"}]}
+            ),
+            encoding="utf-8",
+        )
+        _run(
+            capsys, "watchlist", "add", "TSLA", "--file", str(f), "--upper1", "500"
+        )
+        assert _load(f)["watchlist"][0]["name"] == "特斯拉"
+        _run(capsys, "watchlist", "add", "TSLA", "--file", str(f), "--name", "Tesla")
+        assert _load(f)["watchlist"][0]["name"] == "Tesla"
+
     def test_add_merges_existing(self, tmp_path, capsys):
         f = tmp_path / "w.json"
         f.write_text(

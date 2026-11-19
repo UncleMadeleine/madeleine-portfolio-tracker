@@ -173,7 +173,7 @@ python -m tracker.cli portfolio set-base USD
 python -m tracker.cli watchlist list
 python -m tracker.cli watchlist triggered                    # 只输出到达阈值的自选
 python -m tracker.cli watchlist triggered --json             # 机器可读 (triggered 数组)
-python -m tracker.cli watchlist add NVDA --list 科技,美股 --upper1 260
+python -m tracker.cli watchlist add NVDA --list 科技,美股 --name 英伟达 --upper1 260
 python -m tracker.cli watchlist remove NVDA
 python -m tracker.cli watchlist import-longport --dry-run  # 长桥自选导入预览（先 longport-login）
 python -m tracker.cli watchlist import-longport --overwrite  # 覆盖现有自选

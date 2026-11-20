@@ -22,6 +22,7 @@ from streamlit.testing.v1 import AppTest
 import tracker.prices as prices
 import tracker.storage as storage
 import tracker.ui.app as app_mod
+import tracker.ui.portfolio_data as portfolio_data
 import tracker.ui.portfolio_page as portfolio_page
 
 _URL_PATHS = {
@@ -88,7 +89,7 @@ def _boot_app(monkeypatch, tmp_path, holdings, watchlist=None):
     # 生效, view 为空, data_editor 整段不执行, 列格式问题被掩盖)
     portfolio_page.cached_fx.clear()
     monkeypatch.setattr(
-        portfolio_page,
+        portfolio_data,
         "get_fx_rates",
         lambda base, curs, **kw: ({"USD": 7.1}, []),
     )

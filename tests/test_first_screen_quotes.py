@@ -28,6 +28,7 @@ import tracker.fx as fx_mod
 import tracker.prices as prices
 import tracker.storage as storage
 import tracker.ui.app as app_mod
+import tracker.ui.portfolio_data as portfolio_data
 import tracker.ui.portfolio_page as portfolio_page
 from tracker.prices import Quote
 from tracker.services import warm as warm_mod
@@ -202,12 +203,12 @@ def _boot(
     monkeypatch.setattr(portfolio_page, "WATCHLIST_PATH", wl)
     monkeypatch.setattr(storage, "PORTFOLIO_PATH", pf)
     if get_fx is not None:
-        monkeypatch.setattr(portfolio_page, "get_fx_rates", get_fx)
+        monkeypatch.setattr(portfolio_data, "get_fx_rates", get_fx)
         monkeypatch.setattr(warm_mod, "get_fx_rates", get_fx)
     else:
         # 冷启动汇率兜底: 秒回不落库 (fx 相关的测试自行打桩)
         monkeypatch.setattr(
-            portfolio_page, "get_fx_rates", lambda base, curs, **kw: ({"USD": 7.1}, [])
+            portfolio_data, "get_fx_rates", lambda base, curs, **kw: ({"USD": 7.1}, [])
         )
         monkeypatch.setattr(
             warm_mod, "get_fx_rates", lambda base, curs, **kw: ({"USD": 7.1}, [])
@@ -623,7 +624,7 @@ class TestPeriodicKeepWarm:
         永远等不到保温周期, 服务常驻开着也一直显示缓存里的旧价。
         """
         now = time.time()
-        monkeypatch.setattr(portfolio_page.time, "time", lambda: now)
+        monkeypatch.setattr(portfolio_data.time, "time", lambda: now)
         plan = {"q_age": 10.0, "f_age": 5.0, "checked_at": now - 600}
         assert portfolio_page._plan_data_age(plan) == 610.0
         # 缺数据视为无限旧, 不能被流逝时间掩盖

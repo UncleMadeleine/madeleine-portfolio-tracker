@@ -443,6 +443,7 @@ tracker/ui/           Streamlit 页面包（streamlit run tracker/ui/app.py / �
 │                          + cli_main(): tracker-ui 控制台入口（定位包内 app.py 转交 streamlit）
 ├── portfolio_page.py   「组合」页面（持仓编辑/明细/配置/自选提醒/净值走势 + 行情/汇率缓存）
 ├── kline_page.py       「K线」页面（搜索框 + lightweight-charts 组件 + 上市以来全量滑动 + 多股走势对比 + 加密货币对比）
+├── kline_state.py      K线页会话状态与取数缓存（快捷/最近代码 / st.cache_data / 市值对比缓存）
 ├── index_page.py       「指数K线」页面（IX.<KEY> 分组下拉, 独立于股票 K线页）
 ├── fundamentals_page.py 「基本面」页面（估值指标 PE/PB/股息率 + 最近财报链接 + 历史 PE/PB 分位; AH 溢价曲线: A+H 股票对 / 范围切换, 明细表）
 ├── import_page.py      「导入」页面（IBKR 账户 / 长桥账户 / 链上钱包 / 券商文件, 追加合并或覆盖）

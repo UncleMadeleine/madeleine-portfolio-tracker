@@ -15,9 +15,29 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
-from . import cache as _cache
 from .symbols import is_currency_code, parse
 from .util import finite_float as _finite_opt
+
+
+class _CacheModuleProxy:
+    """对 tracker.cache 的惰性引用.
+
+    cache.py 在文件末尾从本模块再导出域读写函数. 若这里在模块导入阶段
+    直接 ``from . import cache``, 两条导入路径会互相等待:
+    ``import tracker.cache_domains`` → cache.py → ``from .cache_domains
+    import ...`` (此时本模块尚未执行完) → ImportError.
+
+    改为调用时才解析 cache 模块: 直接导入本模块不会触发 cache.py;
+    正常 ``import tracker.cache`` 时本模块可完整加载, 末尾再导出也不成环。
+    """
+
+    def __getattr__(self, name: str):
+        from . import cache
+
+        return getattr(cache, name)
+
+
+_cache = _CacheModuleProxy()
 
 if TYPE_CHECKING:
     from .providers.base import Quote
@@ -26,9 +46,11 @@ if TYPE_CHECKING:
 
 
 def get_ohlc_cached(
-    symbol: str, months: int, ttl: int = _cache.OHLC_TTL
+    symbol: str, months: int, ttl: int | None = None
 ) -> pd.DataFrame | None:
     """读取缓存的日线 OHLC; 未命中 / 过期 / 载荷损坏返回 None."""
+    if ttl is None:
+        ttl = _cache.OHLC_TTL
     payload = _cache._read_payload(
         "ohlc_cache",
         "symbol=? AND months=?",
@@ -234,7 +256,7 @@ def _normalize_quote_currency(symbol: str, currency) -> str | None:
 
 
 def get_cached_with_age(
-    symbols: list[str], ttl: int = _cache.STALE_TTL
+    symbols: list[str], ttl: int | None = None
 ) -> tuple[dict[str, "Quote"], dict[str, float]]:
     """返回 (Symbol→Quote, Symbol→age秒) 两个字典; 未命中/过期/脏数据不在返回值中.
 
@@ -244,6 +266,8 @@ def get_cached_with_age(
     """
     from .providers.base import Quote
 
+    if ttl is None:
+        ttl = _cache.STALE_TTL
     if not symbols:
         return {}, {}
 
@@ -279,8 +303,10 @@ def get_cached_with_age(
     return hits, ages
 
 
-def get_cached(symbols: list[str], ttl: int = _cache.CACHE_TTL) -> dict[str, "Quote"]:
+def get_cached(symbols: list[str], ttl: int | None = None) -> dict[str, "Quote"]:
     """返回缓存命中的 Symbol→Quote 字典, 未命中者不在返回值中."""
+    if ttl is None:
+        ttl = _cache.CACHE_TTL
     hits, _ages = get_cached_with_age(symbols, ttl=ttl)
     return hits
 
@@ -350,12 +376,14 @@ def set_cached(quotes: dict[str, "Quote"]) -> None:
 
 
 def get_fx_cached(
-    base: str, currencies, ttl: int = _cache.FX_STALE_TTL
+    base: str, currencies, ttl: int | None = None
 ) -> tuple[dict[str, float], dict[str, float]]:
     """返回 (currency→rate, currency→age秒); base 自身/未命中/过期不在返回值中.
 
     与 get_cached_with_age 同构: 首屏按 age 分新鲜/陈旧两档处理。
     """
+    if ttl is None:
+        ttl = _cache.FX_STALE_TTL
     base = str(base).upper()
     curs = [
         c
@@ -435,12 +463,12 @@ def _clear_table(table: str) -> int:
 
 def clear_fx() -> int:
     """清汇率磁盘缓存: 数据源偏好 (IBKR 开关) 变化后强制按新链路重取."""
-    return _cache._clear_table("fx_rates")
+    return _clear_table("fx_rates")
 
 
 def clear_quotes() -> int:
     """只清实时行情缓存 (保留 K线/基本面): 数据源偏好切换后强制按新源链重取."""
-    return _cache._clear_table("quotes")
+    return _clear_table("quotes")
 
 
 def clear_ohlc() -> int:
@@ -451,12 +479,12 @@ def clear_ohlc() -> int:
     数据来源标记随新链路刷新。与 clear_quotes 配套, 由设置页在源变化时调用
     (clear 全清亦可, 但会连基本面一起清)。
     """
-    return _cache._clear_table("ohlc_cache")
+    return _clear_table("ohlc_cache")
 
 
 def clear_fundamentals() -> int:
     """只清基本面缓存 (PB/市值): EODHD fundamentals 角色切换后重取."""
-    return _cache._clear_table("fundamentals")
+    return _clear_table("fundamentals")
 
 
 # ---------- 财经日历 (财报/分红事件) 缓存 ----------

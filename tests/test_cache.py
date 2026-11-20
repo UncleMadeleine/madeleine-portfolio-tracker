@@ -535,3 +535,22 @@ def test_fundamental_cache_filters_non_finite():
         "book_value": 12.5,
         "market_cap": 3e9,
     }
+
+
+def test_cache_domains_can_be_imported_directly():
+    """回归: cache_domains 与 cache 的再导出不能形成循环导入.
+
+    直接 ``import tracker.cache_domains`` 时, cache.py 末尾的
+    ``from .cache_domains import ...`` 曾让双方在导入阶段互等。
+    """
+    import subprocess
+    import sys
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import tracker.cache_domains as d; assert callable(d.clear_fx)",
+        ],
+        check=True,
+    )

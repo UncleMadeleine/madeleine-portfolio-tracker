@@ -62,7 +62,10 @@ def request_json(
         kwargs["data"] = data
     if headers:
         kwargs["headers"] = headers
-    req = _requests()
+    try:
+        req = _requests()
+    except Exception as e:  # noqa: BLE001 - 未安装 requests 等导入失败
+        raise HTTPError(f"请求失败: {e}") from e
     try:
         verb = method.upper()
         if verb == "GET":

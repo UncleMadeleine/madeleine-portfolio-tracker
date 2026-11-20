@@ -80,7 +80,12 @@ def normalize_suggest_row(row: dict) -> tuple[str, str] | None:
 def em_code_to_yahoo(code: str, stype: str) -> str:
     """东财代码 + SecurityTypeName → Yahoo 规范代码."""
     if stype == "港股":
-        return f"{int(code):04d}.HK"
+        # 东财港股行偶有非纯数字畸形代码 (历史/指数占位): 不能让 int()
+        # 抛 ValueError 把整次搜索打断, 保留原串交由 parse 过滤。
+        try:
+            return f"{int(code):04d}.HK"
+        except ValueError:
+            return code.upper()
     if stype in ("沪A", "沪B", "科创版", "科创板"):
         return f"{code}.SS"
     if stype in ("深A", "深B"):

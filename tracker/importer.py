@@ -26,6 +26,7 @@ from .storage import (
     PORTFOLIO_PATH as DEFAULT_PORTFOLIO,
     edit_portfolio,
     load_portfolio,
+    parse_lists,
 )
 from .util import canonical_or_upper as _norm_sym
 
@@ -380,7 +381,15 @@ def merge_watchlist(
             by_sym[sym] = entry
             added.append(sym)
         else:
-            cur = found.setdefault("lists", [])
+            # 直接调用方可能传入未归一的 lists (None/逗号字符串): 与
+            # load_watchlist/save_watchlist 同口径先转成列表, 否则 None
+            # 会让 append 抛 AttributeError, 字符串会被按字符拆开。
+            cur = found.get("lists")
+            if isinstance(cur, str):
+                cur = parse_lists(cur)
+            elif not isinstance(cur, list):
+                cur = []
+            found["lists"] = cur
             for name in r.get("lists") or []:
                 if name not in cur:
                     cur.append(name)

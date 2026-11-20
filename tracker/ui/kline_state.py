@@ -49,29 +49,6 @@ def _source_state(
     )
 
 
-def _source_state(
-    prefer_akshare: bool,
-    use_ibkr: bool,
-    use_longport: bool,
-    crypto_source: str,
-) -> tuple:
-    """影响 K 线实际来源的全部配置 (会话数据失效键).
-
-    不能只看四个布尔/枚举参数: 设置页的拖动源顺序、EODHD 角色/复权/
-    币种覆盖同样会改变 prices.get_ohlc 的结果。缺少这些签名时, 改完设置
-    回到 K线页会继续展示旧源的会话数据, 直到换代码或点强制刷新。
-    """
-    from tracker import eodhd, source_order
-
-    return (
-        prefer_akshare,
-        use_ibkr,
-        use_longport,
-        crypto_source,
-        source_order.signature(),
-        eodhd.cache_signature(),
-    )
-
 def quick_symbols() -> list[str]:
     """持仓+自选代码 (页面启动时注入, K线页自身不发起任何网络请求)."""
     return list(st.session_state.get(KLINE_SYMBOLS_KEY, []))

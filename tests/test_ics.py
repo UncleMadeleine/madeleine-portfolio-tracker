@@ -201,3 +201,13 @@ def test_cli_calendar_rejects_conflicting_flags(monkeypatch):
     )
     with pytest.raises(SystemExit):
         cal_mod.cmd_calendar(args)
+
+
+def test_build_ics_skips_pd_na_event_date():
+    """pandas pd.NA 的 `value != value` 返回 NA, 不能在 if 里抛 TypeError."""
+    import pandas as pd
+
+    text = build_ics(
+        [{"symbol": "AAPL", "type": "earnings", "date": pd.NA}]
+    )
+    assert "BEGIN:VEVENT" not in text

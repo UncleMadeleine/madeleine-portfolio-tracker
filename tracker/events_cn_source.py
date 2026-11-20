@@ -30,7 +30,6 @@ from .util import with_timeout
 
 _CN_MAX_WORKERS = 6
 _AK_TIMEOUT = 15.0
-_CN_BOARDS = ("沪深A股", "京市A股")
 
 # sys.stderr 是进程级对象: 重定向窗口必须串行化, 否则 Streamlit 多会话/
 # 多线程并发取日历时会互相覆盖, 甚至把 devnull 永久留在全局。

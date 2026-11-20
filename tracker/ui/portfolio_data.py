@@ -64,7 +64,6 @@ _NAV_SNAPSHOT_KEY = "_nav_snapshot_written"
 # 页面全关 → 进程级保温线程照常刷磁盘缓存 (后来者打开即是新鲜数据)。
 # 具体实现已抽到 tracker/services/warm.py (无 Streamlit 依赖, CLI
 # `tracker warm` 复用同一套协调器); 这里保留页面常量别名与薄封装。
-_REFRESH_POLL = 2.0
 _REFRESH_MIN_INTERVAL = warm_mod.REFRESH_MIN_INTERVAL
 _REFRESH_PERIOD = warm_mod.REFRESH_PERIOD
 _REFRESH_PERIOD_PER_SYMBOL = warm_mod.REFRESH_PERIOD_PER_SYMBOL

@@ -370,3 +370,17 @@ def test_merge_holdings_batch_sum_is_idempotent_against_existing():
     )
     assert len(merged) == 1
     assert merged[0]["quantity"] == 50.0
+
+
+def test_merge_watchlist_normalizes_unnormalized_existing_lists():
+    """直接调用 merge_watchlist 时, 旧条目的 lists 可能是字符串/None."""
+    merged, _stats = importer.merge_watchlist(
+        [
+            {"symbol": "AAPL", "lists": "科技"},
+            {"symbol": "MSFT", "lists": None},
+        ],
+        [{"symbol": "AAPL", "lists": ["美股"]}],
+    )
+    by_symbol = {e["symbol"]: e for e in merged}
+    assert by_symbol["AAPL"]["lists"] == ["科技", "美股"]
+    assert by_symbol["MSFT"]["lists"] is None

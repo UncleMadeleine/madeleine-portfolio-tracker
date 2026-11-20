@@ -37,6 +37,12 @@ def read_state(path: str | Path, max_age: float | None = None) -> dict | None:
         return None
     if not isinstance(data, dict):
         return None
-    if max_age is not None and time.time() - data.get("ts", 0) >= max_age:
-        return None
+    if max_age is not None:
+        try:
+            age = time.time() - float(data.get("ts", 0) or 0)
+        except (TypeError, ValueError):
+            # 手改/半截写入的时间戳: 无法判断新鲜度, 按过期处理。
+            return None
+        if age >= max_age:
+            return None
     return data

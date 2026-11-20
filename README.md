@@ -502,7 +502,8 @@ tracker/
 │   ├── global_stocks.py    全球股票域（美股/港股/欧股…）：yfinance 主源, 港股 akshare 兜底; 搜索走 IBKR → 东财 suggest → yfinance Search → 代码直查
 │   ├── crypto.py           加密货币域（BASE-QUOTE）：Binance → Gate.io → Hyperliquid(USD系) → yfinance
 │   ├── index.py            指数域（IX.<KEY>）：中国指数 akshare 优先, 其余 yfinance 主源 + 新浪兜底; 水泥网/商品期货/恒生官网/Cameco 铀价为专属源
-│   ├── orchestration.py    批量编排：按域分组取数 → 聚合 quotes/errors/notes; 进程内负缓存
+│   ├── orchestration.py    批量行情编排：按域分组取数 → 聚合 quotes/errors/notes; 进程内负缓存
+│   ├── orchestration_history.py 单代码历史K线编排（source_order + IBKR/长桥/降级链）
 │   └── em_suggest.py       东财 suggest 搜索客户端（cn 域搜索底层 HTTP 封装 + 代码归一）
 ├── prices.py           行情门面（历史 API 保持不变, 全部路由到 providers）
 ├── search.py           搜索聚合层：search_grouped() 按域调 provider.search() 保持分组；纯在线接口，失败即该域空结果 + 合法代码直查兜底

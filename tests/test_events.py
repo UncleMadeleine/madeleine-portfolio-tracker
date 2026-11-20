@@ -6,6 +6,7 @@ import pytest
 
 from tracker import events
 from tracker import events_global
+from tracker import events_longport
 from tracker.events import (
     _cn_code_to_yahoo,
     _cn_normalize_disclosure,
@@ -663,7 +664,7 @@ class TestLongportFallback:
             lp_calls["syms"] = sorted(symbols)
             return {"ZZZ-US": []}, None
 
-        monkeypatch.setattr(events, "_fetch_longport_events", fake_lp)
+        monkeypatch.setattr(events_longport, "_fetch_longport_events", fake_lp)
         stored_yf = events_global._yf_calendar_rows
         monkeypatch.setattr(events_global, "_yf_calendar_rows", lambda s: [])
 
@@ -673,7 +674,7 @@ class TestLongportFallback:
         assert r["events"] == []
         # use_longport 关闭时不调兜底
         lp_calls.clear()
-        monkeypatch.setattr(events, "_fetch_longport_events", fake_lp)
+        monkeypatch.setattr(events_longport, "_fetch_longport_events", fake_lp)
         r2 = fetch_calendar(["NOEARNINGS"], months=2, use_longport=False)
         assert "syms" not in lp_calls
         del stored_yf, r, r2
@@ -688,7 +689,7 @@ class TestLongportFallback:
             calls["syms"] = sorted(symbols)
             return {s: [] for s in symbols}, None
 
-        monkeypatch.setattr(events, "_fetch_longport_events", fake_lp)
+        monkeypatch.setattr(events_longport, "_fetch_longport_events", fake_lp)
         fetch_calendar(["600519.SS", "000001.SZ"], months=2, use_longport=True)
         # 600519 有 akshare 事件; 000001 没有 → 只兜底后者
         assert calls["syms"] == ["000001.SZ"]
@@ -1032,7 +1033,7 @@ class TestLongportBatchCache:
         )
         _age_calendar_row(self._KEY, events.CAL_TTL + 1)
         api = _LpApi([_LpInfo("MSFT.US", "2026.10.20")])
-        monkeypatch.setattr(events, "_lp_config_builder", lambda cfg=None: api)
+        monkeypatch.setattr(events_longport, "_lp_config_builder", lambda cfg=None: api)
         evs, err = events._fetch_lp_month_events(
             "US", "Report", self._START, self._END
         )
@@ -1049,7 +1050,7 @@ class TestLongportBatchCache:
             [{"symbol": "AAPL", "type": "earnings", "date": "2026-10-09"}],
         )
         api = _LpApi([_LpInfo("MSFT.US", "2026.10.20")])
-        monkeypatch.setattr(events, "_lp_config_builder", lambda cfg=None: api)
+        monkeypatch.setattr(events_longport, "_lp_config_builder", lambda cfg=None: api)
         evs, err = events._fetch_lp_month_events(
             "US", "Report", self._START, self._END, refresh=True
         )
@@ -1062,7 +1063,7 @@ class TestLongportBatchCache:
         api = _LpApi(
             [_LpInfo("AAPL.US", "2026.10.09"), _LpInfo("MSFT.US", "2026.10.20")]
         )
-        monkeypatch.setattr(events, "_lp_config_builder", lambda cfg=None: api)
+        monkeypatch.setattr(events_longport, "_lp_config_builder", lambda cfg=None: api)
         evs1, err1 = events._fetch_lp_month_events(
             "US", "Report", date(2026, 10, 15), self._END, refresh=True
         )
@@ -1078,7 +1079,7 @@ class TestLongportBatchCache:
     def test_lp_pagination_stops_when_cursor_stuck(self, monkeypatch):
         """next_date 不前进时必须收尾, 不能死循环."""
         api = _LpApi([], next_date="2026-10-01")
-        monkeypatch.setattr(events, "_lp_config_builder", lambda cfg=None: api)
+        monkeypatch.setattr(events_longport, "_lp_config_builder", lambda cfg=None: api)
         evs, err = events._fetch_lp_month_events(
             "US", "Report", self._START, self._END, refresh=True
         )

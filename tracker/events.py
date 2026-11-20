@@ -40,21 +40,26 @@ CAL_STALE_TTL (7 天) 内的旧行, 页面据此秒开 + 后台重取; cache_onl
 
 from __future__ import annotations
 
-import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from contextlib import contextmanager
-from datetime import date, datetime, timedelta
+from datetime import date
 
-from . import cache as cache_mod
-from .deps import akshare as _akshare
+from . import events_longport
 from .symbols import parse
-from .events_cn import (
-    _cn_code_to_yahoo,  # noqa: F401 - 兼容既有导入/测试
+from .events_cn import (  # noqa: F401 - 兼容既有导入/测试
+    _cn_code_to_yahoo,
     _cn_normalize_disclosure,
     _cn_normalize_fhps,
     _market_label_for_symbol,
     _pd_date,
-    _pick_cn_scheduled_row,  # noqa: F401 - 兼容既有导入/测试
+    _pick_cn_scheduled_row,
+)
+from .events_cn_source import (  # noqa: F401 - 兼容再导出
+    _cn_boards_for,
+    _fetch_cn_cached,
+    _fetch_cn_events,
+    _fetch_cn_fhps_period,
+    _fetch_cn_period,
+    _fetch_cn_yysj_board,
+    _quiet_stderr,
 )
 from .events_common import (  # noqa: F401 - 兼容再导出
     CAL_NEG_TTL,
@@ -72,19 +77,29 @@ from .events_global import (  # noqa: F401 - 兼容再导出
     _yf_calendar_rows,
     _yf_rate_limit,
 )
+from .events_longport import (  # noqa: F401 - 兼容再导出
+    _LP_CATEGORIES,
+    _LP_MARKETS,
+    _fetch_longport_events,
+    _fetch_lp_month_events,
+    _lp_config_builder,
+    _lp_dividend_type,
+    _lp_market_axis,
+    _seg_rows,
+    normalize_longport_event,
+)
 from .events_window import (  # noqa: F401 - 兼容再导出
     _age_exceeded,
     _age_of,
-    _to_date,
-    _window_rows,
     _in_window,
     _month_starts,
     _quarter_ends,
+    _to_date,
+    _window_rows,
     cn_dividend_periods_for_window,
     cn_periods_for_window,
     window_from_months,
 )
-from .util import with_timeout
 
 __all__ = [
     "EVENT_TYPE_LABELS",
@@ -160,579 +175,6 @@ _UNSET = object()
 
 
 
-# sys.stderr 是进程级对象: 重定向窗口必须串行化, 否则 Streamlit 多会话/
-# 多线程并发取日历时会互相覆盖, 甚至把 devnull 永久留在全局。
-_STDERR_LOCK = threading.Lock()
-
-
-@contextmanager
-def _quiet_stderr():
-    """静音 akshare 内层 tqdm 进度条 (tqdm 构造时捕获 sys.stderr).
-
-    CLI/UI 日历请求一次拉全市场 5 千行, 内层进度条只会刷屏; 我们自己的
-    单票循环进度 (fetch_calendar progress 回调) 打到 stderr 的提示不受
-    影响。并发批次只在最外层持锁一次 (worker 传 quiet=False), 既避免全局
-    stderr 被并发会话互相改写, 又允许同一批次内多个请求并行。
-    """
-    import os
-    import sys
-
-    with _STDERR_LOCK:
-        devnull = open(os.devnull, "w", encoding="utf-8")
-        old = sys.stderr
-        sys.stderr = devnull
-        try:
-            yield
-        finally:
-            sys.stderr = old
-            devnull.close()
-
-
-_CN_BOARDS = ("沪深A股", "京市A股")
-
-
-def _fetch_cn_cached(
-    key: str,
-    *,
-    period: str,
-    step_label: str,
-    refresh: bool,
-    stale_ok: bool,
-    cache_only: bool,
-    reporter: _ProgressReporter | None,
-    quiet: bool,
-    fetch,
-    normalize,
-    error_text,
-) -> tuple[list[dict], str | None, dict]:
-    """CN 日历单块缓存的公共壳 (预约披露/分红共用)."""
-    meta = {"stale": False, "missing": False, "stale_age": 0.0, "used": False}
-    row = None if refresh else cache_mod.get_calendar_row(key)
-    if row is not None:
-        age = _age_of(row["fetched_at"])
-        if age <= CAL_TTL or (stale_ok and age <= CAL_STALE_TTL):
-            meta.update(stale=age > CAL_TTL, stale_age=age, used=True)
-            if reporter is not None:
-                reporter.step(step_label)
-            return row["events"], None, meta
-    if cache_only:
-        meta["missing"] = True
-        if reporter is not None:
-            reporter.step(step_label)
-        return [], None, meta
-    try:
-        if quiet:
-            with _quiet_stderr():
-                raw = fetch()
-        else:
-            raw = fetch()
-    except Exception as e:  # noqa: BLE001 - 单块失败注记并继续其余块
-        if reporter is not None:
-            reporter.step(step_label)
-        return [], error_text(e)[:200], meta
-    evs = normalize(raw)
-    cache_mod.set_calendar_row(key, evs)
-    if reporter is not None:
-        reporter.step(step_label)
-    return evs, None, meta
-
-
-def _fetch_cn_yysj_board(
-    board: str,
-    period: str,
-    refresh: bool,
-    stale_ok: bool = False,
-    cache_only: bool = False,
-    reporter: _ProgressReporter | None = None,
-    quiet: bool = True,
-) -> tuple[list[dict], str | None, dict]:
-    """单个板块的预约披露 (缓存优先, TTL 6h) → events, error, meta."""
-    return _fetch_cn_cached(
-        f"cn:yysj:{period}:{board}",
-        period=period,
-        step_label=f"{period} {board}",
-        refresh=refresh,
-        stale_ok=stale_ok,
-        cache_only=cache_only,
-        reporter=reporter,
-        quiet=quiet,
-        fetch=lambda: with_timeout(
-            _akshare().stock_yysj_em, _AK_TIMEOUT, symbol=board, date=period
-        ),
-        normalize=lambda df: _cn_normalize_disclosure(df, period),
-        error_text=lambda e: f"akshare 预约披露 {period} {board} 失败 ({e})",
-    )
-
-
-def _fetch_cn_fhps_period(
-    period: str,
-    refresh: bool,
-    stale_ok: bool = False,
-    cache_only: bool = False,
-    reporter: _ProgressReporter | None = None,
-    quiet: bool = True,
-) -> tuple[list[dict], str | None, dict]:
-    """单个报表期的分红送转 (缓存优先, TTL 6h) → events, error, meta."""
-    return _fetch_cn_cached(
-        f"cn:fhps:{period}",
-        period=period,
-        step_label=f"{period} 分红",
-        refresh=refresh,
-        stale_ok=stale_ok,
-        cache_only=cache_only,
-        reporter=reporter,
-        quiet=quiet,
-        fetch=lambda: with_timeout(_akshare().stock_fhps_em, _AK_TIMEOUT, date=period),
-        normalize=_cn_normalize_fhps,
-        error_text=lambda e: f"akshare 分红 {period} 失败 ({e})",
-    )
-
-
-def _fetch_cn_period(
-    period: str,
-    refresh: bool,
-    stale_ok: bool = False,
-    cache_only: bool = False,
-    reporter: _ProgressReporter | None = None,
-    boards: tuple[str, ...] | list[str] | None = None,
-    quiet: bool = True,
-) -> tuple[dict, list[str]]:
-    """一个报表期的整市场日历 (预约披露 + 分红, 各自独立缓存) → events, issues.
-
-    meta 挂在 data 上 (stale/missing/stale_age/used), 保持原有二元组返回结构。
-    boards 可只取本范围真正需要的板块 (如自选里没有北交所代码就跳过京市)。
-    """
-    evs: list[dict] = []
-    issues: list[str] = []
-    meta = {"stale": False, "missing": False, "stale_age": 0.0, "used": False}
-    for board in tuple(boards) if boards is not None else _CN_BOARDS:
-        board_evs, issue, bmeta = _fetch_cn_yysj_board(
-            board,
-            period,
-            refresh,
-            stale_ok=stale_ok,
-            cache_only=cache_only,
-            reporter=reporter,
-            quiet=quiet,
-        )
-        evs.extend(board_evs)
-        if issue:
-            issues.append(issue)
-        _merge_cache_meta(meta, bmeta)
-    fhps_evs, issue, fmeta = _fetch_cn_fhps_period(
-        period,
-        refresh,
-        stale_ok=stale_ok,
-        cache_only=cache_only,
-        reporter=reporter,
-        quiet=quiet,
-    )
-    evs.extend(fhps_evs)
-    if issue:
-        issues.append(issue)
-    _merge_cache_meta(meta, fmeta)
-    return {"events": evs, **meta}, issues
-
-
-def _cn_boards_for(symbols: set[str]) -> tuple[str, ...]:
-    """本范围代码真正需要的东财板块 (沪/深 vs 北交所).
-
-    原实现无条件拉「沪深 + 京市」两块全市场数据; 大部分组合没有北交所
-    代码, 京市那块纯属白请求。反过来只有北交所代码时也无需拉沪深。
-    """
-    suffixes = {s.rpartition(".")[2].upper() for s in symbols if "." in s}
-    boards: list[str] = []
-    if not suffixes or suffixes & {"SS", "SZ"}:
-        boards.append("沪深A股")
-    if "BJ" in suffixes:
-        boards.append("京市A股")
-    return tuple(boards) or _CN_BOARDS
-
-
-def _fetch_cn_events(
-    symbols: set[str],
-    start: date,
-    end: date,
-    refresh: bool,
-    stale_ok: bool = False,
-    cache_only: bool = False,
-    reporter: _ProgressReporter | None = None,
-) -> tuple[list[dict], list[str], dict[str, str], dict]:
-    """cn 域事件: 每报表期整批缓存 + 本窗口过滤. → events, issues, names, meta.
-
-    预约披露只取窗口真正可能命中的报表期; 分红送转单独用 15 个月回看
-    (旧报告期的方案可能在窗口内才实施), 只对预约披露集合之外的老报告期
-    补拉 fhps。各板块/报表期任务并发执行, 冷启动耗时从累加降到最慢一路。
-    """
-    events: list[dict] = []
-    issues: list[str] = []
-    names: dict[str, str] = {}
-    meta = {"stale": False, "missing": False, "stale_age": 0.0, "used": False}
-
-    def take(rows: list[dict]) -> None:
-        for ev in rows:
-            # 缓存载荷只校验顶层 events 是 list; 旧版本/手工改库/半截写入
-            # 可能混进缺 symbol 的行。单条脏数据不能打断整批日历渲染。
-            if not isinstance(ev, dict):
-                continue
-            sym = ev.get("symbol")
-            if not isinstance(sym, str) or not sym:
-                continue
-            typ = ev.get("type")
-            if not isinstance(typ, str) or not typ.strip():
-                continue
-            d = _pd_date(ev.get("date"))
-            if sym in symbols and _in_window(d, start, end):
-                events.append({**ev, "date": d})
-                if sym not in names and ev.get("name"):
-                    names[sym] = ev["name"]
-
-    boards = _cn_boards_for(symbols)
-    # 未来的报表期不可能已经有预约披露/分红实施数据, 东财接口对这类 date
-    # 还会抛 TypeError 并被当成「数据源失败」反复重试。窗口可以包含尚未结束
-    # 的季度 (如 11 月查 12 月), 这里按今天截断。
-    today_s = date.today().strftime("%Y%m%d")
-    earn_periods = [
-        p for p in cn_periods_for_window(start, end) if p <= today_s
-    ]
-    earn_set = set(earn_periods)
-    div_extra = [
-        p
-        for p in cn_dividend_periods_for_window(start, end)
-        if p not in earn_set and p <= today_s
-    ]
-
-    # (kind, period, board) 任务清单: 预约披露按板块拆, 分红按报表期拆。
-    tasks: list[tuple[str, str, str | None]] = []
-    for period in earn_periods:
-        for board in boards:
-            tasks.append(("yysj", period, board))
-        tasks.append(("fhps", period, None))
-    for period in div_extra:
-        tasks.append(("fhps", period, None))
-    if reporter is not None:
-        reporter.plan(len(tasks))
-
-    def _label(task: tuple[str, str, str | None]) -> str:
-        kind, period, board = task
-        return f"{period} {board}" if kind == "yysj" else f"{period} 分红"
-
-    def _run(task: tuple[str, str, str | None]):
-        kind, period, board = task
-        if kind == "yysj":
-            return _fetch_cn_yysj_board(
-                str(board),
-                period,
-                refresh,
-                stale_ok=stale_ok,
-                cache_only=cache_only,
-                reporter=None,
-                quiet=False,
-            )
-        return _fetch_cn_fhps_period(
-            period,
-            refresh,
-            stale_ok=stale_ok,
-            cache_only=cache_only,
-            reporter=None,
-            quiet=False,
-        )
-
-    def _run_safe(task: tuple[str, str, str | None]):
-        try:
-            return _run(task)
-        except Exception as e:  # noqa: BLE001 - 单任务失败不拖整批
-            kind, period, board = task
-            what = f"预约披露 {period} {board}" if kind == "yysj" else f"分红 {period}"
-            return (
-                [],
-                f"akshare {what} 失败 ({type(e).__name__}: {e})"[:200],
-                {"stale": False, "missing": False, "stale_age": 0.0, "used": False},
-            )
-
-    results: dict[int, tuple[list[dict], str | None, dict]] = {}
-    if cache_only or len(tasks) <= 1:
-        # 只读缓存没有网络等待, 顺序执行即可 (也避免无谓的线程/stderr 切换)。
-        for i, task in enumerate(tasks):
-            results[i] = _run_safe(task)
-            if reporter is not None:
-                reporter.step(_label(task))
-    else:
-        # stderr 是进程级状态: 整批只持锁一次, worker 用 quiet=False。
-        with _quiet_stderr():
-            with ThreadPoolExecutor(max_workers=min(_CN_MAX_WORKERS, len(tasks))) as ex:
-                futures = {
-                    ex.submit(_run_safe, task): (i, task)
-                    for i, task in enumerate(tasks)
-                }
-                for fut in as_completed(futures):
-                    i, task = futures[fut]
-                    results[i] = fut.result()
-                    if reporter is not None:
-                        reporter.step(_label(task))
-
-    # 按任务原顺序合并, 保证事件/名称/进度与串行实现一致。
-    for i, task in enumerate(tasks):
-        evs, issue, tmeta = results[i]
-        take(evs)
-        if issue:
-            issues.append(issue)
-        _merge_cache_meta(meta, tmeta)
-    return events, issues, names, meta
-
-
-# ---------------------------------------------------------------------------
-# longport 兜底: CalendarContext 整批 (US/HK/SH/SZ, 每市场每类别按月缓存)
-# ---------------------------------------------------------------------------
-
-_LP_MARKETS = ("US", "HK", "SH", "SZ")
-_LP_CATEGORIES = ("Report", "Dividend")
-
-
-def _lp_dividend_type(date_type: str) -> str:
-    """长桥分红日标签 → 内部类型; 无法判断时按除权除息处理.
-
-    长桥 Dividend 类别会同时返回除净/派息/登记等日期, 统一成 ex_dividend 会
-    把派息日、股权登记日误标成除息日; 这里按 date_type 标签做保守映射。
-    """
-    s = (date_type or "").lower()
-    if any(k in s for k in ("派息", "支付", "发放", "dividend payment", "pay")):
-        return "dividend"
-    if any(k in s for k in ("登记", "record")):
-        return "record_date"
-    return "ex_dividend"
-
-
-def normalize_longport_event(info, category: str) -> dict | None:
-    """SDK CalendarEventInfo → 内部事件行; 无法映射代码返回 None."""
-    from .longport import longport_to_yahoo
-
-    sym = str(getattr(info, "symbol", "") or "").strip()
-    yahoo = longport_to_yahoo(sym) if sym else None
-    if not yahoo:
-        return None
-    d = None
-    raw_date = str(getattr(info, "date", "") or "").strip()
-    for fmt in ("%Y.%m.%d", "%Y-%m-%d"):
-        try:
-            d = datetime.strptime(raw_date, fmt).date()
-            break
-        except ValueError:
-            continue
-    if d is None:
-        return None
-    try:
-        p = parse(yahoo)
-        market_label = p.market_label
-    except ValueError:
-        market_label = yahoo
-    date_type = str(getattr(info, "date_type", "") or "").strip()
-    if category == "Report":
-        typ = "earnings"
-    elif category == "Dividend":
-        typ = _lp_dividend_type(date_type)
-    else:
-        typ = "other"
-    bits = []
-    content = str(getattr(info, "content", "") or "").strip()
-    if content:
-        bits.append(content)
-    if date_type and date_type not in content:
-        bits.append(date_type)
-    kv = getattr(info, "data_kv", None) or []
-    for item in kv or []:
-        k = str(getattr(item, "key", "") or "").strip()
-        v = str(getattr(item, "value", "") or "").strip()
-        if v:
-            bits.append(f"{k}={v}" if k else v)
-    star = getattr(info, "star", None)
-    if isinstance(star, int) and star > 0:
-        bits.append("★" * star)
-    note = "; ".join(bits) or None
-    ev = {
-        "symbol": yahoo,
-        "name": str(getattr(info, "counter_name", "") or "").strip() or None,
-        "type": typ,
-        "date": d.isoformat(),
-        "date_status": "estimate" if category == "Report" else "planned",
-        "note": note,
-        "source": "longport",
-        "market_label": market_label,
-        "date_type": date_type or None,
-    }
-    return ev
-
-
-def _lp_market_axis(yahoo: str) -> str | None:
-    """内部代码 → longport 日历 market 过滤值 (US/HK/SH/SZ; 其它 None)."""
-    s = yahoo.upper()
-    if "." not in s:
-        return "US"
-    suffix = s.rpartition(".")[2]
-    if suffix == "HK":
-        return "HK"
-    if suffix == "SS":
-        return "SH"
-    if suffix == "SZ":
-        return "SZ"
-    return None
-
-
-def _seg_rows(evs: list[dict], start: date, end: date) -> list[dict]:
-    """按日期裁到 [start, end] (长桥缓存按整月存, 读取时按窗口分片裁)."""
-    return [ev for ev in evs if _in_window(_pd_date(ev.get("date")), start, end)]
-
-
-def _fetch_lp_month_events(
-    market: str,
-    category: str,
-    seg_start: date,
-    seg_end: date,
-    cfg: dict | None = None,
-    refresh: bool = False,
-    stale_ok: bool = False,
-    cache_only: bool = False,
-    stats: dict | None = None,
-    reporter: _ProgressReporter | None = None,
-) -> tuple[list[dict], str | None]:
-    """一个 (market, category, 月) 的整批日历 (缓存优先, TTL 6h) → events, error.
-
-    永远按**整月**请求并缓存 (key 只到 YYYY-MM), 返回时再裁到 [seg_start,
-    seg_end]。否则月中窗口会先把半个月的结果缓存成整月, 后续完整月窗口
-    复用时会缺前半月的日期。
-
-    stats/reporter 为可选副作用 (公开返回结构保持二元组): 记录 stale/missing
-    供首屏 SWR 判定, reporter 供进度条按请求推进。
-    """
-    month_start = seg_start.replace(day=1)
-    nxt = date(
-        month_start.year + int(month_start.month == 12),
-        (month_start.month % 12) + 1,
-        1,
-    )
-    month_end = nxt - timedelta(days=1)
-    key = f"lp:{market}:{category}:{month_start.strftime('%Y-%m')}"
-    row = None if refresh else cache_mod.get_calendar_row(key)
-    if row is not None:
-        age = _age_of(row["fetched_at"])
-        if age <= CAL_TTL or (stale_ok and age <= CAL_STALE_TTL):
-            if stats is not None:
-                stats["used"] = True
-                if age > CAL_TTL:
-                    stats["stale"] = True
-                    stats["stale_age"] = max(
-                        float(stats.get("stale_age") or 0.0), age
-                    )
-            if reporter is not None:
-                reporter.step(f"{market}/{category} {month_start:%Y-%m}")
-            return _seg_rows(row["events"], seg_start, seg_end), None
-    if cache_only:
-        if stats is not None:
-            stats["missing"] = True
-        if reporter is not None:
-            reporter.step(f"{market}/{category} {month_start:%Y-%m}")
-        return [], None
-    try:
-        from longport.openapi import CalendarCategory
-
-        api = _lp_config_builder(cfg)
-    except Exception as e:  # noqa: BLE001 - 统一转错误信息
-        if reporter is not None:
-            reporter.step(f"{market}/{category} {month_start:%Y-%m}")
-        return [], f"长桥日历不可用: {type(e).__name__}: {e}"[:200]
-    evs: list[dict] = []
-    cursor = month_start.isoformat()
-    end_iso = month_end.isoformat()
-    try:
-        while cursor <= end_iso:
-            cat = getattr(CalendarCategory, category)
-            resp = api.finance_calendar(cat, cursor, end_iso, market)
-            for group in getattr(resp, "list", []) or []:
-                for info in getattr(group, "infos", []) or []:
-                    ev = normalize_longport_event(info, category)
-                    if ev is not None and (
-                        month_start
-                        <= (date.fromisoformat(ev["date"]))
-                        <= month_end
-                    ):
-                        evs.append(ev)
-            prev = cursor
-            cursor = str(getattr(resp, "next_date", "") or "").strip()
-            # next_date 不前进时立即收尾: 服务端异常返回同一游标会死循环
-            if not cursor or cursor > end_iso or cursor <= prev:
-                break
-    except Exception as e:  # noqa: BLE001 - 带日期的错误兜底
-        if reporter is not None:
-            reporter.step(f"{market}/{category} {month_start:%Y-%m}")
-        return _seg_rows(evs, seg_start, seg_end), (
-            f"长桥日历({market}/{category})失败: {type(e).__name__}: {e}"[:200]
-        )
-    cache_mod.set_calendar_row(key, evs)
-    if reporter is not None:
-        reporter.step(f"{market}/{category} {month_start:%Y-%m}")
-    return _seg_rows(evs, seg_start, seg_end), None
-
-
-def _lp_config_builder(cfg: dict | None):
-    """构造 LongPort CalendarContext (借用 tracker.longport 的 config 凭据链)."""
-    from .longport import build_config
-
-    from longport.openapi import CalendarContext
-
-    return CalendarContext(build_config(cfg))
-
-
-def _fetch_longport_events(
-    symbols: set[str],
-    start: date,
-    end: date,
-    cfg: dict | None = None,
-    refresh: bool = False,
-    stale_ok: bool = False,
-    cache_only: bool = False,
-    stats: dict | None = None,
-    reporter: _ProgressReporter | None = None,
-) -> tuple[dict[str, list[dict]], str | None]:
-    """长桥整批兜底: 只拉长桥支持且自选中存在的市场 → {symbol: 窗口事件}."""
-    markets = sorted({_lp_market_axis(s) for s in symbols} - {None})
-    if not markets:
-        return {}, None
-    out: dict[str, list[dict]] = {s: [] for s in symbols}
-    err = None
-    months = _month_starts(start, end)
-    if reporter is not None:
-        reporter.plan(len(markets) * len(_LP_CATEGORIES) * len(months))
-    for market in markets:
-        for category in _LP_CATEGORIES:
-            for seg_start, seg_end in months:
-                evs, e = _fetch_lp_month_events(
-                    market,
-                    category,
-                    seg_start,
-                    seg_end,
-                    cfg=cfg,
-                    refresh=refresh,
-                    stale_ok=stale_ok,
-                    cache_only=cache_only,
-                    stats=stats,
-                    reporter=reporter,
-                )
-                if e and err is None:
-                    err = e
-                if not evs:
-                    continue
-                syms_of_market = {
-                    s for s in symbols if _lp_market_axis(s) == market
-                }
-                for ev in evs:
-                    if ev["symbol"] in syms_of_market and _in_window(
-                        _pd_date(ev["date"]), start, end
-                    ):
-                        ev = {**ev, "date": _pd_date(ev["date"])}
-                        out[ev["symbol"]].append(ev)
-    return out, err
-
-
 # ---------------------------------------------------------------------------
 # 顶层面板: fetch_calendar
 # ---------------------------------------------------------------------------
@@ -804,7 +246,7 @@ def fetch_calendar(
         monkeypatch; 需要缓存元数据/进度时才追加关键字。
         """
         if stale_ok or cache_only or reporter is not None:
-            return _fetch_longport_events(
+            return events_longport._fetch_longport_events(
                 symset,
                 start,
                 end,
@@ -814,7 +256,7 @@ def fetch_calendar(
                 stats=lp_stats,
                 reporter=reporter,
             )
-        return _fetch_longport_events(symset, start, end, refresh=refresh)
+        return events_longport._fetch_longport_events(symset, start, end, refresh=refresh)
 
     # ---- cn 域 ----
     if cn_syms:

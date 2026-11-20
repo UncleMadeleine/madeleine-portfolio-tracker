@@ -508,7 +508,8 @@ tracker/
 ├── prices.py           行情门面（历史 API 保持不变, 全部路由到 providers）
 ├── search.py           搜索聚合层：search_grouped() 按域调 provider.search() 保持分组；纯在线接口，失败即该域空结果 + 合法代码直查兜底
 ├── fx.py               汇率：CFETS（akshare）优先，yfinance 货币对兜底（直对/逆对/USD 桥）
-├── cache.py            行情/基本面 SQLite 磁盘缓存（实时 5 分钟 / K线 30 分钟 / 基本面 + 估值/财报快照 6 小时）
+├── cache.py            磁盘缓存门面（连接/建表/重试原语 + 域读写再导出）
+├── cache_domains.py    行情/K线/基本面/汇率/日历/序列/JSON 的域读写
 ├── charting.py         K线渲染门面（再导出，保持既有 API）
 ├── charting_core.py    OHLC 清洗 / 均线 / 技术指标 / 重采样 / 摘要（无 plotly）
 ├── charting_plotly.py  plotly 蜡烛图与 CLI HTML 导出（plotly 惰性导入）

@@ -30,15 +30,17 @@ from tracker import cache as cache_mod, nav, prices, storage
 from tracker.analytics import build_view, summarize
 from tracker.fx import get_fx_rates
 from tracker.storage import CorruptDataError, DataFileLocked
-from tracker.symbols import canonical, parse
-from tracker.util import finite_float
+from tracker.symbols import parse
 from tracker.services import warm as warm_mod
 from .portfolio_format import (
     _detail_with_unpriced,
+    _holdings_unchanged,
+    _local_quote_errors,
     _merged_issue_lines,
     _norm_sym,
     _pnl_color,
     _selected_symbols,
+    _status_md_tag,
     _symbol_pie,
     fmt,
 )
@@ -105,35 +107,6 @@ _PLAN_KEY = "_first_screen_plan"
 # 不必反复 upsert 同一个 (day, base) 行 (每次都是磁盘写 + schema 检查)。
 _NAV_SNAPSHOT_KEY = "_nav_snapshot_written"
 
-
-def _editor_holdings_signature(rows) -> list[tuple[str, float | None, float | None]]:
-    """持仓编辑器/磁盘持仓的可比较签名 (代码归一 + 数值归一).
-
-    历史净值只能由已落盘的持仓驱动: data_editor 每次渲染都返回用户正在
-    编辑的内容, 未点保存的数量若被 upsert 进 nav_history.db, 会留下一条
-    组合文件里根本不存在的净值记录 (且次日无法被同日覆盖修正)。
-    """
-    sig: list[tuple[str, float | None, float | None]] = []
-
-    for h in rows or []:
-        if not isinstance(h, dict):
-            continue
-        raw = str(h.get("symbol") or "").strip()
-        if not raw:
-            continue
-        sym = canonical(raw) or raw.upper()
-        sig.append(
-            (
-                sym,
-                finite_float(h.get("quantity")),
-                finite_float(h.get("avg_cost")),
-            )
-        )
-    return sorted(sig, key=lambda x: (x[0], x[1] or 0.0, x[2] or 0.0))
-
-
-def _holdings_unchanged(rows, saved_rows) -> bool:
-    return _editor_holdings_signature(rows) == _editor_holdings_signature(saved_rows)
 
 # ---------- 周期保温: 服务长期运行时数据持续更新 ----------
 # 页面开着 → 看门狗片段按周期主动重取 (用户看到的数据滚动更新);
@@ -209,33 +182,6 @@ def _start_refresh(key: tuple, plan: dict) -> bool:
     """
     return warm_mod.start_refresh(key, plan)
 
-
-
-def _status_md_tag(status: object, up_tag: str, down_tag: str) -> str:
-    """阈值状态 → Streamlit 颜色标签 (上限用涨色, 下限用跌色)."""
-    s = str(status or "")
-    if s.startswith(("🟠", "🔴")):
-        return up_tag
-    if s.startswith("🟢"):
-        return down_tag
-    if s.startswith("🟡"):
-        return "orange"
-    return up_tag
-
-
-def _local_quote_errors(fetch_symbols) -> dict[str, str]:
-    """纯本地计算的低级错误 (代码无法识别), 不依赖刷新结果.
-
-    首屏秒渲染路径上没有 get_quotes 的 errors 产出, 但 parse 失败是本地判断,
-    补一遍让「无法识别」提示不丢失 (缺行情的代码仍由 build_view 报缺失)。
-    """
-    errors: dict[str, str] = {}
-    for s in fetch_symbols:
-        try:
-            parse(s)
-        except ValueError as e:
-            errors[str(s)] = str(e)
-    return errors
 
 
 def _fetch_quotes_with_progress(

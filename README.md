@@ -444,6 +444,7 @@ tracker/ui/           Streamlit 页面包（streamlit run tracker/ui/app.py / �
 ├── portfolio_page.py   「组合」页面（持仓编辑/明细/配置/自选提醒/净值走势）
 ├── portfolio_data.py   组合页首屏数据层（行情/汇率缓存 + SWR 刷新计划/看门狗）
 ├── portfolio_nav.py    组合页「净值走势」区（历史净值读取 + Plotly 曲线）
+├── portfolio_sidebar.py 组合页侧边栏（持仓编辑器 + 自选提醒编辑器）
 ├── kline_page.py       「K线」页面（搜索框 + lightweight-charts 组件 + 上市以来全量滑动 + 多股走势对比 + 加密货币对比）
 ├── kline_state.py      K线页会话状态与取数缓存（快捷/最近代码 / st.cache_data / 市值对比缓存）
 ├── index_page.py       「指数K线」页面（IX.<KEY> 分组下拉, 独立于股票 K线页）

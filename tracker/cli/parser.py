@@ -25,9 +25,41 @@ def _cmd(module: str, name: str):
     return _run
 
 
+def _subparser(
+    sub: argparse.ArgumentParser, name: str, help: str = "", **kwargs
+) -> argparse.ArgumentParser:
+    """统一子命令解析器样板 (默认 RawDescriptionHelpFormatter)."""
+    kwargs.setdefault("formatter_class", argparse.RawDescriptionHelpFormatter)
+    return sub.add_parser(name, help=help, **kwargs)
+
+
 def _add_json_arg(p: argparse.ArgumentParser, help: str = "输出 JSON") -> None:
     """注册统一的 --json 开关 (各子命令 help 可覆盖)."""
     p.add_argument("--json", action="store_true", help=help)
+
+
+def _add_portfolio_arg(
+    p: argparse.ArgumentParser, help: str = "portfolio.json 路径"
+) -> None:
+    p.add_argument("--portfolio", default=str(DEFAULT_PORTFOLIO), help=help)
+
+
+def _add_watchlist_file_arg(
+    p: argparse.ArgumentParser, help: str = "watchlist.json 路径"
+) -> None:
+    p.add_argument("--watchlist-file", default=str(DEFAULT_WATCHLIST), help=help)
+
+
+def _add_base_arg(
+    p: argparse.ArgumentParser, help: str = "覆盖基础货币, 如 USD"
+) -> None:
+    p.add_argument("--base", default=None, help=help)
+
+
+def _add_refresh_arg(
+    p: argparse.ArgumentParser, help: str = "忽略缓存强制刷新"
+) -> None:
+    p.add_argument("--refresh", action="store_true", help=help)
 
 
 def _add_quote_source_flags(
@@ -79,10 +111,9 @@ def positive_int(value: str) -> int:
 
 def _add_snapshot_parser(sub: argparse.ArgumentParser) -> None:
     # ---- snapshot ----
-    p_snap = sub.add_parser(
+    p_snap = _subparser(sub, 
         "snapshot",
         help="组合 + 自选快照",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
             "  tracker snapshot                      # 查看全部持仓 + 自选\n"
@@ -90,14 +121,12 @@ def _add_snapshot_parser(sub: argparse.ArgumentParser) -> None:
             "  tracker snapshot --watchlist 科技 --json  # 仅看「科技」列表并输出 JSON\n"
         ),
     )
-    p_snap.add_argument("--portfolio", default=str(DEFAULT_PORTFOLIO))
-    p_snap.add_argument(
-        "--watchlist-file", default=str(DEFAULT_WATCHLIST), help="watchlist.json 路径"
-    )
+    _add_portfolio_arg(p_snap)
+    _add_watchlist_file_arg(p_snap, "watchlist.json 路径")
     p_snap.add_argument(
         "--watchlist", default=None, help="只查看某个子自选列表 (默认全部)"
     )
-    p_snap.add_argument("--base", default=None, help="覆盖基础货币, 如 USD")
+    _add_base_arg(p_snap, "覆盖基础货币, 如 USD")
     _add_quote_source_flags(p_snap)
     _add_crypto_source_arg(p_snap)
     _add_json_arg(p_snap, "输出 JSON")
@@ -111,10 +140,9 @@ def _add_snapshot_parser(sub: argparse.ArgumentParser) -> None:
 
 def _add_nav_parser(sub: argparse.ArgumentParser) -> None:
     # ---- nav ----
-    p_nav = sub.add_parser(
+    p_nav = _subparser(sub, 
         "nav",
         help="历史净值 (读取 / 保存今日快照 / 回填)",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
             "  tracker nav                          # 最近 180 天净值\n"
@@ -127,8 +155,8 @@ def _add_nav_parser(sub: argparse.ArgumentParser) -> None:
             "(A股/港股历史K线为前复权, 历史段市值/盈亏与当时实际值可能有差异)。\n"
         ),
     )
-    p_nav.add_argument("--portfolio", default=str(DEFAULT_PORTFOLIO))
-    p_nav.add_argument("--base", default=None, help="基础货币, 如 USD (默认取持仓文件)")
+    _add_portfolio_arg(p_nav)
+    _add_base_arg(p_nav, "基础货币, 如 USD (默认取持仓文件)")
     p_nav.add_argument(
         "--days",
         type=positive_int,
@@ -148,10 +176,9 @@ def _add_nav_parser(sub: argparse.ArgumentParser) -> None:
 
 def _add_wallet_nav_parser(sub: argparse.ArgumentParser) -> None:
     # ---- wallet-nav (链上转账回放的钱包净值曲线) ----
-    p_wn = sub.add_parser(
+    p_wn = _subparser(sub, 
         "wallet-nav",
         help="钱包历史净值曲线 (链上转账回放)",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
             "  tracker wallet-nav eth 0xd8dA...6045\n"
@@ -169,10 +196,8 @@ def _add_wallet_nav_parser(sub: argparse.ArgumentParser) -> None:
         help="链: eth/bsc/polygon/arbitrum/avalanche/tron/solana",
     )
     p_wn.add_argument("address", help="链上地址/公钥")
-    p_wn.add_argument("--portfolio", default=str(DEFAULT_PORTFOLIO))
-    p_wn.add_argument(
-        "--base", default=None, help="基础货币 (默认取 portfolio.json 的 base_currency)"
-    )
+    _add_portfolio_arg(p_wn)
+    _add_base_arg(p_wn, "基础货币 (默认取 portfolio.json 的 base_currency)")
     p_wn.add_argument(
         "--days", type=positive_int, default=180, help="回看自然日数 (默认 180)"
     )
@@ -185,17 +210,16 @@ def _add_wallet_nav_parser(sub: argparse.ArgumentParser) -> None:
         help="单次估值最多取多少个资产的历史价 (默认 30, 按当前估值优先保留大头)",
     )
     _add_crypto_source_arg(p_wn)
-    p_wn.add_argument("--refresh", action="store_true", help="强制刷新历史行情缓存")
+    _add_refresh_arg(p_wn, "强制刷新历史行情缓存")
     _add_json_arg(p_wn, "输出 JSON")
     p_wn.set_defaults(func=_cmd(".wallet_nav", "cmd_wallet_nav"))
 
 
 def _add_quote_parser(sub: argparse.ArgumentParser) -> None:
     # ---- quote ----
-    p_q = sub.add_parser(
+    p_q = _subparser(sub, 
         "quote",
         help="查询实时行情",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
             "  tracker quote AAPL 600519.SS          # 查询多个代码\n"
@@ -207,21 +231,16 @@ def _add_quote_parser(sub: argparse.ArgumentParser) -> None:
     p_q.add_argument("symbols", nargs="+", help="Yahoo 代码, 如 AAPL 600519.SS BTC-USD")
     _add_quote_source_flags(p_q)
     _add_crypto_source_arg(p_q)
-    p_q.add_argument(
-        "--refresh",
-        action="store_true",
-        help="忽略 5min 磁盘行情缓存与失败负缓存, 强制重新取数",
-    )
+    _add_refresh_arg(p_q, "忽略 5min 磁盘行情缓存与失败负缓存, 强制重新取数")
     _add_json_arg(p_q)
     p_q.set_defaults(func=_cmd(".quote", "cmd_quote"))
 
 
 def _add_fundamentals_parser(sub: argparse.ArgumentParser) -> None:
     # ---- fundamentals ----
-    p_f = sub.add_parser(
+    p_f = _subparser(sub, 
         "fundamentals",
         help="基本面: 估值快照 / 历史 PE·PB / 最新财报原文链接",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
             "  tracker fundamentals 601398.SS                 # PE/PB/股息率快照\n"
@@ -252,21 +271,16 @@ def _add_fundamentals_parser(sub: argparse.ArgumentParser) -> None:
         action="store_true",
         help="附带最近财报官方原文链接",
     )
-    p_f.add_argument(
-        "--refresh",
-        action="store_true",
-        help="忽略估值/财报/历史缓存, 强制重新取数",
-    )
+    _add_refresh_arg(p_f, "忽略估值/财报/历史缓存, 强制重新取数")
     _add_json_arg(p_f, "输出 JSON")
     p_f.set_defaults(func=_cmd(".fundamentals", "cmd_fundamentals"))
 
 
 def _add_watchlist_parser(sub: argparse.ArgumentParser) -> None:
     # ---- watchlist ----
-    p_w = sub.add_parser(
+    p_w = _subparser(sub, 
         "watchlist",
         help="自选股管理 (list/add/remove) 与阈值提醒",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
             "  tracker watchlist list                          # 查看全部自选 + 行情\n"
@@ -331,10 +345,9 @@ def _add_watchlist_parser(sub: argparse.ArgumentParser) -> None:
 
 def _add_portfolio_parser(sub: argparse.ArgumentParser) -> None:
     # ---- portfolio ----
-    p_p = sub.add_parser(
+    p_p = _subparser(sub, 
         "portfolio",
         help="持仓管理 (list/add/remove/set-base)",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
             "  tracker portfolio list                            # 列出持仓\n"
@@ -351,9 +364,7 @@ def _add_portfolio_parser(sub: argparse.ArgumentParser) -> None:
         default="list",
     )
     p_p.add_argument("symbols", nargs="*", help="add/remove 的目标代码")
-    p_p.add_argument(
-        "--portfolio", default=str(DEFAULT_PORTFOLIO), help="portfolio.json 路径"
-    )
+    _add_portfolio_arg(p_p, "portfolio.json 路径")
     p_p.add_argument("--quantity", type=float, help="持仓数量 (add 时必填)")
     p_p.add_argument("--avg-cost", type=float, help="成本价 (当地货币, add 时可选)")
     p_p.add_argument(
@@ -365,10 +376,9 @@ def _add_portfolio_parser(sub: argparse.ArgumentParser) -> None:
 
 def _add_report_parser(sub: argparse.ArgumentParser) -> None:
     # ---- report ----
-    p_r = sub.add_parser(
+    p_r = _subparser(sub, 
         "report",
         help="导出自选监控阈值报告 (md/csv/json)",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
             "  tracker report -f md                    # 终端打印 Markdown 报告\n"
@@ -405,10 +415,9 @@ def _add_report_parser(sub: argparse.ArgumentParser) -> None:
 
 def _add_export_parser(sub: argparse.ArgumentParser) -> None:
     # ---- export ----
-    p_e = sub.add_parser(
+    p_e = _subparser(sub, 
         "export",
         help="导出投资组合快照为 CSV/JSON/Markdown 报表",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
             "  tracker export -f json -o snapshot.json   # 导出完整快照 JSON\n"
@@ -424,16 +433,12 @@ def _add_export_parser(sub: argparse.ArgumentParser) -> None:
         default="json",
         help="输出格式 (默认 json)",
     )
-    p_e.add_argument(
-        "--portfolio", default=str(DEFAULT_PORTFOLIO), help="portfolio.json 路径"
-    )
-    p_e.add_argument(
-        "--watchlist-file", default=str(DEFAULT_WATCHLIST), help="watchlist.json 路径"
-    )
+    _add_portfolio_arg(p_e, "portfolio.json 路径")
+    _add_watchlist_file_arg(p_e, "watchlist.json 路径")
     p_e.add_argument(
         "--watchlist", "-w", default=None, help="只导出某个子自选列表 (默认全部)"
     )
-    p_e.add_argument("--base", default=None, help="覆盖基础货币, 如 USD")
+    _add_base_arg(p_e, "覆盖基础货币, 如 USD")
     _add_quote_source_flags(p_e)
     _add_crypto_source_arg(p_e)
     p_e.add_argument(
@@ -443,10 +448,9 @@ def _add_export_parser(sub: argparse.ArgumentParser) -> None:
 
 def _add_fx_parser(sub: argparse.ArgumentParser) -> None:
     # ---- fx ----
-    p_fx = sub.add_parser(
+    p_fx = _subparser(sub, 
         "fx",
         help="汇率查询",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
             "  tracker fx USD                       # 1 USD 兑常用币种\n"
@@ -467,10 +471,9 @@ def _add_fx_parser(sub: argparse.ArgumentParser) -> None:
 
 def _add_history_parser(sub: argparse.ArgumentParser) -> None:
     # ---- history ----
-    p_h = sub.add_parser(
+    p_h = _subparser(sub, 
         "history",
         help="历史价格 (近 N 个月)",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
             "  tracker history AAPL                  # 近 12 个月日线\n"
@@ -490,10 +493,9 @@ def _add_history_parser(sub: argparse.ArgumentParser) -> None:
 
 def _add_kline_parser(sub: argparse.ArgumentParser) -> None:
     # ---- kline ----
-    p_k = sub.add_parser(
+    p_k = _subparser(sub, 
         "kline",
         help="K线蜡烛图 (生成交互式 HTML, 含成交量/均线)",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
             "  tracker kline AAPL                              # 日K + 成交量 + MA5/20/60\n"
@@ -519,7 +521,7 @@ def _add_kline_parser(sub: argparse.ArgumentParser) -> None:
         "--ma", default="5,20,60", help="均线周期, 逗号分隔 (如 5,10,20,60)"
     )
     p_k.add_argument("--no-volume", action="store_true", help="隐藏成交量副图")
-    p_k.add_argument("--refresh", action="store_true", help="忽略缓存强制刷新")
+    _add_refresh_arg(p_k, "忽略缓存强制刷新")
     _add_quote_source_flags(p_k)
     _add_crypto_source_arg(p_k)
     p_k.add_argument(
@@ -539,10 +541,9 @@ def _add_kline_parser(sub: argparse.ArgumentParser) -> None:
 
 def _add_calendar_parser(sub: argparse.ArgumentParser) -> None:
     # ---- calendar ----
-    p_cal = sub.add_parser(
+    p_cal = _subparser(sub, 
         "calendar",
         help="组合/自选的财报与重大事件日历 (默认本月+下月)",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
             "  tracker calendar                       # 持仓+自选, 本月+下月\n"
@@ -558,10 +559,8 @@ def _add_calendar_parser(sub: argparse.ArgumentParser) -> None:
     p_cal.add_argument(
         "symbols", nargs="*", help="代码列表 (缺省 = 持仓+自选全部), 如 AAPL 600519.SS"
     )
-    p_cal.add_argument("--portfolio", default=str(DEFAULT_PORTFOLIO))
-    p_cal.add_argument(
-        "--watchlist-file", default=str(DEFAULT_WATCHLIST), help="watchlist.json 路径"
-    )
+    _add_portfolio_arg(p_cal)
+    _add_watchlist_file_arg(p_cal, "watchlist.json 路径")
     p_cal.add_argument(
         "--watchlist",
         default=None,
@@ -573,9 +572,7 @@ def _add_calendar_parser(sub: argparse.ArgumentParser) -> None:
         default=2,
         help="从本月起的自然月数 1..12 (默认 2 = 本月+下月)",
     )
-    p_cal.add_argument(
-        "--refresh", action="store_true", help="忽略缓存强制刷新"
-    )
+    _add_refresh_arg(p_cal, "忽略缓存强制刷新")
     p_cal.add_argument(
         "--longport",
         action="store_true",
@@ -594,10 +591,9 @@ def _add_calendar_parser(sub: argparse.ArgumentParser) -> None:
 
 def _add_search_parser(sub: argparse.ArgumentParser) -> None:
     # ---- search ----
-    p_s = sub.add_parser(
+    p_s = _subparser(sub, 
         "search",
         help="代码/名称搜索 → 规范代码 (可直接喂 kline/compare/quote)",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
             "  tracker search 700                    # 纯数字: 补零命中港股 0700.HK\n"
@@ -620,10 +616,9 @@ def _add_search_parser(sub: argparse.ArgumentParser) -> None:
 
 def _add_compare_parser(sub: argparse.ArgumentParser) -> None:
     # ---- compare ----
-    p_cmp = sub.add_parser(
+    p_cmp = _subparser(sub, 
         "compare",
         help="多股走势/市值对比 (--metric mcap 切市值; --json 出序列, 默认出交互式 HTML)",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
             "  tracker compare AAPL 0700.HK 600519.SS          # 归一化对比 (起点=100)\n"
@@ -677,11 +672,7 @@ def _add_compare_parser(sub: argparse.ArgumentParser) -> None:
         help="市值对比 (--metric mcap) 统一折算币种 (默认组合基础货币, 如 CNY/USD)",
     )
     _add_quote_source_flags(p_cmp)
-    p_cmp.add_argument(
-        "--refresh",
-        action="store_true",
-        help="忽略 K线/市值/基本面/汇率缓存与负缓存, 强制重新取数",
-    )
+    _add_refresh_arg(p_cmp, "忽略 K线/市值/基本面/汇率缓存与负缓存, 强制重新取数")
     _add_crypto_source_arg(p_cmp)
     p_cmp.add_argument(
         "--output",
@@ -700,10 +691,9 @@ def _add_compare_parser(sub: argparse.ArgumentParser) -> None:
 
 def _add_index_kline_parser(sub: argparse.ArgumentParser) -> None:
     # ---- index-kline ----
-    p_ik = sub.add_parser(
+    p_ik = _subparser(sub, 
         "index-kline",
         help="宏观/风险指数K线 (IX.<KEY>, 独立于股票 kline)",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
             "  tracker index-kline IX.DXY --months 12\n"
@@ -735,7 +725,7 @@ def _add_index_kline_parser(sub: argparse.ArgumentParser) -> None:
     p_ik.add_argument(
         "--volume", action="store_true", help="显示成交量副图 (指数一般无意义)"
     )
-    p_ik.add_argument("--refresh", action="store_true", help="忽略缓存强制刷新")
+    _add_refresh_arg(p_ik, "忽略缓存强制刷新")
     p_ik.add_argument(
         "--output",
         "-o",
@@ -753,10 +743,9 @@ def _add_index_kline_parser(sub: argparse.ArgumentParser) -> None:
 
 def _add_import_parser(sub: argparse.ArgumentParser) -> None:
     # ---- import ----
-    p_imp = sub.add_parser(
+    p_imp = _subparser(sub, 
         "import",
         help="统一持仓导入 (ibkr / wallet / file)",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "导入方式: 默认追加合并 (按代码更新数量/成本, 新代码追加, 其余持仓保留);\n"
             "          --overwrite 覆盖全部持仓。\n"
@@ -774,10 +763,9 @@ def _add_import_parser(sub: argparse.ArgumentParser) -> None:
     )
     imp_sub = p_imp.add_subparsers(dest="source", metavar="<来源>", required=True)
 
-    p_i_ibkr = imp_sub.add_parser(
+    p_i_ibkr = _subparser(imp_sub, 
         "ibkr",
         help="从 IB Gateway 账户导入持仓",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
             "  tracker import ibkr --dry-run          # 仅预览\n"
@@ -785,9 +773,7 @@ def _add_import_parser(sub: argparse.ArgumentParser) -> None:
             "  tracker import ibkr --overwrite        # 覆盖全部持仓\n"
         ),
     )
-    p_i_ibkr.add_argument(
-        "--portfolio", default=str(DEFAULT_PORTFOLIO), help="portfolio.json 路径"
-    )
+    _add_portfolio_arg(p_i_ibkr, "portfolio.json 路径")
     p_i_ibkr.add_argument(
         "--mode",
         choices=["paper", "live"],
@@ -801,10 +787,9 @@ def _add_import_parser(sub: argparse.ArgumentParser) -> None:
     _add_json_arg(p_i_ibkr, "输出 JSON")
     p_i_ibkr.set_defaults(func=_cmd(".importer", "cmd_import"))
 
-    p_i_lp = imp_sub.add_parser(
+    p_i_lp = _subparser(imp_sub, 
         "longport",
         help="从长桥账户导入持仓 (OAuth 登录或 API Key)",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
             "  tracker import longport --dry-run       # 仅预览\n"
@@ -813,9 +798,7 @@ def _add_import_parser(sub: argparse.ArgumentParser) -> None:
             "或 longport.json 配置 auth=apikey 与 app_key/app_secret/access_token。"
         ),
     )
-    p_i_lp.add_argument(
-        "--portfolio", default=str(DEFAULT_PORTFOLIO), help="portfolio.json 路径"
-    )
+    _add_portfolio_arg(p_i_lp, "portfolio.json 路径")
     p_i_lp.add_argument(
         "--overwrite", action="store_true", help="覆盖全部持仓 (缺省追加合并)"
     )
@@ -823,10 +806,9 @@ def _add_import_parser(sub: argparse.ArgumentParser) -> None:
     _add_json_arg(p_i_lp, "输出 JSON")
     p_i_lp.set_defaults(func=_cmd(".importer", "cmd_import"))
 
-    p_i_wallet = imp_sub.add_parser(
+    p_i_wallet = _subparser(imp_sub, 
         "wallet",
         help="从链上地址导入加密资产 (轻钱包: tokenlist + balanceOf)",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "支持链: eth, bsc, polygon, arbitrum, avalanche, tron, solana\n"
             "示例:\n"
@@ -842,9 +824,7 @@ def _add_import_parser(sub: argparse.ArgumentParser) -> None:
     p_i_wallet.add_argument(
         "address", help="链上地址 (EVM: 0x+40位hex; TRON: 'T'开头; Solana: base58 公钥)"
     )
-    p_i_wallet.add_argument(
-        "--portfolio", default=str(DEFAULT_PORTFOLIO), help="portfolio.json 路径"
-    )
+    _add_portfolio_arg(p_i_wallet, "portfolio.json 路径")
     p_i_wallet.add_argument(
         "--tokenlist", default=None, help="外部 tokenlist JSON 路径 (覆盖内置列表)"
     )
@@ -858,10 +838,9 @@ def _add_import_parser(sub: argparse.ArgumentParser) -> None:
     _add_json_arg(p_i_wallet, "输出 JSON")
     p_i_wallet.set_defaults(func=_cmd(".importer", "cmd_import"))
 
-    p_i_file = imp_sub.add_parser(
+    p_i_file = _subparser(imp_sub, 
         "file",
         help="从券商导出文件导入 (A股 CSV/Excel)",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
             "  tracker import file 持仓.csv                  # 追加合并\n"
@@ -870,9 +849,7 @@ def _add_import_parser(sub: argparse.ArgumentParser) -> None:
         ),
     )
     p_i_file.add_argument("file", help="券商导出的持仓文件路径 (CSV/Excel)")
-    p_i_file.add_argument(
-        "--portfolio", default=str(DEFAULT_PORTFOLIO), help="portfolio.json 路径"
-    )
+    _add_portfolio_arg(p_i_file, "portfolio.json 路径")
     p_i_file.add_argument(
         "--overwrite", action="store_true", help="覆盖全部持仓 (缺省追加合并)"
     )
@@ -882,10 +859,9 @@ def _add_import_parser(sub: argparse.ArgumentParser) -> None:
 
 def _add_sync_parser(sub: argparse.ArgumentParser) -> None:
     # ---- sync (兼容入口, 已并入 import ibkr) ----
-    p_sync = sub.add_parser(
+    p_sync = _subparser(sub, 
         "sync",
         help="从 IB Gateway 账户同步持仓 (已并入 import ibkr)",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
             "  tracker sync --dry-run                # 预览同步结果, 不写入\n"
@@ -894,7 +870,7 @@ def _add_sync_parser(sub: argparse.ArgumentParser) -> None:
             "  tracker sync --overwrite              # 覆盖全部持仓 (缺省追加合并)\n"
         ),
     )
-    p_sync.add_argument("--portfolio", default=str(DEFAULT_PORTFOLIO))
+    _add_portfolio_arg(p_sync)
     p_sync.add_argument("--dry-run", action="store_true", help="仅预览, 不写入")
     p_sync.add_argument(
         "--mode",
@@ -917,10 +893,9 @@ def _add_sync_parser(sub: argparse.ArgumentParser) -> None:
 
 def _add_longport_login_parser(sub: argparse.ArgumentParser) -> None:
     # ---- longport-login (长桥 OAuth 登录引导) ----
-    p_lp = sub.add_parser(
+    p_lp = _subparser(sub, 
         "longport-login",
         help="发起长桥 OAuth 登录 (浏览器授权, token 自动缓存与刷新)",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "前置: longport.json 已配置有效 client_id (OAuth 客户端注册见 longport.example.json)。\n"
             "授权成功后 token 缓存于 ~/.longport/openapi/tokens/<client_id>, 自动刷新,\n"
@@ -938,10 +913,9 @@ def _add_longport_login_parser(sub: argparse.ArgumentParser) -> None:
 
 def _add_eodhd_parser(sub: argparse.ArgumentParser) -> None:
     # ---- eodhd (BYOK 付费源: 配置状态 + 连通性自检) ----
-    p_eod = sub.add_parser(
+    p_eod = _subparser(sub, 
         "eodhd",
         help="EODHD BYOK 配置状态与连通性自检 (token 自备, 可选付费源)",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "配置: 数据目录 eodhd.json (或 env EODHD_CONFIG 指定路径),\n"
             "token 也可用 env TRACKER_EODHD_TOKEN 注入 (优先级更高)。\n"
@@ -964,10 +938,9 @@ def _add_eodhd_parser(sub: argparse.ArgumentParser) -> None:
 
 def _add_import_wallet_parser(sub: argparse.ArgumentParser) -> None:
     # ---- import-wallet (兼容入口, 已并入 import wallet) ----
-    p_wallet = sub.add_parser(
+    p_wallet = _subparser(sub, 
         "import-wallet",
         help="从链上地址导入加密资产 (已并入 import wallet)",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "支持链: eth, bsc, polygon, arbitrum, avalanche, tron, solana\n"
             "示例:\n"
@@ -984,9 +957,7 @@ def _add_import_wallet_parser(sub: argparse.ArgumentParser) -> None:
     p_wallet.add_argument(
         "address", help="链上地址 (EVM: 0x+40位hex; TRON: 'T'开头; Solana: base58 公钥)"
     )
-    p_wallet.add_argument(
-        "--portfolio", default=str(DEFAULT_PORTFOLIO), help="portfolio.json 路径"
-    )
+    _add_portfolio_arg(p_wallet, "portfolio.json 路径")
     p_wallet.add_argument(
         "--tokenlist", default=None, help="外部 tokenlist JSON 路径 (覆盖内置列表)"
     )
@@ -1007,10 +978,9 @@ def _add_import_wallet_parser(sub: argparse.ArgumentParser) -> None:
 
 def _add_cache_parser(sub: argparse.ArgumentParser) -> None:
     # ---- cache ----
-    p_c = sub.add_parser(
+    p_c = _subparser(sub, 
         "cache",
         help="行情磁盘缓存管理",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
             "  tracker cache info          # 查看缓存统计\n"
@@ -1025,10 +995,9 @@ def _add_cache_parser(sub: argparse.ArgumentParser) -> None:
 
 def _add_warm_parser(sub: argparse.ArgumentParser) -> None:
     # ---- warm ----
-    p_w = sub.add_parser(
+    p_w = _subparser(sub, 
         "warm",
         help="主动预热/保温行情、汇率与财经日历缓存",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
             "  tracker warm                         # 预热一次 (持仓+自选)\n"
@@ -1062,21 +1031,16 @@ def _add_warm_parser(sub: argparse.ArgumentParser) -> None:
         metavar="SYMBOL",
         help="额外预热代码 (可多个; 默认只覆盖持仓 + 自选)",
     )
-    p_w.add_argument(
-        "--refresh",
-        action="store_true",
-        help="忽略行情 5min 磁盘缓存强制刷新",
-    )
+    _add_refresh_arg(p_w, "忽略行情 5min 磁盘缓存强制刷新")
     _add_json_arg(p_w, "输出 JSON")
     p_w.set_defaults(func=_cmd(".warm", "cmd_warm"))
 
 
 def _add_doctor_parser(sub: argparse.ArgumentParser) -> None:
     # ---- doctor (数据源健康 / 缓存覆盖 / 完整性体检) ----
-    p_doc = sub.add_parser(
+    p_doc = _subparser(sub, 
         "doctor",
         help="数据健康体检 (数据源成功率 / 缓存覆盖 / 本地完整性)",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "默认只读本地, 零网络。回答「页面上的数来自哪里、谁在失败、组合里\n"
             "谁缺数据」; 总体异常 (down) 时退出码为 1, 可接告警脚本。\n"
@@ -1120,10 +1084,9 @@ def _add_doctor_parser(sub: argparse.ArgumentParser) -> None:
 
 def _add_webdav_parser(sub: argparse.ArgumentParser) -> None:
     # ---- webdav (远端 portfolio/watchlist 同步) ----
-    p_wd = sub.add_parser(
+    p_wd = _subparser(sub, 
         "webdav",
         help="WebDAV 远端持仓/自选同步 (status / pull / push)",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "配置: 数据目录 webdav.json (或 env TRACKER_WEBDAV_CONFIG 指定路径),\n"
             "密码优先取 env TRACKER_WEBDAV_PASSWORD (配置 password_env 可改名)。\n"
@@ -1139,7 +1102,7 @@ def _add_webdav_parser(sub: argparse.ArgumentParser) -> None:
     )
     wd_sub = p_wd.add_subparsers(dest="webdav_action", required=True)
 
-    wd_status = wd_sub.add_parser("status", help="查看同步状态")
+    wd_status = _subparser(wd_sub, "status", help="查看同步状态")
     wd_status.add_argument(
         "--check", action="store_true", help="联网检查远端文件 (HEAD, 失败回退 GET)"
     )
@@ -1151,7 +1114,7 @@ def _add_webdav_parser(sub: argparse.ArgumentParser) -> None:
         ("pull", "从远端拉取到本地缓存"),
         ("push", "把本地缓存推送到远端"),
     ):
-        p = wd_sub.add_parser(action, help=help_text)
+        p = _subparser(wd_sub, action, help=help_text)
         p.add_argument(
             "target",
             nargs="?",
@@ -1171,10 +1134,9 @@ def _add_webdav_parser(sub: argparse.ArgumentParser) -> None:
 
 def _add_init_parser(sub: argparse.ArgumentParser) -> None:
     # ---- init (首次使用: 模板落地到数据目录) ----
-    p_init = sub.add_parser(
+    p_init = _subparser(sub, 
         "init",
         help="把包内配置模板复制到数据目录 (首次使用)",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
             "  tracker init            # 生成缺失的 portfolio/watchlist/settings/ibkr/longport/eodhd/wallet_history/webdav.json\n"
@@ -1231,7 +1193,6 @@ def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="tracker",
         description="Madeleine Portfolio Tracker 命令行工具 (持仓 / 自选 / 行情 / 汇率 / 缓存)",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
             "  python -m tracker.cli snapshot --json\n"

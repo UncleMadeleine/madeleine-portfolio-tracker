@@ -41,14 +41,12 @@ CAL_STALE_TTL (7 天) 内的旧行, 页面据此秒开 + 后台重取; cache_onl
 from __future__ import annotations
 
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 
 from . import cache as cache_mod
 from .deps import akshare as _akshare
-from .deps import yfinance as _yf
 from .symbols import parse
 from .events_cn import (
     _cn_code_to_yahoo,  # noqa: F401 - 兼容既有导入/测试
@@ -58,9 +56,27 @@ from .events_cn import (
     _pd_date,
     _pick_cn_scheduled_row,  # noqa: F401 - 兼容既有导入/测试
 )
+from .events_common import (  # noqa: F401 - 兼容再导出
+    CAL_NEG_TTL,
+    CAL_STALE_TTL,
+    CAL_TTL,
+    DATE_STATUS_LABELS,
+    EVENT_TYPE_LABELS,
+    _ProgressReporter,
+    _is_valid_eps,
+    _merge_cache_meta,
+)
+from .events_global import (  # noqa: F401 - 兼容再导出
+    _fetch_global_events,
+    _fetch_global_one,
+    _yf_calendar_rows,
+    _yf_rate_limit,
+)
 from .events_window import (  # noqa: F401 - 兼容再导出
     _age_exceeded,
     _age_of,
+    _to_date,
+    _window_rows,
     _in_window,
     _month_starts,
     _quarter_ends,
@@ -83,99 +99,26 @@ __all__ = [
     "fetch_calendar",
 ]
 
-# 单票缓存 TTL (秒): 有事件 6h (与 fundamentals 一致的低频报表口径)
-CAL_TTL = cache_mod.CALENDAR_TTL
-# 单票空结果负缓存 TTL: Yahoo 无数据的标的 24h 内不重试
-CAL_NEG_TTL = 86400
-# 陈旧可渲染期: 超过正/负缓存 TTL 但未超过该年龄的日历仍先展示, 由页面/
-# 后台线程静默重取 (与行情 cache.STALE_TTL 同构的 stale-while-revalidate)。
-# 日历是低频数据, 展示 7 天内的旧结果远比首屏干等整批网络请求可用。
-CAL_STALE_TTL = 7 * 86400
 # 预约披露: 报表期 qe 的法定披露截止日 = {Q1: 4/30, Q2: 8/31, Q3: 10/31,
 # 年报: 次年 4/30}; 实际/变更披露可能略晚于截止日, 留 30 天宽限。只请求
 # 「截止日+宽限 >= 窗口开始」且 qe < 窗口结束 的报表期 —— 否则整批全市场
 # 请求纯属浪费 (例如 11-12 月窗口只需 9/30 一期, 而不是 6/30、9/30、12/31)。
-_YF_PAUSE = 0.05
 # 单票 yfinance 并发数: 自选几百只时, 顺序请求会把冷启动拖到十分钟级。
 # 24 路实测 40 只港股约 6s (顺序约 1 分钟); 每请求仍有 _YF_TIMEOUT 硬超时,
 # 单票失败只丢自己。启动频率另由 _YF_PAUSE 限速, 避免瞬间打满 Yahoo。
-_YF_MAX_WORKERS = 24
 # A股整批请求并发数: 沪深/京市/分红是不同接口, 彼此独立; 并发后冷启动从
 # 「板块×报表期」的累加耗时降到最慢一路的耗时。
 _CN_MAX_WORKERS = 6
 # yfinance 跨线程启动限速状态 (只在 _YF_MAX_WORKERS 个 worker 内使用)。
-_YF_START_LOCK = threading.Lock()
-_YF_NEXT_START = 0.0
 # 单次网络请求硬超时 (秒): 日历是可选附加信息, 不能让一个 TCP 半开的
 # yfinance/akshare 请求把整页/整条 CLI 拖到分钟级。
-_YF_TIMEOUT = 10.0
 _AK_TIMEOUT = 15.0
 
-# 事件类型 → 展示名 (CLI/UI 共用)
-EVENT_TYPE_LABELS = {
-    "earnings": "财报",
-    "ex_dividend": "除息/除权",
-    "record_date": "股权登记",
-    "dividend": "派息日",
-}
-DATE_STATUS_LABELS = {
-    "planned": "预约",
-    "changed": "已变更",
-    "actual": "已披露",
-    "estimate": "估计",
-}
 
 
 
-class _ProgressReporter:
-    """取数进度累加器: 计划总量可后续追加 (长桥兜底按需才知道工作量).
-
-    对外仍是 fetch_calendar(progress=(done, total, label)) 的旧契约:
-    label 是当前代码/阶段的可读文本, total 可能随阶段增加。UI 用
-    done/total 画进度条, CLI 直接打印文本。
-    """
-
-    def __init__(self, cb=None):
-        self._cb = cb
-        self.done = 0
-        self.total = 0
-
-    def plan(self, n: int) -> None:
-        if n > 0:
-            self.total += int(n)
-
-    def step(self, label: str | None = None) -> None:
-        self.done += 1
-        if self._cb is not None:
-            # total 只会追加不会回退; done 超过计划量时至少保证分母不倒退
-            self._cb(self.done, max(self.total, self.done), label)
-
-    def finish(self) -> None:
-        if self._cb is not None:
-            total = max(self.total, self.done)
-            self._cb(total, total, None)
 
 
-def _merge_cache_meta(meta: dict, part: dict | None) -> None:
-    """合并分片缓存元数据 (stale/missing/stale_age/used) 到累计 meta."""
-    if not part:
-        return
-    meta["stale"] = bool(meta.get("stale")) or bool(part.get("stale"))
-    meta["missing"] = bool(meta.get("missing")) or bool(part.get("missing"))
-    meta["used"] = bool(meta.get("used")) or bool(part.get("used"))
-    try:
-        meta["stale_age"] = max(
-            float(meta.get("stale_age") or 0.0),
-            float(part.get("stale_age") or 0.0),
-        )
-    except (TypeError, ValueError):
-        pass
-
-
-def _is_valid_eps(v: float) -> bool:
-    from math import isfinite
-
-    return isfinite(v) and v > 0
 
 
 # ---------------------------------------------------------------------------
@@ -183,236 +126,19 @@ def _is_valid_eps(v: float) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _to_date(v) -> date | None:
-    """yfinance calendar 值 → date; 列表/日期/datetime/字符串统一处理."""
-    if isinstance(v, datetime):
-        if v != v:  # pandas NaT: NaT.date() 仍是 NaT, 不能让比较阶段抛 TypeError
-            return None
-        return v.date()
-    if isinstance(v, date):
-        return v
-    s = str(v or "").strip()[:10]
-    if not s:
-        return None
-    for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
-        try:
-            return datetime.strptime(s, fmt).date()
-        except ValueError:
-            continue
-    return None
 
 
-def _yf_calendar_rows(symbol: str) -> list[dict]:
-    """yf.Ticker(symbol).calendar → 原始事件行 (不含窗口过滤)."""
-    yf = _yf()
-
-    cal = with_timeout(lambda: yf.Ticker(symbol).calendar, _YF_TIMEOUT)
-    if not isinstance(cal, dict):
-        return []
-    out: list[dict] = []
-    eps_avg = None
-    for k in ("Earnings Average", "EPS Estimate Average"):
-        try:
-            v = cal.get(k)
-            f = float(v) if v is not None else None
-        except (TypeError, ValueError):
-            f = None
-        if f is not None and _is_valid_eps(f):
-            eps_avg = f
-            break
-    ed = cal.get("Earnings Date")
-    dates = []
-    if isinstance(ed, (list, tuple)):
-        candidates = list(ed)
-    else:
-        candidates = [ed]
-    for c in candidates:
-        d = _to_date(c)
-        if d is not None:
-            dates.append(d)
-    for d in sorted(set(dates)):
-        row: dict = {
-            "type": "earnings",
-            "date": d,
-            "date_status": "estimate",  # Yahoo 无 confirmed 标志, 一律估计口径
-        }
-        if eps_avg is not None:
-            row["note"] = f"EPS 估计 ~{eps_avg:.2f}"
-        out.append(row)
-    for key, typ in (("Ex-Dividend Date", "ex_dividend"), ("Dividend Date", "dividend")):
-        d = _to_date(cal.get(key))
-        if d is not None:
-            out.append({"type": typ, "date": d, "date_status": "planned"})
-    return out
 
 
 _UNSET = object()
 
 
-def _yf_rate_limit() -> None:
-    """跨线程限制 yfinance 请求启动频率 (替代顺序循环里的 sleep).
-
-    多线程下单纯 `time.sleep(_YF_PAUSE)` 只会让每个 worker 各睡一次,
-    请求仍可能同时打满 Yahoo; 这里用模块级「下一个可用启动时刻」把启动
-    间隔真正串起来。线程在锁外等待, 不阻塞其它 worker 发起请求。
-    """
-    global _YF_NEXT_START
-    if _YF_PAUSE <= 0:
-        return
-    with _YF_START_LOCK:
-        now = time.monotonic()
-        wait = _YF_NEXT_START - now
-        _YF_NEXT_START = max(now, _YF_NEXT_START) + _YF_PAUSE
-    if wait > 0:
-        time.sleep(wait)
 
 
-def _fetch_global_one(symbol: str, refresh: bool, cached_row=_UNSET) -> list[dict]:
-    """单票 global 事件 (磁盘缓存优先); 空结果同样落库 (24h 负缓存语义).
-
-    cached_row 由批量缓存读取层传入 (None 表示确认无行), 避免未命中的代码
-    再逐只连一次 SQLite; 不传时保持旧的自行读缓存行为。
-    """
-    if refresh:
-        row = None
-    elif cached_row is _UNSET:
-        row = cache_mod.get_calendar_row(f"g:{symbol}")
-    else:
-        row = cached_row
-    if row is not None:
-        evs, ttl = row["events"], (CAL_TTL if row["events"] else CAL_NEG_TTL)
-        if not _age_exceeded(row["fetched_at"], ttl):
-            return evs
-    _yf_rate_limit()
-    evs = _yf_calendar_rows(symbol)
-    cache_mod.set_calendar_row(f"g:{symbol}", evs)
-    return evs
 
 
-def _fetch_global_events(
-    symbols: list[str],
-    start: date,
-    end: date,
-    refresh: bool,
-    reporter: _ProgressReporter | None = None,
-    stale_ok: bool = False,
-    cache_only: bool = False,
-) -> tuple[dict[str, list[dict]], list[str], dict]:
-    """yfinance 单票并发取数 → {symbol: 窗口过滤后事件}, issues, 执行统计.
-
-    命中缓存的代码零请求; 未命中的由 _YF_MAX_WORKERS 个线程并发发出,
-    启动间隔仍由 _yf_rate_limit 控制 (防 429)。单票失败注记进 issues,
-    不拖丢整批; progress 回调只在主线程调用, 避免 Streamlit API 跨线程。
-
-    stale_ok: 过期但仍在 CAL_STALE_TTL 内的缓存先返回 (页面秒开, 后台重取)。
-    cache_only: 只读缓存, 缺失/过老的行不进 todo (由调用方决定是否回源)。
-    stats 额外记录 stale (用过陈旧行) / missing (缓存缺失) / stale_age。
-    """
-    out: dict[str, list[dict]] = {s: [] for s in symbols}
-    issues: list[str] = []
-    stats = {"fresh": 0, "cached": 0, "fail": 0, "stale": 0, "missing": 0}
-    stale_age = 0.0
-    todo: list[str] = []
-    if reporter is not None:
-        reporter.plan(len(symbols))
-    # 批量读缓存: 逐票 get_calendar_row 在大自选下是 N 次 SQLite 往返。
-    cached_rows = (
-        {} if refresh else cache_mod.get_calendar_rows([f"g:{s}" for s in symbols])
-    )
-    for s in symbols:
-        row = None if refresh else cached_rows.get(f"g:{s}")
-        if row is not None:
-            evs = row["events"]
-            ttl = CAL_TTL if evs else CAL_NEG_TTL
-            age = _age_of(row["fetched_at"])
-            usable = age <= ttl or (stale_ok and age <= CAL_STALE_TTL)
-            if usable:
-                if age > ttl:
-                    stats["stale"] += 1
-                    stale_age = max(stale_age, age)
-                # 窗口过滤也放在单票保护内: 脏缓存 (NaT/非 dict 行) 只拖丢
-                # 这一只, 不能让整批 fetch_calendar 抛出。
-                try:
-                    out[s] = _window_rows(
-                        evs, start, end, source="yfinance", symbol=s
-                    )
-                except Exception as e:  # noqa: BLE001 - 单票脏数据不拖整批
-                    stats["fail"] += 1
-                    issues.append(
-                        f"{s}: yfinance 缓存行异常 ({type(e).__name__}: {e})"[:160]
-                    )
-                else:
-                    stats["cached"] += 1
-                if reporter is not None:
-                    reporter.step(s)
-                continue
-        if cache_only:
-            stats["missing"] += 1
-            if reporter is not None:
-                reporter.step(s)
-            continue
-        todo.append(s)
-
-    def _one(s: str) -> tuple[str, list[dict], str | None]:
-        """单票取数 + 窗口过滤; 任何异常都收敛成一条 issue, 不冒泡."""
-        try:
-            evs = _fetch_global_one(
-                s,
-                refresh,
-                cached_rows.get(f"g:{s}") if not refresh else None,
-            )
-            return s, _window_rows(evs, start, end, source="yfinance", symbol=s), None
-        except Exception as e:  # noqa: BLE001 - 单票失败不拖丢整批
-            return s, [], f"{s}: yfinance 日历失败 ({type(e).__name__}: {e})"[:160]
-
-    def _apply(s: str, rows: list[dict], issue: str | None) -> None:
-        out[s] = rows
-        if issue is None:
-            stats["fresh"] += 1
-        else:
-            stats["fail"] += 1
-            issues.append(issue)
-        if reporter is not None:
-            reporter.step(s)
-
-    if todo:
-        workers = min(_YF_MAX_WORKERS, len(todo))
-        if workers <= 1:
-            for s in todo:
-                _apply(*_one(s))
-        else:
-            with ThreadPoolExecutor(max_workers=workers) as ex:
-                futures = [ex.submit(_one, s) for s in todo]
-                for fut in as_completed(futures):
-                    _apply(*fut.result())
-    stats["stale_age"] = stale_age
-    return out, issues, stats
 
 
-def _window_rows(
-    evs: list[dict], start: date, end: date, source: str | None = None,
-    symbol: str | None = None,
-) -> list[dict]:
-    """缓存载荷行 → 窗口内事件行 (date 统一 date 对象; source/symbol 补齐)."""
-    picked = []
-    for r in evs or []:
-        if not isinstance(r, dict):
-            continue
-        # 旧版本/手改缓存可能混进缺 type 的行; 排序阶段 e["type"] 会 KeyError,
-        # 让整张日历挂掉。脏行只跳过, 其余事件照常渲染。
-        typ = r.get("type")
-        if not isinstance(typ, str) or not typ.strip():
-            continue
-        d = _to_date(r.get("date"))
-        if _in_window(d, start, end):
-            r = dict(r)
-            r["date"] = d
-            if source and r.get("source") is None:
-                r["source"] = source
-            if symbol and not r.get("symbol"):
-                r["symbol"] = symbol
-            picked.append(r)
-    return picked
 
 
 # ---------------------------------------------------------------------------

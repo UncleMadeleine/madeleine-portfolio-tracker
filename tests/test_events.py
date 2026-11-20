@@ -5,6 +5,7 @@ from datetime import date, timedelta
 import pytest
 
 from tracker import events
+from tracker import events_global
 from tracker.events import (
     _cn_code_to_yahoo,
     _cn_normalize_disclosure,
@@ -75,7 +76,7 @@ def no_network_calendar(monkeypatch):
         calls["cn"].append(("fhps", date))
         return empty_df
 
-    monkeypatch.setattr(events, "_yf_calendar_rows", fake_yf_rows)
+    monkeypatch.setattr(events_global, "_yf_calendar_rows", fake_yf_rows)
     monkeypatch.setattr("akshare.stock_yysj_em", fake_yysj)
     monkeypatch.setattr("akshare.stock_fhps_em", fake_fhps)
     return calls
@@ -146,7 +147,7 @@ class TestDirtyCacheRows:
     def test_fetch_calendar_ignores_dirty_global_row(self, monkeypatch):
         """缺 type 的缓存/上游行不能触发排序阶段 KeyError 弄挂整张日历."""
         monkeypatch.setattr(
-            events,
+            events_global,
             "_yf_calendar_rows",
             lambda s: [{"date": "2026-11-10", "source": "yfinance"}],
         )
@@ -513,8 +514,8 @@ class TestFetchCalendar:
                 active -= 1
             return []
 
-        monkeypatch.setattr(events, "_yf_calendar_rows", fake)
-        monkeypatch.setattr(events, "_YF_PAUSE", 0)
+        monkeypatch.setattr(events_global, "_yf_calendar_rows", fake)
+        monkeypatch.setattr(events_global, "_YF_PAUSE", 0)
         fetch_calendar([f"TST{i}" for i in range(12)], months=2, refresh=True)
         assert peak > 1
         assert len(threads) > 1
@@ -550,25 +551,25 @@ class TestFetchCalendar:
 
     def test_global_failure_isolated(self, monkeypatch):
         """并发取数时单票失败只记 issue, 不拖丢同批其它代码."""
-        monkeypatch.setattr(events, "_YF_PAUSE", 0)
+        monkeypatch.setattr(events_global, "_YF_PAUSE", 0)
 
         def fake(symbol):
             if symbol == "BAD":
                 raise RuntimeError("boom")
             return []
 
-        monkeypatch.setattr(events, "_yf_calendar_rows", fake)
+        monkeypatch.setattr(events_global, "_yf_calendar_rows", fake)
         r = fetch_calendar(["BAD", "GOOD"], months=2, refresh=True)
         assert any("BAD" in issue for issue in r["issues"])
         assert "GOOD" not in " ".join(r["issues"])
 
     def test_global_negative_cache(self, no_network_calendar, monkeypatch):
-        monkeypatch.setattr(events, "_YF_PAUSE", 0)
+        monkeypatch.setattr(events_global, "_YF_PAUSE", 0)
         # 未收录符号: 空载荷落库 (负缓存), 第二次不再走网络
         fetch_calendar(["UNKNOWN_OK"], months=2)
         n_first = len(no_network_calendar["global"])
         monkeypatch.setattr(
-            events,
+            events_global,
             "_yf_calendar_rows",
             lambda s: (_ for _ in ()).throw(AssertionError("negative cache miss")),
         )
@@ -628,7 +629,7 @@ class TestFetchCalendar:
         import pandas as pd
 
         monkeypatch.setattr(
-            events,
+            events_global,
             "_yf_calendar_rows",
             lambda s: [{"type": "earnings", "date": pd.NaT}],
         )
@@ -663,8 +664,8 @@ class TestLongportFallback:
             return {"ZZZ-US": []}, None
 
         monkeypatch.setattr(events, "_fetch_longport_events", fake_lp)
-        stored_yf = events._yf_calendar_rows
-        monkeypatch.setattr(events, "_yf_calendar_rows", lambda s: [])
+        stored_yf = events_global._yf_calendar_rows
+        monkeypatch.setattr(events_global, "_yf_calendar_rows", lambda s: [])
 
         r = fetch_calendar(["NOEARNINGS"], months=2, use_longport=True)
         # 只对 US/HK 可兜底的代码调用长桥
@@ -912,14 +913,14 @@ class TestCalendarStaleWhileRevalidate:
         def boom(_symbol):
             raise AssertionError("cache_only 不应发网络")
 
-        old = events._yf_calendar_rows
-        events._yf_calendar_rows = boom
+        old = events_global._yf_calendar_rows
+        events_global._yf_calendar_rows = boom
         try:
             r = events.fetch_calendar(
                 ["AAPL"], months=2, stale_ok=True, cache_only=True
             )
         finally:
-            events._yf_calendar_rows = old
+            events_global._yf_calendar_rows = old
         assert r is not None
         assert [e["symbol"] for e in r["events"]] == ["AAPL"]
         assert r["cache"] == {
@@ -996,7 +997,7 @@ class TestCalendarStaleWhileRevalidate:
         assert any(e["symbol"] == "600519.SS" for e in r["events"])
 
     def test_progress_reports_plan_and_finishes(self, no_network_calendar, monkeypatch):
-        monkeypatch.setattr(events, "_YF_PAUSE", 0)
+        monkeypatch.setattr(events_global, "_YF_PAUSE", 0)
         seen: list[tuple[int, int, str | None]] = []
         events.fetch_calendar(
             ["AAPL", "600519.SS"],

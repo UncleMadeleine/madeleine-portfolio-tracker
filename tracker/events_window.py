@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 _CN_DISCLOSURE_GRACE_DAYS = 30
 # 候选报表期的回看范围: 年报截止日距期末最长 120 天 + 30 天宽限 = 150 天,
@@ -141,4 +141,49 @@ def _age_of(fetched_at) -> float:
         return float("inf")
     return max(0.0, time.time() - ts)
 
+
+
+
+def _to_date(v) -> date | None:
+    """yfinance calendar 值 → date; 列表/日期/datetime/字符串统一处理."""
+    if isinstance(v, datetime):
+        if v != v:  # pandas NaT: NaT.date() 仍是 NaT, 不能让比较阶段抛 TypeError
+            return None
+        return v.date()
+    if isinstance(v, date):
+        return v
+    s = str(v or "").strip()[:10]
+    if not s:
+        return None
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+def _window_rows(
+    evs: list[dict], start: date, end: date, source: str | None = None,
+    symbol: str | None = None,
+) -> list[dict]:
+    """缓存载荷行 → 窗口内事件行 (date 统一 date 对象; source/symbol 补齐)."""
+    picked = []
+    for r in evs or []:
+        if not isinstance(r, dict):
+            continue
+        # 旧版本/手改缓存可能混进缺 type 的行; 排序阶段 e["type"] 会 KeyError,
+        # 让整张日历挂掉。脏行只跳过, 其余事件照常渲染。
+        typ = r.get("type")
+        if not isinstance(typ, str) or not typ.strip():
+            continue
+        d = _to_date(r.get("date"))
+        if _in_window(d, start, end):
+            r = dict(r)
+            r["date"] = d
+            if source and r.get("source") is None:
+                r["source"] = source
+            if symbol and not r.get("symbol"):
+                r["symbol"] = symbol
+            picked.append(r)
+    return picked
 

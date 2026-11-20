@@ -364,6 +364,37 @@ def _read_one(sql: str, params):
     return rows[0] if rows else None
 
 
+def _read_payload(
+    table: str, where: str, params, ttl: float | None = None
+) -> str | None:
+    """读取单表 payload; ttl 为 None 时不套 fetched_at 条件.
+
+    table/where 均为模块内常量, 不接收外部输入; 统一走 _read_one 保持
+    「锁竞争视为无缓存」与测试 monkeypatch 点不变。
+    """
+    _ensure_db()
+    sql = f"SELECT payload FROM {table} WHERE {where}"
+    values = list(params)
+    if ttl is not None:
+        sql += " AND fetched_at > ?"
+        values.append(time.time() - ttl)
+    row = _read_one(sql, values)
+    return row[0] if row else None
+
+
+def _write_payload(table: str, key: str, payload: str) -> None:
+    """写入单 key payload 表 (series_cache / json_cache / calendar_cache)."""
+    _execute_write(
+        f"""
+        INSERT INTO {table} (key, payload, fetched_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+            payload=excluded.payload, fetched_at=excluded.fetched_at
+        """,
+        (key, payload, time.time()),
+    )
+
+
 def _ensure_db() -> None:
     key = str(CACHE_DB)
     ident = _db_identity()
@@ -460,15 +491,16 @@ def get_ohlc_cached(
     symbol: str, months: int, ttl: int = OHLC_TTL
 ) -> pd.DataFrame | None:
     """读取缓存的日线 OHLC; 未命中 / 过期 / 载荷损坏返回 None."""
-    _ensure_db()
-    row = _read_one(
-        "SELECT payload FROM ohlc_cache WHERE symbol=? AND months=? AND fetched_at > ?",
-        (symbol, int(months), time.time() - ttl),
+    payload = _read_payload(
+        "ohlc_cache",
+        "symbol=? AND months=?",
+        (symbol, int(months)),
+        ttl,
     )
-    if row is None:
+    if payload is None:
         return None
     try:
-        df = pd.DataFrame(json.loads(row[0]))
+        df = pd.DataFrame(json.loads(payload))
         if df.empty:
             return None
         if not {"date", "open", "high", "low", "close"}.issubset(df.columns):
@@ -604,14 +636,10 @@ def set_fundamental_cached(
     _ensure_db()
     now = time.time()
 
-    def _valid(v) -> float | None:
-        # 与 storage._clean_rows 同口径: ±Infinity 同样不落库 (json 不认, 且
-        # 6h 负缓存期内会在视图/snapshot --json 里炸出非法 JSON)
-        f = _finite_opt(v)
-        return f if f is not None and f > 0 else None
-
-    bv = _valid(book_value)
-    mc = _valid(market_cap)
+    # 与 storage._clean_rows 同口径: ±Infinity 同样不落库 (json 不认, 且
+    # 6h 负缓存期内会在视图/snapshot --json 里炸出非法 JSON)
+    bv = _valid_fundamental(book_value)
+    mc = _valid_fundamental(market_cap)
     bv_checked = (
         book_value is not None if book_value_checked is None else book_value_checked
     )
@@ -943,17 +971,8 @@ def get_calendar_row(key: str) -> dict | None:
 
 def set_calendar_row(key: str, events: list) -> None:
     """写入日历缓存行; 空事件列表同样落库 (单票负缓存依赖空载荷)."""
-    _ensure_db()
     payload = json.dumps({"events": events}, ensure_ascii=False, default=str)
-    _execute_write(
-        """
-        INSERT INTO calendar_cache (key, payload, fetched_at)
-        VALUES (?, ?, ?)
-        ON CONFLICT(key) DO UPDATE SET
-            payload=excluded.payload, fetched_at=excluded.fetched_at
-        """,
-        (key, payload, time.time()),
-    )
+    _write_payload("calendar_cache", key, payload)
 
 
 # ---------- 通用序列缓存 (历史市值 em / 历史股本 shares 用) ----------
@@ -964,15 +983,11 @@ def get_series_cached(key: str, ttl: int) -> pd.DataFrame | None:
 
     与 OHLC 缓存同构: 整段 JSON 载荷按 key 覆盖, TTL 过期重取。
     """
-    _ensure_db()
-    row = _read_one(
-        "SELECT payload FROM series_cache WHERE key=? AND fetched_at > ?",
-        (key, time.time() - ttl),
-    )
-    if row is None:
+    payload = _read_payload("series_cache", "key=?", (key,), ttl)
+    if payload is None:
         return None
     try:
-        df = pd.DataFrame(json.loads(row[0]))
+        df = pd.DataFrame(json.loads(payload))
         if df.empty:
             return None
         df["date"] = pd.to_datetime(df["date"])
@@ -989,16 +1004,7 @@ def set_series_cached(key: str, df: pd.DataFrame) -> None:
     _ensure_db()
     recs = df[["date", "close"]].copy()
     recs["date"] = pd.to_datetime(recs["date"]).dt.strftime("%Y-%m-%d")
-    payload = json.dumps(recs.to_dict(orient="records"))
-    _execute_write(
-        """
-        INSERT INTO series_cache (key, payload, fetched_at)
-        VALUES (?, ?, ?)
-        ON CONFLICT(key) DO UPDATE SET
-            payload=excluded.payload, fetched_at=excluded.fetched_at
-        """,
-        (key, payload, time.time()),
-    )
+    _write_payload("series_cache", key, json.dumps(recs.to_dict(orient="records")))
 
 
 # ---------- 通用 JSON 快照缓存 (估值快照 / 财报链接) ----------
@@ -1010,15 +1016,11 @@ def get_json_cached(key: str, ttl: float):
     快照属低频数据 (估值/财报 6h), 与行情/序列缓存共库但独立表;
     读失败按无缓存处理, 不影响上层重新取数。
     """
-    _ensure_db()
-    row = _read_one(
-        "SELECT payload FROM json_cache WHERE key=? AND fetched_at > ?",
-        (key, time.time() - ttl),
-    )
-    if row is None:
+    payload = _read_payload("json_cache", "key=?", (key,), ttl)
+    if payload is None:
         return None
     try:
-        return json.loads(row[0])
+        return json.loads(payload)
     except (TypeError, ValueError, json.JSONDecodeError):
         return None
 
@@ -1030,15 +1032,7 @@ def set_json_cached(key: str, value) -> None:
         payload = json.dumps(value, ensure_ascii=False, default=str)
     except (TypeError, ValueError):
         return
-    _execute_write(
-        """
-        INSERT INTO json_cache (key, payload, fetched_at)
-        VALUES (?, ?, ?)
-        ON CONFLICT(key) DO UPDATE SET
-            payload=excluded.payload, fetched_at=excluded.fetched_at
-        """,
-        (key, payload, time.time()),
-    )
+    _write_payload("json_cache", key, payload)
 
 
 def clear_json_cache(prefix: str = "") -> int:

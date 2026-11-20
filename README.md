@@ -514,7 +514,9 @@ tracker/
 ├── charting_payload.py lightweight-charts 页面 payload（K线/对比/比例线/加密货币）
 ├── ah_premium.py       AH 溢价率（A+H 股票对目录 / A/H+历史汇率对齐 / 溢价曲线与摘要, 基本面页 AH 子视图）
 ├── valuation.py        估值指标（PE/PB/股息率快照 + A股/港股/美股历史 PE/PB 曲线, 6h 内存+磁盘缓存; A/H 失败时东财实时兜底, 其它市场 EODHD 兜底）
-├── filings.py          最新财报链接（A股/北交所 巨潮资讯 / 港股 HKEXnews / 美股 SEC EDGAR / 澳股 ASX / 英股 Companies House / 日股 TDnet / 韩股 DART, 6h 内存+磁盘缓存）
+├── filings.py          最新财报链接门面（缓存 + 市场分发）
+├── filings_parse.py    Filing 数据模型 / 日期清洗 / 去重规则
+├── filings_markets.py  各市场抓取器（巨潮 / HKEXnews / SEC / ASX / Companies House / TDnet / DART）
 ├── analytics.py        组合视图与指标（纯函数）
 ├── watchlist.py        自选配置存储门面（读写委托 storage，仅 I/O 归一）
 ├── services/           **独立用例层**（用例 = 取数 providers/fx + 纯函数计算 + 组装视图）

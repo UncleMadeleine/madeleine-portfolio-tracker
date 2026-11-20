@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 import tracker.filings as filings
+import tracker.filings_markets as filings_markets
 
 
 @pytest.fixture(autouse=True)
@@ -193,7 +194,7 @@ def test_au_filings_tolerates_one_year_failure(monkeypatch):
             raise RuntimeError("current year timeout")
         return SimpleNamespace(text=_AU_HTML)
 
-    monkeypatch.setattr(filings, "_get", fake_get)
+    monkeypatch.setattr(filings_markets, "_get", fake_get)
     out = filings._au_filings("CBA", 6)
     assert out
 
@@ -202,7 +203,7 @@ def test_au_filings_raises_when_both_years_fail(monkeypatch):
     def fake_get(url, params=None):
         raise RuntimeError("asx down")
 
-    monkeypatch.setattr(filings, "_get", fake_get)
+    monkeypatch.setattr(filings_markets, "_get", fake_get)
     with pytest.raises(RuntimeError, match="asx down"):
         filings._au_filings("CBA", 6)
 
@@ -257,9 +258,9 @@ def test_uk_filings_parse_aa_accounts():
 
 
 def test_uk_company_number_prefers_exact_match(monkeypatch):
-    monkeypatch.setattr(filings, "_uk_company_name", lambda s: "BP p.l.c.")
+    monkeypatch.setattr(filings_markets, "_uk_company_name", lambda s: "BP p.l.c.")
     monkeypatch.setattr(
-        filings,
+        filings_markets,
         "_uk_search_companies",
         lambda q: [
             ("SC725848", "Aberdeen City Energy Limited"),
@@ -277,7 +278,7 @@ def test_uk_name_normalization_ignores_legal_suffixes():
 
 
 def test_uk_filings_raises_without_company_name(monkeypatch):
-    monkeypatch.setattr(filings, "_uk_company_name", lambda s: None)
+    monkeypatch.setattr(filings_markets, "_uk_company_name", lambda s: None)
     with pytest.raises(RuntimeError, match="无法获取公司名称"):
         filings._uk_filings("BP.L", 6)
 
@@ -414,7 +415,7 @@ def test_fetch_dispatch_and_cache(monkeypatch):
         calls.append((code, limit))
         return [fake]
 
-    monkeypatch.setattr(filings, "_cn_filings", fake_cn)
+    monkeypatch.setattr(filings_markets, "_cn_filings", fake_cn)
     first = filings.fetch_filings("601398.SS")
     second = filings.fetch_filings("601398.SS")
     assert first == second == [fake]
@@ -429,22 +430,22 @@ def test_fetch_dispatch_hk_and_us(monkeypatch):
     seen: list[str] = []
 
     monkeypatch.setattr(
-        filings, "_hk_filings", lambda code, limit: seen.append(code) or [fake]
+        filings_markets, "_hk_filings", lambda code, limit: seen.append(code) or [fake]
     )
     monkeypatch.setattr(
-        filings, "_us_filings", lambda symbol, limit: seen.append(symbol) or [fake]
+        filings_markets, "_us_filings", lambda symbol, limit: seen.append(symbol) or [fake]
     )
     monkeypatch.setattr(
-        filings, "_au_filings", lambda code, limit: seen.append(code) or [fake]
+        filings_markets, "_au_filings", lambda code, limit: seen.append(code) or [fake]
     )
     monkeypatch.setattr(
-        filings, "_uk_filings", lambda symbol, limit: seen.append(symbol) or [fake]
+        filings_markets, "_uk_filings", lambda symbol, limit: seen.append(symbol) or [fake]
     )
     monkeypatch.setattr(
-        filings, "_jp_filings", lambda code, limit: seen.append(code) or [fake]
+        filings_markets, "_jp_filings", lambda code, limit: seen.append(code) or [fake]
     )
     monkeypatch.setattr(
-        filings, "_kr_filings", lambda code, limit: seen.append(code) or [fake]
+        filings_markets, "_kr_filings", lambda code, limit: seen.append(code) or [fake]
     )
 
     assert filings.fetch_filings("0700.HK") == [fake]
@@ -512,7 +513,7 @@ def _fake_us(monkeypatch, calls, count=2):
             for i in range(min(count, limit))
         ]
 
-    monkeypatch.setattr(filings, "_us_filings", fake)
+    monkeypatch.setattr(filings_markets, "_us_filings", fake)
 
 
 def test_fetch_filings_disk_cache_survives_memory_clear(monkeypatch):

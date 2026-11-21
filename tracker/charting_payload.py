@@ -16,6 +16,7 @@ from .charting_core import (
     BOLL_MIDDLE_COLOR,
     BOLL_UPPER_COLOR,
     DEFAULT_MA,
+    OHLC_COLUMNS,
     KDJ_D_COLOR,
     KDJ_J_COLOR,
     KDJ_K_COLOR,
@@ -377,6 +378,36 @@ COMPARE_PALETTE = (
 )
 
 
+def _close_rows(df: pd.DataFrame) -> tuple[list[str], list[float]]:
+    """有效收盘价行 (日期字符串升序, 跳过 NaN/inf/非正数)."""
+    pairs = [
+        (t, float(v))
+        for t, v in zip(df["date"].dt.strftime("%Y-%m-%d"), df["close"])
+        if pd.notna(v) and math.isfinite(float(v)) and float(v) > 0
+    ]
+    pairs.sort()
+    return [p[0] for p in pairs], [p[1] for p in pairs]
+
+
+def _ohlc_rows(df: pd.DataFrame) -> list[tuple[str, float, float, float, float]]:
+    """有效 OHLC 行 (日期字符串升序, 四价均需为正的有限数)."""
+    rows = []
+    for t, o, h, lo, c in zip(
+        df["date"].dt.strftime("%Y-%m-%d"),
+        df["open"],
+        df["high"],
+        df["low"],
+        df["close"],
+    ):
+        vals = (o, h, lo, c)
+        if all(
+            pd.notna(v) and math.isfinite(float(v)) and float(v) > 0 for v in vals
+        ):
+            rows.append((t, float(o), float(h), float(lo), float(c)))
+    rows.sort()
+    return rows
+
+
 def build_ratio_series(
     frames: dict[str, pd.DataFrame],
     numerator: str,
@@ -408,16 +439,7 @@ def build_ratio_series(
     if num.empty or den.empty:
         raise ValueError("比例线代码无有效K线数据")
 
-    def _rows(df: pd.DataFrame) -> tuple[list[str], list[float]]:
-        pairs = [
-            (t, float(v))
-            for t, v in zip(df["date"].dt.strftime("%Y-%m-%d"), df["close"])
-            if pd.notna(v) and math.isfinite(float(v)) and float(v) > 0
-        ]
-        pairs.sort()
-        return [p[0] for p in pairs], [p[1] for p in pairs]
-
-    den_times, den_vals = _rows(den)
+    den_times, den_vals = _close_rows(den)
     fx_times: list[str] = []
     fx_vals: list[float] = []
     if fx_df is not None and not fx_df.empty:
@@ -427,7 +449,7 @@ def build_ratio_series(
         fx_clean = fx_clean.dropna(subset=["date", "close"])
         fx_clean = fx_clean[fx_clean["close"] > 0]
         if not fx_clean.empty:
-            fx_times, fx_vals = _rows(fx_clean)
+            fx_times, fx_vals = _close_rows(fx_clean)
 
     raw: list[tuple[str, float]] = []
     for t, v in zip(num["date"].dt.strftime("%Y-%m-%d"), num["close"]):
@@ -468,6 +490,94 @@ def build_ratio_series(
             {"time": t, "value": round(v, precision)} for t, v in raw
         ],
     }
+
+
+def build_ratio_ohlc(
+    frames: dict[str, pd.DataFrame],
+    numerator: str,
+    denominator: str,
+    *,
+    period: str = "daily",
+    fx_df: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """两标的比值的 OHLC K线 (分子 ÷ 分母), 可直接喂 kline_payload.
+
+    与 build_ratio_series 的区别: 这里返回完整 OHLC DataFrame, 让比值本身
+    画成蜡烛图 (Roadmap 的「K 线比值模式」), 而不是叠加折线。
+
+    - 日/周/月对齐与比例线一致: 分母缺该交易日时沿用「≤ 当日」的最近收盘
+    - 同日双方都有数据时: open/close 按对应价相除; high/low 用
+      分子高 ÷ 分母低、分子低 ÷ 分母高 作为比值当日的上下界
+    - fx_df 为 1 分母币种 → 分子币种的历史汇率日线 (date/close)
+    - 比值没有成交量语义, volume 统一为 0 (前端会自动省略成交量副图)
+    """
+    if numerator == denominator:
+        raise ValueError("比值的分子与分母不能是同一代码")
+    missing = [c for c in (numerator, denominator) if c not in frames]
+    if missing:
+        raise ValueError(f"比值K线代码不在数据中: {', '.join(missing)}")
+
+    def _prepared(sym: str) -> pd.DataFrame:
+        df = frames[sym]
+        return resample_ohlc(df, period) if period != "daily" else clean_ohlc(df)
+
+    num_rows = _ohlc_rows(_prepared(numerator))
+    den_rows = _ohlc_rows(_prepared(denominator))
+    if not num_rows or not den_rows:
+        raise ValueError("比值K线代码无有效K线数据")
+
+    den_times = [r[0] for r in den_rows]
+    fx_times: list[str] = []
+    fx_vals: list[float] = []
+    if fx_df is not None and not fx_df.empty:
+        fx_clean = fx_df.copy()
+        fx_clean["date"] = pd.to_datetime(fx_clean["date"], errors="coerce")
+        fx_clean["close"] = pd.to_numeric(fx_clean["close"], errors="coerce")
+        fx_clean = fx_clean.dropna(subset=["date", "close"])
+        fx_clean = fx_clean[fx_clean["close"] > 0]
+        if not fx_clean.empty:
+            fx_times, fx_vals = _close_rows(fx_clean)
+
+    rows = []
+    for t, o, h, lo, c in num_rows:
+        j = bisect_right(den_times, t) - 1
+        if j < 0:
+            continue
+        if den_times[j] == t:
+            _, d_open, d_high, d_low, d_close = den_rows[j]
+        else:
+            # 分母当日休市: 用最近收盘价缩放分子的全部四价, 蜡烛仍保留
+            # 分子自身的日内振幅, 与比例线的「≤ 当日」口径一致
+            _, _, _, _, d_close = den_rows[j]
+            d_open = d_high = d_low = d_close
+        rate = 1.0
+        if fx_times:
+            k = bisect_right(fx_times, t) - 1
+            if k < 0:
+                continue
+            rate = fx_vals[k]
+        if rate <= 0:
+            continue
+        vals = (
+            o / d_open / rate,
+            h / d_low / rate,
+            lo / d_high / rate,
+            c / d_close / rate,
+        )
+        if all(math.isfinite(v) and v > 0 for v in vals):
+            rows.append(
+                {
+                    "date": pd.Timestamp(t),
+                    "open": vals[0],
+                    "high": vals[1],
+                    "low": vals[2],
+                    "close": vals[3],
+                    "volume": 0.0,
+                }
+            )
+    if not rows:
+        raise ValueError("比值K线无可对齐的数据 (两标的日期区间无交集)")
+    return pd.DataFrame(rows, columns=list(OHLC_COLUMNS))
 
 
 def compare_payload(

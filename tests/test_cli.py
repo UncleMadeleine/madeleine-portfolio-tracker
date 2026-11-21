@@ -1489,6 +1489,7 @@ class TestParser:
             ["history", "AAPL"],
             ["kline", "AAPL"],
             ["kline", "AAPL", "--period", "weekly", "--ma", "10,30", "--refresh"],
+            ["kline", "AAPL", "--ratio", "MSFT", "--ratio-fx"],
             ["compare", "AAPL", "MSFT", "--metric", "mcap", "--refresh"],
             ["report", "-f", "md"],
             ["report", "-f", "json", "-w", "科技", "-o", "x.md"],
@@ -1574,3 +1575,83 @@ def test_cli_watchlist_add_nan_threshold_does_not_crash(tmp_path, capsys):
     e = json.loads(p.read_text(encoding="utf-8"))["watchlist"][0]
     assert e["symbol"] == "AAPL"
     assert "upper_1" not in e
+
+
+def _ratio_ohlc(symbol: str, base: float, offset: float = 0.0) -> pd.DataFrame:
+    dates = pd.date_range("2025-01-06", periods=5, freq="B")
+    return pd.DataFrame(
+        {
+            "date": dates,
+            "open": [base + i + offset - 0.5 for i in range(5)],
+            "high": [base + i + offset + 0.5 for i in range(5)],
+            "low": [base + i + offset - 1.0 for i in range(5)],
+            "close": [base + i + offset for i in range(5)],
+            "volume": 100.0,
+        }
+    )
+
+
+class TestKlineRatioCli:
+    """kline --ratio: 两标的比值画成蜡烛图 (JSON 供 Agent 读取)."""
+
+    def test_ratio_json_uses_ohlc_and_metadata(self, monkeypatch, capsys):
+        from tracker import prices
+
+        frames = {"AAA": _ratio_ohlc("AAA", 100.0), "BBB": _ratio_ohlc("BBB", 10.0)}
+        monkeypatch.setattr(prices, "get_ohlc", lambda s, **kw: frames[s].copy())
+        out = _run(capsys, "kline", "AAA", "--ratio", "BBB", "--json")
+        payload = json.loads(out)
+        assert payload["symbol"] == "AAA"
+        assert payload["ratio"] == {
+            "numerator": "AAA",
+            "denominator": "BBB",
+            "fxAdjusted": False,
+            "fxPair": None,
+            "fxMissing": False,
+        }
+        assert payload["bars"] == 5
+        row = payload["data"][0]
+        # 同日比值: open/close 按对应价相除
+        assert row["open"] == pytest.approx(99.5 / 9.5, abs=1e-9)
+        assert row["close"] == pytest.approx(100.0 / 10.0, abs=1e-9)
+
+    def test_ratio_fx_adjusts_cross_currency(
+        self, monkeypatch, capsys
+    ):
+        from tracker import fx, prices
+
+        frames = {
+            "AAPL": _ratio_ohlc("AAPL", 100.0),
+            "0700.HK": _ratio_ohlc("0700.HK", 10.0),
+        }
+        monkeypatch.setattr(prices, "get_ohlc", lambda s, **kw: frames[s].copy())
+        monkeypatch.setattr(
+            fx,
+            "get_fx_history",
+            lambda *a, **kw: pd.DataFrame(
+                {"date": [pd.Timestamp("2025-01-01")], "close": [2.0]}
+            ),
+        )
+        out = _run(
+            capsys,
+            "kline",
+            "AAPL",
+            "--ratio",
+            "0700.HK",
+            "--ratio-fx",
+            "--json",
+        )
+        payload = json.loads(out)
+        assert payload["ratio"]["fxAdjusted"] is True
+        assert payload["ratio"]["fxPair"] == "HKDUSD"
+        assert payload["data"][0]["close"] == pytest.approx(100.0 / (10.0 * 2.0))
+
+    def test_ratio_same_symbol_rejected(self, monkeypatch, capsys):
+        from tracker import prices
+
+        monkeypatch.setattr(
+            prices, "get_ohlc", lambda s, **kw: _ratio_ohlc(s, 100.0)
+        )
+        with pytest.raises(SystemExit) as exc:
+            _run(capsys, "kline", "AAPL", "--ratio", "AAPL", "--json")
+        assert exc.value.code == 2

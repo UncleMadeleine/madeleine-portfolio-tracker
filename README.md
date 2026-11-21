@@ -35,7 +35,7 @@ Madeleine Portfolio Tracker 是一款**本地优先**的投资组合追踪工具
 - **基本面分析** — 估值指标子视图：任意 A股/港股/美股的最新 PE(TTM)、PB、股息率、5 年平均股息率，最近财报官方原文链接（已接入 A股/北交所 巨潮资讯 / 港股 HKEXnews / 美股 SEC EDGAR / 澳股 ASX / 英股 Companies House / 日股 TDnet / 韩股 DART；德/加/新/巴等市场会明确提示未接入及原因），以及历史 PE/PB 曲线与自身历史分位（百度股市通）；AH 溢价子视图保留单只 A+H 股票的溢价率曲线：A 股收盘 ÷ (H 股收盘 × 历史汇率) − 1，支持任意 A+H 股票对 / 范围切换，0% 同价参考线 + 区间高低点/均值/分位摘要（独立页面 `/fundamentals`）；同一能力提供 `fundamentals` 子命令（快照 / 历史 PE·PB / 财报链接，全部 `--json`），估值与财报快照落盘 6h（进程重启不重复回源）；A股/港股 yfinance 失败时用东财实时行情兜底（现价/PB/市值 + 动态 PE），其它市场在配置了 EODHD 时用 EODHD 基本面兜底；行情缓存中的东财动态 PE 会作为独立字段 `PE(动态)` 展示，不与 PE(TTM) 混用
 - **数据健康观测** — provider 热路径记录每次真实回源的来源/成功失败/耗时（缓存命中不计）到 `health_events`；`tracker doctor` 与「数据健康」页聚合成功率、p50/p95、最近失败，并从持仓/自选视角列出**行情缺失/过期、持仓无 K线、汇率缺失**等「页面还能开但数字可能已经不准」的缺口；同时只读检查**基本面缓存覆盖**（估值快照 / 财报链接的新鲜、过期、未取，持仓缺口单列）；`doctor --probe` 可主动打一次真实行情/汇率；总体异常时退出码 1，可接告警脚本。事件保留 7 天 / 最多 2 万条，`cache clear` 不会误删排障线索
 - **线上契约测试** — `tests/test_provider_contract_live.py`（`@pytest.mark.network`，默认不跑）真实调用各域代表代码，断言价格为有限正数、币种规范、历史日期升序/收盘为正、汇率为正；离线侧另有源链归名与坏数据拒绝测试，数据源改字段时能第一时间红
-- **Streamlit 可视化页面** — 组合明细 / 资产配置 / 自选提醒 / K线查询（含多股走势对比）/ 指数K线 / 基本面分析 / 日历 / 钱包净值 / 数据健康 / 设置
+- **Streamlit 可视化页面** — 组合明细 / 资产配置 / 自选提醒 / K线查询（含比值K线、多股走势对比）/ 指数K线 / 基本面分析 / 日历 / 钱包净值 / 数据健康 / 设置
 - **统一 CLI** — 26 个子命令（快照、净值、钱包净值、报价、基本面、持仓、自选、监控报告、导出、汇率、历史、K线、日历、搜索、对比、指数K线、导入、长桥登录、EODHD 自检、WebDAV 同步、同步、钱包导入、缓存管理、缓存保温 `warm`、数据健康 `doctor`、初始化），全部支持机器可读输出（`--json`，`report`/`export` 为 `-f json`）；`warm` 可一次性预热或 `--interval` 常驻，不依赖 Streamlit 进程
 - **链上钱包导入** — EVM 五链 + TRON + Solana 共七条链地址余额只读查询，一键写入持仓
 - **A股券商持仓导入** — 解析券商客户端导出的 CSV/Excel 持仓文件
@@ -142,6 +142,7 @@ python -m tracker.cli history AAPL --months 12
 python -m tracker.cli kline AAPL --months 12
 python -m tracker.cli kline 600519.SS --ma 5,10,20,60
 python -m tracker.cli kline 0700.HK --period weekly --open
+python -m tracker.cli kline 0700.HK --ratio NPN.JO --ratio-fx  # 比值K线: 腾讯 ÷ 南非报业
 
 # 宏观/风险指数K线（独立于股票 K 线）
 python -m tracker.cli index-kline IX.DXY --months 12      # 美元指数
@@ -310,6 +311,7 @@ K线页支持两种输入方式：
 页面端基于 TradingView 开源的 **lightweight-charts** 渲染（已 vendored，无新增依赖），券商 App 通用交互：
 
 - **蜡烛图 + 成交量副图 + MA 均线**（默认 MA5/20/60，可自定义），默认红涨绿跌（设置页可切国际配色）
+- **比值 K 线** — 打开「比值K线」开关后填分母代码，把「当前代码 ÷ 分母代码」的比值画成 OHLC 蜡烛图（如腾讯 ÷ 南非报业）；比值无成交量语义，自动隐藏成交量副图；跨币种可开「汇率调整」按历史汇率统一口径
 - **技术指标** — MACD / RSI / KDJ / 布林带，多选叠加，周期参数可调
 - **拖动 = 平移**（带惯性滚动），**滚轮/捏合 = 缩放时间轴**，触控板双指横滑平移、双指纵向/捏合缩放（Chrome/Edge/Firefox 的 `ctrl+wheel` 与 Safari 的 gesture 事件均已适配，捏合不会触发浏览器整页缩放）
 - **右键菜单** — 图表上右键可重置缩放、复制代码、复制数据 (CSV)、导出 PNG；表格上右键可复制单元格/整行/含表头，并可直接「查看 K 线」；持仓/自选表还提供「从持仓/自选删除」（复用确认弹窗，不绕过二次确认）
@@ -327,7 +329,14 @@ CLI 导出的独立 HTML 用 **plotly**：
 python -m tracker.cli kline AAPL --months 12            # 生成 var/kline_AAPL.html
 python -m tracker.cli kline 600519.SS --ma 5,10,20,60   # 自定义均线
 python -m tracker.cli kline 0700.HK --period weekly --open  # 周K + 自动打开浏览器
+python -m tracker.cli kline 0700.HK --ratio NPN.JO      # 比值K线: 腾讯 ÷ 南非报业
+python -m tracker.cli kline 0700.HK --ratio NPN.JO --ratio-fx  # 跨币种按历史汇率调整
 ```
+
+比值 K 线的 `--json` 输出仍是标准 OHLC 结构（`data[].open/high/low/close`），
+额外带 `ratio` 元信息（`numerator` / `denominator` / `fxAdjusted` / `fxPair` / `fxMissing`）；
+分子为位置参数代码，分母为 `--ratio` 的值。两标的原生周期不同时自动取较粗的一档
+（如一方只有周K，则整张比值图按周K展示）。
 
 ---
 
@@ -356,7 +365,8 @@ python -m tracker.cli kline 0700.HK --period weekly --open  # 周K + 自动打�
 > 美股/港股等按「历史股本 × 收盘价」计算；股本数据会按拆股比例换算到与复权收盘价
 > 相同的口径，避免拆股日出现 N 倍的假跳变。
 
-> 比值线（两标的收盘价相除画成折线）已支持，见上；把比值画成 K 线（OHLC）仍在 Roadmap 中。
+> 比值线（两标的收盘价相除画成折线）见上；若要把比值本身画成 K 线（OHLC 蜡烛图），
+> 用 K 线页的「比值K线」开关或 CLI `kline <分子> --ratio <分母>`（`--ratio-fx` 汇率调整）。
 
 ---
 
@@ -479,7 +489,7 @@ tracker/
 │   ├── export.py         组合快照导出（csv/json/md）
 │   ├── fx.py             汇率
 │   ├── history.py        历史价格
-│   ├── kline.py          K线 HTML + 摘要（--json 输出数据）
+│   ├── kline.py          K线 / 比值K线 HTML + 摘要（--json 输出数据）
 │   ├── compare.py        多股走势/市值对比（归一化折线, --raw 原价, --ratio 比例线, --metric mcap 市值, --json 出序列）
 │   ├── search.py         代码/名称搜索 → 规范代码
 │   ├── index_kline.py    指数K线 HTML + 摘要（IX.<KEY>, --json / --list）
@@ -517,7 +527,7 @@ tracker/
 ├── charting.py         K线渲染门面（再导出，保持既有 API）
 ├── charting_core.py    OHLC 清洗 / 均线 / 技术指标 / 重采样 / 摘要（无 plotly）
 ├── charting_plotly.py  plotly 蜡烛图与 CLI HTML 导出（plotly 惰性导入）
-├── charting_payload.py lightweight-charts 页面 payload（K线/对比/比例线/加密货币）
+├── charting_payload.py lightweight-charts 页面 payload（K线/对比/比例线/比值K线/加密货币）
 ├── ah_premium.py       AH 溢价率（A+H 股票对目录 / A/H+历史汇率对齐 / 溢价曲线与摘要, 基本面页 AH 子视图）
 ├── valuation.py        估值指标（PE/PB/股息率快照 + A股/港股/美股历史 PE/PB 曲线, 6h 内存+磁盘缓存; A/H 失败时东财实时兜底, 其它市场 EODHD 兜底）
 ├── filings.py          最新财报链接门面（缓存 + 市场分发）
@@ -914,7 +924,7 @@ CLI 不再依赖前端进程做缓存保温：`python -m tracker.cli warm` 可�
 - [x] A股券商持仓文件导入（CSV/Excel）
 - [x] 链上钱包余额导入（EVM 五链 + TRON + Solana）
 - [x] 多股 K 线对比（同坐标系 + 归一化）
-- [ ] **K 线比值模式** — 两标的收盘价比值画成 K 线（如腾讯 / 南非报业）
+- [x] **K 线比值模式** — 两标的比值画成 OHLC K 线（如腾讯 / 南非报业；CLI `kline A --ratio B` + 页面「比值K线」开关，跨币种 `--ratio-fx`）
 - [ ] Hyperliquid / A股券商实时**持仓**对接（当前 HL 仅为行情源）
 - [ ] 交易流水记录与分批成本（FIFO）
 - [ ] 分红/拆分事件跟踪
@@ -975,7 +985,7 @@ A **local-first** portfolio tracker supporting **A-shares / B-shares / Beijing S
 3. Look up K-line & fundamentals by symbol **or name** (fuzzy search)
 4. Dual frontends — Streamlit for humans, unified JSON CLI for agents (hermes / openclaw)
 5. Read-only broker integration — IBKR Gateway, LongPort (OAuth login), A-share broker file import, Hyperliquid quotes
-6. K-line comparison (normalized overlay and optional ratio line, done) and **ratio-as-candles** (planned)
+6. K-line comparison (normalized overlay and optional ratio line) and **ratio-as-candles** (`kline A --ratio B`, page toggle, optional history-FX adjustment)
 
 ### Features
 
@@ -985,7 +995,7 @@ A **local-first** portfolio tracker supporting **A-shares / B-shares / Beijing S
 - **LongPort integration** — optional quotes/history/positions source (OAuth login), silent fallback to default sources
 - **EODHD BYOK (optional paid source)** — bring your own token; EOD history primary by default (split+dividend adjusted), quotes fallback-only by default (`quotes=primary` batches 15 symbols per `s=` request); PB/market-cap can use EODHD fundamentals (`fundamentals=fallback` fills only missing fields); LSE pence handling, per-exchange ticker mapping, zero impact when unconfigured
 - **Optional WebDAV sync** — keep `portfolio.json` / `watchlist.json` on a WebDAV directory (Nextcloud, Synology, etc.) and share them across devices; ETag-conditional pull/push, local cache fallback when offline, and conflict archives instead of silent overwrites. Disabled by default (`webdav.json`), with `tracker webdav status|pull|push`
-- **K-line charts** — daily/weekly/monthly, MA overlays, volume, MACD/RSI/KDJ/Bollinger; slide mode loads full listing history by default
+- **K-line charts** — daily/weekly/monthly, MA overlays, volume, MACD/RSI/KDJ/Bollinger; slide mode loads full listing history by default; **ratio K-line** (symbol ÷ denominator as OHLC candles, optional history-FX adjustment)
 - **Macro/risk index K-lines** — dedicated `IX.<KEY>` symbol space (USD index, VIX, CSI 300, commodity main-continuous futures — gold, silver, eggs, soybean meal, soybeans, hogs, lithium carbonate — COMEX gold/silver and WTI/Brent crude, derived gold/silver `IX.GOLDSILVER` and gold/oil `IX.GOLDOIL` indices (two-leg ratio, point-only), uranium spot/long-term (Cameco monthly), cement indices, ...), separate page & `index-kline` subcommand, dedicated provider source chain; the ratio indices can be queried directly or overlaid on another index on a separate left price axis
 - **Multi-symbol comparison** — same-coordinate overlay normalized to 100, optional ratio line with history-FX adjustment; plus a crypto-only sub-tab on the K-line page (independent per-coin candle panes, raw prices, shared time axis)
 - **Fundamentals** — valuation sub-view for any A-share/HK/US stock: latest PE(TTM), PB, dividend yield and 5-year average yield, plus historical PE/PB curves and percentile (Baidu via akshare); the AH-premium sub-view retains the original A+H curve: A-share close ÷ (H-share close × historical HKD/CNY FX) − 1, selectable pair/range, 0% parity reference line, range high/low/mean/percentile summary (dedicated `/fundamentals` page)

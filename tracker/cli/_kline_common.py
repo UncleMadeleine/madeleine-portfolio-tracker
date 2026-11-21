@@ -36,21 +36,32 @@ def output_kline(
     warn_prefix: str,
     extra_json: dict | None = None,
     default_dir,
+    resolved_period: str | None = None,
+    file_stem: str | None = None,
+    json_round: int = 6,
 ) -> None:
     """统一处理周期降级、摘要、JSON、HTML 写出与浏览器打开.
 
     调用方只负责解析代码并取到 df; 两个 CLI 的输出格式与错误口径保持一致。
+
+    resolved_period: 调用方已确定生效周期 (如比值K线需取两标的中较粗的
+        原生粒度), 传入后不再按 df 推断, 也不再重复重采样。
+    file_stem: 默认文件名中的代码部分 (默认 p.yahoo, 点号转下划线);
+        比值K线传入「分子_分母」避免覆盖单只 K 线的 HTML。
     """
-    period = charting.resolve_period(df, args.period)
-    if period != args.period:
-        print(
-            f"ℹ {warn_prefix}: 数据源为{charting.PERIOD_LABELS[period]}, "
-            f"{charting.PERIOD_LABELS[args.period]}不可用 — 已按"
-            f"{charting.PERIOD_LABELS[period]}展示",
-            file=sys.stderr,
-        )
-    if period != "daily":
-        df = charting.resample_ohlc(df, period)
+    if resolved_period is not None:
+        period = resolved_period
+    else:
+        period = charting.resolve_period(df, args.period)
+        if period != args.period:
+            print(
+                f"ℹ {warn_prefix}: 数据源为{charting.PERIOD_LABELS[period]}, "
+                f"{charting.PERIOD_LABELS[args.period]}不可用 — 已按"
+                f"{charting.PERIOD_LABELS[period]}展示",
+                file=sys.stderr,
+            )
+        if period != "daily":
+            df = charting.resample_ohlc(df, period)
     if df.empty:
         _finish_with_error(f"{p.yahoo}: 无有效K线数据")
 
@@ -69,7 +80,7 @@ def output_kline(
             "summary": summary,
             # _records 把 NaN/NaT 转 None: json.dumps 默认会输出裸 NaN,
             # 不是合法 JSON (history 子命令同款处理)
-            "data": _records(recs.round(6)),
+            "data": _records(recs.round(json_round)),
         }
         _print_json(payload)
         return
@@ -118,10 +129,11 @@ def output_kline(
         show_volume=show_volume,
         period=period,
     )
+    stem = file_stem or p.yahoo.replace(".", "_")
     out = (
         Path(args.output)
         if args.output
-        else default_dir / f"{output_prefix}_{p.yahoo.replace('.', '_')}.html"
+        else default_dir / f"{output_prefix}_{stem}.html"
     )
     try:
         out.parent.mkdir(parents=True, exist_ok=True)

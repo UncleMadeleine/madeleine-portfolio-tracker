@@ -136,6 +136,42 @@ def test_slide_mode_symbol_change_refetches(kline_app):
     assert kline_app._calls["n"] == 2
 
 
+def test_ratio_kline_renders_after_denominator(kline_app, monkeypatch):
+    """比值K线: 开关 + 分母代码后, 用「分子 ÷ 分母」的 OHLC 渲染蜡烛图."""
+    seen: dict = {}
+
+    def _capture(**kw):
+        seen.clear()
+        seen.update(kw)
+        return {"stub": True}
+
+    monkeypatch.setattr(kline_page, "_KLINE_CHART", _capture)
+    kline_app.text_input[1].set_value("AAPL").run()
+    kline_app.toggle(key="kline_ratio_on").set_value(True).run()
+    assert len(kline_app.text_input) == 3  # 搜索框 / 分子代码 / 分母代码
+    kline_app.text_input[2].set_value("MSFT").run()
+
+    assert len(kline_app.metric) == 4
+    assert kline_app._calls["n"] == 2  # 分子 + 分母各取一次
+    data = seen["data"]
+    assert data["title"].startswith("AAPL / MSFT")
+    assert data["copyText"] == "AAPL / MSFT"
+    # 比值无成交量语义: payload 不带成交量柱
+    assert data["volume"] == []
+    assert any("比值 = AAPL ÷ MSFT" in c.value for c in kline_app.caption)
+
+
+def test_ratio_kline_invalid_denominator_falls_back(kline_app):
+    """分母非法时只提示, 不阻塞单只 K 线渲染, 也不发起多余取数."""
+    kline_app.text_input[1].set_value("AAPL").run()
+    kline_app.toggle(key="kline_ratio_on").set_value(True).run()
+    kline_app.text_input[2].set_value("NOT A SYMBOL").run()
+
+    assert len(kline_app.metric) == 4
+    assert kline_app._calls["n"] == 1
+    assert any("无法识别" in w.value for w in kline_app.warning)
+
+
 def test_slide_mode_symbol_change_uses_disk_cache(monkeypatch):
     """滑动模式换代码走磁盘/内存缓存 (get_ohlc refresh=False), 不每次全量重拉.
 

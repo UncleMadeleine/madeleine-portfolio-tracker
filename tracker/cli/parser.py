@@ -502,6 +502,8 @@ def _add_kline_parser(sub: argparse.ArgumentParser) -> None:
             "  tracker kline 600519.SS --period weekly         # 周K\n"
             "  tracker kline AAPL --ma 10,30 --refresh          # 自定义均线 + 强制刷新\n"
             "  tracker kline AAPL --no-volume --open            # 无成交量 + 浏览器打开\n"
+            "  tracker kline 0700.HK --ratio NPN.JO             # 比值K线: 腾讯 ÷ 南非报业\n"
+            "  tracker kline 0700.HK --ratio NPN.JO --ratio-fx  # 跨币种按历史汇率调整\n"
         ),
     )
     p_k.add_argument(
@@ -521,6 +523,18 @@ def _add_kline_parser(sub: argparse.ArgumentParser) -> None:
         "--ma", default="5,20,60", help="均线周期, 逗号分隔 (如 5,10,20,60)"
     )
     p_k.add_argument("--no-volume", action="store_true", help="隐藏成交量副图")
+    p_k.add_argument(
+        "--ratio",
+        metavar="DENOMINATOR",
+        default=None,
+        help="比值K线: 当前代码为分子、该代码为分母 (如 AAPL --ratio MSFT), "
+        "把两者收盘/开高低比值画成蜡烛图",
+    )
+    p_k.add_argument(
+        "--ratio-fx",
+        action="store_true",
+        help="比值K线跨币种时按历史汇率统一口径 (默认直接看原币比值)",
+    )
     _add_refresh_arg(p_k, "忽略缓存强制刷新")
     _add_quote_source_flags(p_k)
     _add_crypto_source_arg(p_k)

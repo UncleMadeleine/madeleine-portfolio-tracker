@@ -844,6 +844,79 @@ class TestRatioSeries:
         assert p["axis"] == sorted(set(p["axis"]))
 
 
+class TestRatioOhlc:
+    """比值K线 (Roadmap): 两标的 OHLC 相除, 输出可直接绘图的蜡烛数据."""
+
+    def _frames(self):
+        dates = pd.date_range("2025-01-06", periods=5, freq="B")
+        # 分母缺第 3 个交易日: 当日用最近收盘价缩放分子的四价
+        den_dates = [d for d in dates if d != dates[2]]
+        return (
+            {
+                "AAA": _ratio_frame(dates, 100.0),
+                "BBB": _ratio_frame(den_dates, 10.0),
+            },
+            dates,
+        )
+
+    def test_ratio_ohlc_columns_and_alignment(self):
+        frames, dates = self._frames()
+        df = charting.build_ratio_ohlc(frames, "AAA", "BBB")
+        assert list(df.columns) == list(charting.OHLC_COLUMNS)
+        assert len(df) == len(dates)
+        assert list(df["date"]) == list(dates)
+        # 比值无成交量语义: volume 统一为 0
+        assert (df["volume"] == 0).all()
+        # 分母休市日: 四价都按最近收盘 11 缩放分子 OHLC
+        row = df.iloc[2]
+        assert row["open"] == pytest.approx(101.5 / 11)
+        assert row["high"] == pytest.approx(102.5 / 11)
+        assert row["low"] == pytest.approx(101.0 / 11)
+        assert row["close"] == pytest.approx(102.0 / 11)
+
+    def test_ratio_ohlc_bounds_and_same_day_components(self):
+        frames, _ = self._frames()
+        df = charting.build_ratio_ohlc(frames, "AAA", "BBB")
+        # 同日: open/close 按对应价, high/low 用分子高÷分母低 / 分子低÷分母高
+        row = df.iloc[0]
+        assert row["open"] == pytest.approx(99.5 / 9.5)
+        assert row["close"] == pytest.approx(100.0 / 10.0)
+        assert row["high"] == pytest.approx(100.5 / 9.0)
+        assert row["low"] == pytest.approx(99.0 / 10.5)
+        # 任意一行都必须满足 high ≥ max(open, close), low ≤ min(open, close)
+        assert (df["high"] >= df[["open", "close"]].max(axis=1) - 1e-12).all()
+        assert (df["low"] <= df[["open", "close"]].min(axis=1) + 1e-12).all()
+
+    def test_ratio_ohlc_fx_adjustment(self):
+        frames, dates = self._frames()
+        fx = pd.DataFrame(
+            {"date": [dates[0] - pd.Timedelta(days=1)], "close": [0.5]}
+        )
+        base = charting.build_ratio_ohlc(frames, "AAA", "BBB")
+        adj = charting.build_ratio_ohlc(frames, "AAA", "BBB", fx_df=fx)
+        for col in ("open", "high", "low", "close"):
+            assert adj[col].iloc[0] == pytest.approx(base[col].iloc[0] * 2)
+
+    def test_ratio_ohlc_period_resample(self):
+        dates = pd.date_range("2025-01-06", periods=15, freq="B")
+        frames = {
+            "AAA": _ratio_frame(dates, 100.0),
+            "BBB": _ratio_frame(dates, 10.0),
+        }
+        daily = charting.build_ratio_ohlc(frames, "AAA", "BBB")
+        weekly = charting.build_ratio_ohlc(frames, "AAA", "BBB", period="weekly")
+        assert 1 < len(weekly) < len(daily)
+        # 周K不改变比值的方向: 最后一根收盘仍是每日收盘的比值
+        assert weekly["close"].iloc[-1] == pytest.approx(daily["close"].iloc[-1])
+
+    def test_ratio_ohlc_rejects_same_or_missing_code(self):
+        frames, _ = self._frames()
+        with pytest.raises(ValueError):
+            charting.build_ratio_ohlc(frames, "AAA", "AAA")
+        with pytest.raises(ValueError):
+            charting.build_ratio_ohlc(frames, "AAA", "CCC")
+
+
 def _wilder_rsi(close: pd.Series, period: int = 14) -> pd.Series:
     d = close.diff()
     g = d.clip(lower=0)

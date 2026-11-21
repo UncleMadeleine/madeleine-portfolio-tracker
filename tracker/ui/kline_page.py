@@ -93,11 +93,13 @@ def render_kline_view(
     indicators: dict | None = None,
     query_id: str | None = None,
     overlay: dict | None = None,
+    note: str | None = None,
 ) -> dict | None:
     """K线图 + 摘要指标 (供 K线页面与 CLI 内嵌使用, 纯渲染无取数).
 
     overlay: 可选叠加曲线 (指数页的金银比/金油比), 由 charting.kline_payload
     画在独立左侧价轴, 不改变蜡烛/均线价格轴。
+    note: 追加到图表下方说明的补充信息 (如比值K线的分子/分母与汇率口径)。
     """
     # 数据驱动兜底: 请求周期细于数据原生粒度 (周K源请求日K等) 时降级到原生粒度,
     # 防止细粒度周期把粗粒度数据伪装成日K展示 (标题/payload 用生效周期标注)
@@ -154,8 +156,14 @@ def render_kline_view(
     ma_txt = "  ".join(
         f"MA{n[2:]} {v:,.{prec}f}" for n, v in s["ma"].items()
     )
-    if ma_txt:
-        st.caption(f"均线: {ma_txt} · 数据源与行情一致, 日K缓存 30 分钟")
+    if ma_txt or note:
+        parts = []
+        if ma_txt:
+            parts.append(f"均线: {ma_txt}")
+        parts.append("数据源与行情一致, 日K缓存 30 分钟")
+        if note:
+            parts.append(note)
+        st.caption(" · ".join(parts))
     return result
 
 
@@ -171,6 +179,35 @@ def render_compare_chart(data: dict, *, height: int = 560) -> None:
 def render_crypto_compare_chart(data: dict, *, height: int = 560) -> None:
     """加密货币K线对比图: 复用 K线组件 (每币一个窗格蜡烛图), data 由 crypto_compare_payload 生成."""
     _KLINE_CHART(key="crypto_compare_chart", data=data, height=height)
+
+
+def _ratio_fx_frames(
+    frames: dict[str, pd.DataFrame],
+    ratio_num: str,
+    ratio_den: str,
+    refresh: bool = False,
+) -> tuple[pd.DataFrame | None, str, bool]:
+    """比例/比值所需的历史汇率 (1 分母币种 → 分子币种), 返回 (df, pair, missing)."""
+    cur_num = parse(ratio_num).currency
+    cur_den = parse(ratio_den).currency
+    fx_pair = f"{cur_den}{cur_num}"
+    # 两个 frame 的 date 可能一个 tz-naive 一个 tz-aware (磁盘 OHLC 缓存
+    # 往返回填的是字符串→naive, 个别源可能给 aware): 直接 min() 会抛
+    # TypeError 把整页打死。先统一剥掉时区再比。
+    d_num = _naive_dates(frames[ratio_num]["date"])
+    d_den = _naive_dates(frames[ratio_den]["date"])
+    start_ts = min(d_num.min(), d_den.min()) - pd.Timedelta(days=10)
+    # 仅在强制刷新时追加 refresh: 兼容既有 monkeypatch/第三方签名的
+    # get_fx_history(src, dst, start, end) 调用形态。
+    fx_kwargs = {"refresh": True} if refresh else {}
+    fx_df = fx.get_fx_history(
+        cur_den,
+        cur_num,
+        start_ts.strftime("%Y-%m-%d"),
+        pd.Timestamp.today().strftime("%Y-%m-%d"),
+        **fx_kwargs,
+    )
+    return fx_df, fx_pair, fx_df is None
 
 
 def _build_ratio_payload(
@@ -191,26 +228,9 @@ def _build_ratio_payload(
     fx_pair = None
     fx_missing = False
     if fx_adjust:
-        cur_num = parse(ratio_num).currency
-        cur_den = parse(ratio_den).currency
-        fx_pair = f"{cur_den}{cur_num}"
-        # 两个 frame 的 date 可能一个 tz-naive 一个 tz-aware (磁盘 OHLC 缓存
-        # 往返回填的是字符串→naive, 个别源可能给 aware): 直接 min() 会抛
-        # TypeError 把整页打死。先统一剥掉时区再比。
-        d_num = _naive_dates(frames[ratio_num]["date"])
-        d_den = _naive_dates(frames[ratio_den]["date"])
-        start_ts = min(d_num.min(), d_den.min()) - pd.Timedelta(days=10)
-        # 仅在强制刷新时追加 refresh: 兼容既有 monkeypatch/第三方签名的
-        # get_fx_history(src, dst, start, end) 调用形态。
-        fx_kwargs = {"refresh": True} if refresh else {}
-        fx_df = fx.get_fx_history(
-            cur_den,
-            cur_num,
-            start_ts.strftime("%Y-%m-%d"),
-            pd.Timestamp.today().strftime("%Y-%m-%d"),
-            **fx_kwargs,
+        fx_df, fx_pair, fx_missing = _ratio_fx_frames(
+            frames, ratio_num, ratio_den, refresh=refresh
         )
-        fx_missing = fx_df is None
     try:
         return charting.build_ratio_series(
             frames,
@@ -224,6 +244,67 @@ def _build_ratio_payload(
     except ValueError as e:
         st.warning(f"比例线: {e}")
         return None
+
+
+def _build_ratio_kline(
+    frames: dict[str, pd.DataFrame],
+    numerator: str,
+    denominator: str,
+    *,
+    period: str,
+    fx_adjust: bool,
+    refresh: bool = False,
+) -> tuple[pd.DataFrame, str, dict] | None:
+    """比值K线 (分子 ÷ 分母) 的 OHLC, 返回 (df, 生效周期, 元信息).
+
+    K 线页面的「比值K线」开关: 把两条价格序列相除后画成蜡烛图。
+    两标的原生粒度不同时取较粗的一档, 与单只 K 线的周期降级口径一致。
+    """
+    if numerator == denominator:
+        st.warning("比值K线的分子与分母相同, 已忽略。")
+        return None
+    if numerator not in frames or denominator not in frames:
+        st.warning("比值K线代码无有效K线数据, 已忽略。")
+        return None
+
+    fx_df = None
+    fx_pair = None
+    fx_missing = False
+    fx_adjusted = False
+    if fx_adjust:
+        cur_num = parse(numerator).currency
+        cur_den = parse(denominator).currency
+        if cur_num and cur_den and cur_num != cur_den:
+            fx_df, fx_pair, fx_missing = _ratio_fx_frames(
+                frames, numerator, denominator, refresh=refresh
+            )
+            fx_adjusted = fx_df is not None
+            if fx_missing:
+                st.warning(f"{fx_pair}: 汇率历史取数失败, 比值未做汇率调整。")
+        elif cur_num and cur_den and cur_num == cur_den:
+            fx_pair = f"{cur_den}{cur_num}"
+
+    effective = max(
+        charting.resolve_period(frames[numerator], period),
+        charting.resolve_period(frames[denominator], period),
+        key=charting.PERIOD_ORDER.index,
+    )
+    try:
+        df = charting.build_ratio_ohlc(
+            frames,
+            numerator,
+            denominator,
+            period=effective,
+            fx_df=fx_df,
+        )
+    except ValueError as e:
+        st.warning(f"比值K线: {e}")
+        return None
+    return df, effective, {
+        "fxAdjusted": fx_adjusted,
+        "fxPair": fx_pair,
+        "fxMissing": fx_missing,
+    }
 
 
 def _price_compare_payload(
@@ -667,6 +748,8 @@ def _render_slide_mode(
     use_longport: bool = False,
     crypto_source: str = "auto",
     force: bool = False,
+    ratio_den: str | None = None,
+    ratio_fx: bool = False,
 ) -> None:
     """滑动模式: 一次拉取上市以来全量历史, 图表内无限拖动 (纯前端, 不再取数).
 
@@ -729,6 +812,50 @@ def _render_slide_mode(
         kcur = parse(yahoo).currency
     except ValueError:
         kcur = None
+
+    ratio_view = None
+    if ratio_den:
+        try:
+            den_df = cached_kline_all(
+                ratio_den,
+                prefer_akshare,
+                use_ibkr,
+                use_longport,
+                crypto_source,
+                refresh=src_changed or force,
+                cache_bust=_bust_token(ratio_den),
+            )
+        except Exception as e:  # noqa: BLE001 - 分母失败时回退单只 K 线
+            st.warning(f"{ratio_den}: {e}")
+            den_df = None
+        if isinstance(den_df, pd.DataFrame) and not den_df.empty:
+            ratio_view = _build_ratio_kline(
+                {yahoo: df_all, ratio_den: den_df},
+                yahoo,
+                ratio_den,
+                period=kperiod,
+                fx_adjust=ratio_fx,
+                refresh=force,
+            )
+
+    if ratio_view is not None:
+        rdf, rperiod, meta = ratio_view
+        note = f"比值 = {yahoo} ÷ {ratio_den}"
+        if meta.get("fxAdjusted"):
+            note += f" (已按 {meta.get('fxPair')} 历史汇率调整)"
+        render_kline_view(
+            rdf,
+            f"{yahoo} / {ratio_den}",
+            period=rperiod,
+            mas=kmas,
+            show_volume=False,
+            green_up=kgreen,
+            currency=None,
+            indicators=indicators or None,
+            query_id=f"ratio:{yahoo}/{ratio_den}",
+            note=note,
+        )
+        return
 
     render_kline_view(
         df_all,
@@ -826,7 +953,7 @@ def render_kline_controls(
     if st.session_state.pop("_kline_recent_rerun", False):
         submitted = True
 
-    opt1, opt2 = st.columns([1, 1])
+    opt1, opt2, opt3 = st.columns([1.2, 1, 1])
     kmas = opt1.multiselect(
         "均线",
         [5, 10, 20, 30, 60, 120, 250],
@@ -834,6 +961,30 @@ def render_kline_controls(
         key="kline_ma",
     )
     kvol = opt2.toggle("成交量", value=True, key="kline_vol")
+    kratio_on = opt3.toggle(
+        "比值K线",
+        value=False,
+        key="kline_ratio_on",
+        help="把「当前代码 ÷ 分母代码」的比值画成蜡烛图 (OHLC), "
+        "适合看腾讯/南非报业这类控股关系; 比值无成交量, 自动隐藏成交量副图",
+    )
+    kratio_den = ""
+    kratio_fx = False
+    if kratio_on:
+        rc1, rc2 = st.columns([2.4, 1], vertical_alignment="center")
+        kratio_den = rc1.text_input(
+            "分母代码",
+            value="",
+            key="kline_ratio_den",
+            placeholder="如 NPN.JO · MSFT · 601155.SS",
+            help="分子为上方「代码」输入框; 分母同样按规范代码直查",
+        )
+        kratio_fx = rc2.checkbox(
+            "汇率调整",
+            value=False,
+            key="kline_ratio_fx",
+            help="两标的币种不同时, 按历史汇率统一口径, 比值才不受汇率波动影响",
+        )
     kgreen = settings.green_up()  # 涨跌配色全局统一, 在「设置」页切换
 
     # 技术指标选择 (多选 + 可调参数)
@@ -916,6 +1067,27 @@ def render_kline_controls(
     if yahoo is None:
         return
 
+    # 比值K线: 分母必须也是规范代码; 输入不完整/非法时退回普通 K 线并给出提示,
+    # 不阻塞主查询 (用户可能只是刚打开开关还没填分母)。
+    ratio_den_code: str | None = None
+    if kratio_on:
+        raw_den = (kratio_den or "").strip().upper()
+        if not raw_den:
+            st.info("比值K线: 输入分母代码后才会计算比值 (当前按普通 K 线显示)。")
+        elif not is_valid_symbol(raw_den) or not all(
+            ch.isalnum() or ch in ".-_" for ch in raw_den
+        ):
+            st.warning(
+                f"分母代码无法识别: {raw_den} (当前按普通 K 线显示)"
+            )
+        else:
+            ratio_den_code = normalize_or_none(raw_den)
+            if ratio_den_code == yahoo:
+                st.warning(
+                    "比值K线的分子与分母相同, 已忽略 (当前按普通 K 线显示)。"
+                )
+                ratio_den_code = None
+
     # 已有取数结果 (改周期/均线/指标等图表参数) 时两种模式都直接重渲染,
     # 不再要求提交; 无结果且未提交 → 提示, 不取数
     submitted = submitted or st.session_state.get("kline_queried") is True
@@ -937,6 +1109,8 @@ def render_kline_controls(
             use_longport,
             crypto_source,
             force=force_refresh,
+            ratio_den=ratio_den_code,
+            ratio_fx=kratio_fx,
         )
         return
     # ---- 范围模式 (旧流程兜底) ----
@@ -994,6 +1168,52 @@ def render_kline_controls(
         kcur = parse(yahoo).currency
     except ValueError:
         kcur = None
+
+    ratio_view = None
+    if ratio_den_code:
+        try:
+            den_df = cached_kline(
+                ratio_den_code,
+                kdepth,
+                prefer_akshare,
+                use_ibkr,
+                use_longport,
+                crypto_source,
+                refresh=src_changed or force_refresh,
+                cache_bust=_bust_token(ratio_den_code),
+            )
+        except Exception as e:  # noqa: BLE001 - 分母失败时回退单只 K 线
+            st.warning(f"{ratio_den_code}: {e}")
+            den_df = None
+        if isinstance(den_df, pd.DataFrame) and not den_df.empty:
+            ratio_view = _build_ratio_kline(
+                {yahoo: kdf, ratio_den_code: den_df},
+                yahoo,
+                ratio_den_code,
+                period=kperiod,
+                fx_adjust=kratio_fx,
+                refresh=force_refresh,
+            )
+
+    if ratio_view is not None:
+        rdf, rperiod, meta = ratio_view
+        note = f"比值 = {yahoo} ÷ {ratio_den_code}"
+        if meta.get("fxAdjusted"):
+            note += f" (已按 {meta.get('fxPair')} 历史汇率调整)"
+        render_kline_view(
+            rdf,
+            f"{yahoo} / {ratio_den_code}",
+            period=rperiod,
+            mas=kmas,
+            show_volume=False,
+            green_up=kgreen,
+            currency=None,
+            indicators=indicators or None,
+            query_id=f"ratio:{yahoo}/{ratio_den_code}",
+            note=note,
+        )
+        return
+
     render_kline_view(
         kdf,
         yahoo,

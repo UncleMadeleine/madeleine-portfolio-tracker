@@ -45,7 +45,7 @@ tracker-ui          # pip 安装后起 Streamlit 页面 (等价 streamlit run tr
 | `portfolio` | 持仓管理 list/add/remove/set-base | `portfolio list`, `portfolio add AAPL --quantity 10 --avg-cost 180`, `portfolio set-base USD` |
 | `fx` | 汇率 | `fx USD CNY` |
 | `history` | 历史价格 | `history AAPL --months 12` |
-| `kline` | K线蜡烛图 (HTML+摘要) | `kline AAPL --months 6 --ma 5,20,60`, `kline 0700.HK --period weekly --open`, `--json` 出数据, `--refresh` 强刷 |
+| `kline` | K线蜡烛图 (HTML+摘要); `--ratio 分母` 出比值K线 | `kline AAPL --months 6 --ma 5,20,60`, `kline 0700.HK --period weekly --open`, `kline 0700.HK --ratio NPN.JO --ratio-fx` (腾讯÷南非报业, 跨币种按历史汇率), `--json` 出数据, `--refresh` 强刷 |
 | `calendar` | 财报/重大事件日历 (持仓+自选) | `calendar`, `calendar --months 3 --json`, `calendar --watchlist 科技`, `--longport` 开长桥兜底, `--refresh` 强刷 |
 | `search` | 代码/名称搜索→规范代码 | `search 腾讯 --json`, `search 700 --limit 5`, `search AAPL --exact` |
 | `compare` | 多股走势对比 (归一化) | `compare AAPL 0700.HK 600519.SS`, `compare AAPL NVDA --json`, `--raw` 不归一化 (原币种), `--ratio 分子 分母` 额外画比例线 (默认原币比值, `--ratio-fx` 历史汇率调整), `--metric mcap` 市值对比 (统一折算 `--currency`, 缺省组合基础货币), `--refresh` 强制刷新 (含比例线汇率缓存) |
@@ -349,8 +349,9 @@ Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致);
    ```
    .venv/bin/python -m tracker.cli kline AAPL --months 12 --ma 5,20,60
    .venv/bin/python -m tracker.cli kline 600519.SS --period weekly --open   # 周K + 自动开浏览器
+   .venv/bin/python -m tracker.cli kline 0700.HK --ratio NPN.JO --ratio-fx  # 比值K线 (腾讯÷南非报业)
    ```
-   支持 `--period daily|weekly|monthly`、`--no-volume`、`--refresh`（穿透页面/磁盘 K线缓存与负缓存）、`--json`。页面侧 K线是独立页面: `streamlit run tracker/ui/app.py` 后侧边栏「K线」, 可查任意代码, 输入后才取数 (不预加载)。页面「范围」模式与指数K线/对比页范围下拉为 3/6/12/24/36/60 个月 (最长 5 年; 滑动模式本就一次加载上市以来全量历史); IBKR 源历史K线按 ≤365 天窗口分块拼接 (单次请求上限), 5 年区间同样可用。
+   支持 `--period daily|weekly|monthly`、`--no-volume`、`--refresh`（穿透页面/磁盘 K线缓存与负缓存）、`--json`。**比值K线**: `--ratio 分母代码` 把「位置参数代码 ÷ 分母」的比值画成 OHLC 蜡烛图, `--ratio-fx` 在跨币种时按历史汇率调整; `--json` 的 `data[]` 仍是 open/high/low/close/volume, 另有 `ratio` 元信息 (numerator/denominator/fxAdjusted/fxPair/fxMissing); 两标的原生周期不同时自动取较粗一档 (如分母只有周K → 整图周K); 比值无成交量语义, HTML/页面自动隐藏成交量副图。页面侧 K线是独立页面: `streamlit run tracker/ui/app.py` 后侧边栏「K线」, 可查任意代码, 输入后才取数 (不预加载); 页面上方「比值K线」开关 + 分母代码输入框对应同一功能。页面「范围」模式与指数K线/对比页范围下拉为 3/6/12/24/36/60 个月 (最长 5 年; 滑动模式本就一次加载上市以来全量历史); IBKR 源历史K线按 ≤365 天窗口分块拼接 (单次请求上限), 5 年区间同样可用。
 
 8c. **多股对比 / 指数K线**:
    ```

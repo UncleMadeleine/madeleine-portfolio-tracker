@@ -23,10 +23,54 @@ from ._common import (
 )
 
 
+# 阈值键 → (取值参数, 清除参数, 展示名); 取值/清除同时出现视为冲突。
+_THRESHOLD_ARGS = (
+    ("upper_1", "upper1", "clear_upper1", "上限 I"),
+    ("upper_2", "upper2", "clear_upper2", "上限 II"),
+    ("lower_1", "lower1", "clear_lower1", "下限 I"),
+    ("lower_2", "lower2", "clear_lower2", "下限 II"),
+)
+
+
+def _cli_flag(attr: str) -> str:
+    """参数属性名 → CLI 旗标 (clear_lower2 → --clear-lower2)."""
+    return "--" + attr.replace("_", "-")
+
+
+def _threshold_args(args) -> tuple[dict[str, float], set[str]]:
+    """解析阈值参数 → (待写入值, 待清除键), 非法组合在写盘前报错.
+
+    非正数阈值一律拒绝: 阈值按价格/PB/市值解释, 0/负数都没有意义, 旧行为
+    会把它们当成有效阈值写盘 (上限 0 恒触发、下限 0 恒显示 -100%), 污染
+    日报与 --json。清空阈值请用显式 --clear-*。
+    """
+    values: dict[str, float] = {}
+    clears: set[str] = set()
+    for key, val_attr, clear_attr, label in _THRESHOLD_ARGS:
+        val = getattr(args, val_attr, None)
+        clear = bool(getattr(args, clear_attr, False))
+        if val is not None and clear:
+            _finish_with_error(
+                f"{_cli_flag(val_attr)} 与 {_cli_flag(clear_attr)} 不能同时使用 ({label})"
+            )
+        if val is not None:
+            if val <= 0:
+                _finish_with_error(
+                    f"{label} 必须为正数 (收到 {val:g}); 清空请用 {_cli_flag(clear_attr)}"
+                )
+            values[key] = val
+        if clear:
+            clears.add(key)
+    return values, clears
+
+
 def watchlist_add(args) -> None:
     """添加代码到自选 (已存在则合并列表与阈值)."""
     if not args.symbols:
         _finish_with_error("请指定要添加的代码, 如: watchlist add AAPL 600519.SS")
+    # 阈值参数先校验再进锁: 冲突 (同时设值与清除) / 非正数必须在任何写盘
+    # 动作之前退出, 否则 with 块正常退出会把半成品保存。
+    values, clears = _threshold_args(args)
     # 先解析再进锁: 全部代码无效时必须在任何写盘动作之前退出。
     # edit_watchlist 的 with 块正常退出时无条件保存, 把校验放在块内
     # 会导致「没有可添加代码」也把 --file 指向的新路径写成空文件。
@@ -44,14 +88,7 @@ def watchlist_add(args) -> None:
                     e["name"] = args.name
                 if args.metric is not None:
                     e["metric"] = args.metric
-                if args.upper1 is not None:
-                    e["upper_1"] = args.upper1
-                if args.upper2 is not None:
-                    e["upper_2"] = args.upper2
-                if args.lower1 is not None:
-                    e["lower_1"] = args.lower1
-                if args.lower2 is not None:
-                    e["lower_2"] = args.lower2
+                e.update(values)
                 if args.note is not None:
                     e["note"] = args.note
                 entries.append(e)
@@ -64,16 +101,16 @@ def watchlist_add(args) -> None:
                 for key, val in (
                     ("name", args.name),
                     ("metric", args.metric),
-                    ("upper_1", args.upper1),
-                    ("upper_2", args.upper2),
-                    ("lower_1", args.lower1),
-                    ("lower_2", args.lower2),
                 ):
                     if val is not None:
                         found[key] = val
+                found.update(values)
+                for key in clears:
+                    found.pop(key, None)
                 if args.note is not None:
                     found["note"] = args.note
-                changed.append(f"更新 {p.yahoo}")
+                suffix = f" (清除 {', '.join(sorted(clears))})" if clears else ""
+                changed.append(f"更新 {p.yahoo}{suffix}")
     if args.json:
         _print_json(
             {"changed": changed, "skipped": skipped, "watchlist": data.get("watchlist", [])}

@@ -112,6 +112,98 @@ class TestWatchlistCli:
         assert e["lists"] == ["科技", "美股"]
         assert e["upper_1"] == 500.0
 
+    def test_add_clear_threshold_flags(self, tmp_path, capsys):
+        """--clear-* 显式清空阈值 (此前只能写 0, 0 会被当成有效阈值)."""
+        f = tmp_path / "w.json"
+        f.write_text(
+            json.dumps(
+                {
+                    "watchlist": [
+                        {
+                            "symbol": "AAPL",
+                            "lists": ["默认"],
+                            "upper_1": 250,
+                            "upper_2": 300,
+                            "lower_1": 100,
+                            "lower_2": 90,
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        out = _run(
+            capsys,
+            "watchlist",
+            "add",
+            "AAPL",
+            "--file",
+            str(f),
+            "--clear-upper2",
+            "--clear-lower2",
+        )
+        e = _load(f)["watchlist"][0]
+        assert e["upper_1"] == 250.0  # 未指定的阈值保留
+        assert e["lower_1"] == 100.0
+        assert "upper_2" not in e
+        assert "lower_2" not in e
+        assert "清除" in out
+
+    def test_add_clear_flag_on_new_entry_is_noop(self, tmp_path, capsys):
+        """新条目的 --clear-* 无值可清: 照常新增, 不落 0/空阈值."""
+        f = tmp_path / "w.json"
+        f.write_text(json.dumps({"watchlist": []}), encoding="utf-8")
+        _run(
+            capsys,
+            "watchlist",
+            "add",
+            "AAPL",
+            "--file",
+            str(f),
+            "--clear-lower2",
+        )
+        e = _load(f)["watchlist"][0]
+        assert e["symbol"] == "AAPL"
+        assert not {"upper_1", "upper_2", "lower_1", "lower_2"} & set(e)
+
+    def test_add_rejects_zero_and_negative_threshold(self, tmp_path, capsys):
+        """0/负阈值没有意义: 写盘前报错, 不再留下 lower_2=0 污染日报."""
+        f = tmp_path / "w.json"
+        before = {"watchlist": [{"symbol": "AAPL", "lists": ["默认"], "lower_2": 90}]}
+        f.write_text(json.dumps(before), encoding="utf-8")
+        for bad in ("0", "-1"):
+            with pytest.raises(SystemExit) as exc:
+                cli.main(
+                    ["watchlist", "add", "AAPL", "--file", str(f), "--lower2", bad]
+                )
+            assert exc.value.code == 2
+            assert "必须为正数" in capsys.readouterr().err
+        assert _load(f)["watchlist"][0]["lower_2"] == 90  # 文件未被改动
+
+    def test_add_rejects_value_and_clear_conflict(self, tmp_path, capsys):
+        """同时设值与清除同一阈值 → 报错退出 (不猜优先级)."""
+        f = tmp_path / "w.json"
+        f.write_text(
+            json.dumps({"watchlist": [{"symbol": "AAPL", "lists": ["默认"]}]}),
+            encoding="utf-8",
+        )
+        with pytest.raises(SystemExit) as exc:
+            cli.main(
+                [
+                    "watchlist",
+                    "add",
+                    "AAPL",
+                    "--file",
+                    str(f),
+                    "--upper1",
+                    "250",
+                    "--clear-upper1",
+                ]
+            )
+        assert exc.value.code == 2
+        assert "不能同时使用" in capsys.readouterr().err
+        assert "upper_1" not in _load(f)["watchlist"][0]
+
     def test_add_invalid_symbol_skipped(self, tmp_path, capsys):
         f = tmp_path / "w.json"
         f.write_text(json.dumps({"watchlist": []}), encoding="utf-8")

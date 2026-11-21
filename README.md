@@ -441,6 +441,7 @@ python -m tracker.cli wallet-nav solana H... --max-assets 20
 - CLI 只看触发的标的：`tracker watchlist triggered`（`--json` 输出 `triggered` 数组与 `count`，适合脚本/Agent 消费）
 - CLI 添加 PB 提醒：`tracker watchlist add 600036.SS --metric pb --upper1 1.2 --lower1 0.8`
 - CLI 添加市值提醒：`tracker watchlist add AAPL --metric mcap --upper1 4000000000000`
+- CLI 清空某个阈值：`tracker watchlist add AAPL --clear-lower2`（`--clear-upper1` / `--clear-upper2` / `--clear-lower1` / `--clear-lower2`；阈值必须为正数，0/负数会被拒绝——0 会被规则层当成有效阈值，上限 0 恒触发、下限 0 恒显示 -100%，污染报告）
 - 持仓与自选**共用一次批量行情请求**，多加自选不增加请求次数
 
 ---

@@ -291,6 +291,7 @@ def _add_watchlist_parser(sub: argparse.ArgumentParser) -> None:
             "  tracker watchlist add 600519.SS --list 白酒 --lower1 1500\n"
             "  tracker watchlist add 600036.SS --metric pb --upper1 1.2 --lower1 0.8\n"
             "  tracker watchlist add AAPL --metric mcap --upper1 4000000000000\n"
+            "  tracker watchlist add AAPL --clear-upper2 --clear-lower2  # 清空阈值\n"
             "  tracker watchlist remove AAPL --list 科技       # 仅从「科技」列表移除\n"
             "  tracker watchlist import-longport --dry-run     # 预览长桥自选导入\n"
             "  tracker watchlist import-longport --overwrite   # 覆盖现有自选\n"
@@ -312,10 +313,22 @@ def _add_watchlist_parser(sub: argparse.ArgumentParser) -> None:
         default=None,
         help="所属列表名 (add 时指定 / list 时过滤)",
     )
-    p_w.add_argument("--upper1", type=float, help="上限 I")
-    p_w.add_argument("--upper2", type=float, help="上限 II")
-    p_w.add_argument("--lower1", type=float, help="下限 I")
-    p_w.add_argument("--lower2", type=float, help="下限 II")
+    p_w.add_argument("--upper1", type=float, help="上限 I (必须为正数)")
+    p_w.add_argument("--upper2", type=float, help="上限 II (必须为正数)")
+    p_w.add_argument("--lower1", type=float, help="下限 I (必须为正数)")
+    p_w.add_argument("--lower2", type=float, help="下限 II (必须为正数)")
+    for _flag, _label in (
+        ("--clear-upper1", "上限 I"),
+        ("--clear-upper2", "上限 II"),
+        ("--clear-lower1", "下限 I"),
+        ("--clear-lower2", "下限 II"),
+    ):
+        p_w.add_argument(
+            _flag,
+            dest=_flag[2:].replace("-", "_"),
+            action="store_true",
+            help=f"清除{_label} (置空, 与 {_flag.replace('clear-', '')} 互斥)",
+        )
     p_w.add_argument(
         "--metric",
         choices=["price", "pb", "mcap"],

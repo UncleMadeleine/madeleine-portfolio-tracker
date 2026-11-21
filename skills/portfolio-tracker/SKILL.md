@@ -302,6 +302,11 @@ Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致);
    ```
    已存在代码会合并列表/更新阈值, 不会重复。mcap 阈值按当地货币绝对金额;
    想离线固定口径可手写条目 `mcap` 键 (覆盖行情/数据源取值)。
+   清空某个阈值用显式开关 (阈值必须为正数, 0/负数会被拒绝):
+   ```
+   .venv/bin/python -m tracker.cli watchlist add AAPL --clear-lower2
+   .venv/bin/python -m tracker.cli watchlist add NVDA --clear-upper1 --clear-upper2
+   ```
 
 4b. **只看触发阈值**:
    ```

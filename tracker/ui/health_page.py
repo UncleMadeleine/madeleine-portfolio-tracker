@@ -344,7 +344,10 @@ def render_health_page() -> None:
         help="窗口内失败次数 (最多展示 20 条)",
     )
 
-    tabs = st.tabs(["数据源", "组合覆盖", "最近失败", "本地完整性", "缓存与保温"])
+    tabs = st.tabs(
+        ["数据源", "组合覆盖", "最近失败", "本地完整性", "缓存与保温"],
+        key="health_tabs",
+    )
     with tabs[0]:
         st.caption(
             "数据来自 provider 热路径的真实回源记录; 缓存命中不记录。"

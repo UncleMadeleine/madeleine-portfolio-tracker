@@ -200,4 +200,7 @@ _FONT_STACK = (
 
 # 右键菜单样式独立成串; 菜单挂在 document.body 上, 选择器是全局作用域。
 _CONTEXT_MENU_CSS = read_asset("context_menu.css")
+# 注意: assets 里的 CSS 不要出现 "<" 字符 (包括注释)。st.html 的 DOMPurify
+# 清洗遇到 "<" 会把整个 style 标签丢弃, 表现是主题与移动端样式全部失效;
+# 注释请写「小于 16px」而不是「<16px」。
 _CSS = read_asset("theme.css")

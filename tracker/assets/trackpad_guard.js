@@ -3,6 +3,25 @@ export default function (component) {
   // rerun 会重跑组件函数但不一定先 cleanup: window 级单例避免叠加监听器
   if (window.__fpTrackpadGuardCleanup) { return window.__fpTrackpadGuardCleanup; }
 
+  // 移动端: 点侧边栏导航后自动收起侧边栏。否则选完页面侧边栏仍占 70%
+  // 屏宽, 还要再点一次遮罩才能看到内容。
+  if (!window.__fpMobileNavAutoClose) {
+    window.__fpMobileNavAutoClose = true;
+    document.addEventListener('click', function (ev) {
+      var target = ev.target;
+      if (!target || !target.closest) { return; }
+      if (!target.closest('[data-testid="stSidebarNavLink"]')) { return; }
+      if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) { return; }
+      if (!window.matchMedia('(max-width: 640px)').matches) { return; }
+      window.setTimeout(function () {
+        var btn = document.querySelector(
+          '[data-testid="stSidebarCollapseButton"] button'
+        );
+        if (btn) { btn.click(); }
+      }, 120);
+    }, true);
+  }
+
   var cssSupported = !!(window.CSS && CSS.supports &&
     CSS.supports('overscroll-behavior-x', 'none'));
   var ua = navigator.userAgent || '';

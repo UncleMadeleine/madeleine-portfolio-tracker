@@ -23,6 +23,11 @@ html, body, .stApp {
   background-color: var(--fp-bg) !important;
   color: var(--fp-text);
 }
+/* iOS 横屏/分屏时不要由系统二次放大字号 */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
 .stApp {
   background-image:
     radial-gradient(1100px 620px at 8% -12%, rgba(0, 212, 255, 0.11), transparent 62%),
@@ -250,14 +255,16 @@ h1, h2, h3, h4 {
   font-size: 0.76rem !important;
   font-variant-numeric: tabular-nums;
 }
-/* 首页 KPI 首卡 (总市值): 青色描边更醒目 */
-.st-key-fp_kpi [data-testid="stMetric"]:first-child {
+/* 首页 KPI 首卡 (总市值): 青色描边更醒目。注意必须从横向容器的第一个
+   stElementContainer 往下选: 每张 metric 都是各自容器的 :first-child,
+   直接写 `[data-testid="stMetric"]:first-child` 会命中全部 4 张卡。 */
+.st-key-fp_kpi > [data-testid="stElementContainer"]:first-child [data-testid="stMetric"] {
   border-color: rgba(0, 212, 255, 0.28);
   background:
     radial-gradient(130% 100% at 0% 0%, rgba(0, 212, 255, 0.14), transparent 58%),
     linear-gradient(150deg, rgba(255, 255, 255, 0.06), rgba(16, 24, 42, 0.55));
 }
-.st-key-fp_kpi [data-testid="stMetric"]:first-child [data-testid="stMetricValue"] {
+.st-key-fp_kpi > [data-testid="stElementContainer"]:first-child [data-testid="stMetricValue"] {
   font-size: clamp(1.55rem, 1.15rem + 1.15vw, 2.15rem) !important;
 }
 
@@ -780,7 +787,40 @@ h1, h2, h3, h4 {
   .fp-page-header-right { flex-wrap: wrap; }
   .fp-page-title { font-size: 1.45rem; }
   [data-testid="stMetric"] { padding: 0.8rem 0.9rem; }
-  [data-testid="stMetricValue"] { font-size: 1.3rem !important; }
+  /* 字号随视口收缩, 2×2 时也能放下 1,234,567.89 这类长数字 */
+  [data-testid="stMetricValue"],
+  .st-key-fp_kpi
+    > [data-testid="stElementContainer"]:first-child
+    [data-testid="stMetricValue"] {
+    font-size: clamp(1.05rem, 4.2vw, 1.2rem) !important;
+  }
+  /* 指标卡容器: 窄屏统一 2×2。Streamlit 的横向容器按各卡最小宽度换行,
+     4 张卡会出现 1+3 / 3+1 / 1+2+1 的参差排布 (375px 尤其明显), 用 Grid
+     固定列数。:has 只在直接子项是 metric 的横向容器上生效, 不影响 st.columns。 */
+  [data-testid="stHorizontalBlock"]:has(
+      > [data-testid="stElementContainer"] > [data-testid="stMetric"]
+    ) {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: stretch;
+    gap: 0.7rem;
+  }
+  [data-testid="stHorizontalBlock"]:has(
+      > [data-testid="stElementContainer"] > [data-testid="stMetric"]
+    ) > [data-testid="stElementContainer"] {
+    width: auto !important;
+    min-width: 0;
+  }
+  /* iOS Safari 聚焦字号小于 16px 的输入框会自动放大整页; 移动端统一 16px */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not(
+      [type="color"]
+    ):not([type="file"]),
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+  /* 固定背景在 iOS Safari 上不支持且拖动时反复重绘, 移动端改为随页面滚动 */
+  .stApp { background-attachment: scroll; }
   [data-testid="stTabs"] [role="tablist"],
   [data-testid="stTabs"] [data-baseweb="tab-list"] {
     width: 100%;
@@ -807,6 +847,16 @@ h1, h2, h3, h4 {
   }
   .st-key-import_source_tabs [data-testid="stTab"] {
     flex: 1 1 calc(50% - 0.35rem);
+    justify-content: center;
+  }
+  /* 数据健康 5 个标签: 折成 3+2, 否则最后一个 "缓存与保温" 被横向裁掉 */
+  .st-key-health_tabs [role="tablist"] {
+    flex-wrap: wrap;
+    overflow: visible;
+    row-gap: 0.25rem;
+  }
+  .st-key-health_tabs [data-testid="stTab"] {
+    flex: 1 1 calc(33.333% - 0.35rem);
     justify-content: center;
   }
   /* 日历: 7 列固定, 窄屏只留类型色点 (完整信息见下方日程/表格) */
@@ -844,4 +894,13 @@ h1, h2, h3, h4 {
   .fp-agenda-num { font-size: 0.86rem; }
   .fp-agenda-note { flex-basis: 100%; white-space: normal; }
   .fp-agenda-src { margin-left: 0; }
+}
+
+/* 极窄屏 (320px 级): 两列指标卡会把长数字挤成省略号, 退回单列 */
+@media (max-width: 359px) {
+  [data-testid="stHorizontalBlock"]:has(
+      > [data-testid="stElementContainer"] > [data-testid="stMetric"]
+    ) {
+    grid-template-columns: 1fr;
+  }
 }

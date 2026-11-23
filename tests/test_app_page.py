@@ -503,6 +503,32 @@ def test_theme_trackpad_guard_blocks_history_swipe():
     # 只在 CSS 不生效的 Safari / 旧浏览器挂非 passive 监听, 不拖慢 Chrome
     assert "Safari" in js or "safari" in js
     assert "passive: false" in js
+    # 移动端选择页面后自动收起侧边栏 (否则一直遮住内容)
+    assert "stSidebarNavLink" in js
+    assert "stSidebarCollapseButton" in js
+
+
+def test_theme_css_has_no_raw_lt():
+    """CSS 里出现 "<" 会让 st.html 的 DOMPurify 丢弃整个 style 标签.
+
+    表现是主题和全部移动端样式静默失效 (页面退回 Streamlit 默认外观), 且
+    Python/浏览器都不报错。注释里请写「小于 16px」而不是「<16px」。
+    """
+    from tracker.ui import theme
+
+    assert "<" not in theme._CSS
+    assert "<" not in theme._CONTEXT_MENU_CSS
+
+
+def test_theme_mobile_rules():
+    """移动端: 防止 iOS 聚焦缩放, 指标卡固定 2×2, 健康页标签折行."""
+    from tracker.ui import theme
+
+    css = theme._CSS
+    assert "@media (max-width: 640px)" in css
+    assert "font-size: 16px !important" in css
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in css
+    assert ".st-key-health_tabs [role=\"tablist\"]" in css
 
 
 def test_selected_watchlist_delete_action(monkeypatch, tmp_path):

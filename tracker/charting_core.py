@@ -52,12 +52,15 @@ KDJ_J_COLOR = "#e15b64"  # KDJ J 线 - 红
 PERIOD_LABELS = {"daily": "日K", "weekly": "周K", "monthly": "月K"}
 
 
-def clean_ohlc(df: pd.DataFrame) -> pd.DataFrame:
+def clean_ohlc(df: pd.DataFrame, *, allow_nonpositive: bool = False) -> pd.DataFrame:
     """清洗日线数据, 保证绘图与统计准确:
 
     - date 解析失败 / OHLC 任一缺失的行丢弃
     - 逻辑矛盾行丢弃 (high < low, high < max(open,close), low > min(open,close), 价格<=0)
     - 按日期升序排序, 重复日期保留最后一条
+
+    allow_nonpositive: 允许 0 与负值 (利率/利差类序列, 如美债 10Y-2Y 倒挂为负)。
+    默认仍按行情价格剔除 <=0 的坏数据。
     """
     empty = pd.DataFrame(columns=list(OHLC_COLUMNS))
     if df is None or df.empty:
@@ -82,9 +85,10 @@ def clean_ohlc(df: pd.DataFrame) -> pd.DataFrame:
         (out["high"] >= out["low"] - 1e-9)
         & (out["high"] >= body_hi - 1e-9)
         & (out["low"] <= body_lo + 1e-9)
-        # 任一价格 <=0 都是无效行情 (停牌/坏数据), 会污染区间高低点与绘图
-        & (out[["open", "high", "low", "close"]] > 0).all(axis=1)
     )
+    if not allow_nonpositive:
+        # 任一价格 <=0 都是无效行情 (停牌/坏数据), 会污染区间高低点与绘图
+        ok &= (out[["open", "high", "low", "close"]] > 0).all(axis=1)
     out = out[ok]
     # 稳定排序: 重复日期保留输入中最后一条 (来源覆盖顺序有意义)
     out = out.sort_values("date", kind="stable").drop_duplicates(
@@ -266,12 +270,15 @@ def _month_rule() -> str:
         return "M"
 
 
-def resample_ohlc(df: pd.DataFrame, period: str) -> pd.DataFrame:
+def resample_ohlc(
+    df: pd.DataFrame, period: str, *, allow_nonpositive: bool = False
+) -> pd.DataFrame:
     """日线重采样为周K (W-FRI) / 月K; open=首日开, high=最高, low=最低, close=末日收, volume=求和.
 
     已经处于目标粒度 (或更粗) 的数据直接清洗返回: 调用方常先 resolve_period
     再无条件 resample (K线页/CLI/对比 payload), 对原生周K/月K源 (水泥网、
     Cameco 等) 二次重采样会把周一/月末标签改写成 W-FRI/月末, 甚至跨周合并。
+    allow_nonpositive 透传给 clean_ohlc, 供利率/利差等可负值序列使用。
     """
     if df is None or df.empty:
         return pd.DataFrame(columns=list(OHLC_COLUMNS))
@@ -280,10 +287,12 @@ def resample_ohlc(df: pd.DataFrame, period: str) -> pd.DataFrame:
     if period in PERIOD_ORDER:
         native = infer_native_period(df)
         if PERIOD_ORDER.index(period) <= PERIOD_ORDER.index(native):
-            return clean_ohlc(df)[list(OHLC_COLUMNS)]
+            return clean_ohlc(df, allow_nonpositive=allow_nonpositive)[
+                list(OHLC_COLUMNS)
+            ]
     rule = "W-FRI" if period == "weekly" else _month_rule()
     out = (
-        clean_ohlc(df)
+        clean_ohlc(df, allow_nonpositive=allow_nonpositive)
         .set_index("date")
         .resample(rule)
         .agg(
@@ -350,15 +359,19 @@ def _non_trading_days(dates: pd.Series) -> list[pd.Timestamp]:
     return list(full.difference(idx))
 
 
-def summarize_ohlc(df: pd.DataFrame, mas=DEFAULT_MA) -> dict:
+def summarize_ohlc(
+    df: pd.DataFrame, mas=DEFAULT_MA, *, allow_nonpositive: bool = False
+) -> dict:
     """K线摘要统计 (用于终端输出 / --json / 页面指标)."""
-    df = clean_ohlc(df)
+    df = clean_ohlc(df, allow_nonpositive=allow_nonpositive)
     if df.empty:
         return {"bars": 0}
     first, last = df.iloc[0], df.iloc[-1]
+    # 跨零/负值序列的百分比涨跌没有意义 (利差从 -0.4 到 -0.2 并非 -50%),
+    # 仅当首尾收盘都为正是才给出百分比。
     change_pct = (
         (float(last["close"]) / float(first["close"]) - 1) * 100
-        if float(first["close"]) > 0
+        if float(first["close"]) > 0 and float(last["close"]) > 0
         else None
     )
     hi = df.loc[df["high"].idxmax()]

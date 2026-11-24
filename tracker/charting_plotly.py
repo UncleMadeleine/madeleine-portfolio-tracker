@@ -31,14 +31,21 @@ def build_candlestick_fig(
     period: str = "daily",
     title: str | None = None,
     height: int = 680,
+    allow_nonpositive: bool = False,
+    reference: float | None = None,
+    reference_label: str | None = None,
 ) -> go.Figure:
-    """构建蜡烛图: 价格主图 + 成交量副图 + MA 均线 + 非交易日断轴 + 区间快捷按钮."""
+    """构建蜡烛图: 价格主图 + 成交量副图 + MA 均线 + 非交易日断轴 + 区间快捷按钮.
+
+    allow_nonpositive 透传给 clean_ohlc, 供利率/利差等可负值序列使用。
+    reference / reference_label: 主图水平参考线 (如利差的 0 倒挂分界)。
+    """
     # plotly 惰性导入: CLI 的 --json 数据路径 (无图表) 不需要它,
     # 装核心依赖 (openbb/akshare/pandas) 的 Agent 用户无需拖 plotly
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
 
-    df = clean_ohlc(df)
+    df = clean_ohlc(df, allow_nonpositive=allow_nonpositive)
     if df.empty:
         raise ValueError(f"{symbol}: 无有效K线数据")
     up, down = up_down_colors(green_up)
@@ -194,6 +201,18 @@ def build_candlestick_fig(
         showline=True,
         linecolor="rgba(120,140,180,0.2)",
     )
+    # 参考线必须在 update_layout(shapes=...) 之后追加, 否则会被最新价线覆盖
+    if reference is not None:
+        fig.add_hline(
+            y=reference,
+            line_width=1,
+            line_dash="dash",
+            line_color="#8b949e",
+            annotation_text=reference_label or "",
+            annotation_position="top left",
+            row=price_row,
+            col=1,
+        )
     fig.update_xaxes(
         rangeselector=dict(buttons=buttons, bgcolor="rgba(30,34,40,0.8)"),
         row=price_row,

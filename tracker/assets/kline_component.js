@@ -89,6 +89,12 @@ export default function (component) {
   } else {
     candle = chart.addSeries(LC.CandlestickSeries, CFG.candleOpts);
     candle.setData(CFG.candles);
+    if (CFG.reference != null) {
+      candle.createPriceLine({
+        price: CFG.reference, color: '#8b949e', lineWidth: 1, lineStyle: 2,
+        axisLabelVisible: true, title: CFG.referenceLabel || ''
+      });
+    }
     tracks = CFG.mas.map(function (m) {
       return { name: m.name, color: m.color, series: addLine(m.color, m.data), data: m.data };
     });

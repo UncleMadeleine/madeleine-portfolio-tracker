@@ -26,6 +26,8 @@ Cameco 官网铀价 (IX.URANIUM/URANIUM_LT, 目录条目带 cameco 字段): 服�
 圣路易斯联储 FRED 免费 CSV 端点 (ICE BofA 日频 OAS), 零鉴权; 只有利差点位,
 无开高低 → 平K线, 单位百分点, 专属源无兜底。FRED 对 ICE BofA 系列当前只
 提供约 3 年滚动窗口且忽略日期参数, 全量取回后本地裁剪。
+美国国债收益率倒挂 (IX.US2Y/US10Y2Y/US10Y3M, 同样 fred 字段): FRED 的
+DGS2 与 T10Y2Y/T10Y3M 日频序列, 提供完整历史; 利差为长端减短端, 负值即倒挂。
 """
 
 from __future__ import annotations
@@ -467,7 +469,7 @@ class IndexProvider(Provider):
     商品期货 (futures 字段) 与水泥网 (ccement 字段) 为各自专属源, 无兜底;
     恒生官方 API (hsi 字段) 同理, 官网零鉴权但仅约 5 年滚动窗口;
     Cameco 铀价 (cameco 字段) 为月频专属源, 无第二数据源;
-    FRED 信用利差 (fred 字段) 为日频专属源, 无第二数据源。
+    FRED 信用利差/国债利差 (fred 字段) 为日频专属源, 无第二数据源。
     """
 
     name = "index"

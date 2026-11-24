@@ -17,7 +17,7 @@ from .providers.crypto import CryptoProvider  # noqa: F401
 from .providers.cn_stocks import CNStocksProvider  # noqa: F401
 from .providers.global_stocks import GlobalStocksProvider  # noqa: F401 - 再导出
 from .providers.orchestration import get_history, get_quotes
-from .symbols import parse
+from .symbols import INDEX_CATALOG, parse
 from . import cache as cache_mod
 
 __all__ = [
@@ -178,7 +178,10 @@ def get_index_history(
         if cached is not None:
             return cached
     df = clean_ohlc(
-        get_history(symbol, months=months, start_date=start_date, end_date=end_date)
+        get_history(symbol, months=months, start_date=start_date, end_date=end_date),
+        # FRED 利率/利差序列 (10Y-2Y 倒挂、信用利差等) 可以为 0 或负;
+        # 股票/指数点位仍走默认的非正价格清洗。
+        allow_nonpositive=bool(INDEX_CATALOG[p.yahoo[3:]].get("fred")),
     )
     if not df.empty and not is_range:
         cache_mod.set_ohlc_cached(key, months, df)

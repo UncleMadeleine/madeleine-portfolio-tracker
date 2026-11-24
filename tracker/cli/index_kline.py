@@ -43,6 +43,10 @@ def cmd_index_kline(args) -> None:
         noun="指数K线图",
         warn_prefix=f"{p.yahoo} ({label})",
         extra_json={"name": label},
+        # FRED 国债/信用利差可出现 0 或负值 (10Y-2Y 倒挂), 不能按股票价格清洗
+        allow_nonpositive=bool(INDEX_CATALOG[p.yahoo[3:]].get("fred")),
+        reference=0.0 if p.yahoo in ("IX.US10Y2Y", "IX.US10Y3M") else None,
+        reference_label="倒挂分界" if p.yahoo in ("IX.US10Y2Y", "IX.US10Y3M") else None,
     )
 
 

@@ -39,6 +39,9 @@ def output_kline(
     resolved_period: str | None = None,
     file_stem: str | None = None,
     json_round: int = 6,
+    allow_nonpositive: bool = False,
+    reference: float | None = None,
+    reference_label: str | None = None,
 ) -> None:
     """统一处理周期降级、摘要、JSON、HTML 写出与浏览器打开.
 
@@ -48,6 +51,8 @@ def output_kline(
         原生粒度), 传入后不再按 df 推断, 也不再重复重采样。
     file_stem: 默认文件名中的代码部分 (默认 p.yahoo, 点号转下划线);
         比值K线传入「分子_分母」避免覆盖单只 K 线的 HTML。
+    allow_nonpositive: 允许 0/负值 (利率与利差序列, 如 10Y-2Y 倒挂为负)。
+    reference / reference_label: 主图水平参考线 (如利差的 0 倒挂分界)。
     """
     if resolved_period is not None:
         period = resolved_period
@@ -61,12 +66,12 @@ def output_kline(
                 file=sys.stderr,
             )
         if period != "daily":
-            df = charting.resample_ohlc(df, period)
+            df = charting.resample_ohlc(df, period, allow_nonpositive=allow_nonpositive)
     if df.empty:
         _finish_with_error(f"{p.yahoo}: 无有效K线数据")
 
     mas = charting.parse_ma_periods(args.ma)
-    summary = charting.summarize_ohlc(df, mas)
+    summary = charting.summarize_ohlc(df, mas, allow_nonpositive=allow_nonpositive)
     if args.json:
         recs = df.copy()
         recs["date"] = recs["date"].dt.strftime("%Y-%m-%d")
@@ -128,6 +133,9 @@ def output_kline(
         mas=mas,
         show_volume=show_volume,
         period=period,
+        allow_nonpositive=allow_nonpositive,
+        reference=reference,
+        reference_label=reference_label,
     )
     stem = file_stem or p.yahoo.replace(".", "_")
     out = (

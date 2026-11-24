@@ -88,7 +88,7 @@ _SUFFIX_MARKET: dict[str, Market] = {
 # (单一定义点, CLI --list 与 UI 下拉均从 index_groups() 读取, 不会再出现"目录有、分组无").
 # yf: Yahoo Finance 全球指数代码; ak: akshare 新浪指数代码 (stock_zh_index_daily /
 # index_us_stock_sina, 缺省 = key 本身); hsi: 恒生官网内部指数代码 (00001.00 等);
-# fred: 圣路易斯联储 FRED 序列代码 (BAMLH0A0HYM2 等高收益/投资级信用利差).
+# fred: 圣路易斯联储 FRED 序列代码 (T10Y2Y 国债利差 / BAMLH0A0HYM2 信用利差等).
 # currency 仅作展示 (指数无交割货币).
 INDEX_GROUPS: dict[str, dict[str, dict[str, str]]] = {
     "风险/波动": {
@@ -99,9 +99,26 @@ INDEX_GROUPS: dict[str, dict[str, dict[str, str]]] = {
     "美元/利率": {
         "DXY": {"name": "美元指数", "yf": "DX-Y.NYB", "currency": "USD"},
         "US10Y": {"name": "美债 10 年收益率", "yf": "^TNX", "currency": "%"},
-        # ^IRX 是 Cboe 13 周国库券收益率 (Yahoo 无 2 年期); 原错标为"2 年",
-        # 按数据实际口径正名为 3 个月, 避免把 3 个月收益率当 2 年读
+        # ^IRX 是 Cboe 13 周国库券收益率; 原错标为"2 年", 按数据实际口径正名为
+        # 3 个月, 避免把 3 个月收益率当 2 年读。Yahoo 无 2 年期, 2Y 改走 FRED DGS2。
         "US3M": {"name": "美债 3 个月收益率", "yf": "^IRX", "currency": "%"},
+        "US2Y": {"name": "美债 2 年收益率", "fred": "DGS2", "currency": "%"},
+    },
+    # 美国国债收益率曲线倒挂指标 (FRED 日频利差, 单位百分点):
+    # 序列口径为长端减短端, 负值 = 倒挂。10Y-2Y 是最常引用的衰退前瞻指标,
+    # 10Y-3M 覆盖更短端; 与信用利差共用 _fred_history (平K线), 但这两条
+    # 国债序列 FRED 提供完整历史 (不受 ICE BofA 约 3 年窗口限制)。
+    "国债利差": {
+        "US10Y2Y": {
+            "name": "美债 10Y-2Y 利差 (倒挂指标)",
+            "fred": "T10Y2Y",
+            "currency": "%",
+        },
+        "US10Y3M": {
+            "name": "美债 10Y-3M 利差 (倒挂指标)",
+            "fred": "T10Y3M",
+            "currency": "%",
+        },
     },
     # 美国信用利差 (FRED 日频 OAS, 单位百分点; 见 providers/index.py 的 _fred_history):
     # 投资级 → BBB → 高收益 → CCC 由高评级到低评级排列, 利差走阔通常对应风险偏好恶化。

@@ -173,6 +173,10 @@ def _base_payload(
         # 单只K线的可选叠加曲线 (如指数页的金银比/金油比): 独立左侧价轴.
         # 固定给出 None, 前端按字段存在性读取, 避免模式切换时进 undefined 分支.
         "overlay": None,
+        # 可选水平参考线 (如 10Y-2Y 利差的 0 倒挂分界); 固定字段保证前端
+        # 在模式切换时不会读到 undefined.
+        "reference": None,
+        "referenceLabel": "",
         "options": _lwc_options(),
     }
     if precision is not None:
@@ -194,6 +198,9 @@ def kline_payload(
     indicators: dict | None = None,
     query_id: str | None = None,
     overlay: dict | None = None,
+    allow_nonpositive: bool = False,
+    reference: float | None = None,
+    reference_label: str | None = None,
 ) -> dict:
     """生成传给 K线组件 (st.components.v2) 的数据 payload.
 
@@ -205,8 +212,10 @@ def kline_payload(
     query_id: 查询标识 (如代码), 变化时组件丢弃视口锚点回退初始区间.
     overlay: 可选叠加曲线 (如 build_ratio_series 生成的比率线): 画在独立左侧
              价轴, 不改变蜡烛/均线的右侧价格轴。
+    allow_nonpositive: 允许 0/负值 (利率与利差序列, 如 10Y-2Y 倒挂为负)。
+    reference / reference_label: 主图水平参考线 (如利差的 0 倒挂分界)。
     """
-    df = clean_ohlc(df)
+    df = clean_ohlc(df, allow_nonpositive=allow_nonpositive)
     if df.empty:
         raise ValueError(f"{symbol}: 无有效K线数据")
     up, down = up_down_colors(green_up)
@@ -326,6 +335,8 @@ def kline_payload(
             "rsi": rsi_data,
             "kdj": kdj_data,
             "overlay": overlay,
+            "reference": reference,
+            "referenceLabel": reference_label or "",
             "candleOpts": {
                 "upColor": up,
                 "downColor": down,

@@ -151,7 +151,16 @@ def render_index_page() -> None:
         green_up=settings.green_up(),
         currency=None,  # 指数以点数/%计价, 不标货币
         overlay=overlay,
+        # FRED 国债/信用利差可出现 0 或负值 (10Y-2Y 倒挂), 不能按股票价格清洗
+        allow_nonpositive=bool(INDEX_CATALOG[key].get("fred")),
+        reference=0.0 if key in ("US10Y2Y", "US10Y3M") else None,
+        reference_label="倒挂分界" if key in ("US10Y2Y", "US10Y3M") else None,
     )
+    if key in ("US10Y2Y", "US10Y3M"):
+        st.caption(
+            "利差 = 长端收益率 − 短端收益率: 负值即收益率曲线倒挂, "
+            "0 轴为倒挂/正常的分界; 倒挂持续越久、负值越深, 通常越受关注。"
+        )
     if main_ratio_preset is not None:
         st.caption(
             f"派生比率指数 {yahoo} = {main_ratio_preset.formula}; "

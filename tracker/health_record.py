@@ -228,7 +228,7 @@ def label(source: str) -> str:
         "ccement": "水泥网指数",
         "hsi": "恒生指数官网",
         "cameco": "Cameco 铀价",
-        "fred": "FRED 信用利差",
+        "fred": "FRED 国债/信用利差",
         "unknown": "未知来源",
     }.get(source, source)
 

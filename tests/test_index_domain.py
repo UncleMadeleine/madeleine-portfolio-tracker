@@ -525,20 +525,24 @@ def test_cameco_history_dedupes_duplicate_month(monkeypatch):
     assert df.iloc[0]["close"] == pytest.approx(11.00)
 
 
-# ---------- FRED 信用利差源 ----------
+# ---------- FRED 宏观利差源 (国债倒挂 / 信用利差) ----------
+
+_FRED_SERIES = {
+    "US2Y": "DGS2",
+    "US10Y2Y": "T10Y2Y",
+    "US10Y3M": "T10Y3M",
+    "IG_OAS": "BAMLC0A0CM",
+    "BBB_OAS": "BAMLC0A4CBBB",
+    "HY_OAS": "BAMLH0A0HYM2",
+    "CCC_OAS": "BAMLH0A3HYC",
+}
 
 
 def test_fred_catalog_entries_parse_to_index_domain():
-    """美国信用利差: 目录合法 + 统一带 fred 路由字段 + 单位为百分点."""
+    """FRED 指数: 目录合法 + 统一带 fred 路由字段 + 单位为百分点."""
     fred_keys = [k for k, e in INDEX_CATALOG.items() if "fred" in e]
-    assert fred_keys == ["IG_OAS", "BBB_OAS", "HY_OAS", "CCC_OAS"]
-    expected = {
-        "IG_OAS": "BAMLC0A0CM",
-        "BBB_OAS": "BAMLC0A4CBBB",
-        "HY_OAS": "BAMLH0A0HYM2",
-        "CCC_OAS": "BAMLH0A3HYC",
-    }
-    for key, series in expected.items():
+    assert fred_keys == list(_FRED_SERIES)
+    for key, series in _FRED_SERIES.items():
         p = parse(f"IX.{key}")
         assert p.type == "index"
         assert p.market is Market.INDEX
@@ -551,9 +555,9 @@ def test_fred_catalog_entries_parse_to_index_domain():
 
 
 def test_fred_source_chain_is_exclusive():
-    """FRED 信用利差源链只有专属 fr 源 (无第二数据源)."""
+    """FRED 指数源链只有专属 fr 源 (无第二数据源)."""
     provider = IndexProvider()
-    for key in ("IG_OAS", "BBB_OAS", "HY_OAS", "CCC_OAS"):
+    for key in _FRED_SERIES:
         chains = provider.history_sources(parse(f"IX.{key}"), "2025-01-01", None)
         assert [f.__name__ for f in chains] == ["fr"]
         assert chains[0].__source_id__ == "fred"
@@ -616,6 +620,89 @@ def test_fred_history_rejects_non_csv(monkeypatch):
     )
     with pytest.raises(RuntimeError, match="列数不足|无法解析"):
         idx_mod._fred_history(parse("IX.HY_OAS"), "2026-10-01", None)
+
+
+# ---------- 负值序列 (国债倒挂) 的清洗与渲染 ----------
+
+
+def _signed_index_frame() -> pd.DataFrame:
+    """10Y-2Y 倒挂: 收盘从负值穿过 0 再到正值 (平K线)."""
+    vals = [-0.40, -0.20, 0.0, 0.15]
+    return pd.DataFrame(
+        {
+            "date": pd.date_range("2026-01-05", periods=4, freq="B"),
+            "open": vals,
+            "high": vals,
+            "low": vals,
+            "close": vals,
+            "volume": 0.0,
+        }
+    )
+
+
+def test_clean_ohlc_allows_nonpositive_only_when_requested():
+    """利率/利差序列允许 0 与负值; 股票价格清洗默认仍拒绝 <=0."""
+    from tracker.charting import clean_ohlc
+
+    df = _signed_index_frame()
+    assert len(clean_ohlc(df)) == 1  # 默认只保留 >0 的那一根
+    assert len(clean_ohlc(df, allow_nonpositive=True)) == 4
+    # 负值不破坏 OHLC 逻辑校验 (high/low 仍须包住开收盘)
+    bad = df.copy()
+    bad.loc[0, "high"] = -0.50
+    out = clean_ohlc(bad, allow_nonpositive=True)
+    assert len(out) == 3
+
+
+def test_get_index_history_keeps_negative_fred_values(monkeypatch):
+    """FRED 倒挂利差经 K线门面后仍保留负值, 不能被价格清洗静默删掉."""
+    df = _signed_index_frame()
+
+    def fake_get_history(symbol, months=12, start_date=None, end_date=None, **kw):
+        return df.copy()
+
+    monkeypatch.setattr("tracker.prices.get_history", fake_get_history)
+    # start_date 走区间路径, 不写缓存, 避免污染同进程其它用例
+    out = prices.get_index_history("IX.US10Y2Y", months=6, start_date="2026-01-01")
+    assert out["close"].tolist() == pytest.approx([-0.40, -0.20, 0.0, 0.15])
+    # 非 FRED 指数仍按股票口径清洗 (0 与负值属坏数据)
+    out2 = prices.get_index_history("IX.DXY", months=6, start_date="2026-01-01")
+    assert out2["close"].tolist() == pytest.approx([0.15])
+
+
+def test_kline_payload_and_summary_keep_negative_values():
+    """图表 payload 与区间统计同样要能在负区间工作 (倒挂段不被截断)."""
+    from tracker import charting
+
+    df = _signed_index_frame()
+    payload = charting.kline_payload(
+        df,
+        "IX.US10Y2Y",
+        allow_nonpositive=True,
+        reference=0.0,
+        reference_label="倒挂分界",
+    )
+    assert [c["close"] for c in payload["candles"]] == pytest.approx(
+        [-0.40, -0.20, 0.0, 0.15]
+    )
+    assert payload["reference"] == pytest.approx(0.0)
+    assert payload["referenceLabel"] == "倒挂分界"
+    summary = charting.summarize_ohlc(df, allow_nonpositive=True)
+    assert summary["period_low"] == pytest.approx(-0.40)
+    assert summary["last_close"] == pytest.approx(0.15)
+    # 首尾跨零时百分比涨跌没有意义 → None
+    assert summary["change_pct"] is None
+
+
+def test_resample_ohlc_keeps_negative_values():
+    """周/月K重采样不能把负值区间丢掉, 聚合高低点仍须包含负值."""
+    from tracker.charting import resample_ohlc
+
+    df = _signed_index_frame()
+    weekly = resample_ohlc(df, "weekly", allow_nonpositive=True)
+    assert len(weekly) == 1
+    assert weekly.iloc[0]["low"] == pytest.approx(-0.40)
+    assert weekly.iloc[0]["close"] == pytest.approx(0.15)
 
 
 def test_get_quotes_routes_index_to_explicit_error(monkeypatch):

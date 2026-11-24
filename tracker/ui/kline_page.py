@@ -94,18 +94,25 @@ def render_kline_view(
     query_id: str | None = None,
     overlay: dict | None = None,
     note: str | None = None,
+    allow_nonpositive: bool = False,
+    reference: float | None = None,
+    reference_label: str | None = None,
 ) -> dict | None:
     """K线图 + 摘要指标 (供 K线页面与 CLI 内嵌使用, 纯渲染无取数).
 
     overlay: 可选叠加曲线 (指数页的金银比/金油比), 由 charting.kline_payload
     画在独立左侧价轴, 不改变蜡烛/均线价格轴。
     note: 追加到图表下方说明的补充信息 (如比值K线的分子/分母与汇率口径)。
+    allow_nonpositive: 允许 0/负值 (利率与利差序列, 如 10Y-2Y 倒挂为负)。
+    reference / reference_label: 主图水平参考线 (如利差的 0 倒挂分界)。
     """
     # 数据驱动兜底: 请求周期细于数据原生粒度 (周K源请求日K等) 时降级到原生粒度,
     # 防止细粒度周期把粗粒度数据伪装成日K展示 (标题/payload 用生效周期标注)
     period = charting.resolve_period(kdf, period)
     if period != "daily":
-        kdf = charting.resample_ohlc(kdf, period)
+        kdf = charting.resample_ohlc(
+            kdf, period, allow_nonpositive=allow_nonpositive
+        )
     # lightweight-charts (TradingView 内核): 拖动平移 / 滚轮·捏合缩放 /
     # 触控板双指手势, 券商 App 通用交互; 内嵌 JS 引擎无外部依赖.
     result = _KLINE_CHART(
@@ -121,10 +128,15 @@ def render_kline_view(
             indicators=indicators,
             query_id=query_id,
             overlay=overlay,
+            allow_nonpositive=allow_nonpositive,
+            reference=reference,
+            reference_label=reference_label,
         ),
         height=680,
     )
-    s = charting.summarize_ohlc(kdf, tuple(mas))
+    s = charting.summarize_ohlc(
+        kdf, tuple(mas), allow_nonpositive=allow_nonpositive
+    )
     # 精度随价格量级 (summarize_ohlc 按收盘价中位数算): 低价币 ~1e-5 若固定
     # 3 位小数会显示成 0.000。
     prec = int(s.get("precision", 3))

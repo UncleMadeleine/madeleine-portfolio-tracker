@@ -87,7 +87,8 @@ _SUFFIX_MARKET: dict[str, Market] = {
 # 分组是唯一数据源: 新增指数必须归入 INDEX_GROUPS 某组, 平铺目录 INDEX_CATALOG 由此派生
 # (单一定义点, CLI --list 与 UI 下拉均从 index_groups() 读取, 不会再出现"目录有、分组无").
 # yf: Yahoo Finance 全球指数代码; ak: akshare 新浪指数代码 (stock_zh_index_daily /
-# index_us_stock_sina, 缺省 = key 本身); hsi: 恒生官网内部指数代码 (00001.00 等).
+# index_us_stock_sina, 缺省 = key 本身); hsi: 恒生官网内部指数代码 (00001.00 等);
+# fred: 圣路易斯联储 FRED 序列代码 (BAMLH0A0HYM2 等高收益/投资级信用利差).
 # currency 仅作展示 (指数无交割货币).
 INDEX_GROUPS: dict[str, dict[str, dict[str, str]]] = {
     "风险/波动": {
@@ -101,6 +102,32 @@ INDEX_GROUPS: dict[str, dict[str, dict[str, str]]] = {
         # ^IRX 是 Cboe 13 周国库券收益率 (Yahoo 无 2 年期); 原错标为"2 年",
         # 按数据实际口径正名为 3 个月, 避免把 3 个月收益率当 2 年读
         "US3M": {"name": "美债 3 个月收益率", "yf": "^IRX", "currency": "%"},
+    },
+    # 美国信用利差 (FRED 日频 OAS, 单位百分点; 见 providers/index.py 的 _fred_history):
+    # 投资级 → BBB → 高收益 → CCC 由高评级到低评级排列, 利差走阔通常对应风险偏好恶化。
+    # FRED 序列由 ICE BofA 编制, 免费 CSV 端点零鉴权 (无需 API key), 无第二数据源;
+    # 目前只提供约 3 年滚动窗口, 选更长范围时曲线自然从有数据处开始。
+    "信用利差": {
+        "IG_OAS": {
+            "name": "美国投资级信用利差 (IG OAS)",
+            "fred": "BAMLC0A0CM",
+            "currency": "%",
+        },
+        "BBB_OAS": {
+            "name": "美国 BBB 级信用利差 (BBB OAS)",
+            "fred": "BAMLC0A4CBBB",
+            "currency": "%",
+        },
+        "HY_OAS": {
+            "name": "美国高收益信用利差 (HY OAS)",
+            "fred": "BAMLH0A0HYM2",
+            "currency": "%",
+        },
+        "CCC_OAS": {
+            "name": "美国 CCC 级信用利差 (CCC OAS)",
+            "fred": "BAMLH0A3HYC",
+            "currency": "%",
+        },
     },
     "美股": {
         "SPX": {"name": "标普 500", "yf": "^GSPC", "currency": "点"},

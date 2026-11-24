@@ -91,7 +91,7 @@ tracker-ui          # pip 安装后起 Streamlit 页面 (等价 streamlit run tr
 | 新加坡股 | `.SI` | `D05.SI` | SGD / USD | global | `.SG` 别名自动归一为 `.SI` (yfinance 无 `.SG` 数据); SGX 有 SGD 与 USD 计价证券 |
 | 巴西股 | `.SA` | `PETR4.SA` | BRL | global | B3; IBKR 交易所代号 `B3` (旧 `BVMF` 已下线) |
 | 加密货币 | `-QUOTE` | `BTC-USD` `ETH-USDT` | 计价货币 | crypto | 无分隔符 `BTCUSD` 自动补全; 稳定币计价按 USD 等价估值 |
-| 指数 | `IX.<KEY>` | `IX.DXY` `IX.VIX` `IX.CEMPI` `IX.LC` `IX.XAU` `IX.WTI` `IX.GOLDSILVER` `IX.GOLDOIL` `IX.URANIUM` `IX.HSAHP` | 各异 | index | 已收录 57 个, `index-kline --list` 可查 |
+| 指数 | `IX.<KEY>` | `IX.DXY` `IX.VIX` `IX.CEMPI` `IX.LC` `IX.XAU` `IX.WTI` `IX.GOLDSILVER` `IX.GOLDOIL` `IX.HY_OAS` `IX.IG_OAS` `IX.URANIUM` `IX.HSAHP` | 各异 | index | 已收录 61 个, `index-kline --list` 可查 |
 
 - 推导唯一入口: `symbols.type_for_symbol()`; 单字母连字符是美股类别股 (`BRK-B` → global),
   `P+系列字母` 连字符 (`WFC-PL`) 是美股优先股, 都不是 crypto。

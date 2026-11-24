@@ -26,7 +26,7 @@ Madeleine Portfolio Tracker 是一款**本地优先**的投资组合追踪工具
 - **长桥 (LongPort) 行情接入** — 可选行情/历史/持仓源（OAuth 登录），自带 PB (calc_indexes 实时口径) 反推每股净资产，失败自动回退默认数据源
 - **EODHD 付费源 (BYOK)** — 自备 token 的增强源：历史 K 线默认在 yfinance 之前（拆股+分红复权），实时行情默认仅在默认源失败时兜底（`quotes=primary` 时走 `s=` 批量，每批 15 个代码）；PB/市值可用 EODHD fundamentals 补/替换 yfinance；LSE 便士折算、`.IL` 豁免、按交易所映射 EODHD ticker；未配置 token 时完全不影响免费链路
 - **K 线蜡烛图** — 日K / 周K / 月K，MA 均线，成交量，MACD / RSI / KDJ / 布林带，滑动模式默认加载上市以来全量历史
-- **宏观/风险指数K线** — 独立 IX.<KEY> 代码规范（美元指数 / VIX / 沪深 300 / 商品期货主力连续（黄金·白银·鸡蛋·豆粕·豆一·豆二·生猪·碳酸锂）/ COMEX 黄金·白银与 WTI·布伦特原油 / 金银比 IX.GOLDSILVER·金油比 IX.GOLDOIL 派生指数 / 铀现货与长协价（Cameco 月度 U3O8）/ 水泥网建材指数 / 恒生官网港股指数（恒生指数·国企·恒生科技·红筹·恒生综合·恒指波幅 等共 12 个）/ 恒生AH股溢价指数 等，共 57 个，`index-kline --list` 可查全部），独立页面与 `index-kline` 子命令，独立 provider 源链；金银比/金油比可直接当作指数查询，也可叠加在其它指数K线上（左侧独立纵轴）
+- **宏观/风险指数K线** — 独立 IX.<KEY> 代码规范（美元指数 / VIX / 沪深 300 / 商品期货主力连续（黄金·白银·鸡蛋·豆粕·豆一·豆二·生猪·碳酸锂）/ COMEX 黄金·白银与 WTI·布伦特原油 / 金银比 IX.GOLDSILVER·金油比 IX.GOLDOIL 派生指数 / 美国信用利差 IG·BBB·HY·CCC OAS（FRED 日频，约 3 年滚动窗口）/ 铀现货与长协价（Cameco 月度 U3O8）/ 水泥网建材指数 / 恒生官网港股指数（恒生指数·国企·恒生科技·红筹·恒生综合·恒指波幅 等共 12 个）/ 恒生AH股溢价指数 等，共 61 个，`index-kline --list` 可查全部），独立页面与 `index-kline` 子命令，独立 provider 源链；金银比/金油比可直接当作指数查询，也可叠加在其它指数K线上（左侧独立纵轴）
 - **多股对比** — 任意代码同坐标系折线对比，归一化（起点=100）跨币种跨量级比较
 - **财经日历** — 持仓/自选的本月与下月财报、预约披露、除权除息/派息事件（yfinance 单票 + akshare 整批，长桥可选兜底），独立页面与 `calendar` 子命令；支持导出 iCalendar (`.ics`) 到 Apple 日历 / Google Calendar / Outlook；A股只请求窗口内可能命中的报表期、按范围跳过无关板块，取数并发执行；首屏先展示磁盘缓存并后台刷新，服务进程内置保温线程按默认范围周期预热缓存，冷启动带 A股整批/海外单票进度条
 - **首屏性能** — 组合与日历均采用 stale-while-revalidate：先渲染 30 分钟 / 7 天内的旧缓存秒开，后台静默重取；仅在完全无缓存时阻塞取数（组合/日历均显示实时进度条）；行情/汇率/日历均有进程级保温线程周期刷新磁盘缓存，且保温服务已抽成无 Streamlit 依赖的 `tracker/services/warm.py`，CLI 可用 `tracker warm` 一次性预热或 `--interval` 常驻保温
@@ -516,7 +516,7 @@ tracker/
 │   ├── cn_stocks.py        A股/B股域（.SS/.SZ/.BJ）：akshare 固定优先, yfinance 兜底
 │   ├── global_stocks.py    全球股票域（美股/港股/欧股…）：yfinance 主源, 港股 akshare 兜底; 搜索走 IBKR → 东财 suggest → yfinance Search → 代码直查
 │   ├── crypto.py           加密货币域（BASE-QUOTE）：Binance → Gate.io → Hyperliquid(USD系) → yfinance
-│   ├── index.py            指数域（IX.<KEY>）：中国指数 akshare 优先, 其余 yfinance 主源 + 新浪兜底; 水泥网/商品期货/恒生官网/Cameco 铀价为专属源
+│   ├── index.py            指数域（IX.<KEY>）：中国指数 akshare 优先, 其余 yfinance 主源 + 新浪兜底; 水泥网/商品期货/恒生官网/Cameco 铀价/FRED 信用利差为专属源
 │   ├── orchestration.py    批量行情编排：按域分组取数 → 聚合 quotes/errors/notes; 进程内负缓存
 │   ├── orchestration_history.py 单代码历史K线编排（source_order + IBKR/长桥/降级链）
 │   └── em_suggest.py       东财 suggest 搜索客户端（cn 域搜索底层 HTTP 封装 + 代码归一）
@@ -608,7 +608,7 @@ tests/                  单元测试（离线, mock）
 | **global** | 裸代码（美股）、`.HK/.DE/.AS/.L/.TO/.AX/.T/.KS/.KQ/.SI/.SA…` | IBKR(可选, 优先) → 长桥(可选) → **EODHD(可选, primary 时)** → yfinance 批量 → 港股 akshare → EODHD(可选, fallback) | IBKR(可选) → 长桥(可选) → **EODHD(可选, primary)** → yfinance（港股可 `--akshare` 翻转） → EODHD(可选, fallback) |
 | **cn** | `.SS/.SZ/.BJ`（A/B股、北交所） | 长桥(可选前置) → **akshare 优先** → yfinance | 长桥(可选前置) → **akshare 优先** → yfinance |
 | **crypto** | `BASE-QUOTE`（`BTC-USD`） | **Binance API** → Gate.io 现货 → Hyperliquid 永续（仅USD系） → yfinance | **Binance klines** → Gate.io → Hyperliquid → yfinance |
-| **index** | `IX.<KEY>`（`IX.DXY` 美元指数 / `IX.VIX` 恐慌指数 / `IX.CSI300` 沪深 300 / `IX.AU` 黄金 · `IX.AG` 白银 · `IX.JD` 鸡蛋 · `IX.M` 豆粕 · `IX.A` 豆一 · `IX.B` 豆二 · `IX.LH` 生猪 · `IX.LC` 碳酸锂主力连续 / `IX.URANIUM` 铀现货价 · `IX.URANIUM_LT` 铀长协价 / `IX.CEMPI` 水泥价格指数 / `IX.HSI` 恒生指数 · `IX.HSTECH` 恒生科技指数 等恒生官网港股指数 / `IX.HSAHP` AH股溢价指数 …） | —（指数无实时行情, 不参与持仓聚合） | 中国指数 **akshare 优先** → yfinance；美股 SPX/NDX/DJI 有新浪兜底；水泥网/商品期货/恒生官网/Cameco 铀价为专属源（无兜底） |
+| **index** | `IX.<KEY>`（`IX.DXY` 美元指数 / `IX.VIX` 恐慌指数 / `IX.CSI300` 沪深 300 / `IX.AU` 黄金 · `IX.AG` 白银 · `IX.JD` 鸡蛋 · `IX.M` 豆粕 · `IX.A` 豆一 · `IX.B` 豆二 · `IX.LH` 生猪 · `IX.LC` 碳酸锂主力连续 / `IX.IG_OAS` · `IX.BBB_OAS` · `IX.HY_OAS` · `IX.CCC_OAS` 美国信用利差 / `IX.URANIUM` 铀现货价 · `IX.URANIUM_LT` 铀长协价 / `IX.CEMPI` 水泥价格指数 / `IX.HSI` 恒生指数 · `IX.HSTECH` 恒生科技指数 等恒生官网港股指数 / `IX.HSAHP` AH股溢价指数 …） | —（指数无实时行情, 不参与持仓聚合） | 中国指数 **akshare 优先** → yfinance；美股 SPX/NDX/DJI 有新浪兜底；水泥网/商品期货/恒生官网/Cameco 铀价/FRED 信用利差为专属源（无兜底） |
 
 - **最新财报链接**：基本面页按代码直连官方披露库 —— A股/北交所走 akshare 巨潮资讯公告检索，港股走 HKEXnews 标题检索，澳股走 ASX 公告检索（按年 HTML），英股走 Companies House 公开网站（公司搜索 + filing history），日股走 Yahoo!ファイナンス 適時開示（TDnet PDF 镜像），韩股走 DART 公示检索（사업/반기/분기보고서），美股走 OpenBB SEC filings；只保留定期报告/业绩公告并给出原文 URL，零 API Key，结果缓存 6h（手动刷新可穿透）。覆盖范围为 A股/北交所、港股、美股、澳股、英股、日股、韩股；德/加/新/巴等市场因无公开 API 或接口反爬暂未接入，页面会显示具体原因，不会静默伪装成「无财报」
 - **最新财报链接覆盖范围**：

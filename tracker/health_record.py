@@ -197,6 +197,7 @@ _SOURCE_BY_NAME = {
     "_ccement_history": "ccement",
     "_hsi_history": "hsi",
     "_cameco_history": "cameco",
+    "_fred_history": "fred",
 }
 
 
@@ -227,6 +228,7 @@ def label(source: str) -> str:
         "ccement": "水泥网指数",
         "hsi": "恒生指数官网",
         "cameco": "Cameco 铀价",
+        "fred": "FRED 信用利差",
         "unknown": "未知来源",
     }.get(source, source)
 

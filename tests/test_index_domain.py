@@ -525,6 +525,99 @@ def test_cameco_history_dedupes_duplicate_month(monkeypatch):
     assert df.iloc[0]["close"] == pytest.approx(11.00)
 
 
+# ---------- FRED 信用利差源 ----------
+
+
+def test_fred_catalog_entries_parse_to_index_domain():
+    """美国信用利差: 目录合法 + 统一带 fred 路由字段 + 单位为百分点."""
+    fred_keys = [k for k, e in INDEX_CATALOG.items() if "fred" in e]
+    assert fred_keys == ["IG_OAS", "BBB_OAS", "HY_OAS", "CCC_OAS"]
+    expected = {
+        "IG_OAS": "BAMLC0A0CM",
+        "BBB_OAS": "BAMLC0A4CBBB",
+        "HY_OAS": "BAMLH0A0HYM2",
+        "CCC_OAS": "BAMLH0A3HYC",
+    }
+    for key, series in expected.items():
+        p = parse(f"IX.{key}")
+        assert p.type == "index"
+        assert p.market is Market.INDEX
+        entry = INDEX_CATALOG[key]
+        assert entry["fred"] == series
+        assert entry["currency"] == "%"
+        assert not (
+            {"ak", "yf", "ccement", "futures", "hsi", "cameco", "ratio"} & set(entry)
+        )
+
+
+def test_fred_source_chain_is_exclusive():
+    """FRED 信用利差源链只有专属 fr 源 (无第二数据源)."""
+    provider = IndexProvider()
+    for key in ("IG_OAS", "BBB_OAS", "HY_OAS", "CCC_OAS"):
+        chains = provider.history_sources(parse(f"IX.{key}"), "2025-01-01", None)
+        assert [f.__name__ for f in chains] == ["fr"]
+        assert chains[0].__source_id__ == "fred"
+
+
+def _fake_fred_requests(text, calls, status=200):
+    class FakeRequests:
+        @staticmethod
+        def get(url, params=None, timeout=None):
+            calls.append({"url": url, "params": params, "timeout": timeout})
+            return _FakeResp(None, status, text=text)
+
+    return FakeRequests
+
+
+_FRED_CSV = (
+    "observation_date,BAMLH0A0HYM2\n2026-10-13,3.10\n2026-10-14,.\n2026-10-15,3.25\n"
+)
+
+
+def test_fred_history_parses_csv_as_flat_kline(monkeypatch):
+    """FRED CSV → 平K线; '.' 缺失值丢弃, end_date 闭区间, 本地再切一次."""
+    from tracker.providers import index as idx_mod
+
+    calls = []
+    monkeypatch.setattr(idx_mod, "_requests", _fake_fred_requests(_FRED_CSV, calls))
+    df = idx_mod._fred_history(parse("IX.HY_OAS"), "2026-10-13", "2026-10-15")
+    assert list(df.columns) == ["date", "open", "high", "low", "close", "volume"]
+    assert [d.strftime("%Y-%m-%d") for d in df["date"]] == [
+        "2026-10-13",
+        "2026-10-15",
+    ]
+    assert df.iloc[-1]["close"] == pytest.approx(3.25)
+    row = df.iloc[-1]
+    assert row["open"] == row["high"] == row["low"] == row["close"]
+    assert (df["volume"] == 0.0).all()
+    assert calls[0]["url"] == idx_mod._FRED_CSV_URL
+    assert calls[0]["params"] == {"id": "BAMLH0A0HYM2"}
+
+
+def test_fred_history_rejects_empty_series(monkeypatch):
+    """缺失值占满整个窗口必须显式报错, 不能产出空 DataFrame 静默通过."""
+    from tracker.providers import index as idx_mod
+
+    monkeypatch.setattr(
+        idx_mod,
+        "_requests",
+        _fake_fred_requests("observation_date,BAMLH0A0HYM2\n2026-10-13,.\n", []),
+    )
+    with pytest.raises(RuntimeError, match="空序列"):
+        idx_mod._fred_history(parse("IX.HY_OAS"), "2026-10-01", None)
+
+
+def test_fred_history_rejects_non_csv(monkeypatch):
+    """端点异常页/限流页必须转成异常, 不能把 HTML 当行情解析."""
+    from tracker.providers import index as idx_mod
+
+    monkeypatch.setattr(
+        idx_mod, "_requests", _fake_fred_requests("<html>error</html>", [])
+    )
+    with pytest.raises(RuntimeError, match="列数不足|无法解析"):
+        idx_mod._fred_history(parse("IX.HY_OAS"), "2026-10-01", None)
+
+
 def test_get_quotes_routes_index_to_explicit_error(monkeypatch):
     """IX.* 混入实时行情查询: 记入明确 errors, 不落入 global 域误查 yfinance."""
     import tracker.providers.orchestration as orch

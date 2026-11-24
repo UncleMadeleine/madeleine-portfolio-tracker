@@ -22,6 +22,10 @@ Cameco 官网铀价 (IX.URANIUM/URANIUM_LT, 目录条目带 cameco 字段): 服�
 派生比率指数 (IX.GOLDSILVER/GOLDOIL, 目录条目带 ratio 字段): 没有独立行情源,
 按预设从两条腿 (COMEX 黄金/白银、WTI 原油) 取数后相除得到点位序列, 返回
 平K线; 两条腿的日期对齐/精度与均值口径统一见 tracker.index_ratios。
+美国信用利差 (IX.IG_OAS/BBB_OAS/HY_OAS/CCC_OAS, 目录条目带 fred 字段):
+圣路易斯联储 FRED 免费 CSV 端点 (ICE BofA 日频 OAS), 零鉴权; 只有利差点位,
+无开高低 → 平K线, 单位百分点, 专属源无兜底。FRED 对 ICE BofA 系列当前只
+提供约 3 年滚动窗口且忽略日期参数, 全量取回后本地裁剪。
 """
 
 from __future__ import annotations
@@ -69,6 +73,45 @@ def _slice_range(
     if end_date:
         mask &= out["date"] <= pd.Timestamp(end_date)
     return out[mask].sort_values("date").reset_index(drop=True)
+
+
+# ---------- FRED 信用利差源 (fred.stlouisfed.org) ----------
+
+# fredgraph.csv 是 FRED 的公开图表 CSV 端点: 零鉴权、无需 API key。ICE BofA
+# 信用利差系列均为日频、单位百分点 (3.85 = 3.85%), 缺失观察值以 "." 占位,
+# 只有点位没有开高低 → 与恒生/水泥网一样作平K线。
+# 注意: FRED 目前对 ICE BofA 系列只提供约 3 年滚动窗口, 且 cosd/coed 日期参数
+# 会被忽略 (实测传 1990 起仍只回 3 年), 因此全量取回后由 _slice_range 本地裁剪。
+_FRED_CSV_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv"
+_FRED_TIMEOUT = 30.0
+
+
+def _fred_history(
+    p: ParsedSymbol, start_date: str, end_date: str | None = None
+) -> pd.DataFrame:
+    """FRED 日频序列 → 平K线 (fred 字段 = FRED series id).
+
+    信用利差是利差点位而非可交易价格, 所以 open=high=low=close、volume=0;
+    周/月K由上层 resample_ohlc 聚合出区间高低。CSV 第一列为 observation_date,
+    第二列为序列值; "." 占位与空值统一丢弃, 避免把缺失日画成 0。
+    """
+    series = _catalog(p)["fred"]
+    r = _requests().get(_FRED_CSV_URL, params={"id": series}, timeout=_FRED_TIMEOUT)
+    r.raise_for_status()
+    try:
+        raw = pd.read_csv(io.StringIO(r.text))
+    except (pd.errors.ParserError, pd.errors.EmptyDataError) as exc:
+        raise RuntimeError(f"FRED 序列 {series} 返回无法解析的 CSV: {exc}") from exc
+    if raw.shape[1] < 2:
+        raise RuntimeError(f"FRED 序列 {series} 返回列数不足")
+    df = raw.iloc[:, :2].copy()
+    df.columns = ["date", "close"]
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df["close"] = pd.to_numeric(df["close"], errors="coerce")
+    df = df.dropna(subset=["date", "close"]).drop_duplicates("date", keep="last")
+    if df.empty:
+        raise RuntimeError(f"FRED 序列 {series} 返回空序列")
+    return _slice_range(_flat_ohlc(df), start_date, end_date)
 
 
 # ---------- 中国水泥网源 (index.ccement.com) ----------
@@ -423,7 +466,8 @@ class IndexProvider(Provider):
 
     商品期货 (futures 字段) 与水泥网 (ccement 字段) 为各自专属源, 无兜底;
     恒生官方 API (hsi 字段) 同理, 官网零鉴权但仅约 5 年滚动窗口;
-    Cameco 铀价 (cameco 字段) 为月频专属源, 无第二数据源。
+    Cameco 铀价 (cameco 字段) 为月频专属源, 无第二数据源;
+    FRED 信用利差 (fred 字段) 为日频专属源, 无第二数据源。
     """
 
     name = "index"
@@ -459,8 +503,11 @@ class IndexProvider(Provider):
         def rt():
             return _ratio_history(p, start_date, end_date)
 
+        def fr():
+            return _fred_history(p, start_date, end_date)
+
         # 健康观测按 source id 归并; 这些是局部 lambda 样式的包装函数,
-        # 函数名 (ak/yf/cc/hs/ft/cm/rt) 无法反推来源, 显式打标。
+        # 函数名 (ak/yf/cc/hs/ft/cm/rt/fr) 无法反推来源, 显式打标。
         for _fn, _sid in (
             (ak, "akshare"),
             (yf, "yfinance"),
@@ -469,12 +516,16 @@ class IndexProvider(Provider):
             (ft, "akshare"),
             (cm, "cameco"),
             (rt, "ratio"),
+            (fr, "fred"),
         ):
             _fn.__source_id__ = _sid
 
         # 派生比率指数: 目录带 ratio 字段, 由两条腿计算 (无独立行情源)
         if _catalog(p).get("ratio"):
             return [rt]
+        # FRED 信用利差: 目录带 fred 字段, 专属源 (无第二数据源)
+        if _catalog(p).get("fred"):
+            return [fr]
         # Cameco 铀价: 目录带 cameco 字段, 月频专属源 (无第二数据源)
         if _catalog(p).get("cameco"):
             return [cm]

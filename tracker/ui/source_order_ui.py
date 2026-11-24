@@ -286,7 +286,7 @@ def render_source_order_editor(
     if domain == "index":
         st.caption(
             "顺序只影响同时具备 akshare 与 yfinance 的指数；"
-            "水泥网/恒生/Cameco/商品期货等专属源不参与排序。"
+            "水泥网/恒生/Cameco/商品期货/FRED 等专属源不参与排序。"
         )
     for channel in so.CHANNEL_ORDER:
         if channel not in so.CATALOG[domain] or not so.CATALOG[domain][channel]:

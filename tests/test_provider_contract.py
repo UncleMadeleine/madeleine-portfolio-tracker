@@ -29,7 +29,7 @@ _ALLOWED = {
     "global": {"ibkr", "longport", "eodhd", "yfinance", "akshare"},
     "cn": {"longport", "akshare", "yfinance"},
     "crypto": {"binance", "gate", "hyperliquid", "yfinance"},
-    "index": {"akshare", "yfinance", "ccement", "hsi", "cameco"},
+    "index": {"akshare", "yfinance", "ccement", "hsi", "cameco", "fred"},
 }
 
 
@@ -60,7 +60,7 @@ def test_cn_and_crypto_source_ids_are_known():
 
 
 @pytest.mark.parametrize(
-    "key", ["DXY", "VIX", "SPX", "HSI", "HSTECH", "CEMPI", "AU", "URANIUM"]
+    "key", ["DXY", "VIX", "SPX", "HSI", "HSTECH", "CEMPI", "AU", "URANIUM", "HY_OAS"]
 )
 def test_index_source_ids_are_known(key: str):
     provider = IndexProvider()
@@ -83,7 +83,7 @@ def test_no_source_is_unknown():
     crypto = CryptoProvider()
     chains.extend(crypto.quote_sources(parse("BTC-USD")))
     chains.extend(crypto.history_sources(parse("BTC-USD"), "2024-01-01", None))
-    for key in ("DXY", "HSI", "CEMPI", "AU", "URANIUM"):
+    for key in ("DXY", "HSI", "CEMPI", "AU", "URANIUM", "HY_OAS"):
         chains.extend(
             IndexProvider().history_sources(parse(f"IX.{key}"), "2024-01-01", None)
         )

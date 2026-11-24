@@ -176,6 +176,10 @@ class Provider:
                         # 不标记会让健康页把「无数据」显示成成功。
                         sp.ok = False
                         sp.error = "空结果"
+                        # 同时记到最后错误: 所有源都只返回空表时, 原先
+                        # last_err 保持 None → 报「未知错误」, 用户看不出
+                        # 是「数据源无数据」而不是程序异常。
+                        last_err = RuntimeError("空结果")
                     else:
                         return df
             except Exception as e:  # noqa: BLE001 - 降级到下一数据源

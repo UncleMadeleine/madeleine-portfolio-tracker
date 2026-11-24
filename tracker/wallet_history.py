@@ -629,7 +629,9 @@ def _fetch_tron(
                 ledger.add_transfer(
                     ts, native, -(amount + fee / 10**native.decimals), txid
                 )
-            elif to_addr == addr_hex and amount:
+            # 自转 (owner == to_address) 时上面扣了 amount+fee, 这里要把 amount
+            # 加回, 净变化只剩手续费; 普通转入仍只走这一支。
+            if to_addr == addr_hex and amount:
                 ledger.add_transfer(ts, native, amount, txid)
         else:
             # 合约调用/质押/投票等: 只扣手续费; 代币数量已由 trc20 列表覆盖

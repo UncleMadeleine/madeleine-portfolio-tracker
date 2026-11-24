@@ -603,6 +603,21 @@ class TestSymbolForToken:
         result = wallet_mod._symbol_for_token("eth", "eth")
         assert result == "ETH-USD"
 
+    def test_bridged_token_suffix_is_stripped(self):
+        """USDC.e / BTC.b 等桥接代币后缀在 Yahoo 不存在, 必须取主符号.
+
+        不剥离会生成 ``USDC.E-USD``, symbols.parse 以「无法识别的交易所
+        后缀」拒绝, 外部 tokenlist 导入的持仓每轮都报行情缺失。
+        """
+        from tracker.symbols import Market, parse
+
+        for raw in ("USDC.e", "WETH.e", "BTC.b", "USDT.e"):
+            code = wallet_mod._symbol_for_token(raw, "avalanche")
+            p = parse(code)
+            assert p.market is Market.CRYPTO, f"{raw} → {code}"
+            assert p.currency == "USD"
+            assert "." not in code
+
 # ---------------------------------------------------------------------------
 # TRON 链 (base58check 地址 + TronGrid /v1/accounts)
 # ---------------------------------------------------------------------------

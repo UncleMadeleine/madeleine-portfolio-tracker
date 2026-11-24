@@ -224,6 +224,49 @@ class TestRoutescan:
         token_deltas = [t.delta for t in ledger.transfers if t.asset_key == usdc_key]
         assert token_deltas == [pytest.approx(50.0)]
 
+    def test_self_transfer_only_costs_fee(self, monkeypatch):
+        """from == to == 地址的自转不能当全额转出 (只应扣 gas)."""
+        one_eth = "1000000000000000000"
+
+        def fake(url, params=None, **_kw):
+            if url.endswith("/gas-balance"):
+                return {"items": [{"balance": "0"}]}
+            if url.endswith("/erc20-holdings"):
+                return {"items": [], "link": {}}
+            if url.endswith("/erc20-transfers"):
+                return {"items": [], "link": {}}
+            if url.endswith("/transactions"):
+                return {
+                    "items": [
+                        {
+                            "id": "0xself",
+                            "timestamp": "2026-01-02T01:00:00Z",
+                            "from": ADDR,
+                            "to": ADDR,
+                            "value": one_eth,
+                            "gasUsed": "21000",
+                            "gasPrice": "1000000000",
+                            "status": True,
+                        }
+                    ],
+                    "link": {},
+                }
+            if url.endswith("/internal-operations"):
+                return {"items": [], "link": {}}
+            raise AssertionError(url)
+
+        monkeypatch.setattr(wallet_evm, "_http_json", fake)
+        ledger = wallet_evm._fetch_evm_routescan(
+            1,
+            "eth",
+            ADDR,
+            _ts("2026-01-01"),
+            _ts("2026-01-03", 23),
+            {**wh.DEFAULTS, "max_pages": 2},
+        )
+        native = [t.delta for t in ledger.transfers if t.asset_key == "native"]
+        assert sum(native) == pytest.approx(-0.000021)
+
 
     def test_internal_root_operation_is_not_double_counted(self, monkeypatch):
         """Routescan internal-operations 的 opIndex=0 是交易根调用, 与 txlist 重复."""
@@ -330,6 +373,45 @@ class TestBlockscout:
         native = [t.delta for t in ledger.transfers if t.asset_key == "native"]
         assert native == [pytest.approx(-int(fee_wei) / 1e18)]
 
+    def test_self_transfer_only_costs_fee(self, monkeypatch):
+        def fake(url, params=None, **_kw):
+            if url.endswith("/token-balances"):
+                return []
+            if "/token-transfers" in url:
+                return {"items": [], "next_page_params": None}
+            if url.endswith("/transactions"):
+                return {
+                    "items": [
+                        {
+                            "hash": "0xself",
+                            "timestamp": "2026-01-02T01:00:00Z",
+                            "from": {"hash": ADDR},
+                            "to": {"hash": ADDR},
+                            "value": "1000000000000000000",
+                            "fee": {"type": "actual", "value": "21000000000000"},
+                            "status": "ok",
+                        }
+                    ],
+                    "next_page_params": None,
+                }
+            if url.endswith("/internal-transactions"):
+                return {"items": [], "next_page_params": None}
+            if url.rstrip("/").endswith(f"/addresses/{ADDR}"):
+                return {"coin_balance": "0"}
+            raise AssertionError(url)
+
+        monkeypatch.setattr(wallet_evm, "_http_json", fake)
+        ledger = wallet_evm._fetch_evm_blockscout(
+            "https://example.invalid",
+            "eth",
+            ADDR,
+            _ts("2026-01-01"),
+            _ts("2026-01-03", 23),
+            {**wh.DEFAULTS, "max_pages": 2},
+        )
+        native = [t.delta for t in ledger.transfers if t.asset_key == "native"]
+        assert sum(native) == pytest.approx(-0.000021)
+
 
 # ---------------------------------------------------------------------------
 # Etherscan 兼容接口
@@ -410,6 +492,48 @@ class TestEtherscanLike:
         assert [t.delta for t in ledger.transfers if t.asset_key == usdc_key] == [
             pytest.approx(1.0)
         ]
+
+    def test_self_transfer_only_costs_fee(self, monkeypatch):
+        def fake(url, params=None, **_kw):
+            action = (params or {}).get("action")
+            if action == "balance":
+                return {"status": "1", "result": "0"}
+            if action == "addresstokenbalance":
+                return {"status": "1", "result": []}
+            if action == "tokentx":
+                return {"status": "1", "result": []}
+            if action == "txlist":
+                return {
+                    "status": "1",
+                    "result": [
+                        {
+                            "hash": "0xself",
+                            "timeStamp": str(_ts("2026-01-02")),
+                            "from": ADDR,
+                            "to": ADDR,
+                            "value": "1000000000000000000",
+                            "gasUsed": "21000",
+                            "gasPrice": "1000000000",
+                            "isError": "0",
+                        }
+                    ],
+                }
+            if action == "txlistinternal":
+                return {"status": "0", "message": "No transactions found", "result": []}
+            raise AssertionError(action)
+
+        monkeypatch.setattr(wallet_evm, "_http_json", fake)
+        ledger = wallet_evm._fetch_evm_etherscan_like(
+            "https://example/api",
+            "eth",
+            ADDR,
+            _ts("2026-01-01"),
+            _ts("2026-01-03", 23),
+            {**wh.DEFAULTS, "max_pages": 3},
+            label="TestScan",
+        )
+        native = [t.delta for t in ledger.transfers if t.asset_key == "native"]
+        assert sum(native) == pytest.approx(-0.000021)
 
 
 # ---------------------------------------------------------------------------
@@ -542,6 +666,53 @@ class TestTron:
         # 失败转账的 2 TRX 并未移动, 只应扣 0.1 TRX 手续费
         native = [t.delta for t in ledger.transfers if t.asset_key == "native"]
         assert native == [pytest.approx(-0.1)]
+
+    def test_self_transfer_only_costs_fee(self, monkeypatch):
+        """owner == to_address 的 TRX 自转净变化只应有手续费."""
+        hex_addr = wh._tron_hex_address(TRON_ADDR)
+
+        def fake_get(path, cfg):
+            if path.startswith("/v1/accounts/") and "/transactions/trc20" in path:
+                return {"data": [], "meta": {}}
+            if path.startswith("/v1/accounts/") and "/transactions" in path:
+                return {
+                    "data": [
+                        {
+                            "txID": "tself",
+                            "block_timestamp": _ts("2026-01-02") * 1000,
+                            "raw_data": {
+                                "contract": [
+                                    {
+                                        "type": "TransferContract",
+                                        "parameter": {
+                                            "value": {
+                                                "owner_address": hex_addr,
+                                                "to_address": hex_addr,
+                                                "amount": 2000000,
+                                            }
+                                        },
+                                    }
+                                ]
+                            },
+                            "ret": [{"fee": 100000}],
+                        }
+                    ],
+                    "meta": {},
+                }
+            if path.startswith("/v1/accounts/"):
+                return {"data": [{"balance": 0, "trc20": []}]}
+            raise AssertionError(path)
+
+        monkeypatch.setattr(wh, "_tron_get", fake_get)
+        ledger = wh.fetch_ledger(
+            "tron",
+            TRON_ADDR,
+            date(2026, 1, 1),
+            date(2026, 1, 3),
+            cfg=wh.DEFAULTS,
+        )
+        native = [t.delta for t in ledger.transfers if t.asset_key == "native"]
+        assert sum(native) == pytest.approx(-0.1)
 
 
 # ---------------------------------------------------------------------------

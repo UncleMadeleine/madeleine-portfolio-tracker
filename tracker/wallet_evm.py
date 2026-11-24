@@ -287,7 +287,7 @@ def _fetch_evm_routescan(
         fee = gas_used * gas_price
         if fee <= 0:
             fee = _to_float(row.get("burnedFees")) or 0.0
-        ok = bool(row.get("status", True))
+        ok = _tx_ok(row.get("status", True))
         if src == addr:
             spend = (value if ok else 0.0) + fee
             if spend:
@@ -297,7 +297,10 @@ def _fetch_evm_routescan(
                     -spend / (10**native.decimals),
                     str(row.get("id") or ""),
                 )
-        elif dst == addr and ok and value:
+        # 自转 (from == to == 地址) 时上面扣了 value+fee, 这里必须把 value 加回:
+        # 否则一笔自己转给自己会被当成全额转出, 历史余额整体偏移。用独立 if
+        # 而不是 elif, 对普通转入仍然只走这一支。
+        if dst == addr and ok and value:
             ledger.add_transfer(
                 ts,
                 native,
@@ -315,7 +318,7 @@ def _fetch_evm_routescan(
             ts = _parse_ts(row.get("timestamp"))
             if ts is None or ts < start_ts or ts > end_ts:
                 continue
-            if not bool(row.get("status", True)):
+            if not _tx_ok(row.get("status", True)):
                 continue
             # Routescan 的 internal-operations 会把每笔交易的根调用
             # (opIndex=0) 也列出来, 它和 /transactions 的同一条记录完全重复。
@@ -334,7 +337,8 @@ def _fetch_evm_routescan(
             txid = str(row.get("txHash") or "")
             if dst == addr:
                 ledger.add_transfer(ts, native, value / (10**native.decimals), txid)
-            elif src == addr:
+            # 自转/自调用同样要两边都记: 只加不减会把内部自转当成凭空收入。
+            if src == addr:
                 ledger.add_transfer(ts, native, -value / (10**native.decimals), txid)
     except WalletHistoryError as e:
         ledger.notes.append(f"内部交易未取到, 原生币历史可能偏低: {e}")
@@ -381,6 +385,23 @@ def _bs_hash(value: Any) -> str:
     if isinstance(value, dict):
         return str(value.get("hash") or "")
     return str(value or "")
+
+
+def _tx_ok(value: Any) -> bool:
+    """交易执行状态 → bool (兼容 bool / 0-1 / "ok"/"success"/"false"/"0").
+
+    Routescan 的 transactions 用布尔 status, Blockscout 的 internal-transactions
+    用 success; 不同自建实例/版本偶尔返回字符串或数字。直接 ``bool("false")``
+    会得到 True, 把失败交易当成成功并计入金额, 历史余额随之偏移。
+    """
+    if value is None:
+        return True
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    s = str(value).strip().lower()
+    return s not in ("", "0", "false", "fail", "failed", "error", "reverted")
 
 
 def _fetch_evm_blockscout(
@@ -510,13 +531,14 @@ def _fetch_evm_blockscout(
             fee = (_to_float(row.get("gas_used")) or 0.0) * (
                 _to_float(row.get("gas_price")) or 0.0
             )
-        ok = str(row.get("status") or "ok").lower() in ("ok", "success", "true", "1")
+        ok = _tx_ok(row.get("status"))
         txid = str(row.get("hash") or "")
         if src == addr:
             spend = (value if ok else 0.0) + fee
             if spend:
                 ledger.add_transfer(ts, native, -spend / (10**native.decimals), txid)
-        elif dst == addr and ok and value:
+        # 自转 (from == to == 地址): 扣款后要把 value 加回, 否则会被当成全额转出。
+        if dst == addr and ok and value:
             ledger.add_transfer(ts, native, value / (10**native.decimals), txid)
 
     # 内部交易
@@ -529,7 +551,7 @@ def _fetch_evm_blockscout(
             ts = _parse_ts(row.get("timestamp"))
             if ts is None or ts < start_ts or ts > end_ts:
                 continue
-            if not bool(row.get("success", True)):
+            if not _tx_ok(row.get("success", True)):
                 continue
             value = _to_float(row.get("value")) or 0.0
             if not value:
@@ -540,7 +562,8 @@ def _fetch_evm_blockscout(
             txid = str(row.get("transaction_hash") or row.get("hash") or "")
             if dst == addr:
                 ledger.add_transfer(ts, native, value / (10**native.decimals), txid)
-            elif src == addr:
+            # 自转/自调用两边都记 (净变化 0), 不能只加不减。
+            if src == addr:
                 ledger.add_transfer(ts, native, -value / (10**native.decimals), txid)
     except WalletHistoryError as e:
         ledger.notes.append(f"Blockscout 内部交易未取到, 原生币历史可能偏低: {e}")
@@ -793,7 +816,8 @@ def _fetch_evm_etherscan_like(
             spend = (value if ok else 0.0) + fee
             if spend:
                 ledger.add_transfer(ts, native, -spend / (10**native.decimals), txid)
-        elif dst == addr and ok and value:
+        # 自转 (from == to == 地址) 时扣款后把 value 加回, 净变化只剩手续费。
+        if dst == addr and ok and value:
             ledger.add_transfer(ts, native, value / (10**native.decimals), txid)
 
     # 内部交易
@@ -823,7 +847,8 @@ def _fetch_evm_etherscan_like(
             txid = str(row.get("hash") or "")
             if dst == addr:
                 ledger.add_transfer(ts, native, value / (10**native.decimals), txid)
-            elif src == addr:
+            # 自转两边都记; 只走 dst 分支会凭空多出一笔收入。
+            if src == addr:
                 ledger.add_transfer(ts, native, -value / (10**native.decimals), txid)
     except WalletHistoryError as e:
         ledger.notes.append(f"{label} 内部交易未取到, 原生币历史可能偏低: {e}")

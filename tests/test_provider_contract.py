@@ -18,7 +18,7 @@ from tests._contracts import (
 )
 
 from tracker import health
-from tracker.providers.base import Quote
+from tracker.providers.base import Provider, Quote
 from tracker.providers.cn_stocks import CNStocksProvider
 from tracker.providers.crypto import CryptoProvider
 from tracker.providers.global_stocks import GlobalStocksProvider
@@ -118,6 +118,21 @@ def test_quote_contract_accepts_valid_quote():
 def test_quote_contract_rejects_bad_data(quote):
     with pytest.raises(AssertionError):
         assert_quote_contract(quote, "AAPL")
+
+
+def test_history_all_empty_sources_reports_empty_result():
+    """所有源都只返回空表时, 错误信息不应退化成「未知错误」."""
+
+    class EmptyHistoryProvider(Provider):
+        name = "empty"
+
+        def history_sources(self, p, start_date, end_date, prefer_first=False):
+            return [lambda: pd.DataFrame()]
+
+    with pytest.raises(RuntimeError, match="空结果"):
+        EmptyHistoryProvider().fetch_history(
+            parse("AAPL"), "2024-01-01", "2024-02-01"
+        )
 
 
 def test_history_contract_accepts_valid_frame():

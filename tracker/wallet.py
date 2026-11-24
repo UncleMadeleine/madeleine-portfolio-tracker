@@ -483,10 +483,16 @@ def _symbol_for_token(symbol: str, chain: str, base_currency: str = "USD") -> st
     (symbols.valuation_currency), 否则会产出 USDT-USDT 这种自配对 ——
     Binance/Gate 都没有该交易对, 导入后永远取不到数; 且估值链没有 USDT
     汇率通道, 持仓会被排除出视图。
+
+    桥接/包装代币符号常带链后缀 (USDC.e / WETH.e / BTC.b, 外部 tokenlist
+    常见写法): Yahoo 没有这种代码, 直接拼接会得到 ``USDC.E-USD`` —— parse()
+    把它当成「无法识别的交易所后缀 .E-USD」而拒绝, 导入后每轮快照都报行情
+    缺失。与 wallet_nav 的取价口径一致, 只保留点号前的主符号。
     """
     from .symbols import valuation_currency
 
-    base = symbol.upper()
+    raw = str(symbol or "").strip().upper()
+    base = raw.split(".", 1)[0].strip() or raw
     quote = valuation_currency(base_currency)
     return f"{base}-{quote}"
 

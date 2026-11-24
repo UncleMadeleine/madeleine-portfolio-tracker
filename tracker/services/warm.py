@@ -10,6 +10,12 @@ streamlit, 因而可以在 headless CLI / 常驻服务里安全运行。
     refresh_state 协调器, 同数据面不会重复发网络;
   - CLI: `tracker warm` 调用 warm_once() 做一次预热, --interval 则常驻。
 
+跨进程单例: 常驻 CLI (`warm --interval`) 与 Streamlit 的 ensure_warmers()
+都会抢 var/warm.lock 的独占 flock, 先启动者成为唯一 leader 并负责后台保温,
+后启动者只保留页面级按需刷新 —— 否则两个进程各刷同一批 704 只, 会放大
+数据源限流与失败率。leader 退出/崩溃后锁自动释放, 另一个进程下次检查时
+再接管。
+
 进程内协调器 (inflight/完成时间) 按进程隔离: UI 与 CLI 同时运行可能各发一次
 同一批请求, 数据正确性不受影响 (SQLite WAL 支持并发读写)。
 """
@@ -17,8 +23,19 @@ streamlit, 因而可以在 headless CLI / 常驻服务里安全运行。
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
+from pathlib import Path
+
+try:  # Unix/macOS: 跨进程文件锁
+    import fcntl as _fcntl
+except ImportError:  # pragma: no cover - Windows
+    _fcntl = None
+try:  # Windows: 退化为字节范围锁
+    import msvcrt as _msvcrt
+except ImportError:  # pragma: no cover - Unix/macOS
+    _msvcrt = None
 
 from .. import events as events_mod
 from .. import prices
@@ -399,8 +416,156 @@ def ensure_calendar_refresher() -> None:
     ).start()
 
 
+# ---------- 跨进程共享保温 leader (唯一常驻保温) ----------
+
+#: 常驻保温锁文件 (var/warm.lock); flock 随进程退出自动释放, 空文件无害
+_WARM_LOCK_NAME = "warm.lock"
+_leader_lock = threading.Lock()
+_leader_file = None
+_leader_role: str | None = None
+_leader_denied_logged = False
+
+
+def warm_lock_path() -> Path:
+    """共享保温锁文件路径 (与行情缓存同目录)."""
+    from ..paths import var_dir
+
+    return var_dir() / _WARM_LOCK_NAME
+
+
+def _lock_file_nonblocking(f) -> None:
+    """对已打开文件加跨进程独占锁; 被占用时抛 OSError."""
+    if _fcntl is not None:
+        _fcntl.flock(f.fileno(), _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+        return
+    if _msvcrt is not None:  # pragma: no cover - Windows
+        f.seek(0)
+        _msvcrt.locking(f.fileno(), _msvcrt.LK_NBLCK, 1)
+
+
+def _unlock_file(f) -> None:
+    try:
+        if _fcntl is not None:
+            _fcntl.flock(f.fileno(), _fcntl.LOCK_UN)
+        elif _msvcrt is not None:  # pragma: no cover - Windows
+            f.seek(0)
+            _msvcrt.locking(f.fileno(), _msvcrt.LK_UNLCK, 1)
+    except OSError:
+        pass
+
+
+def _ensure_lockable_byte(f) -> None:
+    """Windows 字节锁要求文件至少 1 字节; Unix 不需要."""
+    if _msvcrt is None or _fcntl is not None:  # pragma: no cover - Windows
+        return
+    f.seek(0, os.SEEK_END)
+    if f.tell() == 0:
+        f.write(" ")
+        f.flush()
+
+
+def acquire_warm_leader(role: str = "warm") -> bool:
+    """尝试成为全机唯一常驻保温 leader; 成功返回 True.
+
+    锁用非阻塞 flock, 生命周期 = 进程生命周期 (文件句柄保存在模块全局)。
+    已被其它进程持有时返回 False, 调用方只保留页面级按需刷新, 不应再起
+    第二套后台线程。同一进程重复调用幂等返回 True。
+    """
+    global _leader_file, _leader_role, _leader_denied_logged
+
+    with _leader_lock:
+        if _leader_file is not None:
+            return True
+        path = warm_lock_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            f = open(path, "a+", encoding="utf-8")
+        except OSError:
+            # 锁文件都建不了 (只读数据目录) 时别连带停掉保温: 保持旧行为
+            logger.warning("无法创建共享保温锁 %s, 本进程按独立保温启动", path)
+            return True
+        try:
+            _ensure_lockable_byte(f)
+            _lock_file_nonblocking(f)
+        except OSError:
+            f.close()
+            return False
+        try:
+            if _fcntl is not None:
+                f.seek(0)
+                f.truncate()
+            f.seek(0)
+            f.write(f"{os.getpid()} {role}\n")
+            f.flush()
+        except OSError:
+            pass  # 诊断文本写失败不影响锁本身
+        _leader_file = f
+        _leader_role = role
+        _leader_denied_logged = False
+        return True
+
+
+def release_warm_leader() -> None:
+    """主动释放共享保温锁 (CLI 常驻循环退出时调用; 进程退出会自动释放)."""
+    global _leader_file, _leader_role
+
+    with _leader_lock:
+        f = _leader_file
+        _leader_file = None
+        _leader_role = None
+    if f is not None:
+        _unlock_file(f)
+        f.close()
+
+
+def warm_lock_held_by_other() -> bool:
+    """探测其它进程是否持有共享保温锁 (不改变本进程 leader 状态)."""
+    with _leader_lock:
+        if _leader_file is not None:
+            return False
+    path = warm_lock_path()
+    if not path.exists():
+        return False
+    try:
+        f = open(path, "a+", encoding="utf-8")
+    except OSError:
+        return False
+    try:
+        _ensure_lockable_byte(f)
+        _lock_file_nonblocking(f)
+    except OSError:
+        f.close()
+        return True
+    _unlock_file(f)
+    f.close()
+    return False
+
+
+def leader_status() -> dict:
+    """本进程/其它进程的共享保温 leader 状态 (doctor / 健康页展示)."""
+    with _leader_lock:
+        held = _leader_file is not None
+        role = _leader_role
+    return {
+        "held": held,
+        "role": role,
+        "external": (not held) and warm_lock_held_by_other(),
+    }
+
+
 def ensure_warmers() -> None:
-    """一次拉起行情/汇率 + 日历两条保温线程 (幂等)."""
+    """一次拉起行情/汇率 + 日历两条保温线程 (全机唯一 leader 才启动).
+
+    常驻 CLI (`warm --interval`) 已持锁时, Streamlit 不再起第二套后台线程;
+    只靠页面级按需刷新即可。若 leader 退出, 下一次 rerun 会自动接管。
+    """
+    global _leader_denied_logged
+
+    if not acquire_warm_leader("streamlit"):
+        if not _leader_denied_logged:
+            logger.info("共享保温已由其它进程负责, 本进程跳过后台保温线程")
+            _leader_denied_logged = True
+        return
     ensure_background_refresher()
     ensure_calendar_refresher()
 
@@ -534,4 +699,5 @@ def status() -> dict:
             "inflight": cal_inflight,
             "last_done_at": cal_last,
         },
+        "leader": leader_status(),
     }

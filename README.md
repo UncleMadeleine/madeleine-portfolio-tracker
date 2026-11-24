@@ -206,7 +206,7 @@ python -m tracker.cli cache clear
 python -m tracker.cli warm                          # 预热一次 (持仓+自选)
 python -m tracker.cli warm --symbols AAPL TSLA      # 额外代码也预热
 python -m tracker.cli warm --calendar-only --json   # 只预热财经日历
-python -m tracker.cli warm --interval 300           # 常驻, 每 5 分钟检查一次
+python -m tracker.cli warm --interval 300           # 常驻 (全机唯一; 已有时等待接管)
 
 # 统一导入（追加合并为默认，--overwrite 覆盖全部持仓）
 python -m tracker.cli import ibkr --dry-run            # 预览 IBKR 账户持仓（需 Gateway 已登录）
@@ -891,6 +891,10 @@ python -m tracker.cli import wallet polygon 0x... --tokenlist my_tokens.json
 CLI 不再依赖前端进程做缓存保温：`python -m tracker.cli warm` 可按磁盘持仓/自选预热一次，
 `warm --interval 300` 可常驻周期刷新；两者都和页面共用 `var/quotes_cache.db`，也可在启动
 `tracker-ui` 后直接受益于前端保温线程写入的缓存。
+
+常驻保温全机只保留一个：`warm --interval` 与 Streamlit 启动时的内置保温共用
+`var/warm.lock` 选举 leader，后启动者自动让位（第二个 CLI 常驻进程会原地等待，
+leader 退出后自动接管），避免两个进程重复刷新同一批代码放大数据源限流。
 
 **给 AI 的完整操作手册**（子命令速查、代码规范、数据源优先级、配置文件字段、常见操作流程、
 注意事项）随仓库分发在 [`skills/portfolio-tracker/SKILL.md`](skills/portfolio-tracker/SKILL.md)，

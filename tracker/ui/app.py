@@ -47,7 +47,8 @@ def main() -> None:
     theme.inject()
     # 进程级后台保温: 服务长期运行时持续刷新行情/汇率/日历磁盘缓存 (没有
     # 任何页面打开也更新, 后来者打开即是新鲜数据)。实现无 Streamlit 依赖,
-    # 与 CLI `tracker warm` 共用同一套服务。幂等, 每次 rerun 重复调用无副作用
+    # 与 CLI `tracker warm` 共用同一套服务。跨进程用 var/warm.lock 选唯一
+    # leader: CLI 常驻保温已在跑时这里直接让位, 不会起第二套线程。
     ensure_warmers()
 
     def _run_kline() -> None:

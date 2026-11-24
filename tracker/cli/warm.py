@@ -4,7 +4,7 @@ CLI 每次执行只按需回源; 需要常驻保温时用本子命令 (不依赖
 
   tracker warm                         # 预热一次 (持仓+自选)
   tracker warm --symbols AAPL TSLA     # 额外代码也预热
-  tracker warm --interval 300          # 常驻, 启动预热一次后每 5 分钟检查
+  tracker warm --interval 300          # 常驻 (全机唯一; 已有时等待接管)
 """
 
 from __future__ import annotations
@@ -72,40 +72,58 @@ def _warm_kwargs(args) -> dict:
 
 
 def _run_resident(args, kwargs: dict) -> None:
-    """常驻保温: 启动先预热一次, 之后每 interval 秒检查一次."""
+    """常驻保温: 启动先预热一次, 之后每 interval 秒检查一次.
+
+    全机同时只允许一个常驻保温进程: 由 var/warm.lock 的 flock 选举。
+    锁已被 Streamlit 或另一个 CLI 持有时不重复刷新, 而是原地等待其退出
+    后接管 (systemd 服务不会因为 UI 先启动就退出/进入重启循环)。
+    """
     from ..services import warm
 
+    waiting = False
+    while not warm.acquire_warm_leader("cli"):
+        if not waiting:
+            print(
+                "已有共享保温进程在运行, 等待其退出后接管 (每 30s 重试)…",
+                flush=True,
+            )
+            waiting = True
+        time.sleep(30)
+
     interval = int(args.interval)
-    while True:
-        at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        try:
-            result = warm.warm_once(**kwargs)
-        except Exception as e:  # noqa: BLE001 - 常驻进程不因单轮失败退出
-            result = {"error": f"{type(e).__name__}: {e}"}
-            if args.json:
-                print(
-                    json.dumps(
-                        {"at": at, **result}, ensure_ascii=False, default=str
-                    ),
-                    flush=True,
-                )
+    try:
+        while True:
+            at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            try:
+                result = warm.warm_once(**kwargs)
+            except Exception as e:  # noqa: BLE001 - 常驻进程不因单轮失败退出
+                result = {"error": f"{type(e).__name__}: {e}"}
+                if args.json:
+                    print(
+                        json.dumps(
+                            {"at": at, **result}, ensure_ascii=False, default=str
+                        ),
+                        flush=True,
+                    )
+                else:
+                    print(f"[{at}] ⚠ 预热失败: {result['error']}", flush=True)
             else:
-                print(f"[{at}] ⚠ 预热失败: {result['error']}", flush=True)
-        else:
-            if args.json:
-                print(
-                    json.dumps(
-                        {"at": at, **result}, ensure_ascii=False, default=str
-                    ),
-                    flush=True,
-                )
-            else:
-                print(f"[{at}]", flush=True)
-                print(_summary_text(result), flush=True)
-        try:
-            time.sleep(interval)
-        except KeyboardInterrupt:
-            break
+                if args.json:
+                    print(
+                        json.dumps(
+                            {"at": at, **result}, ensure_ascii=False, default=str
+                        ),
+                        flush=True,
+                    )
+                else:
+                    print(f"[{at}]", flush=True)
+                    print(_summary_text(result), flush=True)
+            try:
+                time.sleep(interval)
+            except KeyboardInterrupt:
+                break
+    finally:
+        warm.release_warm_leader()
 
 
 def cmd_warm(args) -> None:

@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 from tracker.prices import Quote
 from tracker.services import warm as warm_mod
@@ -186,3 +189,111 @@ def test_cli_warm_once_text(monkeypatch, capsys):
     assert "=== 缓存预热 ===" in out
     assert "行情: 1/1 只成功" in out
     assert "日历: 2 个月窗口, 3 个事件" in out
+
+
+# ---------- 共享保温单例 (var/warm.lock) ----------
+
+
+def test_shared_warm_lock_is_cross_process(monkeypatch, tmp_path):
+    """一个进程持锁时, 另一个进程不能再成为常驻保温; 释放后可接管."""
+    monkeypatch.setenv("TRACKER_HOME", str(tmp_path))
+    root = Path(__file__).resolve().parents[1]
+    env = {**os.environ, "TRACKER_HOME": str(tmp_path)}
+    code = (
+        "from tracker.services import warm; "
+        "print(warm.acquire_warm_leader('child'))"
+    )
+
+    def child() -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=str(root),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+    warm_mod.release_warm_leader()
+    try:
+        assert warm_mod.acquire_warm_leader("parent") is True
+        assert warm_mod.warm_lock_path() == tmp_path / "var" / "warm.lock"
+        # 同进程重复获取幂等
+        assert warm_mod.acquire_warm_leader("again") is True
+
+        blocked = child()
+        assert blocked.returncode == 0, blocked.stderr
+        assert blocked.stdout.strip() == "False"
+    finally:
+        warm_mod.release_warm_leader()
+
+    # leader 退出 (锁 fd 关闭) 后, 下一进程可以接管
+    took_over = child()
+    assert took_over.returncode == 0, took_over.stderr
+    assert took_over.stdout.strip() == "True"
+
+
+def test_ensure_warmers_respects_shared_lock(monkeypatch):
+    """Streamlit 入口只在成为 leader 时起线程, 否则完全让位给常驻进程."""
+    calls: list[str] = []
+    monkeypatch.setattr(
+        warm_mod, "ensure_background_refresher", lambda: calls.append("quotes")
+    )
+    monkeypatch.setattr(
+        warm_mod, "ensure_calendar_refresher", lambda: calls.append("calendar")
+    )
+
+    monkeypatch.setattr(
+        warm_mod, "acquire_warm_leader", lambda role="warm": False
+    )
+    warm_mod.ensure_warmers()
+    assert calls == []
+
+    monkeypatch.setattr(
+        warm_mod, "acquire_warm_leader", lambda role="warm": True
+    )
+    warm_mod.ensure_warmers()
+    assert calls == ["quotes", "calendar"]
+
+
+def test_cli_resident_waits_for_existing_leader(monkeypatch, capsys):
+    """已有常驻保温时, 第二个 `warm --interval` 不重复刷新, 原地等待接管."""
+    from tracker.cli import build_parser
+
+    monkeypatch.setattr(
+        warm_mod, "acquire_warm_leader", lambda role="warm": False
+    )
+    monkeypatch.setattr(
+        warm_mod,
+        "warm_once",
+        lambda **kw: pytest.fail("等待 leader 期间不应发起预热"),
+    )
+
+    class _StopSleep:
+        def sleep(self, _seconds):
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr("tracker.cli.warm.time", _StopSleep())
+    args = build_parser().parse_args(["warm", "--interval", "300"])
+    args.func(args)
+
+    out = capsys.readouterr().out
+    assert "等待其退出后接管" in out
+    assert "已停止保温" in out
+
+
+def test_status_reports_shared_leader(monkeypatch, tmp_path):
+    monkeypatch.setenv("TRACKER_HOME", str(tmp_path))
+    warm_mod.release_warm_leader()
+
+    before = warm_mod.status()["leader"]
+    assert before == {"held": False, "role": None, "external": False}
+
+    assert warm_mod.acquire_warm_leader("unit") is True
+    try:
+        leader = warm_mod.status()["leader"]
+        assert leader["held"] is True
+        assert leader["role"] == "unit"
+        assert leader["external"] is False
+    finally:
+        warm_mod.release_warm_leader()

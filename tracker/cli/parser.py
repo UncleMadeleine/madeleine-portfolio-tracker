@@ -1029,7 +1029,7 @@ def _add_warm_parser(sub: argparse.ArgumentParser) -> None:
             "示例:\n"
             "  tracker warm                         # 预热一次 (持仓+自选)\n"
             "  tracker warm --symbols AAPL TSLA     # 额外代码也预热\n"
-            "  tracker warm --interval 300          # 常驻, 每 5 分钟检查一次\n"
+            "  tracker warm --interval 300          # 常驻 (全机唯一; 已有时等待接管)\n"
             "  tracker warm --calendar-only --json  # 只预热日历, JSON 输出\n"
         ),
     )

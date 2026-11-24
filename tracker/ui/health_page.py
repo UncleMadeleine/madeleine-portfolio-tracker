@@ -295,8 +295,18 @@ def _render_cache(report: dict) -> None:
         )
 
     warm = report["warm"]
+    leader = warm.get("leader") or {}
+    if leader.get("held"):
+        lock_txt = (
+            "共享保温锁: 本进程持有"
+            + (f" ({leader.get('role')})" if leader.get("role") else "")
+        )
+    elif leader.get("external"):
+        lock_txt = "共享保温锁: 由其它常驻进程持有 (本进程不重复启动)"
+    else:
+        lock_txt = "共享保温锁: 空闲"
     st.caption(
-        f"保温线程 (本进程): 行情 "
+        f"{lock_txt} · 本进程保温线程: 行情 "
         f"{'运行中' if warm['quotes']['started'] else '未启动'} / 日历 "
         f"{'运行中' if warm['calendar']['started'] else '未启动'}"
     )

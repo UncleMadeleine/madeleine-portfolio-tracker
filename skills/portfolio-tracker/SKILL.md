@@ -58,7 +58,7 @@ tracker-ui          # pip 安装后起 Streamlit 页面 (等价 streamlit run tr
 | `export` | 组合快照导出 | `export -f md -o snapshot.md`, `export -f json` |
 | `sync` | IBKR 同步 (兼容入口→import ibkr; 缺省追加合并, 与 import 一致, `--overwrite` 才覆盖) | `sync --dry-run` |
 | `import-wallet` | 链上钱包导入 (兼容入口→import wallet; 缺省只查询, `--add`/`--overwrite` 才写盘) | `import-wallet eth 0x... --add` |
-| `cache` | 行情磁盘缓存 | `cache info`, `cache clear` |
+| `cache` | 行情磁盘缓存 | `cache info`, `cache clear`, `cache prune [--dry-run]` (清理孤儿缓存) |
 | `warm` | 主动预热/保温行情、汇率、日历、持仓K线与估值快照 (不依赖前端进程) | `warm`, `warm --symbols AAPL TSLA`, `warm --calendar-only --json`, `warm --interval 300` (常驻) |
 | `doctor` | 数据健康体检 (来源成功率/耗时/最近失败 + 持仓自选行情/K线/汇率/基本面缓存缺口 + 本地完整性) | `doctor`, `doctor --window 72`, `doctor --json`, `doctor --probe` (主动联网), `doctor --clear-events`; 总体异常退出码 1 |
 | `init` | 首次使用: 模板落地到数据目录 | `init`, `init --force` |

@@ -83,6 +83,31 @@ _refresh_done_at = _quote_coordinator.done_at
 _refresher_lock = threading.Lock()
 _refresher_started = False
 
+#: 孤儿缓存自动清理: 每 24h 最多一次 (常驻进程内计时, 重启后首轮会检查).
+CACHE_PRUNE_INTERVAL = 24 * 3600.0
+_last_cache_prune = 0.0
+_cache_prune_lock = threading.Lock()
+
+
+def _maybe_prune_orphans() -> dict | None:
+    """按当前持仓/自选清理孤儿缓存; 每天最多一次, 失败不影响保温."""
+    global _last_cache_prune
+    now = time.time()
+    with _cache_prune_lock:
+        if now - _last_cache_prune < CACHE_PRUNE_INTERVAL:
+            return None
+        _last_cache_prune = now
+    try:
+        from .. import cache as cache_mod
+
+        result = cache_mod.prune_orphans()
+        if result.get("deleted"):
+            logger.info("清理孤儿缓存: %s 条", result["deleted"])
+        return result
+    except Exception:  # noqa: BLE001 - 维护任务失败不能拖垮保温
+        logger.warning("清理孤儿缓存失败", exc_info=True)
+        return None
+
 
 def refresh_period(n_symbols: int) -> float:
     """保温周期 (秒): 基准 300s 起, 按符号集规模拉长, 上限 30min."""
@@ -798,6 +823,9 @@ def warm_once(
     started = time.time()
     result: dict = {}
     try:
+        pruned = _maybe_prune_orphans()
+        if pruned is not None:
+            result["cache_prune"] = pruned
         if include_quotes:
             quotes, fx = warm_quotes_once(
                 extra_symbols=extra_symbols, refresh=refresh

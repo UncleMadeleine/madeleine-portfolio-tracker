@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
-from .symbols import is_currency_code, parse
+from .symbols import Market, is_currency_code, parse
 from .util import finite_float as _finite_opt
 
 
@@ -485,6 +485,188 @@ def clear_ohlc() -> int:
 def clear_fundamentals() -> int:
     """只清基本面缓存 (PB/市值): EODHD fundamentals 角色切换后重取."""
     return _clear_table("fundamentals")
+
+
+def prune_orphans(*, dry_run: bool = False) -> dict:
+    """删除当前持仓/自选之外的孤儿缓存 (可再生数据).
+
+    覆盖:
+      - quotes / fundamentals / series_cache(shares_full:*) / calendar_cache(g:*)
+      - ohlc_cache (键可能是 ``SYMBOL|源签名``)
+      - json_cache (valuation_snapshot:* / filings:*)
+
+    保守保留:
+      - 指数缓存 (``index:IX.*``) 与批量日历键 (``cn:*``): 不属于持仓/自选域
+      - 无法解析的键、``g:UNKNOWN_OK`` 等哨兵
+      - 持仓/自选为空或任一文件读取失败时整体跳过, 避免误删全部缓存
+    """
+    from . import storage
+
+    scope: set[str] = set()
+    for label, loader, path, key in (
+        ("持仓", storage.load_portfolio, storage.PORTFOLIO_PATH, "holdings"),
+        ("自选", storage.load_watchlist, storage.WATCHLIST_PATH, "watchlist"),
+    ):
+        try:
+            data = loader(path)
+        except Exception as e:  # noqa: BLE001 - 任一侧不可读时宁可不清
+            return {
+                "skipped": True,
+                "reason": f"{label}文件读取失败, 未删除: {e}",
+                "scope_size": len(scope),
+                "deleted": 0,
+                "tables": {},
+            }
+        rows = data.get(key) if isinstance(data, dict) else None
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            sym = row.get("symbol")
+            if not sym:
+                continue
+            try:
+                scope.add(parse(str(sym)).yahoo)
+            except (TypeError, ValueError):
+                continue
+    if not scope:
+        return {
+            "skipped": True,
+            "reason": "当前持仓/自选为空, 为安全起见未删除",
+            "scope_size": 0,
+            "deleted": 0,
+            "tables": {},
+        }
+
+    def _keep(sym: str) -> bool:
+        try:
+            p = parse(sym)
+        except (TypeError, ValueError):
+            return True  # 无法解析的键保守保留
+        return p.market is Market.INDEX or p.yahoo in scope
+
+    def _run():
+        with _cache._lock, _cache._connection() as con:
+            tables: dict[str, dict] = {}
+
+            def _collect(sql: str):
+                return con.execute(sql).fetchall()
+
+            def _entry(keys: list, **extra) -> dict:
+                item = {
+                    "orphans": len(keys),
+                    "deleted": 0 if dry_run else len(keys),
+                    "sample": sorted(str(k) for k in keys)[:20],
+                }
+                item.update(extra)
+                return item
+
+            q_orph = [
+                r[0]
+                for r in _collect("SELECT symbol FROM quotes")
+                if not _keep(r[0])
+            ]
+            tables["quotes"] = _entry(q_orph)
+
+            ohlc_rows = _collect("SELECT symbol, months FROM ohlc_cache")
+            ohlc_orph: list[tuple[str, int]] = []
+            index_kept = 0
+            for sym, months in ohlc_rows:
+                base = str(sym).split("|", 1)[0]
+                if base.startswith("index:"):
+                    index_kept += 1
+                    continue
+                if not _keep(base):
+                    ohlc_orph.append((str(sym), int(months)))
+            tables["ohlc_cache"] = _entry(
+                [f"{s} ({m}m)" for s, m in ohlc_orph],
+                kept_index=index_kept,
+            )
+
+            json_orph = []
+            for (key,) in _collect("SELECT key FROM json_cache"):
+                prefix, sep, sym = str(key).partition(":")
+                if prefix not in ("valuation_snapshot", "filings") or not sep:
+                    continue
+                if not _keep(sym):
+                    json_orph.append(str(key))
+            tables["json_cache"] = _entry(json_orph)
+
+            fund_orph = [
+                r[0]
+                for r in _collect("SELECT symbol FROM fundamentals")
+                if not _keep(r[0])
+            ]
+            tables["fundamentals"] = _entry(fund_orph)
+
+            series_orph = []
+            for (key,) in _collect("SELECT key FROM series_cache"):
+                key = str(key)
+                prefix, sep, sym = key.partition(":")
+                if prefix != "shares_full" or not sep:
+                    continue
+                if not _keep(sym):
+                    series_orph.append(key)
+            tables["series_cache"] = _entry(series_orph)
+
+            cal_orph = []
+            for (key,) in _collect("SELECT key FROM calendar_cache"):
+                key = str(key)
+                if not key.startswith("g:"):
+                    continue  # cn:* 整批缓存不属于单代码
+                if key[2:].upper() == "UNKNOWN_OK":
+                    continue  # 哨兵键 (无有效代码) 不属于任何代码
+                if not _keep(key[2:]):
+                    cal_orph.append(key)
+            tables["calendar_cache"] = _entry(cal_orph)
+
+            if not dry_run:
+                if q_orph:
+                    con.executemany(
+                        "DELETE FROM quotes WHERE symbol=?", [(s,) for s in q_orph]
+                    )
+                if ohlc_orph:
+                    con.executemany(
+                        "DELETE FROM ohlc_cache WHERE symbol=? AND months=?",
+                        ohlc_orph,
+                    )
+                if json_orph:
+                    con.executemany(
+                        "DELETE FROM json_cache WHERE key=?", [(k,) for k in json_orph]
+                    )
+                if fund_orph:
+                    con.executemany(
+                        "DELETE FROM fundamentals WHERE symbol=?",
+                        [(s,) for s in fund_orph],
+                    )
+                if series_orph:
+                    con.executemany(
+                        "DELETE FROM series_cache WHERE key=?",
+                        [(k,) for k in series_orph],
+                    )
+                if cal_orph:
+                    con.executemany(
+                        "DELETE FROM calendar_cache WHERE key=?",
+                        [(k,) for k in cal_orph],
+                    )
+                con.commit()
+
+            deleted = sum(t["deleted"] for t in tables.values())
+            would_delete = sum(t["orphans"] for t in tables.values())
+            return {
+                "skipped": False,
+                "scope_size": len(scope),
+                "dry_run": dry_run,
+                "deleted": deleted,
+                "would_delete": would_delete,
+                "tables": tables,
+            }
+
+    try:
+        return _cache._with_schema_retry(_run)
+    except sqlite3.Error as e:
+        raise RuntimeError(f"缓存数据库忙或不可用 ({e}); 稍后重试") from e
 
 
 # ---------- 财经日历 (财报/分红事件) 缓存 ----------

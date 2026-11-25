@@ -202,6 +202,8 @@ python -m tracker.cli import wallet solana Hxxxx...            # Solana 链 (bas
 # 行情磁盘缓存管理
 python -m tracker.cli cache info
 python -m tracker.cli cache clear
+python -m tracker.cli cache prune            # 清理当前持仓/自选之外的孤儿缓存
+python -m tracker.cli cache prune --dry-run  # 只查看将删除的条目
 
 # 主动预热 / 常驻保温 (不依赖 Streamlit 前端进程; 与页面共用同一磁盘缓存)
 python -m tracker.cli warm                          # 预热一次 (行情+汇率+日历+持仓K线/估值)
@@ -893,7 +895,8 @@ CLI 不再依赖前端进程做缓存保温：`python -m tracker.cli warm` 可�
 并对**持仓**预热最近 14 个月日K（叠加 `--symbols`）与估值快照，顺手补齐净值回填和 PB/市值阈值所需的缓存；
 `warm --interval 300` 可常驻周期刷新；两者都和页面共用 `var/quotes_cache.db`，也可在启动
 `tracker-ui` 后直接受益于前端保温线程写入的缓存。行情全量一轮约 30s，常驻建议 300–600s
-（与 5 分钟行情新鲜期对齐），健康事件在每轮结束立即落盘。
+（与 5 分钟行情新鲜期对齐），健康事件在每轮结束立即落盘；保温进程每天自动执行一次
+`cache prune`，清理已移出持仓/自选的孤儿缓存（指数缓存与整批日历键保留）。
 
 常驻保温全机只保留一个：`warm --interval` 与 Streamlit 启动时的内置保温共用
 `var/warm.lock` 选举 leader，后启动者自动让位（第二个 CLI 常驻进程会原地等待，

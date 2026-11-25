@@ -14,6 +14,12 @@ from tracker.prices import Quote
 from tracker.services import warm as warm_mod
 
 
+@pytest.fixture(autouse=True)
+def _skip_auto_cache_prune(monkeypatch):
+    """默认跳过 warm_once 的每日孤儿缓存清理, 避免测试互相影响."""
+    monkeypatch.setattr(warm_mod, "_last_cache_prune", warm_mod.time.time())
+
+
 def test_warm_service_has_no_streamlit_dependency():
     """CLI 只装核心依赖也要能保温: 服务模块不得间接 import streamlit."""
     code = (
@@ -276,6 +282,28 @@ def test_warm_once_includes_history_and_flushes_health(monkeypatch):
     assert result["history"]["ok"] == 1
     assert result["valuation"]["ok"] == 1
     assert calls == [True]
+
+
+def test_warm_once_prunes_orphans_at_most_once_per_day(monkeypatch):
+    monkeypatch.setattr(warm_mod, "_last_cache_prune", 0.0)
+    monkeypatch.setattr(
+        warm_mod,
+        "warm_quotes_once",
+        lambda **kw: ({"symbols": [], "ok": 0, "errors": {}, "notes": []}, None),
+    )
+    monkeypatch.setattr(
+        warm_mod, "warm_holdings_history_once", lambda **kw: {"skipped": True}
+    )
+    monkeypatch.setattr(warm_mod, "warm_valuation_once", lambda **kw: {"skipped": True})
+    monkeypatch.setattr(warm_mod, "warm_calendar_once", lambda **kw: None)
+    calls: list[int] = []
+    monkeypatch.setattr(
+        "tracker.cache.prune_orphans",
+        lambda **kw: calls.append(1) or {"deleted": 0},
+    )
+    warm_mod.warm_once()
+    warm_mod.warm_once()
+    assert calls == [1]
 
 
 def test_refresh_period_scales_with_batch_quotes():

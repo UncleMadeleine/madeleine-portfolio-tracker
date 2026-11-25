@@ -1013,15 +1013,20 @@ def _add_cache_parser(sub: argparse.ArgumentParser) -> None:
             "  tracker cache info          # 查看缓存统计\n"
             "  tracker cache clear         # 清空行情缓存\n"
             "  tracker cache prune         # 清理当前持仓/自选之外的孤儿缓存\n"
+            "  tracker cache gc            # 清理损坏/过期/旧源签名的无效缓存\n"
             "  tracker cache prune --dry-run\n"
+            "  tracker cache gc --dry-run\n"
             "  tracker cache info --json   # JSON 输出\n"
         ),
     )
     p_c.add_argument(
-        "action", nargs="?", choices=["info", "clear", "prune"], default="info"
+        "action",
+        nargs="?",
+        choices=["info", "clear", "prune", "gc"],
+        default="info",
     )
     p_c.add_argument(
-        "--dry-run", action="store_true", help="prune 时只展示将删除的条目"
+        "--dry-run", action="store_true", help="prune/gc 时只展示将删除的条目"
     )
     _add_json_arg(p_c)
     p_c.set_defaults(func=_cmd(".cache", "cmd_cache"))

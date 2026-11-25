@@ -795,6 +795,7 @@ from .cache_domains import (  # noqa: E402,F401 - 兼容再导出
     get_json_cached,
     get_ohlc_cached,
     get_series_cached,
+    gc_invalid,
     prune_orphans,
     set_cached,
     set_calendar_row,

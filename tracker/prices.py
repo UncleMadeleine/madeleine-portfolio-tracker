@@ -26,6 +26,8 @@ __all__ = [
     "get_quotes",
     "get_history",
     "get_ohlc",
+    "ohlc_cache_key",
+    "index_ohlc_cache_key",
     "get_index_history",
 ]
 
@@ -81,6 +83,43 @@ def get_quote(
         raise
 
 
+def ohlc_cache_key(
+    symbol: str,
+    prefer_akshare: bool = False,
+    use_ibkr: bool = False,
+    use_longport: bool = False,
+    crypto_source: str = "auto",
+) -> str:
+    """股票/加密 K线磁盘缓存键 (与 get_ohlc 共用, 供 GC 判断当前源签名)."""
+    p = parse(symbol)
+    src_sig = ""
+    if prefer_akshare or use_ibkr or use_longport or crypto_source != "auto":
+        src_sig = (
+            f"|a{int(prefer_akshare)}i{int(use_ibkr)}"
+            f"l{int(use_longport)}c{crypto_source}"
+        )
+    from . import eodhd as eodhd_mod
+    from . import source_order as source_order_mod
+
+    src_sig += eodhd_mod.cache_signature()
+    order_sig = source_order_mod.signature()
+    if order_sig:
+        src_sig += f"|o{order_sig}"
+    return f"{p.yahoo}{src_sig}"
+
+
+def index_ohlc_cache_key(symbol: str) -> str:
+    """指数 K线磁盘缓存键 (index: 前缀 + 当前 source_order 签名)."""
+    from . import source_order as source_order_mod
+
+    p = parse(symbol)
+    key = f"index:{p.yahoo}"
+    order_sig = source_order_mod.signature()
+    if order_sig:
+        key += f"|o{order_sig}"
+    return key
+
+
 def get_ohlc(
     symbol: str,
     months: int = 12,
@@ -101,31 +140,16 @@ def get_ohlc(
     """
     from .charting import clean_ohlc
 
-    p = parse(symbol)
     # 只要指定了任一端日期就是「区间查询」: 结果可能被截断, 不能当作完整
     # months 窗口读写 (key 只有 symbol+months), 否则会把截断数据污染进缓存
     is_range = start_date is not None or end_date is not None
-    # 数据源偏好也必须进缓存键: 缓存里的 K 线来自某条源链, 同一代码换
-    # --akshare/--longport/--ibkr/--crypto-source 再查时若仍命中旧缓存,
-    # 用户显式指定的源根本不会执行 (首次结果被 TTL 内复用)。
-    src_sig = ""
-    if prefer_akshare or use_ibkr or use_longport or crypto_source != "auto":
-        src_sig = (
-            f"|a{int(prefer_akshare)}i{int(use_ibkr)}"
-            f"l{int(use_longport)}c{crypto_source}"
-        )
-    # EODHD (BYOK) 的角色/复权口径也必须进缓存键: 同一代码从 yfinance 切到
-    # EODHD (或反之) 后, TTL 内继续命中旧源的K线会让开关看起来没生效。
-    from . import eodhd as eodhd_mod
-    from . import source_order as source_order_mod
-
-    src_sig += eodhd_mod.cache_signature()
-    # 设置页拖动 / 手改 source_order 后, 同一代码换源取回的历史K线不能命中
-    # 旧缓存 (磁盘缓存键只含代码+窗口, 不含源顺序)。
-    order_sig = source_order_mod.signature()
-    if order_sig:
-        src_sig += f"|o{order_sig}"
-    cache_key = f"{p.yahoo}{src_sig}"
+    cache_key = ohlc_cache_key(
+        symbol,
+        prefer_akshare=prefer_akshare,
+        use_ibkr=use_ibkr,
+        use_longport=use_longport,
+        crypto_source=crypto_source,
+    )
     if not refresh and not is_range:
         cached = cache_mod.get_ohlc_cached(cache_key, months, ttl=cache_ttl)
         if cached is not None:
@@ -169,12 +193,8 @@ def get_index_history(
     p = parse(symbol)
     if p.type != "index":
         raise ValueError(f"{p.yahoo}: 不是指数代码 (指数代码规范 IX.<KEY>, 如 IX.DXY)")
-    from . import source_order as source_order_mod
 
-    key = f"index:{p.yahoo}"
-    order_sig = source_order_mod.signature()
-    if order_sig:
-        key += f"|o{order_sig}"
+    key = index_ohlc_cache_key(symbol)
     is_range = start_date is not None or end_date is not None
     if not refresh and not is_range:
         cached = cache_mod.get_ohlc_cached(key, months)

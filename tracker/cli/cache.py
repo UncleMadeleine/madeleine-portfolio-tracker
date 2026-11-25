@@ -58,6 +58,42 @@ def cmd_cache(args) -> None:
         count = result.get("would_delete") if result.get("dry_run") else result["deleted"]
         print(f"  {verb} {count} 条孤儿缓存")
         return
+    if args.action == "gc":
+        try:
+            result = cache_mod.gc_invalid(
+                dry_run=bool(getattr(args, "dry_run", False))
+            )
+        except (RuntimeError, sqlite3.Error) as e:
+            _finish_with_error(f"清理无效缓存失败: {e}")
+        if args.json:
+            _print_json(result)
+            return
+        if result.get("skipped"):
+            print(f"⏭ 跳过: {result.get('reason')}")
+            return
+        print("\n=== 无效/过期缓存 ===")
+        print(f"  扫描范围: {result['scope_size']} 个持仓/自选代码")
+        labels = {
+            "quotes": "实时行情",
+            "ohlc_cache": "K线 (旧源签名/损坏/过期)",
+            "json_cache": "估值/财报快照",
+            "fundamentals": "基本面",
+            "series_cache": "历史序列",
+            "calendar_cache": "日历",
+            "fx_rates": "汇率",
+        }
+        for name, item in result["tables"].items():
+            if not item["orphans"]:
+                continue
+            sample = ", ".join(item["sample"][:5])
+            print(
+                f"  {labels.get(name, name)}: {item['orphans']} 条"
+                + (f" · {sample}" if sample else "")
+            )
+        verb = "将删除" if result.get("dry_run") else "已删除"
+        count = result.get("would_delete") if result.get("dry_run") else result["deleted"]
+        print(f"  {verb} {count} 条无效缓存")
+        return
     try:
         info = cache_mod.info()
     except (RuntimeError, sqlite3.Error) as e:

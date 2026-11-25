@@ -11,6 +11,7 @@ import json
 import math
 import sqlite3
 import time
+from datetime import date, datetime
 from typing import TYPE_CHECKING
 
 import pandas as pd
@@ -487,19 +488,8 @@ def clear_fundamentals() -> int:
     return _clear_table("fundamentals")
 
 
-def prune_orphans(*, dry_run: bool = False) -> dict:
-    """删除当前持仓/自选之外的孤儿缓存 (可再生数据).
-
-    覆盖:
-      - quotes / fundamentals / series_cache(shares_full:*) / calendar_cache(g:*)
-      - ohlc_cache (键可能是 ``SYMBOL|源签名``)
-      - json_cache (valuation_snapshot:* / filings:*)
-
-    保守保留:
-      - 指数缓存 (``index:IX.*``) 与批量日历键 (``cn:*``): 不属于持仓/自选域
-      - 无法解析的键、``g:UNKNOWN_OK`` 等哨兵
-      - 持仓/自选为空或任一文件读取失败时整体跳过, 避免误删全部缓存
-    """
+def _cache_scope() -> tuple[set[str] | None, str | None]:
+    """当前持仓/自选的规范代码集合; 读取失败或为空返回 (None, 原因)."""
     from . import storage
 
     scope: set[str] = set()
@@ -510,13 +500,7 @@ def prune_orphans(*, dry_run: bool = False) -> dict:
         try:
             data = loader(path)
         except Exception as e:  # noqa: BLE001 - 任一侧不可读时宁可不清
-            return {
-                "skipped": True,
-                "reason": f"{label}文件读取失败, 未删除: {e}",
-                "scope_size": len(scope),
-                "deleted": 0,
-                "tables": {},
-            }
+            return None, f"{label}文件读取失败, 未删除: {e}"
         rows = data.get(key) if isinstance(data, dict) else None
         if not isinstance(rows, list):
             continue
@@ -531,9 +515,28 @@ def prune_orphans(*, dry_run: bool = False) -> dict:
             except (TypeError, ValueError):
                 continue
     if not scope:
+        return None, "当前持仓/自选为空, 为安全起见未删除"
+    return scope, None
+
+
+def prune_orphans(*, dry_run: bool = False) -> dict:
+    """删除当前持仓/自选之外的孤儿缓存 (可再生数据).
+
+    覆盖:
+      - quotes / fundamentals / series_cache(shares_full:*) / calendar_cache(g:*)
+      - ohlc_cache (键可能是 ``SYMBOL|源签名``)
+      - json_cache (valuation_snapshot:* / filings:*)
+
+    保守保留:
+      - 指数缓存 (``index:IX.*``) 与批量日历键 (``cn:*``): 不属于持仓/自选域
+      - 无法解析的键、``g:UNKNOWN_OK`` 等哨兵
+      - 持仓/自选为空或任一文件读取失败时整体跳过, 避免误删全部缓存
+    """
+    scope, reason = _cache_scope()
+    if scope is None:
         return {
             "skipped": True,
-            "reason": "当前持仓/自选为空, 为安全起见未删除",
+            "reason": reason,
             "scope_size": 0,
             "deleted": 0,
             "tables": {},
@@ -649,6 +652,281 @@ def prune_orphans(*, dry_run: bool = False) -> dict:
                     con.executemany(
                         "DELETE FROM calendar_cache WHERE key=?",
                         [(k,) for k in cal_orph],
+                    )
+                con.commit()
+
+            deleted = sum(t["deleted"] for t in tables.values())
+            would_delete = sum(t["orphans"] for t in tables.values())
+            return {
+                "skipped": False,
+                "scope_size": len(scope),
+                "dry_run": dry_run,
+                "deleted": deleted,
+                "would_delete": would_delete,
+                "tables": tables,
+            }
+
+    try:
+        return _cache._with_schema_retry(_run)
+    except sqlite3.Error as e:
+        raise RuntimeError(f"缓存数据库忙或不可用 ({e}); 稍后重试") from e
+
+
+# ---------- 无效/过期缓存 GC ----------
+
+#: 旧源签名的 K线缓存: 3 天未用即视为失效 (K线本身 30min TTL, 用户切回旧源
+#: 时重取即可); 避免误删最近用 --akshare/--ibkr 生成的合法变体。
+_INVALID_OHLC_SIG_AGE = 3 * 86400
+#: 估值历史序列 6h TTL、市值股本序列低频; 过期后无命中可能。
+_INVALID_VALUATION_SERIES_AGE = 7 * 86400
+_INVALID_SHARES_AGE = 30 * 86400
+_INVALID_JSON_AGE = 30 * 86400
+_INVALID_QUOTE_AGE = 30 * 86400
+_INVALID_FUNDAMENTALS_AGE = 30 * 86400
+_INVALID_FX_AGE = 30 * 86400
+_INVALID_CALENDAR_AGE = 30 * 86400
+#: cn: 批量日历按报表期存; 保留近 90 天，更早的报表期不会再进默认窗口。
+_CN_CALENDAR_RETENTION_DAYS = 90
+
+
+def gc_invalid(*, dry_run: bool = False) -> dict:
+    """清理损坏、过期、旧源签名等不再可能命中的缓存 (可再生数据).
+
+    与 ``prune_orphans`` 的区别: 本函数处理「代码仍在范围内，但缓存本身
+    已无效/过期」的条目，例如换过 source_order 后留下的 ``SYMBOL|a1...``
+    K线、7 天前的估值历史序列、90 天前的 cn: 报表期、损坏 JSON 等。
+    """
+    scope, reason = _cache_scope()
+    if scope is None:
+        return {
+            "skipped": True,
+            "reason": reason,
+            "scope_size": 0,
+            "deleted": 0,
+            "would_delete": 0,
+            "tables": {},
+        }
+
+    from . import prices as prices_mod
+    from . import source_order as source_order_mod
+    from . import storage
+
+    try:
+        settings = storage.load_settings()
+    except Exception:  # noqa: BLE001 - 读盘失败按默认源链计算签名
+        settings = {}
+    key_flags = {
+        "prefer_akshare": bool(settings.get("prefer_akshare", False)),
+        "use_ibkr": bool(settings.get("use_ibkr", False)),
+        "use_longport": bool(settings.get("use_longport", False)),
+        "crypto_source": str(settings.get("crypto_source") or "auto"),
+    }
+    order_sig = source_order_mod.signature()
+    today = date.today()
+
+    def _bad_num(value) -> bool:
+        try:
+            f = float(value)
+        except (TypeError, ValueError):
+            return True
+        return not math.isfinite(f)
+
+    def _json_rows(payload, required: tuple[str, ...]):
+        try:
+            rows = json.loads(payload)
+        except Exception:
+            return None
+        if not isinstance(rows, list) or not rows:
+            return None
+        if not isinstance(rows[0], dict) or not set(required) <= set(rows[0]):
+            return None
+        return rows
+
+    def _run():
+        with _cache._lock, _cache._connection() as con:
+            now = time.time()
+            tables: dict[str, dict] = {}
+
+            def _collect(sql: str):
+                return con.execute(sql).fetchall()
+
+            def _entry(keys: list) -> dict:
+                return {
+                    "orphans": len(keys),
+                    "deleted": 0 if dry_run else len(keys),
+                    "sample": sorted(str(k) for k in keys)[:20],
+                }
+
+            # 行情/基本面/汇率: 非法数值或长期未用
+            q_bad = [
+                r[0]
+                for r in _collect("SELECT symbol, price, currency, fetched_at FROM quotes")
+                if _bad_num(r[1]) or float(r[1]) <= 0 or not r[2]
+                or now - float(r[3]) > _INVALID_QUOTE_AGE
+            ]
+            tables["quotes"] = _entry(q_bad)
+
+            f_bad = []
+            for sym, bv, mcap, fetched_at in _collect(
+                "SELECT symbol, book_value, market_cap, fetched_at FROM fundamentals"
+            ):
+                invalid = (bv is not None and (_bad_num(bv) or float(bv) <= 0)) or (
+                    mcap is not None and (_bad_num(mcap) or float(mcap) <= 0)
+                )
+                if invalid or now - float(fetched_at) > _INVALID_FUNDAMENTALS_AGE:
+                    f_bad.append(sym)
+            tables["fundamentals"] = _entry(f_bad)
+
+            fx_bad = [
+                f"{r[0]}/{r[1]}"
+                for r in _collect(
+                    "SELECT base, currency, rate, fetched_at FROM fx_rates"
+                )
+                if _bad_num(r[2])
+                or float(r[2]) <= 0
+                or now - float(r[3]) > _INVALID_FX_AGE
+            ]
+            # fx 删除条件需要 base+currency; 单独保存用于删除
+            fx_rows = [
+                (r[0], r[1])
+                for r in _collect(
+                    "SELECT base, currency, rate, fetched_at FROM fx_rates"
+                )
+                if _bad_num(r[2])
+                or float(r[2]) <= 0
+                or now - float(r[3]) > _INVALID_FX_AGE
+            ]
+            tables["fx_rates"] = _entry(fx_bad)
+
+            # K线: 损坏/过期/旧 source 签名
+            ohlc_bad: list[tuple[str, int]] = []
+            ohlc_samples: list[str] = []
+            for sym, months, payload, fetched_at in _collect(
+                "SELECT symbol, months, payload, fetched_at FROM ohlc_cache"
+            ):
+                bad = _json_rows(payload, ("date", "open", "high", "low", "close")) is None
+                if not bad and now - float(fetched_at) > _INVALID_QUOTE_AGE:
+                    bad = True
+                if not bad:
+                    base = str(sym).split("|", 1)[0]
+                    if base.startswith("index:"):
+                        expected = base + (f"|o{order_sig}" if order_sig else "")
+                    else:
+                        try:
+                            expected = prices_mod.ohlc_cache_key(
+                                base, **key_flags
+                            )
+                        except (TypeError, ValueError):
+                            expected = str(sym)  # 解析失败保守保留
+                    if expected != sym and now - float(fetched_at) > _INVALID_OHLC_SIG_AGE:
+                        bad = True
+                if bad:
+                    ohlc_bad.append((str(sym), int(months)))
+                    ohlc_samples.append(f"{sym} ({months}m)")
+            tables["ohlc_cache"] = _entry(ohlc_samples)
+
+            # 序列缓存: 损坏 / 估值历史过期 / 已移出范围
+            series_bad: list[str] = []
+            for key, payload, fetched_at in _collect(
+                "SELECT key, payload, fetched_at FROM series_cache"
+            ):
+                key = str(key)
+                bad = _json_rows(payload, ("date", "close")) is None
+                if not bad:
+                    prefix, sep, rest = key.partition(":")
+                    age = now - float(fetched_at)
+                    if prefix == "shares_full" and sep:
+                        bad = rest not in scope or age > _INVALID_SHARES_AGE
+                    elif prefix == "valuation" and sep:
+                        sym = rest.split(":", 1)[0]
+                        bad = sym not in scope or age > _INVALID_VALUATION_SERIES_AGE
+                if bad:
+                    series_bad.append(key)
+            tables["series_cache"] = _entry(series_bad)
+
+            # JSON 快照: 损坏 / 长期未用 / 已移出范围
+            json_bad: list[str] = []
+            for key, payload, fetched_at in _collect(
+                "SELECT key, payload, fetched_at FROM json_cache"
+            ):
+                key = str(key)
+                try:
+                    json.loads(payload)
+                    bad = False
+                except Exception:
+                    bad = True
+                if not bad and now - float(fetched_at) > _INVALID_JSON_AGE:
+                    bad = True
+                if not bad:
+                    prefix, sep, sym = key.partition(":")
+                    if prefix in ("valuation_snapshot", "filings") and sep:
+                        bad = sym not in scope
+                if bad:
+                    json_bad.append(key)
+            tables["json_cache"] = _entry(json_bad)
+
+            # 日历: 损坏 / 单票长期未用 / cn: 旧报表期
+            cal_bad: list[str] = []
+            for key, payload, fetched_at in _collect(
+                "SELECT key, payload, fetched_at FROM calendar_cache"
+            ):
+                key = str(key)
+                try:
+                    data = json.loads(payload)
+                    bad = not isinstance(data, dict) or not isinstance(
+                        data.get("events"), list
+                    )
+                except Exception:
+                    bad = True
+                if not bad and key.startswith("g:"):
+                    bad = now - float(fetched_at) > _INVALID_CALENDAR_AGE
+                if not bad and key.startswith("cn:"):
+                    parts = key.split(":")
+                    raw = parts[2] if len(parts) >= 3 else ""
+                    if len(raw) == 8 and raw.isdigit():
+                        try:
+                            period = datetime.strptime(raw, "%Y%m%d").date()
+                        except ValueError:
+                            period = None
+                        if period is not None and (
+                            today - period
+                        ).days > _CN_CALENDAR_RETENTION_DAYS:
+                            bad = True
+                if bad:
+                    cal_bad.append(key)
+            tables["calendar_cache"] = _entry(cal_bad)
+
+            if not dry_run:
+                if q_bad:
+                    con.executemany(
+                        "DELETE FROM quotes WHERE symbol=?", [(s,) for s in q_bad]
+                    )
+                if f_bad:
+                    con.executemany(
+                        "DELETE FROM fundamentals WHERE symbol=?",
+                        [(s,) for s in f_bad],
+                    )
+                if fx_rows:
+                    con.executemany(
+                        "DELETE FROM fx_rates WHERE base=? AND currency=?", fx_rows
+                    )
+                if ohlc_bad:
+                    con.executemany(
+                        "DELETE FROM ohlc_cache WHERE symbol=? AND months=?", ohlc_bad
+                    )
+                if series_bad:
+                    con.executemany(
+                        "DELETE FROM series_cache WHERE key=?",
+                        [(k,) for k in series_bad],
+                    )
+                if json_bad:
+                    con.executemany(
+                        "DELETE FROM json_cache WHERE key=?", [(k,) for k in json_bad]
+                    )
+                if cal_bad:
+                    con.executemany(
+                        "DELETE FROM calendar_cache WHERE key=?",
+                        [(k,) for k in cal_bad],
                     )
                 con.commit()
 

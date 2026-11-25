@@ -88,6 +88,11 @@ CACHE_PRUNE_INTERVAL = 24 * 3600.0
 _last_cache_prune = 0.0
 _cache_prune_lock = threading.Lock()
 
+#: 无效/过期缓存 GC: 每周最多一次 (旧源签名 K线、过期序列/日历等).
+CACHE_GC_INTERVAL = 7 * 24 * 3600.0
+_last_cache_gc = 0.0
+_cache_gc_lock = threading.Lock()
+
 
 def _maybe_prune_orphans() -> dict | None:
     """按当前持仓/自选清理孤儿缓存; 每天最多一次, 失败不影响保温."""
@@ -106,6 +111,26 @@ def _maybe_prune_orphans() -> dict | None:
         return result
     except Exception:  # noqa: BLE001 - 维护任务失败不能拖垮保温
         logger.warning("清理孤儿缓存失败", exc_info=True)
+        return None
+
+
+def _maybe_gc_invalid() -> dict | None:
+    """清理无效/过期缓存; 每周最多一次, 失败不影响保温."""
+    global _last_cache_gc
+    now = time.time()
+    with _cache_gc_lock:
+        if now - _last_cache_gc < CACHE_GC_INTERVAL:
+            return None
+        _last_cache_gc = now
+    try:
+        from .. import cache as cache_mod
+
+        result = cache_mod.gc_invalid()
+        if result.get("deleted"):
+            logger.info("清理无效缓存: %s 条", result["deleted"])
+        return result
+    except Exception:  # noqa: BLE001 - 维护任务失败不能拖垮保温
+        logger.warning("清理无效缓存失败", exc_info=True)
         return None
 
 
@@ -826,6 +851,9 @@ def warm_once(
         pruned = _maybe_prune_orphans()
         if pruned is not None:
             result["cache_prune"] = pruned
+        invalid = _maybe_gc_invalid()
+        if invalid is not None:
+            result["cache_gc"] = invalid
         if include_quotes:
             quotes, fx = warm_quotes_once(
                 extra_symbols=extra_symbols, refresh=refresh

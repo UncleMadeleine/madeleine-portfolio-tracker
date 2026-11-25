@@ -145,6 +145,85 @@ def test_warm_once_can_skip_calendar(monkeypatch):
     assert "calendar" not in result
 
 
+def test_warm_holdings_history_only_portfolio(monkeypatch):
+    """K线保温只覆盖持仓 (+--symbols), 不把 702 只自选全拉一遍."""
+    pd = pytest.importorskip("pandas")
+    monkeypatch.setattr(
+        warm_mod.storage,
+        "load_portfolio",
+        lambda *a, **k: {
+            "holdings": [
+                {"symbol": "AAPL"},
+                {"symbol": "600519.SS"},
+                {"symbol": "AAPL"},  # 去重
+                {"symbol": None},
+            ]
+        },
+    )
+    monkeypatch.setattr(warm_mod.storage, "load_settings", _settings)
+    calls: list[dict] = []
+
+    def fake_ohlc(sym, **kw):
+        calls.append({"symbol": sym, **kw})
+        return pd.DataFrame({"date": ["2026-01-01"], "close": [1.0]})
+
+    monkeypatch.setattr(warm_mod.prices, "get_ohlc", fake_ohlc)
+    out = warm_mod.warm_holdings_history_once(extra_symbols=["MSFT"])
+    assert out["skipped"] is False
+    assert out["ok"] == 3
+    assert out["errors"] == {}
+    assert [c["symbol"] for c in calls] == ["AAPL", "600519.SS", "MSFT"]
+    assert {c["months"] for c in calls} == {warm_mod.HISTORY_WARM_MONTHS}
+    assert {c["cache_ttl"] for c in calls} == {warm_mod.HISTORY_WARM_TTL}
+
+
+def test_warm_holdings_history_collects_errors(monkeypatch):
+    pd = pytest.importorskip("pandas")
+    monkeypatch.setattr(
+        warm_mod.storage,
+        "load_portfolio",
+        lambda *a, **k: {"holdings": [{"symbol": "AAPL"}, {"symbol": "MSFT"}]},
+    )
+    monkeypatch.setattr(warm_mod.storage, "load_settings", _settings)
+    monkeypatch.setattr(
+        warm_mod.prices,
+        "get_ohlc",
+        lambda sym, **kw: (_ for _ in ()).throw(RuntimeError("boom"))
+        if sym == "MSFT"
+        else pd.DataFrame({"date": ["2026-01-01"], "close": [1.0]}),
+    )
+    out = warm_mod.warm_holdings_history_once()
+    assert out["ok"] == 1
+    assert out["errors"] == {"MSFT": "boom"}
+
+
+def test_warm_once_includes_history_and_flushes_health(monkeypatch):
+    monkeypatch.setattr(
+        warm_mod,
+        "warm_quotes_once",
+        lambda **kw: ({"symbols": [], "ok": 0, "errors": {}, "notes": []}, None),
+    )
+    monkeypatch.setattr(
+        warm_mod,
+        "warm_holdings_history_once",
+        lambda **kw: {"symbols": ["AAPL"], "ok": 1, "errors": {}, "skipped": False},
+    )
+    monkeypatch.setattr(warm_mod, "warm_calendar_once", lambda **kw: None)
+    calls: list[bool] = []
+    import tracker.health as health_mod
+
+    monkeypatch.setattr(health_mod, "flush", lambda: calls.append(True))
+    result = warm_mod.warm_once()
+    assert result["history"]["ok"] == 1
+    assert calls == [True]
+
+
+def test_refresh_period_scales_with_batch_quotes():
+    """行情已批量: 706 只的默认周期应与 300s 缓存新鲜期对齐, 不再 23 分钟."""
+    assert warm_mod.refresh_period(706) == warm_mod.REFRESH_PERIOD
+    assert warm_mod.refresh_period(5000) == warm_mod.REFRESH_PERIOD_MAX
+
+
 def test_cli_warm_once_json(monkeypatch, capsys):
     from tracker.cli import build_parser
 
@@ -179,6 +258,12 @@ def test_cli_warm_once_text(monkeypatch, capsys):
             "skipped": False,
         },
         "fx": None,
+        "history": {
+            "symbols": ["AAPL"],
+            "ok": 1,
+            "errors": {},
+            "skipped": False,
+        },
         "calendar": {"months": 2, "events": 3, "issues": []},
         "elapsed_seconds": 0.1,
     }
@@ -188,6 +273,7 @@ def test_cli_warm_once_text(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "=== 缓存预热 ===" in out
     assert "行情: 1/1 只成功" in out
+    assert "K线: 1/1 只成功" in out
     assert "日历: 2 个月窗口, 3 个事件" in out
 
 

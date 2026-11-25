@@ -1,9 +1,10 @@
 """无 UI 依赖的缓存保温/预热服务 (Streamlit 与 CLI 共用).
 
-背景: 行情/汇率/日历的周期刷新原先挂在 Streamlit 页面模块里, 只有前端进程
-常驻时才会运行; CLI 每次调用都只能按需回源。本模块把「从磁盘持仓/自选推导
-刷新范围 → 走正常缓存链 → 回写 SQLite」抽出来, 只依赖取数与存储层, 不 import
-streamlit, 因而可以在 headless CLI / 常驻服务里安全运行。
+背景: 行情/汇率/日历/持仓K线的周期刷新原先挂在 Streamlit 页面模块里, 只有
+前端进程常驻时才会运行; CLI 每次调用都只能按需回源。本模块把「从磁盘持仓/
+自选推导刷新范围 → 走正常缓存链 → 回写 SQLite」抽出来, 只依赖取数与存储层,
+不 import streamlit, 因而可以在 headless CLI / 常驻服务里安全运行。
+行情全量一轮约 30s (Yahoo v7 批量), 常驻周期默认按 300s 新鲜期缩放。
 
 使用方式:
   - UI: app 入口调用 ensure_warmers(); 页面看门狗复用 start_refresh /
@@ -23,9 +24,11 @@ streamlit, 因而可以在 headless CLI / 常驻服务里安全运行。
 from __future__ import annotations
 
 import logging
+import math
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 try:  # Unix/macOS: 跨进程文件锁
@@ -57,8 +60,9 @@ REFRESH_MIN_INTERVAL = 60.0
 #: 只是空转一轮并把「完成」记账, 真正回源反而被推迟到下一个周期。
 REFRESH_PERIOD = float(CACHE_TTL)
 #: 符号集越大周期越长 (大组合一轮刷新就要数分钟, 周期不拉长会把刷新器拖到
-#: 常驻满负荷, Yahoo 限流是 IP 级的, 连累 K线页), 上限 = 陈旧期。
-REFRESH_PERIOD_PER_SYMBOL = 2.0
+#: 常驻满负荷)。行情已改 Yahoo v7 批量 (100 个/请求), 706 只一轮约 30s,
+#: 按 0.4s/只缩放; 700 只 ≈ 300s, 与 CACHE_TTL 对齐, 上限仍是陈旧期。
+REFRESH_PERIOD_PER_SYMBOL = 0.4
 REFRESH_PERIOD_MAX = float(STALE_TTL)
 #: 保温线程的检查粒度: 磁盘年龄才是刷新依据, 每 60s 查一次才能让实际回源
 #: 贴近缓存过期时刻 (而不是睡满一个周期后才刚好看一眼)。
@@ -110,18 +114,25 @@ def start_refresh(key: tuple, plan: dict) -> bool:
     f_args = plan.get("fx")
 
     def _run() -> None:
-        if q_args:
-            symbols, prefer_akshare, use_ibkr, use_longport, crypto_source = q_args
-            prices.get_quotes(
-                list(symbols),
-                prefer_akshare=prefer_akshare,
-                use_ibkr=use_ibkr,
-                use_longport=use_longport,
-                crypto_source=crypto_source,
-            )
-        if f_args:
-            base, currencies, use_ibkr = f_args
-            get_fx_rates(base, list(currencies), use_ibkr=use_ibkr)
+        try:
+            if q_args:
+                symbols, prefer_akshare, use_ibkr, use_longport, crypto_source = q_args
+                prices.get_quotes(
+                    list(symbols),
+                    prefer_akshare=prefer_akshare,
+                    use_ibkr=use_ibkr,
+                    use_longport=use_longport,
+                    crypto_source=crypto_source,
+                )
+            if f_args:
+                base, currencies, use_ibkr = f_args
+                get_fx_rates(base, list(currencies), use_ibkr=use_ibkr)
+        finally:
+            # 保温/页面刷新大多是长驻进程, 健康事件不能等攒满 20 条才落盘;
+            # 每轮结束立即 flush, 健康页才能看到刚发生的成功/失败。
+            from .. import health
+
+            health.flush()
 
     return _quote_coordinator.start(key, _run)
 
@@ -650,9 +661,75 @@ def warm_calendar_once(*, extra_symbols=()) -> dict | None:
     }
 
 
+#: 持仓 K线保温窗口: 与 nav 默认 365 天回填一致 (ceil(365/30)+1 = 14 个月).
+HISTORY_WARM_MONTHS = max(1, math.ceil(365 / 30) + 1)
+#: 日线一天只变一次; 6h 内命中就不再回源, 避免 5min 行情周期重复拉历史.
+HISTORY_WARM_TTL = 6 * 3600
+HISTORY_WARM_WORKERS = 4
+
+
+def warm_holdings_history_once(*, portfolio_path=None, extra_symbols=()) -> dict:
+    """只按持仓 (可加 --symbols) 预热 K线, 不碰 702 只自选.
+
+    目的: 修复「持仓无 K线缓存 → 净值回填跳过」; 自选只在 K线页按需取。
+    6h 内已缓存直接命中, 所以高频行情保温不会顺带反复拉历史。
+    """
+    try:
+        portfolio = storage.load_portfolio(
+            portfolio_path or storage.PORTFOLIO_PATH
+        )
+    except Exception:  # noqa: BLE001 - 持仓文件坏了不影响其它保温
+        portfolio = {}
+    rows = [h for h in portfolio.get("holdings", []) if h.get("symbol")]
+    rows += [{"symbol": s} for s in extra_symbols]
+    symbols = _symbols_from_rows(rows)
+    if not symbols:
+        return {"symbols": [], "ok": 0, "errors": {}, "skipped": True}
+    try:
+        settings = storage.load_settings()
+    except Exception:  # noqa: BLE001 - 读盘失败按默认源链
+        settings = {}
+    prefer_akshare = bool(settings.get("prefer_akshare", False))
+    use_ibkr = bool(settings.get("use_ibkr", False))
+    use_longport = bool(settings.get("use_longport", False))
+    crypto_source = str(settings.get("crypto_source") or "auto")
+
+    def _one(sym: str) -> tuple[str, str | None]:
+        try:
+            df = prices.get_ohlc(
+                sym,
+                months=HISTORY_WARM_MONTHS,
+                prefer_akshare=prefer_akshare,
+                use_ibkr=use_ibkr,
+                use_longport=use_longport,
+                crypto_source=crypto_source,
+                cache_ttl=HISTORY_WARM_TTL,
+            )
+        except Exception as e:  # noqa: BLE001 - 单代码失败不拖垮其它持仓
+            return sym, str(e) or type(e).__name__
+        if df is None or df.empty:
+            return sym, "无历史数据"
+        return sym, None
+
+    errors: dict[str, str] = {}
+    with ThreadPoolExecutor(
+        max_workers=min(HISTORY_WARM_WORKERS, len(symbols))
+    ) as pool:
+        for sym, err in pool.map(_one, symbols):
+            if err:
+                errors[sym] = err
+    return {
+        "symbols": symbols,
+        "ok": len(symbols) - len(errors),
+        "errors": errors,
+        "skipped": False,
+    }
+
+
 def warm_once(
     *,
     include_quotes: bool = True,
+    include_history: bool = True,
     include_calendar: bool = True,
     extra_symbols=(),
     refresh: bool = False,
@@ -660,16 +737,27 @@ def warm_once(
     """同步执行一次预热 (CLI `tracker warm` 用), 返回可序列化摘要."""
     started = time.time()
     result: dict = {}
-    if include_quotes:
-        quotes, fx = warm_quotes_once(
-            extra_symbols=extra_symbols, refresh=refresh
-        )
-        result["quotes"] = quotes
-        result["fx"] = fx
-    if include_calendar:
-        result["calendar"] = warm_calendar_once(extra_symbols=extra_symbols)
-    result["elapsed_seconds"] = round(time.time() - started, 2)
-    return result
+    try:
+        if include_quotes:
+            quotes, fx = warm_quotes_once(
+                extra_symbols=extra_symbols, refresh=refresh
+            )
+            result["quotes"] = quotes
+            result["fx"] = fx
+        if include_history:
+            result["history"] = warm_holdings_history_once(
+                extra_symbols=extra_symbols
+            )
+        if include_calendar:
+            result["calendar"] = warm_calendar_once(extra_symbols=extra_symbols)
+        result["elapsed_seconds"] = round(time.time() - started, 2)
+        return result
+    finally:
+        # 长驻保温进程不能等健康缓冲攒满 20 条: 重启会丢, 健康页也看不到
+        # 本轮的真实批量结果 (尤其 yfinance 的 1 条批量事件)。
+        from .. import health
+
+        health.flush()
 
 
 def status() -> dict:

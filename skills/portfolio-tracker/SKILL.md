@@ -59,7 +59,7 @@ tracker-ui          # pip 安装后起 Streamlit 页面 (等价 streamlit run tr
 | `sync` | IBKR 同步 (兼容入口→import ibkr; 缺省追加合并, 与 import 一致, `--overwrite` 才覆盖) | `sync --dry-run` |
 | `import-wallet` | 链上钱包导入 (兼容入口→import wallet; 缺省只查询, `--add`/`--overwrite` 才写盘) | `import-wallet eth 0x... --add` |
 | `cache` | 行情磁盘缓存 | `cache info`, `cache clear` |
-| `warm` | 主动预热/保温行情、汇率、日历 (不依赖前端进程) | `warm`, `warm --symbols AAPL TSLA`, `warm --calendar-only --json`, `warm --interval 300` (常驻) |
+| `warm` | 主动预热/保温行情、汇率、日历与持仓K线 (不依赖前端进程) | `warm`, `warm --symbols AAPL TSLA`, `warm --calendar-only --json`, `warm --interval 300` (常驻) |
 | `doctor` | 数据健康体检 (来源成功率/耗时/最近失败 + 持仓自选行情/K线/汇率/基本面缓存缺口 + 本地完整性) | `doctor`, `doctor --window 72`, `doctor --json`, `doctor --probe` (主动联网), `doctor --clear-events`; 总体异常退出码 1 |
 | `init` | 首次使用: 模板落地到数据目录 | `init`, `init --force` |
 
@@ -284,12 +284,14 @@ Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致);
 
 1c. **预热缓存 (可选, 让后续命令秒回)**:
    ```
-   .venv/bin/python -m tracker.cli warm                       # 按持仓+自选预热一次
+   .venv/bin/python -m tracker.cli warm                       # 行情/汇率/日历/持仓K线预热一次
    .venv/bin/python -m tracker.cli warm --symbols AAPL TSLA   # 额外代码也预热
    .venv/bin/python -m tracker.cli warm --interval 300        # 常驻保温 (Ctrl+C 停止)
    ```
    `warm` 不依赖 Streamlit 进程, 与页面共用同一个 `var/quotes_cache.db`;
-   默认覆盖行情+汇率+财经日历, 可用 `--quotes-only` / `--calendar-only` 缩小范围。
+   默认覆盖行情+汇率+财经日历+持仓最近 14 个月日K, 可用 `--quotes-only` /
+   `--calendar-only` 缩小范围。行情全量约 30s, 常驻建议 300–600s; 每轮结束
+   会立即 flush 健康事件, 健康页无需等攒满 20 条。
 
 2. **查某只股票行情**:
    ```

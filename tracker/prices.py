@@ -91,9 +91,12 @@ def get_ohlc(
     start_date: str | None = None,
     end_date: str | None = None,
     crypto_source: str = "auto",
+    cache_ttl: int | None = None,
 ) -> pd.DataFrame:
     """K线日线数据 (date/open/high/low/close/volume, 升序), 带磁盘缓存与清洗.
 
+    ``cache_ttl`` 可覆盖默认 30 分钟 OHLC 新鲜期: 保温线程用它把日线缓存
+    延长到 6h, 避免 5 分钟一轮的行情保温顺带重复拉历史。
     惰性导入 charting (plotly 较重), 避免拖慢其它子命令.
     """
     from .charting import clean_ohlc
@@ -124,7 +127,7 @@ def get_ohlc(
         src_sig += f"|o{order_sig}"
     cache_key = f"{p.yahoo}{src_sig}"
     if not refresh and not is_range:
-        cached = cache_mod.get_ohlc_cached(cache_key, months)
+        cached = cache_mod.get_ohlc_cached(cache_key, months, ttl=cache_ttl)
         if cached is not None:
             return cached
     raw = get_history(

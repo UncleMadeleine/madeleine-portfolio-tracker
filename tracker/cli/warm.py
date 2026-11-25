@@ -45,6 +45,17 @@ def _summary_text(result: dict) -> str:
             lines.append(f"  缺失: {', '.join(missing)}")
     elif q is not None and not q.get("skipped"):
         lines.append("汇率: 无需更新")
+    hist = result.get("history")
+    if hist is not None:
+        if hist.get("skipped"):
+            lines.append("K线: 无持仓, 跳过")
+        else:
+            total = len(hist.get("symbols") or [])
+            lines.append(f"K线: {hist.get('ok', 0)}/{total} 只成功")
+            hist_errors = hist.get("errors") or {}
+            if hist_errors:
+                for sym, msg in list(hist_errors.items())[:3]:
+                    lines.append(f"    {sym}: {msg}")
     cal = result.get("calendar")
     if cal is None:
         lines.append("日历: 跳过")
@@ -65,6 +76,8 @@ def _warm_kwargs(args) -> dict:
     include_calendar = not getattr(args, "quotes_only", False)
     return {
         "include_quotes": include_quotes,
+        # --calendar-only 跳过行情/K线; --quotes-only 只跳过日历
+        "include_history": include_quotes,
         "include_calendar": include_calendar,
         "extra_symbols": tuple(getattr(args, "symbols", None) or ()),
         "refresh": bool(getattr(args, "refresh", False)),

@@ -609,10 +609,11 @@ class TestPeriodicKeepWarm:
     def test_period_scales_with_symbol_count(self):
         # 基准周期 = 行情新鲜期: 早于过期触发只会空转 (get_quotes 仍命中磁盘)
         assert warm_mod.REFRESH_PERIOD == cache_mod.CACHE_TTL
-        # 100 个代码: 100*2=200 < 基准 300 → 仍为基准
+        # 行情已 v7 批量 (100 个/请求): 685 只 *0.4=274 < 基准 300 → 仍为基准
         assert warm_mod.refresh_period(100) == 300.0
-        # 685 个代码: 685*2=1370, 介于基准与上限之间
-        assert warm_mod.refresh_period(685) == 1370.0
+        assert warm_mod.refresh_period(685) == 300.0
+        # 大组合超过基准后按 0.4s/只缩放
+        assert warm_mod.refresh_period(1000) == 400.0
         # 超大组合封顶在上限 (= 陈旧期)
         assert warm_mod.refresh_period(10**6) == warm_mod.REFRESH_PERIOD_MAX
         assert warm_mod.refresh_period(1) == warm_mod.REFRESH_PERIOD

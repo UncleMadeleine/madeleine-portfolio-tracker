@@ -16,7 +16,7 @@ def fake_calendar_result():
                 "type": "earnings",
                 "date": "2026-10-31",
                 "date_status": "planned",
-                "source": "akshare",
+                "source": "akshare_em",
                 "market_label": "A股",
             },
             {
@@ -40,7 +40,7 @@ def fake_calendar_result():
             },
         ],
         "issues": [],
-        "sources": {"yfinance": 2, "akshare": 1},
+        "sources": {"yfinance": 2, "akshare_em": 1},
         "names": {"AAPL": "苹果公司", "600519.SS": "贵州茅台"},
     }
 

@@ -7,12 +7,12 @@
 
     "source_order": {
       "global": {
-        "quote":   ["ibkr", "longport", "eodhd", "yfinance", "akshare"],
-        "history": ["ibkr", "longport", "eodhd", "yfinance", "akshare"]
+        "quote":   ["ibkr", "longport", "eodhd", "yfinance", "akshare_em", "akshare_sina"],
+        "history": ["ibkr", "longport", "eodhd", "yfinance", "akshare_em"]
       },
-      "cn":      {"quote": ["longport", "akshare", "yfinance"], ...},
+      "cn":      {"quote": ["longport", "akshare_em", "akshare_sina", "yfinance"], ...},
       "crypto":  {"quote": ["binance", "gate", "hyperliquid", "yfinance"], ...},
-      "index":   {"history": ["akshare", "yfinance"]}
+      "index":   {"history": ["akshare_em", "yfinance"]}
     }
 
 约定:
@@ -21,7 +21,8 @@
 - IBKR/长桥也参与排序; ``use_ibkr`` / ``use_longport`` 开关只决定是否启用,
   EODHD 还受 ``quotes=off`` / token 约束。
 - 空/缺失 = 沿用历史默认链, 保证老配置零改动.
-- 大小写、``gate.io``/``yahoo`` 等别名在读取时归一.
+- 大小写、``gate.io``/``yahoo``、旧 ID ``akshare``/``sina`` 等别名在读取时归一
+  (``akshare`` → ``akshare_em``, ``sina`` → ``akshare_sina``).
 - 显式顺序优先于 EODHD 的 ``priority`` / ``quotes`` 角色, 但 ``quotes=off``
   与未配置 token 仍会跳过 EODHD。
 """
@@ -47,9 +48,11 @@ __all__ = [
     "configured",
     "signature",
     "clear_cache",
+    "canonical_source",
     "default_order",
     "display_order",
     "label",
+    "display_source",
     "chain_text",
     "prefer_source",
     "prefer_akshare_order",
@@ -67,12 +70,19 @@ CRYPTO_SOURCE_ORDER = tuple(s for s in CRYPTO_SOURCE_PREFERS if s != "auto")
 #: 每个域、每个通道可排序的数据源 (IBKR/长桥按位置批量或单码执行)
 CATALOG: dict[str, dict[str, tuple[str, ...]]] = {
     "global": {
-        "quote": ("ibkr", "longport", "eodhd", "yfinance", "akshare"),
-        "history": ("ibkr", "longport", "eodhd", "yfinance", "akshare"),
+        "quote": (
+            "ibkr",
+            "longport",
+            "eodhd",
+            "yfinance",
+            "akshare_em",
+            "akshare_sina",
+        ),
+        "history": ("ibkr", "longport", "eodhd", "yfinance", "akshare_em"),
     },
     "cn": {
-        "quote": ("longport", "akshare", "yfinance"),
-        "history": ("longport", "akshare", "yfinance"),
+        "quote": ("longport", "akshare_em", "akshare_sina", "yfinance"),
+        "history": ("longport", "akshare_em", "yfinance"),
     },
     "crypto": {
         "quote": CRYPTO_SOURCE_ORDER,
@@ -80,7 +90,7 @@ CATALOG: dict[str, dict[str, tuple[str, ...]]] = {
     },
     "index": {
         "quote": (),
-        "history": ("akshare", "yfinance"),
+        "history": ("akshare_em", "yfinance"),
     },
 }
 
@@ -115,8 +125,11 @@ class SourceMeta:
 SOURCE_META: dict[str, SourceMeta] = {
     "eodhd": SourceMeta("EODHD（BYOK）", "需 token；行情 quotes=off 时禁用"),
     "yfinance": SourceMeta("yfinance / OpenBB", "免 Key；Yahoo Finance"),
-    "akshare": SourceMeta(
+    "akshare_em": SourceMeta(
         "akshare / 东财", "全球域仅港股使用；沪深可转债走新浪兜底"
+    ),
+    "akshare_sina": SourceMeta(
+        "akshare / 新浪", "免 Key；沪深/港股单代码行情，东财 push2 不可达时兜底"
     ),
     "binance": SourceMeta("Binance", "现货 24h ticker"),
     "gate": SourceMeta("Gate.io", "现货；覆盖 Binance 未上架币种"),
@@ -127,7 +140,9 @@ SOURCE_META: dict[str, SourceMeta] = {
     "ibkr": SourceMeta("IBKR", "需 IB Gateway；未启用时自动跳过"),
 }
 
-# 手写配置的常见别名 → 内部 id (Quote.source 的 gate.io 也映射到 gate)
+# 手写配置的常见别名 → 内部 id (Quote.source 的 gate.io 也映射到 gate).
+# akshare/sina 是旧 source id (旧 settings / 历史健康记录 / 行情缓存),
+# 统一归一到 akshare_em / akshare_sina, 老配置无需手工迁移。
 _ALIASES = {
     "yahoo": "yfinance",
     "yf": "yfinance",
@@ -136,6 +151,10 @@ _ALIASES = {
     "gateio": "gate",
     "hl": "hyperliquid",
     "hyper": "hyperliquid",
+    "akshare": "akshare_em",
+    "akshare-em": "akshare_em",
+    "sina": "akshare_sina",
+    "akshare-sina": "akshare_sina",
 }
 
 # settings.json 的缓存: 源链在批量取数时按代码反复查询, 每次读盘/解析不可接受.
@@ -192,6 +211,15 @@ def _canonical(source_id: object) -> str | None:
     return _ALIASES.get(s, s)
 
 
+def canonical_source(source_id: object) -> str:
+    """公开的 source id 归一: 旧 ``akshare``/``sina`` → ``akshare_em``/``akshare_sina``.
+
+    健康库和行情缓存里可能留着改名前的字符串; 展示与聚合前统一走这里,
+    避免同一上游在报告里被拆成两行。
+    """
+    return _canonical(source_id) or "unknown"
+
+
 def normalize(domain: str, channel: str, raw) -> list[str] | None:
     """校验/归一一条源链; 空或全非法返回 None (由调用方回退默认链).
 
@@ -228,7 +256,9 @@ def signature() -> str:
     if not raw:
         return ""
     try:
-        blob = json.dumps(raw, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        blob = json.dumps(
+            raw, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+        )
     except (TypeError, ValueError):
         return ""
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:12]
@@ -251,13 +281,13 @@ def prefer_source(order: list[str], prefer) -> list[str]:
 
 
 def prefer_akshare_order(order: list[str]) -> list[str]:
-    """把 akshare 提前, 但保留原本排在它前面的 IBKR/长桥.
+    """把 akshare_em 提前, 但保留原本排在它前面的 IBKR/长桥.
 
     ``--akshare`` 的旧语义是「港股优先走 akshare」, 不是「关掉 IBKR/长桥」:
-    在默认链路里 IBKR/长桥仍然先执行。显式顺序下同理, 只把 akshare 提到
+    在默认链路里 IBKR/长桥仍然先执行。显式顺序下同理, 只把 akshare_em 提到
     eodhd/yfinance 之前, 不越过已经排在前面的批量源。
     """
-    if "akshare" not in order:
+    if "akshare_em" not in order:
         return order
     leading: list[str] = []
     for source_id in order:
@@ -265,8 +295,8 @@ def prefer_akshare_order(order: list[str]) -> list[str]:
             leading.append(source_id)
         else:
             break
-    rest = [s for s in order if s != "akshare" and s not in leading]
-    return leading + ["akshare"] + rest
+    rest = [s for s in order if s != "akshare_em" and s not in leading]
+    return leading + ["akshare_em"] + rest
 
 
 def default_order(
@@ -288,21 +318,21 @@ def default_order(
         prefix = ["ibkr", "longport"]
         if channel == "quote":
             base = prefix + (
-                ["eodhd", "yfinance", "akshare"]
+                ["eodhd", "yfinance", "akshare_em", "akshare_sina"]
                 if eodhd_quotes == "primary"
-                else ["yfinance", "akshare", "eodhd"]
+                else ["yfinance", "akshare_em", "eodhd", "akshare_sina"]
             )
         else:
             base = prefix + (
-                ["eodhd", "yfinance", "akshare"]
+                ["eodhd", "yfinance", "akshare_em"]
                 if eodhd_priority == "primary"
-                else ["yfinance", "akshare", "eodhd"]
+                else ["yfinance", "akshare_em", "eodhd"]
             )
         if prefer_akshare:
             base = prefer_akshare_order(base)
         return base
     if domain == "cn":
-        return ["longport", "akshare", "yfinance"]
+        return ["longport", "akshare_em", "akshare_sina", "yfinance"]
     if domain == "crypto":
         base = ["binance", "gate", "hyperliquid", "yfinance"]
         if crypto_source != "auto":
@@ -311,7 +341,11 @@ def default_order(
     if domain == "index":
         if not akshare_supported:
             return ["yfinance"]
-        return ["akshare", "yfinance"] if akshare_first else ["yfinance", "akshare"]
+        return (
+            ["akshare_em", "yfinance"]
+            if akshare_first
+            else ["yfinance", "akshare_em"]
+        )
     return list(CATALOG.get(domain, {}).get(channel, ()))
 
 
@@ -350,8 +384,23 @@ def display_order(
 
 
 def label(source_id: str) -> str:
-    meta = SOURCE_META.get(source_id)
-    return meta.label if meta else source_id
+    canonical = canonical_source(source_id)
+    meta = SOURCE_META.get(canonical)
+    if meta is not None:
+        return meta.label
+    return str(source_id) if source_id else "unknown"
+
+
+def display_source(source_id: object) -> str:
+    """行情表「数据来源」展示名.
+
+    akshare 系 (东财/新浪) 统一显示成 ``akshare / 东财`` / ``akshare / 新浪``;
+    其它源保持原 id, 与历史表格口径一致。
+    """
+    canonical = canonical_source(source_id)
+    if canonical in ("akshare_em", "akshare_sina"):
+        return label(canonical)
+    return str(source_id or "")
 
 
 def chain_text(order: list[str]) -> str:

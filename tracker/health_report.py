@@ -56,7 +56,8 @@ _EXPECTED = (
     "longport",
     "eodhd",
     "yfinance",
-    "akshare",
+    "akshare_em",
+    "akshare_sina",
     "binance",
     "gate",
     "hyperliquid",
@@ -83,6 +84,7 @@ def summary(window_hours: float = 24.0, now: float | None = None) -> dict:
         }
     """
     from . import cache as cache_mod
+    from .source_order import canonical_source
 
     flush()
     now = time.time() if now is None else float(now)
@@ -92,7 +94,9 @@ def summary(window_hours: float = 24.0, now: float | None = None) -> dict:
 
     groups: dict[tuple[str, str], dict] = {}
     for ev in events:
-        key = (ev["source"], ev["kind"])
+        # 旧记录里的 akshare/sina 与新 id 归并成同一行
+        source = canonical_source(ev["source"])
+        key = (source, ev["kind"])
         g = groups.setdefault(
             key,
             {
@@ -201,7 +205,7 @@ def summary(window_hours: float = 24.0, now: float | None = None) -> dict:
         {
             "ts": ev["ts"],
             "age_seconds": max(0.0, now - ev["ts"]),
-            "source": ev["source"],
+            "source": canonical_source(ev["source"]),
             "kind": ev["kind"],
             "symbol": ev["symbol"],
             "error": ev["error"] or "无错误信息",
@@ -580,10 +584,17 @@ def report(
     """
     from . import cache as cache_mod
     from .services import warm
+    from .source_order import canonical_source
 
     data = summary(window_hours)
     coverage_data = coverage()
     integrity_data = integrity()
+    # 旧行情缓存 (改名前的 akshare/sina) 与新 id 合并展示, 避免同一上游两行
+    cache_sources: dict[str, dict[str, int]] = {}
+    for src, info in cache_mod.source_distribution().items():
+        merged = cache_sources.setdefault(canonical_source(src), {"total": 0, "fresh": 0})
+        merged["total"] += int(info.get("total") or 0)
+        merged["fresh"] += int(info.get("fresh") or 0)
     try:
         cache_info = cache_mod.info()
     except Exception as e:  # noqa: BLE001 - 页面不能因缓存库忙而整页崩
@@ -611,7 +622,7 @@ def report(
         "coverage": coverage_data,
         "integrity": integrity_data,
         "cache": cache_info,
-        "cache_sources": cache_mod.source_distribution(),
+        "cache_sources": cache_sources,
         "warm": warm.status(),
     }
     if with_probe:

@@ -26,10 +26,24 @@ from tracker.providers.index import IndexProvider
 from tracker.symbols import parse
 
 _ALLOWED = {
-    "global": {"ibkr", "longport", "eodhd", "yfinance", "akshare"},
-    "cn": {"longport", "akshare", "yfinance"},
+    "global": {
+        "ibkr",
+        "longport",
+        "eodhd",
+        "yfinance",
+        "akshare_em",
+        "akshare_sina",
+    },
+    "cn": {"longport", "akshare_em", "akshare_sina", "yfinance"},
     "crypto": {"binance", "gate", "hyperliquid", "yfinance"},
-    "index": {"akshare", "yfinance", "ccement", "hsi", "cameco", "fred"},
+    "index": {
+        "akshare_em",
+        "yfinance",
+        "ccement",
+        "hsi",
+        "cameco",
+        "fred",
+    },
 }
 
 

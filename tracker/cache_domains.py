@@ -362,7 +362,7 @@ def set_cached(quotes: dict[str, "Quote"]) -> None:
             -- 动态 PE: akshare/东财是权威口径, 它返回 "-" 时要清掉旧值;
             -- 其它源 (yfinance/长桥) 不提供该字段, 不能把东财值抹成 NULL。
             pe_dynamic=CASE
-                WHEN excluded.source = 'akshare' THEN excluded.pe_dynamic
+                WHEN excluded.source IN ('akshare_em', 'akshare') THEN excluded.pe_dynamic
                 ELSE COALESCE(excluded.pe_dynamic, quotes.pe_dynamic)
             END,
             source=excluded.source, fetched_at=excluded.fetched_at

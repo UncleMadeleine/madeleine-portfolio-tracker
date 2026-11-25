@@ -1328,9 +1328,9 @@ def test_cached_source_ok_skips_longport_b_share(monkeypatch):
     from tracker.providers import orchestration as orch
 
     monkeypatch.setattr(
-        so, "configured", lambda domain, channel: ["longport", "akshare"]
+        so, "configured", lambda domain, channel: ["longport", "akshare_em"]
     )
-    q = Quote("900901.SS", "B-share", 1.0, 0.99, 1.0, "USD", source="akshare")
+    q = Quote("900901.SS", "B-share", 1.0, 0.99, 1.0, "USD", source="akshare_em")
     assert orch._cached_source_ok(
         q, parse("900901.SS"), False, False, True, "auto"
     )

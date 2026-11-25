@@ -31,6 +31,7 @@ from tracker import storage
 from tracker.ics import build_ics, ics_filename
 from tracker.services import warm as warm_mod
 from tracker.services.watchlist import entries_for
+from tracker.source_order import display_source
 from tracker.symbols import parse
 from tracker.ui import theme
 from tracker.ui.progress import FetchProgress
@@ -602,7 +603,7 @@ def _render_agenda(evs: list[dict]) -> None:
                 ev.get("date_status") or "", ""
             )
             note = str(ev.get("note") or "").strip()
-            source = str(ev.get("source") or "").strip()
+            source = display_source(ev.get("source"))
             name = str(ev.get("name") or "").strip()
             items.append(
                 f'<div class="fp-agenda-item fp-ev-{_type_class(ev)}">'
@@ -656,7 +657,7 @@ def _render_detail_table(evs: list[dict]) -> None:
                     e.get("date_status") or "", ""
                 ),
                 "说明": e.get("note") or None,
-                "来源": e.get("source") or None,
+                "来源": display_source(e.get("source")) or None,
             }
             for e in _sorted_events(evs)
         ]

@@ -178,7 +178,7 @@ class TestCacheCoalesce:
             {
                 "600519.SS": Quote(
                     "600519.SS", "贵州茅台", 1500.0, None, None, "CNY",
-                    book_value=38.0, market_cap=1.9e12, source="akshare",
+                    book_value=38.0, market_cap=1.9e12, source="akshare_em",
                 )
             }
         )

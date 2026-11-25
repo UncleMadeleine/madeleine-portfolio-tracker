@@ -273,7 +273,9 @@ def _fetch_akshare_snapshot(
         pb=pb,
         market_cap=q.market_cap,
         pe_dynamic=getattr(q, "pe_dynamic", None),
-        source="akshare",
+        # 东财不可达时会回落新浪: 快照来源跟随实际命中的行情源, 页面才能
+        # 显示 "akshare / 东财" 还是 "akshare / 新浪"。
+        source=q.source or "akshare_em",
         fetched_at=fetched_at,
     )
 

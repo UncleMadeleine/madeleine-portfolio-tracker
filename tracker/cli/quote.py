@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .. import prices
+from ..source_order import display_source
 from ..symbols import parse
 from ._common import _print_json
 
@@ -56,7 +57,7 @@ def cmd_quote(args) -> None:
             print(f"  {r['symbol']}: ⚠ {r['error']}")
             continue
         chg = f" ({r['change_pct']:+.2f}%)" if r["change_pct"] is not None else ""
-        src = f" [{r['source']}]" if r.get("source") else ""
+        src = f" [{display_source(r['source'])}]" if r.get("source") else ""
         pe = (
             f"  PE(动) {r['pe_dynamic']:.2f}"
             if r.get("pe_dynamic") is not None

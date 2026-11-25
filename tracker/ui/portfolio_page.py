@@ -27,6 +27,7 @@ import streamlit as st
 from tracker import nav, storage
 from tracker.analytics import build_view, summarize
 from tracker.storage import CorruptDataError, DataFileLocked
+from tracker.source_order import display_source
 from tracker.symbols import parse
 from .portfolio_data import (  # noqa: F401 - 兼容再导出
     QUOTE_FRESH_TTL,
@@ -402,7 +403,7 @@ def render_portfolio_page() -> None:
             st.caption(f":material/info: {n}")
     src_counts: dict[str, int] = {}
     for q in quotes.values():
-        src = getattr(q, "source", None)
+        src = display_source(getattr(q, "source", None))
         if src:
             src_counts[src] = src_counts.get(src, 0) + 1
     if src_counts:
@@ -506,6 +507,8 @@ def render_portfolio_page() -> None:
         if detail.empty:
             st.info("暂无持仓数据。")
         else:
+            if "source" in detail.columns:
+                detail["source"] = detail["source"].map(display_source)
             styled = detail.style.map(
                 _pnl_color, subset=["change_pct", "pnl", "pnl_pct", "today_pnl"]
             )
@@ -715,6 +718,8 @@ def render_portfolio_page() -> None:
             if wview.empty:
                 st.info("自选行情全部缺失 (行情源失败或代码无效), 详情见上方数据问题。")
             else:
+                if "source" in wview.columns:
+                    wview["source"] = wview["source"].map(display_source)
                 styled_w = wview.style.map(_pnl_color, subset=["change_pct"]).map(
                     lambda v: (
                         f"color: {S.up_down_colors()[0]}; font-weight: 600"

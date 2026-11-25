@@ -17,7 +17,7 @@
 事件统一为 dict 行:
   {"symbol", "name"?, "market_label", "type": earnings|ex_dividend|
    record_date|dividend, "date": "YYYY-MM-DD", "date_status": planned|changed|
-   actual|estimate, "note"?, "source": yfinance|akshare|longport}
+   actual|estimate, "note"?, "source": yfinance|akshare_em|longport}
 
 缓存: tracker.cache 表 calendar_cache (key, payload, fetched_at)。
   - 单票 global: key="g:<symbol>", 有事件 TTL 6h (对齐 fundamentals, 低频
@@ -351,9 +351,11 @@ def fetch_calendar(
             ev["date"] = ev["date"].isoformat()
     events = [e for e in events if e.get("date") is not None]
     # 来源计数按最终事件条数统一聚合 (不再按域分别统计, 避免各分支口径不一)
+    from .source_order import canonical_source
+
     sources: dict[str, int] = {}
     for ev in events:
-        src = ev.get("source") or "yfinance"
+        src = canonical_source(ev.get("source") or "yfinance")
         sources[src] = sources.get(src, 0) + 1
     events.sort(key=lambda e: (e["date"], e.get("symbol") or "", e.get("type") or ""))
     if cache_only and not meta["used"]:

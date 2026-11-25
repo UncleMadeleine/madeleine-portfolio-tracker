@@ -66,9 +66,11 @@ def test_summary_aggregates_and_degrades():
 
 def test_summary_down_when_all_fail():
     now = time.time()
+    # 旧 source id 也要归并到新 id (akshare → akshare_em)
     _add([(-i, "akshare", False, 10.0, "X", "boom") for i in range(1, 4)])
     summary = health.summary(24, now=now)
-    row = next(r for r in summary["sources"] if r["source"] == "akshare")
+    row = next(r for r in summary["sources"] if r["source"] == "akshare_em")
+    assert row["label"] == "akshare / 东财"
     assert row["status"] == "down"
     assert summary["overall"] == "down"
 
@@ -88,12 +90,12 @@ def test_summary_ignores_events_outside_window():
 
 def test_span_records_failure_and_reraises():
     with pytest.raises(ValueError, match="boom"):
-        with health.span("quote", "akshare", "600519.SS"):
+        with health.span("quote", "akshare_em", "600519.SS"):
             raise ValueError("boom")
     health.flush()
     events = cache_mod.get_health_events(0)
     assert len(events) == 1
-    assert events[0]["source"] == "akshare"
+    assert events[0]["source"] == "akshare_em"
     assert events[0]["ok"] is False
     assert "boom" in events[0]["error"]
 
@@ -240,13 +242,13 @@ def test_health_events_prune_by_age_and_cap():
     cache_mod.add_health_events(
         [
             (now - 8 * 86400, "quote", "yfinance", 1, 1.0, None, None),
-            (now - 60, "quote", "akshare", 1, 1.0, None, None),
+            (now - 60, "quote", "akshare_em", 1, 1.0, None, None),
         ]
     )
     removed = cache_mod.prune_health_events(now - 7 * 86400, max_rows=20000)
     assert removed == 1
     events = cache_mod.get_health_events(0)
-    assert [e["source"] for e in events] == ["akshare"]
+    assert [e["source"] for e in events] == ["akshare_em"]
 
     cache_mod.add_health_events(
         [(now - i, "quote", "yfinance", 1, 1.0, None, None) for i in range(5)]
@@ -255,18 +257,59 @@ def test_health_events_prune_by_age_and_cap():
     assert len(cache_mod.get_health_events(0)) == 2
 
 
+def test_health_events_limit_keeps_newest_in_ascending_order():
+    """超过 limit 时保留最近事件: 否则 doctor/健康页看不到刚发生的失败."""
+    now = time.time()
+    cache_mod.add_health_events(
+        [
+            (now - 40, "quote", "oldest", 1, 1.0, None, None),
+            (now - 30, "quote", "older", 1, 1.0, None, None),
+            (now - 20, "quote", "newer", 0, 1.0, None, "boom"),
+            (now - 10, "quote", "newest", 0, 1.0, None, "boom"),
+        ]
+    )
+    events = cache_mod.get_health_events(0, limit=2)
+    assert [e["source"] for e in events] == ["newer", "newest"]
+    assert [e["ok"] for e in events] == [False, False]
+
+
+def test_short_error_renders_empty_timeout_exception():
+    from tracker import health_record
+
+    assert health_record._short_error(TimeoutError()) == "超时"
+    assert health_record._short_error(ValueError()) == "ValueError"
+    assert health_record._short_error("  ") is None
+
+
 def test_source_distribution_reads_cache():
     cache_mod.set_cached(
         {
             "AAPL": Quote("AAPL", "Apple", 1.0, None, None, "USD", source="yfinance"),
             "MSFT": Quote("MSFT", "Microsoft", 2.0, None, None, "USD", source="yfinance"),
             "0700.HK": Quote("0700.HK", "腾讯", 3.0, None, None, "HKD",
-                             source="akshare"),
+                             source="akshare_em"),
         }
     )
     dist = cache_mod.source_distribution()
     assert dist["yfinance"]["total"] == 2
-    assert dist["akshare"]["total"] == 1
+    assert dist["akshare_em"]["total"] == 1
+
+
+def test_report_merges_legacy_cache_source_ids(monkeypatch):
+    """缓存里改名前的 akshare/sina 与新 id 合并, 不在报告里拆成两行."""
+    monkeypatch.setattr(
+        cache_mod,
+        "source_distribution",
+        lambda: {
+            "akshare": {"total": 1, "fresh": 1},
+            "akshare_em": {"total": 2, "fresh": 1},
+            "sina": {"total": 3, "fresh": 0},
+            "akshare_sina": {"total": 1, "fresh": 1},
+        },
+    )
+    sources = health.report()["cache_sources"]
+    assert sources["akshare_em"] == {"total": 3, "fresh": 2}
+    assert sources["akshare_sina"] == {"total": 4, "fresh": 1}
 
 
 def test_coverage_reports_fundamentals_gaps_for_holdings_only():

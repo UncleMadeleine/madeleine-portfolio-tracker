@@ -446,11 +446,11 @@ class TestFetchCalendar:
         assert by["AAPL"]["date"] == (w_start + timedelta(days=10)).isoformat()
         assert by["AAPL"]["source"] == "yfinance"
         assert by["AAPL"]["name"] == "苹果公司"  # names 参数补齐
-        assert by["600519.SS"]["source"] == "akshare"
+        assert by["600519.SS"]["source"] == "akshare_em"
         assert by["600519.SS"]["name"] == "贵州茅台"
         assert r["window"]["start"] == w_start.isoformat()
         assert r["window"]["end"] == w_end.isoformat()
-        assert r["sources"] == {"yfinance": 1, "akshare": 1}
+        assert r["sources"] == {"yfinance": 1, "akshare_em": 1}
 
     def test_skips_crypto_index(self, no_network_calendar):
         r = fetch_calendar(["AAPL", "BTC-USD", "IX.DXY"], months=2)

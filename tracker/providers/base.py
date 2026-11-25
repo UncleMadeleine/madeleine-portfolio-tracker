@@ -93,7 +93,7 @@ class Quote:
     currency: str
     book_value: float | None = None  # 每股净资产 (PB 提醒用; 部分源无此数据)
     market_cap: float | None = None  # 总市值, 当地货币 (mcap 提醒用; 部分源无此数据)
-    # 实际命中数据源 (longport/ibkr/eodhd/yfinance/akshare/binance/gate.io/hyperliquid/cache);
+    # 实际命中数据源 (longport/ibkr/eodhd/yfinance/akshare_em/akshare_sina/binance/gate.io/hyperliquid/cache);
     # 由取数链路打标, 缓存命中项从磁盘缓存恢复, 供前端「数据来源」列展示
     source: str | None = None
     # 东财实时「市盈率(动)」(f162): 与 PE(TTM) 口径不同, 单独字段保存,

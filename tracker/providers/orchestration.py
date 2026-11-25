@@ -151,7 +151,9 @@ def _fetch_domain(
     return out
 
 
-def _run_single_source(plist: list[ParsedSymbol], fn) -> tuple[dict[str, Quote], dict[str, str]]:
+def _run_single_source(
+    plist: list[ParsedSymbol], fn
+) -> tuple[dict[str, Quote], dict[str, str]]:
     """并发执行单个逐代码源; 返回成功行情与单码错误 (不写负缓存)."""
     out: dict[str, Quote] = {}
     errs: dict[str, str] = {}
@@ -163,9 +165,7 @@ def _run_single_source(plist: list[ParsedSymbol], fn) -> tuple[dict[str, Quote],
             return p.yahoo, e
 
     with ThreadPoolExecutor(max_workers=_FALLBACK_WORKERS) as pool:
-        for _p, (yahoo, result) in zip(
-            plist, pool.map(_one, plist), strict=False
-        ):
+        for _p, (yahoo, result) in zip(plist, pool.map(_one, plist), strict=False):
             if isinstance(result, BaseException):
                 errs[yahoo] = str(result) or repr(result)
             else:
@@ -192,7 +192,8 @@ def _fetch_ordered_quotes(
     """
     from .. import eodhd as eodhd_mod
     from .. import source_order as so
-    from .stock_akshare import _akshare_quote
+    from . import stock_yahoo as sy_mod
+    from .stock_akshare import _akshare_quote, _sina_quote
     from .stock_yahoo import _yahoo_quote
 
     if domain == "global" and prefer_akshare:
@@ -270,12 +271,16 @@ def _fetch_ordered_quotes(
                     _settle(batch)
                     if len(quotes) == before:
                         sp.ok = False
-                        sp.error = (batch_errors[0] if batch_errors else "无行情")
+                        sp.error = batch_errors[0] if batch_errors else "无行情"
                     for err in batch_errors[:3]:
                         notes.append(f"EODHD 批量行情: {err}")
             except Exception as e:  # noqa: BLE001 - 批量失败落到下一源
                 notes.append(f"EODHD 批量行情异常: {e} (已按顺序尝试下一源)")
         elif source_id == "yfinance":
+            # 熔断期跳过逐代码回源: 批量已被限流时, 再对剩余代码各发一次
+            # 请求只会延长限流窗口 (这是 600+ 自选一轮打出几百条失败的主因)。
+            if sy_mod.quote_throttled():
+                continue
             if domain == "global":
                 before = len(quotes)
                 try:
@@ -294,7 +299,7 @@ def _fetch_ordered_quotes(
                     if errs and len(out) < len(pending):
                         sp.ok = False
                         sp.error = next(iter(errs.values()))
-        elif source_id == "akshare":
+        elif source_id == "akshare_em":
             targets = (
                 pending
                 if domain == "cn"
@@ -302,8 +307,24 @@ def _fetch_ordered_quotes(
             )
             if not targets:
                 continue
-            with health.span("quote", "akshare") as sp:
+            with health.span("quote", "akshare_em") as sp:
                 out, errs = _run_single_source(targets, _akshare_quote)
+                last_err.update(errs)
+                _settle(out)
+                if errs and len(out) < len(targets):
+                    sp.ok = False
+                    sp.error = next(iter(errs.values()))
+        elif source_id == "akshare_sina":
+            # 新浪只覆盖沪深/港股; 美股等代码跳过
+            targets = (
+                pending
+                if domain == "cn"
+                else [p for p in pending if p.market is Market.HK]
+            )
+            if not targets:
+                continue
+            with health.span("quote", "akshare_sina") as sp:
+                out, errs = _run_single_source(targets, _sina_quote)
                 last_err.update(errs)
                 _settle(out)
                 if errs and len(out) < len(targets):
@@ -388,9 +409,13 @@ def _first_configured_quote_source(
                 return "eodhd"
         elif source_id == "yfinance":
             return "yfinance"
-        elif source_id == "akshare":
+        elif source_id == "akshare_em":
             if parsed.type != "global" or parsed.market is Market.HK:
-                return "akshare"
+                return "akshare_em"
+        elif source_id == "akshare_sina":
+            # 新浪只覆盖沪深/港股 (北交所接口返回全 0 占位, 不参与)
+            if parsed.market in (Market.CN, Market.HK):
+                return "akshare_sina"
         elif source_id == "gate":
             return "gate.io"
         elif source_id in ("hyperliquid", "binance"):
@@ -408,14 +433,10 @@ def _legacy_required_quote_source(
     """未配置 source_order 时, 旧版优先级最高源所对应的 Quote.source."""
     if use_ibkr and parsed.type == "global":
         return "ibkr"
-    if (
-        use_longport
-        and parsed.type in ("global", "cn")
-        and _longport_can_quote(parsed)
-    ):
+    if use_longport and parsed.type in ("global", "cn") and _longport_can_quote(parsed):
         return "longport"
     if prefer_akshare and parsed.market is Market.HK:
-        return "akshare"
+        return "akshare_em"
     if parsed.type == "crypto" and crypto_source != "auto":
         # settings/CLI 用 gate 指 Gate.io, Quote.source 是 "gate.io"
         return "gate.io" if crypto_source == "gate" else crypto_source
@@ -511,7 +532,11 @@ def get_quotes(
             sym: q
             for sym, q in cached.items()
             if _cached_source_ok(
-                q, by_yahoo[sym], prefer_akshare, use_ibkr, use_longport,
+                q,
+                by_yahoo[sym],
+                prefer_akshare,
+                use_ibkr,
+                use_longport,
                 crypto_source,
             )
         }
@@ -562,9 +587,7 @@ def get_quotes(
         # 与长桥预取一致: 新鲜缓存命中的代码不再打 IBKR 配额; 原先未过滤,
         # 一只缺失代码会让整个全球域 (可能数百只) 重新批量请求。
         ib_plist = [
-            p
-            for p in by_yahoo.values()
-            if p.type == "global" and p.yahoo not in quotes
+            p for p in by_yahoo.values() if p.type == "global" and p.yahoo not in quotes
         ]
         if ib_plist:
             _emit("IBKR 批量行情")
@@ -673,6 +696,7 @@ def get_quotes(
 
         if global_plist:
             if global_order is not None:
+
                 def _on_done_ordered(yahoo: str) -> None:
                     settled.add(yahoo)
                     _emit(yahoo)
@@ -732,9 +756,7 @@ def get_quotes(
                 # 港股永远走 yfinance (与声明的"港股源顺序翻转"矛盾)。
                 batch_plist = global_plist
                 if prefer_akshare:
-                    batch_plist = [
-                        p for p in global_plist if p.market is not Market.HK
-                    ]
+                    batch_plist = [p for p in global_plist if p.market is not Market.HK]
                 if batch_plist:
                     _emit("yfinance 批量行情")
                     try:
@@ -748,13 +770,9 @@ def get_quotes(
                     except Exception as e:  # noqa: BLE001 - 批量失败不能让整个域崩
                         # 批量是优化不是必需: 失败则全部代码落逐代码源链 (那里每源
                         # 单独 try)。逐代码阶段异常也会被 _fetch_domain 收敛成单码错误。
-                        notes.append(
-                            f"yfinance 批量行情异常: {e} (已回退逐代码取数)"
-                        )
+                        notes.append(f"yfinance 批量行情异常: {e} (已回退逐代码取数)")
                     _emit("yfinance 批量行情")
-                    global_plist = [
-                        p for p in global_plist if p.yahoo not in quotes
-                    ]
+                    global_plist = [p for p in global_plist if p.yahoo not in quotes]
 
                 if global_plist:
                     if progress is not None:
@@ -788,9 +806,7 @@ def get_quotes(
         # 转成进度 (global 缺失时也能逐只推进), 异常不拖垮其它域。
         _drain_side_progress()
         while pending:
-            done_futs, _ = wait(
-                list(pending), timeout=0.1, return_when=FIRST_COMPLETED
-            )
+            done_futs, _ = wait(list(pending), timeout=0.1, return_when=FIRST_COMPLETED)
             _drain_side_progress()
             for fut in done_futs:
                 domain = pending.pop(fut)

@@ -65,7 +65,7 @@ def _print_human(report: dict) -> None:
     for row in health["sources"]:
         if row["status"] == "idle" and row["source"] not in (
             "yfinance",
-            "akshare",
+            "akshare_em",
             "cfets",
         ):
             # 可选源未启用是常态: 只在 --json 中保留, 人读输出不刷屏

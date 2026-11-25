@@ -513,8 +513,8 @@ tracker/
 │   ├── base.py         Provider 基类 + Quote/SymbolEntry 数据结构 + resolve(type) 域路由
 │   ├── stock_yahoo.py      Yahoo/OpenBB 股票行情与历史源（global/cn/index 共用）
 │   ├── stock_akshare.py    东财/akshare 股票行情与历史源（cn/全球港股兜底共用）
-│   ├── cn_stocks.py        A股/B股域（.SS/.SZ/.BJ）：akshare 固定优先, yfinance 兜底
-│   ├── global_stocks.py    全球股票域（美股/港股/欧股…）：yfinance 主源, 港股 akshare 兜底; 搜索走 IBKR → 东财 suggest → yfinance Search → 代码直查
+│   ├── cn_stocks.py        A股/B股域（.SS/.SZ/.BJ）：akshare 固定优先, 新浪兜底, yfinance 兜底
+│   ├── global_stocks.py    全球股票域（美股/港股/欧股…）：yfinance 主源, 港股 akshare/新浪兜底; 搜索走 IBKR → 东财 suggest → yfinance Search → 代码直查
 │   ├── crypto.py           加密货币域（BASE-QUOTE）：Binance → Gate.io → Hyperliquid(USD系) → yfinance
 │   ├── index.py            指数域（IX.<KEY>）：中国指数 akshare 优先, 其余 yfinance 主源 + 新浪兜底; 水泥网/商品期货/恒生官网/Cameco 铀价/FRED 国债与信用利差为专属源
 │   ├── orchestration.py    批量行情编排：按域分组取数 → 聚合 quotes/errors/notes; 进程内负缓存
@@ -605,8 +605,8 @@ tests/                  单元测试（离线, mock）
 
 | type | 覆盖代码 | 实时行情优先级 | 历史K线优先级 |
 |----------|----------|----------------|----------------|
-| **global** | 裸代码（美股）、`.HK/.DE/.AS/.L/.TO/.AX/.T/.KS/.KQ/.SI/.SA…` | IBKR(可选, 优先) → 长桥(可选) → **EODHD(可选, primary 时)** → yfinance 批量 → 港股 akshare → EODHD(可选, fallback) | IBKR(可选) → 长桥(可选) → **EODHD(可选, primary)** → yfinance（港股可 `--akshare` 翻转） → EODHD(可选, fallback) |
-| **cn** | `.SS/.SZ/.BJ`（A/B股、北交所） | 长桥(可选前置) → **akshare 优先** → yfinance | 长桥(可选前置) → **akshare 优先** → yfinance |
+| **global** | 裸代码（美股）、`.HK/.DE/.AS/.L/.TO/.AX/.T/.KS/.KQ/.SI/.SA…` | IBKR(可选, 优先) → 长桥(可选) → **EODHD(可选, primary 时)** → yfinance 批量 → 港股 akshare → EODHD(可选, fallback) → 港股新浪 | IBKR(可选) → 长桥(可选) → **EODHD(可选, primary)** → yfinance（港股可 `--akshare` 翻转） → EODHD(可选, fallback) |
+| **cn** | `.SS/.SZ/.BJ`（A/B股、北交所） | 长桥(可选前置) → **akshare 优先** → 新浪 → yfinance | 长桥(可选前置) → **akshare 优先** → yfinance |
 | **crypto** | `BASE-QUOTE`（`BTC-USD`） | **Binance API** → Gate.io 现货 → Hyperliquid 永续（仅USD系） → yfinance | **Binance klines** → Gate.io → Hyperliquid → yfinance |
 | **index** | `IX.<KEY>`（`IX.DXY` 美元指数 / `IX.VIX` 恐慌指数 / `IX.CSI300` 沪深 300 / `IX.AU` 黄金 · `IX.AG` 白银 · `IX.JD` 鸡蛋 · `IX.M` 豆粕 · `IX.A` 豆一 · `IX.B` 豆二 · `IX.LH` 生猪 · `IX.LC` 碳酸锂主力连续 / `IX.US2Y` 美债 2 年期 · `IX.US10Y2Y` · `IX.US10Y3M` 倒挂利差 / `IX.IG_OAS` · `IX.BBB_OAS` · `IX.HY_OAS` · `IX.CCC_OAS` 美国信用利差 / `IX.URANIUM` 铀现货价 · `IX.URANIUM_LT` 铀长协价 / `IX.CEMPI` 水泥价格指数 / `IX.HSI` 恒生指数 · `IX.HSTECH` 恒生科技指数 等恒生官网港股指数 / `IX.HSAHP` AH股溢价指数 …） | —（指数无实时行情, 不参与持仓聚合） | 中国指数 **akshare 优先** → yfinance；美股 SPX/NDX/DJI 有新浪兜底；水泥网/商品期货/恒生官网/Cameco 铀价/FRED 国债与信用利差为专属源（无兜底） |
 
@@ -628,7 +628,7 @@ tests/                  单元测试（离线, mock）
   **实时行情** / **历史K线** 的逐代码源链（自动保存，也支持 ↑/↓ 与 Alt/Ctrl+↑/↓），
   配置写在 `settings.json` 的 `source_order`。顺序从上到下即优先级，手写配置里未列出的源自动补到末尾；
   手改 JSON 同样生效，空对象 `{}` = 沿用上表默认链。
-  例：`{"global": {"quote": ["akshare", "yfinance", "eodhd"]}}`。
+  例：`{"global": {"quote": ["akshare_em", "yfinance", "eodhd"]}}`（旧 `akshare`/`sina` 会自动归一到 `akshare_em`/`akshare_sina`）。
   IBKR / 长桥也在这份列表里参与排序：`use_ibkr` / `use_longport` 开关只控制是否启用，
   拖到前面就优先命中，拖到 yfinance 后面则只为前面未命中的代码兜底。
 - **type 即域**：`type` 字段由系统在保存/导入时按 `symbols.type_for_symbol()` 自动推导覆写，
@@ -637,7 +637,7 @@ tests/                  单元测试（离线, mock）
 - **长桥与 IBKR 同开时**：默认顺序为 IBKR → 长桥（IBKR 命中的代码优先，长桥补未命中项）；历史同理。可在设置页把长桥拖到 IBKR 前面改变优先级
 - **IBKR 历史K线按 ≤365 天窗口分块拼接**（IBKR 单次日K请求上限 365 D，超限拒单）：60 个月（5 年）区间在 IBKR 源同样可用；标的上市晚于区间起点时连续空窗即停，任一分块失败该代码整体回退默认源（不返回半截区间）
 - 汇率：CFETS 一次拿全 XXX/CNY；直对/逆对/USD 桥接兜底
-- A股/港股实时行情（akshare 源）走东财 push2 **单代码**接口（`.SS`=市场段 1、`.SZ`/`.BJ`=0、`.HK`=116+5位码），一个请求拿齐 最新价/昨收/涨跌幅/名称/总市值/市净率，实测 0.4-0.8s；不用 akshare 全市场 spot（内部分 60 页拉全 A 股、页间 sleep，单次 42-102s，秒级超时必然失败——改之前「A股 akshare 优先 / 港股 akshare 兜底」实际从未生效）。单代码接口还比全市场表多给港股的总市值/市净率（全市场 spot 最终列丢了这两列），港股 PB/市值阈值提醒因此有了东财实时口径；带 5s 进程内缓存 + per-key 单飞 + 失败 15s 占位
+- A股/港股实时行情（akshare 源）走东财 push2 **单代码**接口（`.SS`=市场段 1、`.SZ`/`.BJ`=0、`.HK`=116+5位码），一个请求拿齐 最新价/昨收/涨跌幅/名称/总市值/市净率，实测 0.4-0.8s；不用 akshare 全市场 spot（内部分 60 页拉全 A 股、页间 sleep，单次 42-102s，秒级超时必然失败——改之前「A股 akshare 优先 / 港股 akshare 兜底」实际从未生效）。单代码接口还比全市场表多给港股的总市值/市净率（全市场 spot 最终列丢了这两列），港股 PB/市值阈值提醒因此有了东财实时口径；带 5s 进程内缓存 + per-key 单飞 + 失败 15s 占位。**东财 push2 域名整段不可达时**（实测 curl 52 Empty reply，而新浪/腾讯正常），A股/港股自动回落 `akshare_sina` 源（新浪 `hq.sinajs.cn` 单代码，沪深+港股，北交所除外）；失败原因（`RemoteDisconnected`/超时/`data=null`）会带进健康记录，不再只显示「akshare 行情不可用」
 - `--akshare` 开关仅影响港股数据源顺序（A股域默认 akshare 优先，也可在设置页拖动）；设置页已改为直接拖动排序，
   旧 `"prefer_akshare": true` 仍作为未配置 `source_order` 时的默认链兼容偏好
 - 加密货币域默认链 Binance → Gate.io → Hyperliquid(USD系) → yfinance；可直接在设置页拖动排序，

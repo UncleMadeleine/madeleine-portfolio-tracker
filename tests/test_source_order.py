@@ -56,7 +56,7 @@ def _patch_eodhd(monkeypatch, *, available=True, quotes="fallback", priority="pr
 def test_normalize_aliases_dedupes_and_appends_missing():
     assert so.normalize(
         "global", "quote", ["Yahoo", "gate.io", "AKSHARE", "yfinance", "bogus"]
-    ) == ["yfinance", "akshare", "ibkr", "longport", "eodhd"]
+    ) == ["yfinance", "akshare_em", "ibkr", "longport", "eodhd", "akshare_sina"]
     # crypto 只接受本域源; global 的 akshare 不能被塞进 crypto
     assert so.normalize("crypto", "quote", ["gate.io", "GATE", "binance"]) == [
         "gate",
@@ -81,23 +81,25 @@ def test_settings_roundtrip_and_invalid_shape(tmp_path):
 
 def test_configured_reads_settings_and_invalidates_on_rewrite():
     _save_order(order={"global": {"quote": ["yfinance", "eodhd"]}})
-    # 未列出的 IBKR/长桥/akshare 自动补到末尾
+    # 未列出的 IBKR/长桥/akshare_em/akshare_sina 自动补到末尾
     assert so.configured("global", "quote") == [
         "yfinance",
         "eodhd",
         "ibkr",
         "longport",
-        "akshare",
+        "akshare_em",
+        "akshare_sina",
     ]
     assert so.configured("global", "history") is None
 
     _save_order(order={"global": {"quote": ["akshare", "yfinance"]}})
     assert so.configured("global", "quote") == [
-        "akshare",
+        "akshare_em",
         "yfinance",
         "ibkr",
         "longport",
         "eodhd",
+        "akshare_sina",
     ]
 
 
@@ -113,17 +115,17 @@ def test_signature_changes_with_order():
 def test_display_order_keeps_legacy_prefer_consistent_with_provider():
     _save_order(order={"global": {"quote": ["yfinance", "eodhd"]}})
     order = so.display_order("global", "quote", prefer_akshare=True)
-    # 用户没把 IBKR/长桥排在前面时, --akshare 把 akshare 提到最前
-    assert order[0] == "akshare"
-    assert order.index("akshare") < order.index("eodhd")
-    assert order.index("akshare") < order.index("yfinance")
+    # 用户没把 IBKR/长桥排在前面时, --akshare 把 akshare_em 提到最前
+    assert order[0] == "akshare_em"
+    assert order.index("akshare_em") < order.index("eodhd")
+    assert order.index("akshare_em") < order.index("yfinance")
 
     # 已排在 akshare 前面的 IBKR/长桥保持不动
     _save_order(
         order={"global": {"quote": ["ibkr", "longport", "yfinance", "eodhd"]}}
     )
     order = so.display_order("global", "quote", prefer_akshare=True)
-    assert order[:3] == ["ibkr", "longport", "akshare"]
+    assert order[:3] == ["ibkr", "longport", "akshare_em"]
 
     _save_order(order={"crypto": {"quote": ["binance", "hyperliquid"]}})
     assert so.display_order("crypto", "quote", crypto_source="gate")[0] == "gate"
@@ -134,14 +136,21 @@ def test_display_order_defaults_follow_legacy_flags():
         "ibkr",
         "longport",
         "yfinance",
-        "akshare",
+        "akshare_em",
         "eodhd",
+        "akshare_sina",
     ]
     assert so.default_order(
         "global", "history", prefer_akshare=True, eodhd_priority="primary"
-    ) == ["ibkr", "longport", "akshare", "eodhd", "yfinance"]
+    ) == ["ibkr", "longport", "akshare_em", "eodhd", "yfinance"]
     assert so.default_order("crypto", "quote", crypto_source="gate")[0] == "gate"
     assert so.default_order("index", "history", akshare_supported=False) == ["yfinance"]
+
+
+def test_akshare_upstreams_share_display_prefix():
+    """东财/新浪在 akshare 体系下展示成 "akshare / X", 避免看起来是两个产品."""
+    assert so.SOURCE_META["akshare_em"].label == "akshare / 东财"
+    assert so.SOURCE_META["akshare_sina"].label == "akshare / 新浪"
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +169,12 @@ def test_global_quote_chain_honours_configured_order(monkeypatch):
     assert us == [gs._yahoo_quote, eodhd.quote]  # akshare 仅港股
 
     hk = provider.quote_sources(parse("0700.HK"))
-    assert hk == [gs._akshare_quote, gs._yahoo_quote, eodhd.quote]
+    assert hk == [
+        gs._akshare_quote,
+        gs._yahoo_quote,
+        eodhd.quote,
+        gs._sina_quote,
+    ]
 
 
 def test_global_quote_chain_appends_unlisted_sources(monkeypatch):
@@ -202,6 +216,7 @@ def test_cn_and_crypto_chains_honour_order():
     assert CNStocksProvider().quote_sources(parse("600519.SS")) == [
         gs._yahoo_quote,
         gs._akshare_quote,
+        gs._sina_quote,
     ]
 
     _save_order(
@@ -322,7 +337,7 @@ def test_akshare_before_yfinance_keeps_hk_out_of_batch(monkeypatch):
 
     monkeypatch.setattr(
         "tracker.providers.stock_akshare._akshare_quote",
-        lambda p: _q(p.yahoo, "akshare"),
+        lambda p: _q(p.yahoo, "akshare_em"),
     )
     monkeypatch.setattr(orch, "_yahoo_batch", fake_yahoo)
     monkeypatch.setattr(orch.cache_mod, "get_cached", lambda *a, **k: {})
@@ -331,7 +346,7 @@ def test_akshare_before_yfinance_keeps_hk_out_of_batch(monkeypatch):
     quotes, _errors, _notes = orch.get_quotes(["0700.HK", "AAPL"], refresh=True)
     # 港股先由 akshare 命中, yfinance 批量只处理剩余美股
     assert batched == ["AAPL"]
-    assert quotes["0700.HK"].source == "akshare"
+    assert quotes["0700.HK"].source == "akshare_em"
 
 
 def test_akshare_failure_falls_through_to_yfinance(monkeypatch):
@@ -515,7 +530,7 @@ def test_store_order_resets_only_relevant_legacy_preference(monkeypatch):
     # 未编辑的 global 历史链保留 akshare 前置的旧偏好 (IBKR/长桥仍在最前)
     history = settings["source_order"]["global"]["history"]
     assert history[:2] == ["ibkr", "longport"]
-    assert history.index("akshare") < history.index("eodhd")
+    assert history.index("akshare_em") < history.index("eodhd")
 
     # 没有旧偏好时不要冻结另一条链, 否则之后改 eodhd.json 角色不会生效
     storage.save_settings(

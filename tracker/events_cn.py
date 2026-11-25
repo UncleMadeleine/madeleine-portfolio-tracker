@@ -114,7 +114,7 @@ def _cn_normalize_disclosure(df, period: str) -> list[dict]:
             "type": "earnings",
             "date": d.isoformat(),
             "date_status": status,
-            "source": "akshare",
+            "source": "akshare_em",
             "market_label": "A股",
             "period": period,
         }
@@ -171,7 +171,7 @@ def _cn_normalize_fhps(df) -> list[dict]:
                     "date": d.isoformat(),
                     "date_status": "planned",
                     "note": note,
-                    "source": "akshare",
+                    "source": "akshare_em",
                     "market_label": "A股",
                 }
             )

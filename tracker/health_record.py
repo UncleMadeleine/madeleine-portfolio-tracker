@@ -80,10 +80,16 @@ def enabled() -> bool:
 def _short_error(value, limit: int = 400) -> str | None:
     if value is None:
         return None
-    text = str(value).strip()
+    if isinstance(value, BaseException):
+        text = " ".join(str(value).split())
+        if not text:
+            # with_timeout 抛出的 TimeoutError() 没有消息, 直接 str() 会得到
+            # 空串; 健康页就只剩「无错误信息」。把超时/异常类型写出来。
+            text = "超时" if isinstance(value, TimeoutError) else type(value).__name__
+    else:
+        text = " ".join(str(value).split())
     if not text:
         return None
-    text = " ".join(text.split())
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
@@ -184,10 +190,11 @@ _SOURCE_BY_NAME = {
     "_yahoo_history": "yfinance",
     "_yf_quote": "yfinance",
     "_yf_history": "yfinance",
-    "_akshare_quote": "akshare",
-    "_akshare_history": "akshare",
-    "_ak_index_history": "akshare",
-    "_ak_futures_history": "akshare",
+    "_akshare_quote": "akshare_em",
+    "_akshare_history": "akshare_em",
+    "_ak_index_history": "akshare_em",
+    "_ak_futures_history": "akshare_em",
+    "_sina_quote": "akshare_sina",
     "_hl_quote": "hyperliquid",
     "_hl_history": "hyperliquid",
     "_binance_quote": "binance",
@@ -212,17 +219,18 @@ def source_id(fn) -> str:
 
 def label(source: str) -> str:
     """来源 id → 展示名 (复用设置页的 SOURCE_META, 避免两处文案漂移)."""
-    source = {"gate.io": "gate", "yahoo": "yfinance", "yf": "yfinance"}.get(
-        source, source
-    )
     try:
-        from .source_order import SOURCE_META
+        from .source_order import SOURCE_META, canonical_source
 
+        # 旧健康记录/缓存里的 akshare/sina 也要显示成同一展示名
+        source = canonical_source(source)
         meta = SOURCE_META.get(source)
         if meta is not None:
             return meta.label
     except Exception:  # noqa: BLE001 - 展示层兜底
-        pass
+        source = {"gate.io": "gate", "yahoo": "yfinance", "yf": "yfinance"}.get(
+            source, source
+        )
     return {
         "cfets": "CFETS 人民币中间价",
         "ccement": "水泥网指数",

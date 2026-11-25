@@ -41,7 +41,7 @@ def _fetch_ordered_history(
             cfg = eodhd_mod.load_config()
             if not eodhd_mod.available(cfg):
                 continue
-        if source_id == "akshare" and p.market not in (
+        if source_id == "akshare_em" and p.market not in (
             Market.HK,
             Market.CN,
             Market.BJ,
@@ -83,7 +83,7 @@ def _fetch_ordered_history(
                         return df
                     sp.ok = False
                     sp.error = "无历史数据"
-                elif source_id == "akshare":
+                elif source_id == "akshare_em":
                     df = _akshare_history(p, start_date, end_date)
                     if df is not None and not df.empty:
                         return df

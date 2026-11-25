@@ -70,7 +70,7 @@ def test_akshare_quote_falls_back_to_sina_for_bond(monkeypatch):
     assert q.prev_close == 84.734
     assert q.change_pct == pytest.approx((85.499 / 84.734 - 1) * 100)
     assert q.currency == "CNY"
-    assert q.source == "akshare"
+    assert q.source == "akshare_em"
 
 
 def test_stock_quote_does_not_use_bond_fallback(monkeypatch):

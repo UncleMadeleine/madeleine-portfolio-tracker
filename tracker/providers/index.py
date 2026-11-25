@@ -511,11 +511,11 @@ class IndexProvider(Provider):
         # 健康观测按 source id 归并; 这些是局部 lambda 样式的包装函数,
         # 函数名 (ak/yf/cc/hs/ft/cm/rt/fr) 无法反推来源, 显式打标。
         for _fn, _sid in (
-            (ak, "akshare"),
+            (ak, "akshare_em"),
             (yf, "yfinance"),
             (cc, "ccement"),
             (hs, "hsi"),
-            (ft, "akshare"),
+            (ft, "akshare_em"),
             (cm, "cameco"),
             (rt, "ratio"),
             (fr, "fred"),
@@ -552,4 +552,4 @@ class IndexProvider(Provider):
             akshare_supported=True,
             akshare_first=bool(_catalog(p).get("ak")) or prefer_first,
         )
-        return ordered_sources(order, {"akshare": ak, "yfinance": yf})
+        return ordered_sources(order, {"akshare_em": ak, "yfinance": yf})

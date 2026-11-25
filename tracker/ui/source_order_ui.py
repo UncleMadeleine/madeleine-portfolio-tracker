@@ -87,7 +87,7 @@ def _item_meta(
         item["badge"] = "未启用"
     elif source_id == "yfinance" and domain == "global":
         item["note"] = "免 Key；全球域有批量请求"
-    elif source_id == "akshare" and domain == "index":
+    elif source_id == "akshare_em" and domain == "index":
         item["note"] = "仅中国指数 / 美股 SPX·NDX·DJI 有 akshare 源"
     return item
 

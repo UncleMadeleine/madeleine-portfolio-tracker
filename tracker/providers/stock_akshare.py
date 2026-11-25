@@ -34,7 +34,7 @@ _AK_FAIL_TTL = 15.0
 #   单代码 stock/get 一个请求拿齐 最新价/昨收/涨跌幅/名称/总市值/市净率,
 #   实测 0.4-0.8s, 且比全市场表**多**给港股的总市值/市净率 (全市场 spot 的
 #   最终列把这两个丢了)。数据口径仍是东财实时 (akshare 只是它的封装), 故
-#   source 标签沿用 "akshare"。
+#   source 标签沿用 akshare_em; 新浪兜底另走 akshare_sina。
 
 _AK_QUOTE_URL = "https://push2.eastmoney.com/api/qt/stock/get"
 # 东财对无 UA 的请求直接 RST: akshare 的 stock_bid_ask_em 就是这样失败的
@@ -80,8 +80,45 @@ def _ak_secid(p: ParsedSymbol) -> str:
     return f"{prefix}.{code}"
 
 
+#: 单代码失败的真实原因 (secid → (时间戳, 简短描述)). 只用于把健康记录里
+#: 干巴巴的「akshare 行情不可用」补成可诊断的 HTTP/网络错误; 最近 2 分钟内
+#: 的才使用, 避免旧错误串到下一次调用。
+_AK_ERR_TTL = 120.0
+_ak_quote_errors: dict[str, tuple[float, str]] = {}
+
+
+def _err_text(exc: BaseException) -> str:
+    """异常 → 单行诊断文案 (requests 的连接错误/超时都带 host)."""
+    msg = " ".join(str(exc).split())
+    name = type(exc).__name__
+    text = f"{name}: {msg}" if msg else name
+    return text[:200]
+
+
+def _ak_note_error(secid: str, text: str | None) -> None:
+    """记录/清除某代码最近一次东财失败原因."""
+    with _ak_quote_lock:
+        if text:
+            _ak_quote_errors[secid] = (time.time(), text)
+        else:
+            _ak_quote_errors.pop(secid, None)
+
+
+def _ak_quote_error(secid: str) -> str | None:
+    """该代码最近一次东财失败原因 (过期返回 None)."""
+    with _ak_quote_lock:
+        hit = _ak_quote_errors.get(secid)
+        if hit and time.time() - hit[0] < _AK_ERR_TTL:
+            return hit[1]
+    return None
+
+
 def _ak_quote_fetch(secid: str) -> dict | None:
-    """东财 push2 单代码行情 data 字典; 任何失败/无数据返回 None."""
+    """东财 push2 单代码行情 data 字典; 任何失败/无数据返回 None.
+
+    失败原因写入 ``_ak_quote_errors``: 取数层只看到 None, 不记录就无法区分
+    「网络被重置」「东财限流」「代码无行情」, 健康页会全部显示成同一句话。
+    """
     try:
         r = _requests().get(
             _AK_QUOTE_URL,
@@ -94,11 +131,22 @@ def _ak_quote_fetch(secid: str) -> dict | None:
             headers=_AK_QUOTE_HEADERS,
             timeout=_AK_QUOTE_TIMEOUT,
         )
+        if r.status_code >= 400:
+            # 429/403 等限流/封禁响应: requests 不会自动抛错, 直接 .json()
+            # 会退化成难以理解的 JSONDecodeError
+            _ak_note_error(secid, f"HTTP {r.status_code}")
+            return None
         j = r.json()
-    except Exception:
+    except Exception as e:  # noqa: BLE001 - 视作无行情, 细节留给健康记录
+        _ak_note_error(secid, _err_text(e))
         return None
     data = j.get("data") if isinstance(j, dict) else None
-    return data if isinstance(data, dict) else None
+    if not isinstance(data, dict):
+        # 东财对无效/退市代码也返回 200 + {"data": null}, 与网络错误区分开
+        _ak_note_error(secid, "东财无该代码行情 (data=null)")
+        return None
+    _ak_note_error(secid, None)
+    return data
 
 
 def _ak_quote_raw(p: ParsedSymbol) -> dict | None:
@@ -193,9 +241,36 @@ def _cn_bond_sina_symbol(p: ParsedSymbol) -> str | None:
     return None
 
 
-def _sina_bond_quote_raw(p: ParsedSymbol) -> dict | None:
-    """新浪可转债实时行情原始字段; 失败/无数据返回 None (带短 TTL 缓存)."""
-    symbol = _cn_bond_sina_symbol(p)
+def _sina_symbol(p: ParsedSymbol) -> str | None:
+    """沪深/港股 → 新浪单代码 (sh600585/sz000001/rt_hk00700); 其它返回 None.
+
+    北交所不在兜底范围: 新浪 ``bj`` 接口对北交所返回全 0 占位 (实测
+    830799.BJ), 误判成有效行情会污染缓存; 北交所继续走东财/yfinance。
+    港股用 ``rt_hk`` + 5 位代码 (含人民币柜台 8xxxx)。
+    """
+    if p.market is Market.HK:
+        code = p.ak_code or p.yahoo.split(".")[0]
+        return f"rt_hk{code}" if code.isdigit() else None
+    if p.market is not Market.CN:
+        return None
+    code = p.ak_code or p.yahoo.split(".")[0]
+    suffix = p.yahoo.rsplit(".", 1)[-1].upper()
+    if suffix in ("SS", "SH"):
+        return f"sh{code}"
+    if suffix == "SZ":
+        return f"sz{code}"
+    return None
+
+
+def _sina_quote_raw(p: ParsedSymbol) -> dict | None:
+    """新浪单代码实时行情原始字段; 失败/无数据返回 None (带短 TTL 缓存).
+
+    支持的返回字段: name / price / prev_close / change_pct (仅港股接口自带) /
+    date / time。A股与港股的新浪字段布局不同, 必须按市场分别取:
+      A股: 0=名称 2=昨收 3=最新价 ... 30=日期 31=时间
+      港股 rt_hk: 0=英文名 1=中文名 3=昨收 6=最新价 8=涨跌幅 ... 17=日期 18=时间
+    """
+    symbol = _cn_bond_sina_symbol(p) or _sina_symbol(p)
     if not symbol:
         return None
     now = time.time()
@@ -214,8 +289,18 @@ def _sina_bond_quote_raw(p: ParsedSymbol) -> dict | None:
         text = r.text or ""
         if '"' in text:
             fields = text.split('"', 2)[1].split(",")
-            # 字段与新浪股票行情一致: 0=名称 2=昨收 3=最新价 ... 30=日期 31=时间
-            if len(fields) >= 32 and fields[0].strip():
+            if p.market is Market.HK:
+                # rt_hk 第 17/18 位是 2026/11/24 与 16:08:15
+                if len(fields) >= 19 and (fields[1].strip() or fields[0].strip()):
+                    data = {
+                        "name": (fields[1].strip() or fields[0].strip()),
+                        "prev_close": fields[3],
+                        "price": fields[6],
+                        "change_pct": fields[8],
+                        "date": fields[17],
+                        "time": fields[18],
+                    }
+            elif len(fields) >= 32 and fields[0].strip():
                 data = {
                     "name": fields[0].strip(),
                     "prev_close": fields[2],
@@ -223,35 +308,64 @@ def _sina_bond_quote_raw(p: ParsedSymbol) -> dict | None:
                     "date": fields[30],
                     "time": fields[31],
                 }
-    except Exception:
+    except Exception:  # noqa: BLE001 - 网络/解析失败一律视为本源无行情
         data = None
     with _sina_quote_lock:
         _sina_quote_cache[symbol] = (now, data)
     return data
 
 
-def _sina_bond_quote(p: ParsedSymbol) -> Quote:
-    """可转债行情 (新浪): 最新价 + 昨收 + 涨跌幅 + 名称, 币种固定 CNY."""
-    d = _sina_bond_quote_raw(p)
-    if not d:
-        raise RuntimeError(f"{p.yahoo}: 可转债行情不可用 (新浪)")
+def _sina_bond_quote_raw(p: ParsedSymbol) -> dict | None:
+    """新浪可转债实时行情原始字段 (保留旧入口, 字段解析与 A 股一致)."""
+    return _sina_quote_raw(p)
+
+
+def _quote_from_sina(
+    p: ParsedSymbol,
+    d: dict,
+    *,
+    source: str,
+    currency: str | None = None,
+    label: str = "新浪",
+) -> Quote:
+    """新浪原始字段 → Quote (价格守卫 + 涨跌幅回算), 供股票/转债共用."""
     price = _ak_num(d.get("price"))
     if price is None or price <= 0:
-        raise RuntimeError(
-            f"{p.yahoo}: 可转债无有效最新价 ({d.get('price')!r})"
-        )
+        raise RuntimeError(f"{p.yahoo}: {label}无有效最新价 ({d.get('price')!r})")
     prev = _ak_num(d.get("prev_close"))
-    change_pct = (
-        (price / prev - 1.0) * 100.0 if prev is not None and prev > 0 else None
-    )
+    change_pct = _ak_num(d.get("change_pct"))
+    if change_pct is None and prev is not None and prev > 0:
+        change_pct = (price / prev - 1.0) * 100.0
     return Quote(
         symbol=p.yahoo,
         name=str(d.get("name") or "").strip() or None,
         price=price,
         prev_close=prev,
         change_pct=change_pct,
-        currency="CNY",
-        source="akshare",
+        currency=currency or p.currency,
+        source=source,
+    )
+
+
+def _sina_quote(p: ParsedSymbol) -> Quote:
+    """沪深/港股实时行情兜底 (新浪单代码); 东财 push2 不可达时接管."""
+    d = _sina_quote_raw(p)
+    if not d:
+        raise RuntimeError(f"{p.yahoo}: 新浪行情不可用")
+    return _quote_from_sina(p, d, source="akshare_sina")
+
+
+def _sina_bond_quote(p: ParsedSymbol) -> Quote:
+    """可转债行情 (新浪): 最新价 + 昨收 + 涨跌幅 + 名称.
+
+    转债在东财链路里仍是 akshare_em 的内部兜底, 来源标签保持 akshare_em
+    以兼容显式源偏好; 股票兜底另走 ``_sina_quote`` (source=akshare_sina)。
+    """
+    d = _sina_bond_quote_raw(p)
+    if not d:
+        raise RuntimeError(f"{p.yahoo}: 可转债行情不可用 (新浪)")
+    return _quote_from_sina(
+        p, d, source="akshare_em", currency="CNY", label="可转债"
     )
 
 
@@ -283,9 +397,7 @@ def _akshare_quote(p: ParsedSymbol) -> Quote:
                 currency = p.currency
             else:
                 currency = (
-                    reported_ccy
-                    if is_currency_code(reported_ccy)
-                    else p.currency
+                    reported_ccy if is_currency_code(reported_ccy) else p.currency
                 )
             return Quote(
                 symbol=p.yahoo,
@@ -301,14 +413,16 @@ def _akshare_quote(p: ParsedSymbol) -> Quote:
                 pe_dynamic=(
                     pe_dynamic if pe_dynamic is not None and pe_dynamic > 0 else None
                 ),
-                source="akshare",
+                source="akshare_em",
             )
         if not bond:
-            raise RuntimeError(
-                f"{p.yahoo}: akshare 无有效最新价 ({d.get('f43')!r})"
-            )
+            raise RuntimeError(f"{p.yahoo}: akshare 无有效最新价 ({d.get('f43')!r})")
     elif not bond:
-        raise RuntimeError(f"{p.yahoo}: akshare 行情不可用 ({p.market.value})")
+        # 把真实原因 (连接被重置/超时/东财返回 data=null) 带出来: 健康记录
+        # 里只有「akshare 行情不可用」时, 无法区分网络故障和数据源限流。
+        detail = _ak_quote_error(_ak_secid(p))
+        suffix = f": {detail}" if detail else ""
+        raise RuntimeError(f"{p.yahoo}: akshare 行情不可用 ({p.market.value}){suffix}")
     return _sina_bond_quote(p)
 
 
@@ -322,9 +436,7 @@ def _akshare_history(
     if bond_symbol:
         # 可转债日K: akshare 只有新浪接口 (全量历史, 无 start/end 参数),
         # 取回后按请求区间裁剪; 股票接口 stock_zh_a_hist 不支持转债代码.
-        df = with_timeout(
-            ak.bond_zh_hs_cov_daily, _AK_HIST_TIMEOUT, symbol=bond_symbol
-        )
+        df = with_timeout(ak.bond_zh_hs_cov_daily, _AK_HIST_TIMEOUT, symbol=bond_symbol)
         if df is not None and not df.empty:
             df = df.copy()
             df["date"] = pd.to_datetime(df["date"])
@@ -380,5 +492,3 @@ def _akshare_history(
         c for c in ("date", "open", "high", "low", "close", "volume") if c in df.columns
     ]
     return df[keep]
-
-

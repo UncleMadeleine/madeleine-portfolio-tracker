@@ -193,7 +193,11 @@ def _render_valuation_metrics(snap: valuation.ValuationSnapshot) -> None:
     source_label = {
         "yfinance": "OpenBB / yfinance",
         "eodhd": "EODHD",
-        "akshare": "东财实时",
+        "akshare_em": "akshare / 东财",
+        "akshare_sina": "akshare / 新浪",
+        # 旧磁盘快照 (6h TTL) 里的 source 仍是旧 id
+        "akshare": "akshare / 东财",
+        "sina": "akshare / 新浪",
     }.get(snap.source, snap.source or "未知")
     st.caption(
         f"快照时间 {_fmt_snapshot_time(snap.fetched_at)} · 数据源 {source_label}。"

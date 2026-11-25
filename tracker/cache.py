@@ -496,15 +496,21 @@ def add_health_events(rows: list[tuple]) -> bool:
 
 
 def get_health_events(since: float, limit: int = 20000) -> list[dict]:
-    """读取 since 之后的健康事件 (按时间升序, 最多 limit 条).
+    """读取 since 之后**最近**的 limit 条健康事件 (返回按时间升序).
 
-    库忙/损坏时返回空列表: 诊断功能不能反过来把 doctor 弄崩。
+    先按 ts DESC 截断再升序返回: 总行数超过上限时, 丢弃的应是更早的事件;
+    直接 `ORDER BY ts ASC LIMIT` 会把最新事件截掉, 健康页/doctor 看起来像
+    「最近几小时没有记录」。库忙/损坏时返回空列表, 不让诊断反把 doctor 弄崩。
     """
     rows = _read_all(
         """
         SELECT ts, kind, source, ok, latency_ms, symbol, error
-        FROM health_events WHERE ts >= ?
-        ORDER BY ts ASC LIMIT ?
+        FROM (
+            SELECT ts, kind, source, ok, latency_ms, symbol, error
+            FROM health_events WHERE ts >= ?
+            ORDER BY ts DESC LIMIT ?
+        )
+        ORDER BY ts ASC
         """,
         (float(since), int(limit)),
     )

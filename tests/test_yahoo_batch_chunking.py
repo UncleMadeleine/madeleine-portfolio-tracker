@@ -10,6 +10,7 @@ quote 请求 → Yahoo 429 (crumb rate-limited) / 401 (Invalid Crumb), 且限流
 from __future__ import annotations
 
 from types import SimpleNamespace
+import time as _time
 
 import pytest
 
@@ -54,7 +55,9 @@ def _empty(syms: list[str]) -> _Res:
 def patch_chunk(monkeypatch):
     """缩小块大小 + 屏蔽批间 sleep, 让测试快而可读."""
     monkeypatch.setattr(gs, "_YAHOO_CHUNK", 3)
-    monkeypatch.setattr(gs, "time", SimpleNamespace(sleep=lambda s: None))
+    monkeypatch.setattr(
+        gs, "time", SimpleNamespace(sleep=lambda s: None, time=_time.time)
+    )
 
 
 def _run(monkeypatch, script, symbols):
@@ -124,8 +127,45 @@ def test_pause_between_chunks(monkeypatch):
     """批间暂停: N 个块之间 sleep N-1 次 (首块前不停)."""
     sleeps: list[float] = []
     monkeypatch.setattr(gs, "_YAHOO_CHUNK", 3)
-    monkeypatch.setattr(gs, "time", SimpleNamespace(sleep=lambda s: sleeps.append(s)))
+    monkeypatch.setattr(
+        gs,
+        "time",
+        SimpleNamespace(sleep=lambda s: sleeps.append(s), time=_time.time),
+    )
     syms = [f"S{i:03d}" for i in range(12)]  # 4 块
     _out, calls = _run(monkeypatch, lambda s: _ok(s), syms)
     assert len(calls) == 4
     assert len(sleeps) == 3
+
+
+def test_batch_empty_trips_circuit_and_skips_single_quote(monkeypatch, patch_chunk):
+    """连续空批 → 打开熔断; 单代码回源直接失败, 不再打 Yahoo.
+
+    回归背景: Yahoo 429 后, 600+ 只代码逐只超时, 一轮保温打出几百条失败
+    并持续延长限流窗口。
+    """
+    syms = [f"S{i:03d}" for i in range(9)]  # 3 块, 第 2 块后熔断
+    out, calls = _run(monkeypatch, _empty, syms)
+    assert out == {}
+    assert len(calls) == gs._EMPTY_STREAK_GIVEUP
+    assert gs.quote_throttled()
+
+    monkeypatch.setattr(
+        gs, "_obb", lambda: pytest.fail("熔断期不应再初始化/调用 OpenBB")
+    )
+    with pytest.raises(RuntimeError, match="限流冷却中"):
+        gs._yahoo_quote(parse("AAPL"))
+
+    # 熔断期批量调用直接返回空, 不产生网络请求
+    assert gs._yahoo_batch([parse("AAPL")]) == {}
+
+
+def test_batch_success_clears_circuit(monkeypatch, patch_chunk):
+    syms = [f"S{i:03d}" for i in range(3)]
+    gs._trip_throttle()
+    assert gs.quote_throttled()
+    # 直接绕过批量入口的熔断检查, 模拟冷却到期后首个成功批
+    monkeypatch.setattr(gs, "quote_throttled", lambda: False)
+    out, _calls = _run(monkeypatch, lambda s: _ok(s), syms)
+    assert set(out) == set(syms)
+    assert not gs.quote_throttled()

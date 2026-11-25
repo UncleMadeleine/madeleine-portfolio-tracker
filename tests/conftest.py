@@ -27,6 +27,16 @@ def _no_browser(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _reset_yahoo_throttle():
+    """yfinance 限流熔断是进程级状态, 测试之间必须隔离."""
+    from tracker.providers import stock_yahoo
+
+    stock_yahoo.reset_quote_throttle()
+    yield
+    stock_yahoo.reset_quote_throttle()
+
+
+@pytest.fixture(autouse=True)
 def _no_network(monkeypatch, request):
     if "network" in request.keywords:  # 显式联调用例 (@pytest.mark.network) 放行
         return

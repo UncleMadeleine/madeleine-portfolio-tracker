@@ -7,7 +7,7 @@ description: Use when the user asks to check or manage their investment portfoli
 
 本地多市场投资组合追踪 (A股/B股/北交所/港股/美股/德股/荷兰股/英股/加股/澳股/新加坡股/巴西股 + 加密货币 + 宏观/风险指数)。
 数据层抽象为 **provider 层** (`tracker/providers/`): 四个市场域各一个 provider —
-全球股票 (美股/港股, 长桥→IBKR→yfinance→港股 akshare 兜底)、A股/B股 (.SS/.SZ/.BJ, akshare 固定优先→yfinance)、
+全球股票 (美股/港股, 长桥→IBKR→yfinance→港股 akshare→港股新浪兜底)、A股/B股 (.SS/.SZ/.BJ, akshare 固定优先→新浪→yfinance)、
 加密货币 (`BASE-QUOTE` 连字符代码, Binance 优先→Gate.io→Hyperliquid(仅USD系)→yfinance; 数据源偏好 settings.json `crypto_source` 或 CLI `--crypto-source`, 默认 auto=默认链, 指定源前置失败自动回落),
 指数 (`IX.<KEY>`, 中国指数 akshare 优先, 其余 yfinance→akshare 新浪兜底; 水泥网/商品期货/恒生官网/Cameco 铀价指数为专属源无兜底)。
 各域只在投资组合/watchlist 聚合, 数据层面严格分域。有 Streamlit 页面
@@ -110,8 +110,8 @@ tracker-ui          # pip 安装后起 Streamlit 页面 (等价 streamlit run tr
 ### 数据源优先级 (provider 层)
 
 | type | 实时行情 | 历史K线 |
-| global | IBKR(可选, 优先)→ 长桥(可选)→ EODHD(可选, quotes=primary)→ yfinance 批量 → 港股 akshare → EODHD(可选, quotes=fallback) | IBKR(可选)→ 长桥(可选)→ EODHD(可选, priority=primary)→ yfinance (港股可 `--akshare` 翻转) → EODHD(可选, fallback) |
-| cn | **akshare 优先** → yfinance (长桥可选前置, 沪深代码 .SH/.SZ) | **akshare 优先** → yfinance (长桥可选前置) |
+| global | IBKR(可选, 优先)→ 长桥(可选)→ EODHD(可选, quotes=primary)→ yfinance 批量 → 港股 akshare → EODHD(可选, quotes=fallback) → 港股新浪 | IBKR(可选)→ 长桥(可选)→ EODHD(可选, priority=primary)→ yfinance (港股可 `--akshare` 翻转) → EODHD(可选, fallback) |
+| cn | **akshare 优先** → 新浪 → yfinance (长桥可选前置, 沪深代码 .SH/.SZ) | **akshare 优先** → yfinance (长桥可选前置) |
 | crypto | **Binance API** → Gate.io 现货 → Hyperliquid 永续(仅USD系) → yfinance (偏好 `crypto_source`/`--crypto-source`) | **Binance klines** → Gate.io → Hyperliquid → yfinance |
 | index | — (指数无实时行情, 不参与持仓聚合) | 中国指数 **akshare 优先** → yfinance; 美股 SPX/NDX/DJI 有新浪兜底; 水泥网 (CEMPI 等) / 商品期货主力连续 (`IX.AU` 黄金 `IX.AG` 白银 `IX.JD` 鸡蛋 `IX.M` 豆粕 `IX.A` 豆一 `IX.B` 豆二 `IX.LH` 生猪 `IX.LC` 碳酸锂) / Cameco 铀价 (`IX.URANIUM` 现货 `IX.URANIUM_LT` 长协, 月K) / 恒生官网 (IX.HSAHP) 为专属源无兜底 |
 
@@ -131,6 +131,13 @@ spot (`stock_zh_a_spot_em`/`stock_hk_spot_em`): 那兩個内部分页拉全市�
 PB/市值阈值提醒因此有了东财实时口径。单代码行情带 5s 进程内缓存 + per-key 单飞 +
 失败 15s 占位 (东财不可达时不反复打)。历史K线仍走 akshare 的 `stock_zh_a_hist` /
 `stock_hk_hist` (本身是 per-symbol)。
+
+**东财 push2 整段不可达时**: A股/港股行情自动回落 `akshare_sina` 源 (新浪
+`hq.sinajs.cn` 单代码, 沪深+港股; 北交所新浪返回全 0 占位, 不参与)。健康记录
+会带出真实原因 (`ConnectionError: RemoteDisconnected` / 超时 / `data=null`),
+不再统一显示「akshare 行情不可用」。Yahoo 批量行情连续空批/超时后进入 180s
+熔断, 冷却期跳过 yfinance 逐代码回源 (避免 600+ 只代码各超时一次把限流窗口
+越撞越长)。
 
 代码搜索 (`tracker/search.py`) 为**纯在线分域接口**:
 - A股/北交所: 东财 suggest (支持中文名/拼音)
@@ -185,7 +192,7 @@ Windows `%APPDATA%\tracker`)。源码树里跑就是仓库根 (与旧版一致);
   `color_scheme` (cn 红涨绿跌 / intl 绿涨红跌, 默认 cn) ·
   `use_ibkr` (默认 false) · `use_longport` (默认 false) ·
   `source_order`: 各 provider 的回退顺序（含 IBKR / 长桥），例如
-  `{"global": {"quote": ["longport", "akshare", "yfinance", "eodhd"]}}`；未配置/空对象 = 默认链，
+  `{"global": {"quote": ["longport", "akshare_em", "yfinance", "eodhd"]}}`；未配置/空对象 = 默认链，
   未列出的源自动补到末尾。设置页可直接拖动排序并自动保存。
   旧 `prefer_akshare` / `crypto_source` 仍兼容，作为未配置 `source_order` 时的快捷偏好。
   设置页切换数据源即时生效 (连进程内负缓存一起清); 直接改文件则重启 streamlit 生效。

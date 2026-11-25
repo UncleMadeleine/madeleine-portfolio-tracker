@@ -19,6 +19,7 @@ from .stock_akshare import (  # noqa: F401 - 兼容再导出
     _ak_secid,
     _akshare_history,
     _akshare_quote,
+    _sina_quote,
 )
 from .stock_yahoo import (  # noqa: F401 - 兼容再导出
     _quote_from_dump,
@@ -26,6 +27,7 @@ from .stock_yahoo import (  # noqa: F401 - 兼容再导出
     _yahoo_history,
     _yahoo_quote,
     _yahoo_quote_currency,
+    quote_throttled,
 )
 
 
@@ -61,8 +63,6 @@ def _yf_search(query: str) -> list[dict]:
     return out
 
 
-
-
 class GlobalStocksProvider(Provider):
     """美股/港股/全球股票域: IBKR 在批量层前置 (orchestration), 此处 yfinance 为主源,
 
@@ -88,9 +88,12 @@ class GlobalStocksProvider(Provider):
             eodhd_quotes=mode,
             eodhd_priority=cfg["priority"],
         )
-        funcs = {"yfinance": _yahoo_quote}
+        funcs = {}
+        if not quote_throttled():
+            funcs["yfinance"] = _yahoo_quote
         if p.market is Market.HK:
-            funcs["akshare"] = _akshare_quote
+            funcs["akshare_em"] = _akshare_quote
+            funcs["akshare_sina"] = _sina_quote
         if eod and mode != "off":
             funcs["eodhd"] = eodhd_mod.quote
         return ordered_sources(order, funcs)
@@ -122,7 +125,7 @@ class GlobalStocksProvider(Provider):
         if eod:
             funcs["eodhd"] = eod_src
         if p.market is Market.HK:
-            funcs["akshare"] = ak_src
+            funcs["akshare_em"] = ak_src
         return ordered_sources(order, funcs)
 
     # -- 搜索: IBKR (可选) → 东财 suggest (纯数字, 补零命中港股) → yfinance Search → 合法代码直查 --

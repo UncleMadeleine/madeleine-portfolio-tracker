@@ -88,7 +88,7 @@ def test_cache_clear_preserved_quote_fields():
                 change_pct=1.54,
                 currency="HKD",
                 book_value=45.2,
-                source="akshare",
+                source="akshare_em",
             )
         }
     )
@@ -97,7 +97,7 @@ def test_cache_clear_preserved_quote_fields():
     assert q.currency == "HKD"
     assert q.book_value == 45.2
     assert q.change_pct == 1.54
-    assert q.source == "akshare"
+    assert q.source == "akshare_em"
 
 
 def test_orchestration_preserves_provider_source(monkeypatch):
@@ -159,7 +159,7 @@ def test_dynamic_pe_round_trips_through_cache():
                 prev_close=1460.0,
                 change_pct=0.1,
                 currency="CNY",
-                source="akshare",
+                source="akshare_em",
             )
         }
     )

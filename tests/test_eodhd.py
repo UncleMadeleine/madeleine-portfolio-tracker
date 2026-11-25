@@ -529,7 +529,7 @@ def test_eodhd_primary_batch_defers_hk_to_akshare(monkeypatch):
                 prev_close=2.0,
                 change_pct=0.0,
                 currency="HKD",
-                source="akshare",
+                source="akshare_em",
             )
             for p in plist
         }
@@ -547,7 +547,7 @@ def test_eodhd_primary_batch_defers_hk_to_akshare(monkeypatch):
     )
     assert eod_batch_symbols == ["AAPL"]
     assert fetched == [("0700.HK", True)]
-    assert quotes["0700.HK"].source == "akshare"
+    assert quotes["0700.HK"].source == "akshare_em"
     assert quotes["AAPL"].source == "eodhd"
     assert not errors
 

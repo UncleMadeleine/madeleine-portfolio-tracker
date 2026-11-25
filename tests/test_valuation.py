@@ -185,7 +185,7 @@ class TestSnapshot:
                         book_value=50.0,
                         market_cap=1.0e12,
                         pe_dynamic=21.24,
-                        source="akshare",
+                        source="akshare_em",
                     )
                 },
                 {},
@@ -194,11 +194,45 @@ class TestSnapshot:
         )
         valuation.clear_cache()
         snap = valuation.fetch_snapshot("600519.SS")
-        assert snap.source == "akshare"
+        assert snap.source == "akshare_em"
         assert snap.pe_ttm is None
         assert snap.pe_dynamic == pytest.approx(21.24)
         assert snap.pb == pytest.approx(2.0)
         assert snap.market_cap == pytest.approx(1.0e12)
+
+    def test_snapshot_keeps_sina_fallback_source(self, monkeypatch):
+        """东财不可达时估值兜底实际命中新浪, source 不能仍写死 akshare."""
+        import tracker.eodhd as eodhd
+        from tracker.providers.base import Quote
+
+        def boom(symbol):
+            raise RuntimeError("yfinance unavailable")
+
+        monkeypatch.setattr(valuation, "_fetch_metrics_row", boom)
+        monkeypatch.setattr(eodhd, "available", lambda cfg=None: False)
+        monkeypatch.setattr(
+            "tracker.prices.get_quotes",
+            lambda symbols, **kw: (
+                {
+                    "600519.SS": Quote(
+                        symbol="600519.SS",
+                        name="贵州茅台",
+                        price=100.0,
+                        prev_close=99.0,
+                        change_pct=1.0,
+                        currency="CNY",
+                        source="akshare_sina",
+                    )
+                },
+                {},
+                [],
+            ),
+        )
+        valuation.clear_cache()
+        snap = valuation.fetch_snapshot("600519.SS")
+        assert snap.source == "akshare_sina"
+        assert snap.pb is None
+        assert snap.market_cap is None
 
     def test_crypto_rejected(self):
         with pytest.raises(ValueError, match="估值指标"):

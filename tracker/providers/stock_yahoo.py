@@ -8,6 +8,7 @@ provider 导入私有函数」的跨模块耦合。
 from __future__ import annotations
 
 import math
+import threading
 import time
 
 import pandas as pd
@@ -51,6 +52,7 @@ def _quote_from_dump(p: ParsedSymbol, d: dict) -> Quote | None:
         return None
     prev = _pick(d, "prev_close", "previous_close")
     chg = _pick(d, "change_percent", "percent_change")
+
     # 与价格字段同一守卫: 停牌/坏响应里的 NaN 会 float() 成 nan 而非 None,
     # 直接漏进 Quote 变成 "+NaN%" 行情 (其余数据源均有 pd.notna/有限性过滤)。
     def _finite_or_none(v: object) -> float | None:
@@ -113,18 +115,63 @@ def _quote_from_dump(p: ParsedSymbol, d: dict) -> Quote | None:
     )
 
 
-_QUOTE_TIMEOUT = 5.0  # yfinance/OpenBB 偶发内部重试会把单码失败拖到 8s+; 硬超时快速降级
+_QUOTE_TIMEOUT = 8.0  # 成功 p95 已接近 5s, 5s 会把正常慢请求误杀; 批量失败后由熔断兜底
 _BATCH_TIMEOUT = 30.0  # 批量一次上百代码, 预算放大; 仍挂住则整批放弃走逐代码源链
 _HISTORY_TIMEOUT = 60.0  # 历史K线单码请求 (OpenBB 内部可能重试/半开连接)
 _YAHOO_CHUNK = 50  # 单批代码数: 一次上千代码的 quote 请求会被 Yahoo 429/401 拒掉
 _CHUNK_PAUSE = 1.0  # 批间基础暂停 (s); 出现限流迹象 (空批) 时翻倍
 _EMPTY_STREAK_GIVEUP = 2  # 连续空批: 判定已被限流, 放弃剩余批次 (逐代码源链兜底)
 
+# ---------- 进程级限流熔断 ----------
+#
+# Yahoo 限流是 IP 级的: 批量请求被 429/超时后, 若逐代码源链继续对 600+ 只
+# 代码各发一次 5-8s 请求, 既拖住保温线程数分钟, 又会把限流窗口越撞越长。
+# 批量失败/连续空批时打开熔断, TTL 内跳过 yfinance (健康记录也少几百条
+# 误伤式失败), 冷却结束后下一轮保温自动恢复。
+_THROTTLE_TTL = 180.0
+_throttle_until = 0.0
+_throttle_lock = threading.Lock()
+
+
+def quote_throttled() -> bool:
+    """yfinance 行情是否处于限流冷却期."""
+    with _throttle_lock:
+        return time.time() < _throttle_until
+
+
+def quote_throttle_remaining() -> float:
+    """距冷却结束还有多少秒 (未冷却返回 0)."""
+    with _throttle_lock:
+        return max(0.0, _throttle_until - time.time())
+
+
+def _trip_throttle(seconds: float = _THROTTLE_TTL) -> None:
+    global _throttle_until
+    with _throttle_lock:
+        _throttle_until = max(_throttle_until, time.time() + seconds)
+
+
+def _clear_throttle() -> None:
+    global _throttle_until
+    with _throttle_lock:
+        _throttle_until = 0.0
+
+
+def reset_quote_throttle() -> None:
+    """清空熔断状态 (设置页切换数据源 / 测试隔离用)."""
+    _clear_throttle()
+
 
 def _yahoo_quote(p: ParsedSymbol) -> Quote:
+    remaining = quote_throttle_remaining()
+    if remaining > 0:
+        # 熔断期不发网络: 避免批量已被 429 后, 600+ 只代码再各撞一次
+        raise RuntimeError(
+            f"{p.yahoo}: yfinance 限流冷却中 ({remaining:.0f}s), 跳过回源"
+        )
     # _obb() 必须先在计时区外求值: 冷启动 (首次 import openbb + 触达 provider
-    # 注册表) 实测 8-16s, 整段塞进 with_timeout 会吃掉 5s 预算, 首次必然超时。
-    # 取到引用后 5s 预算只覆盖真正的网络请求。
+    # 注册表) 实测 8-16s, 整段塞进 with_timeout 会吃掉预算, 首次必然超时。
+    # 取到引用后预算只覆盖真正的网络请求。
     res = with_timeout(
         _obb().equity.price.quote,
         _QUOTE_TIMEOUT,
@@ -137,20 +184,23 @@ def _yahoo_quote(p: ParsedSymbol) -> Quote:
     q = _quote_from_dump(p, d)
     if q is None:
         raise RuntimeError(f"{p.yahoo}: yfinance 无有效价格")
+    _clear_throttle()
     return q
 
 
 def _yahoo_batch(parsed: list[ParsedSymbol]) -> dict[str, Quote]:
-    """yfinance 批量行情: 分块拉取 + 批间暂停 + 限流早停.
+    """yfinance 批量行情: 分块拉取 + 批间暂停 + 限流早停/熔断.
 
     一次性把全部代码 (自选 600+ 时) 塞进单个 quote 请求, Yahoo 会以
     429 (crumb rate-limited) / 401 (Invalid Crumb) 拒绝; 且限流是 IP 级 —
     随后单代码行情/K线历史请求全部遭殃。按块拆分 + 批间暂停; 连续空批视为
-    已被限流, 放弃剩余块 (未取到的代码由逐代码源链兜底, 失败进负缓存,
-    TTL 内不重试), 不再持续撞击数据源。
+    已被限流, 放弃剩余块并打开进程级熔断 (冷却期跳过 yfinance, 冷却结束后
+    下一轮保温自动恢复), 不再持续撞击数据源。
     """
     out: dict[str, Quote] = {}
     if not parsed:
+        return out
+    if quote_throttled():
         return out
     by_yahoo = {p.yahoo: p for p in parsed}
     empty_streak = 0
@@ -173,7 +223,7 @@ def _yahoo_batch(parsed: list[ParsedSymbol]) -> dict[str, Quote]:
         try:
             # 批量同样要硬超时: OpenBB/yfinance 偶发内部重试会把批量调用挂住,
             # 而它跑在 get_quotes 主线程里 (域间串行), 一挂全批卡死。超时按
-            # 空结果处理, 后续逐代码源链还能兜底 (单代码 5s 硬超时)
+            # 空结果处理并打开熔断, 后续逐代码源链跳过 yfinance。
             res = with_timeout(
                 quote_fn,
                 _BATCH_TIMEOUT,
@@ -190,10 +240,16 @@ def _yahoo_batch(parsed: list[ParsedSymbol]) -> dict[str, Quote]:
                 if q is not None:
                     out[p.yahoo] = q
                     got += 1
-            empty_streak = 0 if got else empty_streak + 1
+            if got:
+                empty_streak = 0
+                _clear_throttle()
+            else:
+                empty_streak += 1
         except Exception:
             empty_streak += 1
         if empty_streak >= _EMPTY_STREAK_GIVEUP:
+            # 连续空批/批量超时: 判定 IP 已被限流, 本轮不再逐代码重试
+            _trip_throttle()
             break
     return out
 
@@ -253,5 +309,3 @@ def _yahoo_history(
                 if c in df.columns:
                     df[c] = df[c].astype(float) / 100
     return df
-
-

@@ -1,14 +1,15 @@
 """with_timeout 参数求值语义 + OpenBB 单例的回归测试.
 
 背景: 曾以为 `with_timeout(_obb().equity.price.quote, _QUOTE_TIMEOUT, ...)`
-会把 `_obb()` 的冷启动 (本机实测 5.5s) 算进 5.0s 超时预算, 导致首次 quote
+会把 `_obb()` 的冷启动 (本机实测 5.5s) 算进超时预算, 导致首次 quote
 必然超时, 并据此把 `_obb()` 移出 with_timeout —— 那是错的。
 
 `with_timeout(fn, timeout, *args, **kwargs)` 的实参在调用它之前就已在主线程
 求值完毕, daemon 线程只执行已解析的可调用对象。所以 `_obb()` 无论写在哪里
 都在计时区外, 那类改动语义上无效。
 
-本测试锁定该语义, 并锁定单例本身的真实收益 (进程内只导入一次)。
+行情路径后来改为直接调 Yahoo v7 批量接口 (不再走 OpenBB), 但历史K线仍用
+`_obb()`; 本测试锁定 with_timeout 语义与 deps 的单例导入行为。
 """
 
 from __future__ import annotations

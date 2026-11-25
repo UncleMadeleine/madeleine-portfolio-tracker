@@ -135,9 +135,10 @@ PB/市值阈值提醒因此有了东财实时口径。单代码行情带 5s 进�
 **东财 push2 整段不可达时**: A股/港股行情自动回落 `akshare_sina` 源 (新浪
 `hq.sinajs.cn` 单代码, 沪深+港股; 北交所新浪返回全 0 占位, 不参与)。健康记录
 会带出真实原因 (`ConnectionError: RemoteDisconnected` / 超时 / `data=null`),
-不再统一显示「akshare 行情不可用」。Yahoo 批量行情连续空批/超时后进入 180s
-熔断, 冷却期跳过 yfinance 逐代码回源 (避免 600+ 只代码各超时一次把限流窗口
-越撞越长)。
+不再统一显示「akshare 行情不可用」。Yahoo 实时行情走 v7
+`finance/quote` 批量接口 (100 个代码/请求, 复用 yfinance 的 session/crumb;
+不再逐代码 `Ticker.get_info()`), 连续空批/超时后进入 180s 熔断, 冷却期跳过
+yfinance 逐代码回源 (避免 600+ 只代码各超时一次把限流窗口越撞越长)。
 
 代码搜索 (`tracker/search.py`) 为**纯在线分域接口**:
 - A股/北交所: 东财 suggest (支持中文名/拼音)

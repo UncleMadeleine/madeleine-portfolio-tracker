@@ -42,8 +42,9 @@ Madeleine Portfolio Tracker 是一款**本地优先**的投资组合追踪工具
 
 > **核心设计**：数据层抽象为 **provider 层**（全球股票 / A股·B股 / 加密货币 / 指数四域，后缀即域、互不冲突），
 > 多级降级（长桥 / IBKR → yfinance → akshare / Binance → Gate.io → Hyperliquid），离线可用的 SQLite 磁盘缓存，
-> 所有配置为可编辑 JSON 文件，不依赖任何云服务。行情/历史取数经 **OpenBB** 平台统一封装
-> （`openbb>=4.7.0`，provider=yfinance/akshare），零 API Key。
+> 所有配置为可编辑 JSON 文件，不依赖任何云服务。历史/基本面经 **OpenBB** 平台封装
+> （`openbb>=4.7.0`，provider=yfinance/akshare），实时行情走 Yahoo v7 批量接口
+> （100 个代码/请求，共享 yfinance 会话与 crumb），零 API Key。
 
 ---
 
@@ -442,7 +443,7 @@ python -m tracker.cli wallet-nav solana H... --max-assets 20
 - CLI 添加 PB 提醒：`tracker watchlist add 600036.SS --metric pb --upper1 1.2 --lower1 0.8`
 - CLI 添加市值提醒：`tracker watchlist add AAPL --metric mcap --upper1 4000000000000`
 - CLI 清空某个阈值：`tracker watchlist add AAPL --clear-lower2`（`--clear-upper1` / `--clear-upper2` / `--clear-lower1` / `--clear-lower2`；阈值必须为正数，0/负数会被拒绝——0 会被规则层当成有效阈值，上限 0 恒触发、下限 0 恒显示 -100%，污染报告）
-- 持仓与自选**共用一次批量行情请求**，多加自选不增加请求次数
+- 持仓与自选**共用批量行情请求**（Yahoo v7 每 100 个代码一个请求），多加自选只增加分块数
 
 ---
 
@@ -511,7 +512,7 @@ tracker/
 ├── util.py             with_timeout / 数值归一 / 日期对齐 / 展示格式化等共享工具
 ├── providers/          **数据 provider 层**（按权威 type 域隔离）
 │   ├── base.py         Provider 基类 + Quote/SymbolEntry 数据结构 + resolve(type) 域路由
-│   ├── stock_yahoo.py      Yahoo/OpenBB 股票行情与历史源（global/cn/index 共用）
+│   ├── stock_yahoo.py      Yahoo v7 批量行情 + OpenBB 历史源（global/cn/index 共用）
 │   ├── stock_akshare.py    东财/akshare 股票行情与历史源（cn/全球港股兜底共用）
 │   ├── cn_stocks.py        A股/B股域（.SS/.SZ/.BJ）：akshare 固定优先, 新浪兜底, yfinance 兜底
 │   ├── global_stocks.py    全球股票域（美股/港股/欧股…）：yfinance 主源, 港股 akshare/新浪兜底; 搜索走 IBKR → 东财 suggest → yfinance Search → 代码直查
@@ -1050,7 +1051,7 @@ Quotes are fetched with a priority chain:
 1. **IBKR** (TWS / IB Gateway) — real-time if subscribed, delayed otherwise, batch snapshot (default order ahead of LongPort; draggable)
 2. **LongPort** (optional, `use_longport` / `--longport`) — HK/US/CN quotes & history, silent fallback
 3. **EODHD** (optional BYOK, `eodhd.json` / `TRACKER_EODHD_TOKEN`) — history primary by default (ahead of yfinance, behind IBKR/LongPort), live quotes fallback-only by default; errors fall through to the next source
-4. **yfinance** (via OpenBB) — batch quote (1 request) + individual retry
+4. **yfinance** — Yahoo v7 batch quote (100 symbols / request, shared crumb/session) + individual retry
 5. **akshare** (East Money) — A-shares / HK spot + history (CN domain: akshare first)
 6. **FX** — CFETS for full XXX/CNY table, direct/inverse/USD bridge fallback
 7. **Indices** — `IX.<KEY>` historical only: CN indices via akshare (Sina), US SPX/NDX/DJI via yfinance with Sina fallback, cement / commodity-futures / Cameco uranium indices on dedicated sources (no fallback)

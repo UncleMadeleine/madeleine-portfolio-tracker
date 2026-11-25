@@ -424,14 +424,14 @@ def test_crypto_yf_history_fallback_does_not_nameerror(monkeypatch):
 
 
 class TestProviderDomainIsolation:
-    def test_batch_obb_failure_does_not_kill_other_domains(self, monkeypatch):
-        """openbb 故障时批量路径返回空表 (逐代码源链兜底), 不向上抛连坐 cn/crypto 域."""
+    def test_batch_yahoo_failure_does_not_kill_other_domains(self, monkeypatch):
+        """Yahoo 批量源故障时返回空表 (逐代码源链兜底), 不向上抛连坐 cn/crypto 域."""
         from tracker.providers import stock_yahoo
 
-        def _boom():
-            raise RuntimeError("cannot import name 'obb' from 'openbb'")
+        def _boom(*a, **k):
+            raise RuntimeError("Yahoo quote unavailable")
 
-        monkeypatch.setattr(stock_yahoo, "_obb", _boom)
+        monkeypatch.setattr(stock_yahoo, "_yahoo_quote_json", _boom)
         out = stock_yahoo._yahoo_batch([parse("AAPL")])
         assert out == {}
 

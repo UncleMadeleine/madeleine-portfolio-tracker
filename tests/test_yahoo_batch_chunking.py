@@ -1,16 +1,14 @@
-"""_yahoo_batch 分批 + 限流早停测试 (离线, mock).
+"""_yahoo_batch 分批 + 限流早停/熔断测试 (离线, mock).
 
-回归背景: 组合页 675 自选冷启动, _yahoo_batch 把全部代码塞进单个 OpenBB
-quote 请求 → Yahoo 429 (crumb rate-limited) / 401 (Invalid Crumb), 且限流
-是 IP 级 —— 随后单代码行情与 K线历史请求全部遭殃。修复: 按 50 个/块拆分
-+ 批间暂停; 连续空批判定已被限流, 放弃剩余块 (未取到的代码由逐代码源链
-兜底, 失败进负缓存, TTL 内不重试)。
+回归背景: Yahoo 限流是 IP 级的。行情改用 v7 ``finance/quote`` 批量接口
+(50 个/请求), 不再逐代码 ``Ticker.get_info()``; 连续空批/超时打开进程级
+熔断, 冷却期跳过逐代码回源, 避免 600+ 自选一轮打出几百条超时。
 """
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 import time as _time
+from types import SimpleNamespace
 
 import pytest
 
@@ -18,37 +16,23 @@ from tracker.providers import stock_yahoo as gs
 from tracker.symbols import parse
 
 
-class _Item:
-    def __init__(self, d: dict):
-        self._d = d
-
-    def model_dump(self) -> dict:
-        return self._d
-
-
-class _Res:
-    def __init__(self, items: list[_Item]):
-        self.results = items
+def _row(sym: str) -> dict:
+    return {
+        "symbol": sym,
+        "regularMarketPrice": 10.0,
+        "regularMarketPreviousClose": 9.0,
+        "regularMarketChangePercent": 1.0,
+        "currency": "USD",
+        "longName": sym,
+    }
 
 
-def _ok(syms: list[str]) -> _Res:
-    return _Res(
-        [
-            _Item(
-                {
-                    "symbol": s,
-                    "last_price": 10.0,
-                    "prev_close": 9.0,
-                    "currency": "USD",
-                }
-            )
-            for s in syms
-        ]
-    )
+def _ok(syms: list[str]) -> dict:
+    return {"quoteResponse": {"result": [_row(s) for s in syms]}}
 
 
-def _empty(syms: list[str]) -> _Res:
-    return _Res([])
+def _empty(syms: list[str]) -> dict:
+    return {"quoteResponse": {"result": []}}
 
 
 @pytest.fixture
@@ -61,25 +45,18 @@ def patch_chunk(monkeypatch):
 
 
 def _run(monkeypatch, script, symbols):
-    """以给定脚本跑 _yahoo_batch, 返回 (结果 dict, 每次 quote 调用收到的 symbol 列表).
+    """以给定脚本跑 _yahoo_batch, 返回 (结果 dict, 每次请求收到的 symbol 列表).
 
     script 可以是单个 callable (每次调用都用它) 或按调用序取值的 callable 列表。
     """
     calls: list[list[str]] = []
 
-    def quote(symbol=None, provider=None):
-        s = [symbol] if isinstance(symbol, str) else list(symbol)
-        calls.append(s)
+    def fake_json(syms, timeout=gs._BATCH_TIMEOUT):
+        calls.append(list(syms))
         fn = script if callable(script) else script[len(calls) - 1]
-        return fn(s)
+        return fn(syms)
 
-    monkeypatch.setattr(
-        gs,
-        "_obb",
-        lambda: SimpleNamespace(
-            equity=SimpleNamespace(price=SimpleNamespace(quote=quote))
-        ),
-    )
+    monkeypatch.setattr(gs, "_yahoo_quote_json", fake_json)
     out = gs._yahoo_batch([parse(s) for s in symbols])
     return out, calls
 
@@ -112,7 +89,7 @@ def test_success_resets_empty_streak(monkeypatch, patch_chunk):
 
 
 def test_chunk_exception_counts_as_empty(monkeypatch, patch_chunk):
-    """块调用抛异常 (如批量超时按空结果处理): 计入连空, 达到上限同样早停."""
+    """块调用抛异常 (如批量超时): 计入连空, 达到上限同样早停."""
 
     def boom(syms):
         raise TimeoutError("batch hung")
@@ -151,7 +128,7 @@ def test_batch_empty_trips_circuit_and_skips_single_quote(monkeypatch, patch_chu
     assert gs.quote_throttled()
 
     monkeypatch.setattr(
-        gs, "_obb", lambda: pytest.fail("熔断期不应再初始化/调用 OpenBB")
+        gs, "_yahoo_quote_json", lambda *a, **k: pytest.fail("熔断期不应再请求 Yahoo")
     )
     with pytest.raises(RuntimeError, match="限流冷却中"):
         gs._yahoo_quote(parse("AAPL"))
@@ -169,3 +146,55 @@ def test_batch_success_clears_circuit(monkeypatch, patch_chunk):
     out, _calls = _run(monkeypatch, lambda s: _ok(s), syms)
     assert set(out) == set(syms)
     assert not gs.quote_throttled()
+
+
+def test_v7_quote_rows_parse_price_and_currency():
+    """v7 quote 行 → Quote: 价格/昨收/涨跌/币种; 便士与 B 股口径复用旧守卫."""
+    from tracker.providers.stock_yahoo import _quote_from_v7
+
+    aapl = _quote_from_v7(
+        parse("AAPL"),
+        {
+            "symbol": "AAPL",
+            "regularMarketPrice": 350.28,
+            "regularMarketPreviousClose": 354.07,
+            "regularMarketChangePercent": -1.07,
+            "currency": "USD",
+            "longName": "Apple Inc.",
+        },
+    )
+    assert aapl is not None
+    assert aapl.price == 350.28
+    assert aapl.prev_close == 354.07
+    assert aapl.change_pct == pytest.approx(-1.07)
+    assert aapl.currency == "USD"
+    assert aapl.name == "Apple Inc."
+
+    vod = _quote_from_v7(
+        parse("VOD.L"),
+        {
+            "symbol": "VOD.L",
+            "regularMarketPrice": 101.55,
+            "regularMarketPreviousClose": 102.9,
+            "currency": "GBp",
+        },
+    )
+    assert vod is not None
+    assert vod.currency == "GBP"
+    assert vod.price == pytest.approx(1.0155)  # 便士 ÷100
+
+    b_share = _quote_from_v7(
+        parse("900901.SS"),
+        {"symbol": "900901.SS", "regularMarketPrice": 0.444, "currency": "USD"},
+    )
+    assert b_share is not None
+    assert b_share.currency == "USD"
+
+    # 无价格 (如可转债) 返回 None, 交给下一源
+    assert (
+        _quote_from_v7(
+            parse("110081.SS"),
+            {"symbol": "110081.SS", "regularMarketPrice": None},
+        )
+        is None
+    )

@@ -1,4 +1,7 @@
-"""Yahoo / OpenBB 股票行情与历史源 (global/cn/index 域共用).
+"""Yahoo 股票行情与历史源 (global/cn/index 域共用).
+
+行情走 Yahoo v7 ``finance/quote`` 批量接口 (100 个/请求, 共享 yfinance 的
+YfData 会话/crumb); 历史K线仍走 OpenBB ``equity.price.historical``。
 
 从 global_stocks 拆出: 这些函数不依赖 GlobalStocksProvider 的源链, 但被
 global/cn/index/orchestration/mcap 多处复用。集中在此避免「CN 域从全球
@@ -115,17 +118,18 @@ def _quote_from_dump(p: ParsedSymbol, d: dict) -> Quote | None:
     )
 
 
-_QUOTE_TIMEOUT = 8.0  # 成功 p95 已接近 5s, 5s 会把正常慢请求误杀; 批量失败后由熔断兜底
-_BATCH_TIMEOUT = 30.0  # 批量一次上百代码, 预算放大; 仍挂住则整批放弃走逐代码源链
+_QUOTE_TIMEOUT = 10.0  # v7 单代码含首次 crumb 握手, 留足余量; 批量失败由熔断兜底
+_BATCH_TIMEOUT = 30.0  # 批量一次 100 个代码 (单个 HTTP 请求), 挂住则整批放弃
 _HISTORY_TIMEOUT = 60.0  # 历史K线单码请求 (OpenBB 内部可能重试/半开连接)
-_YAHOO_CHUNK = 50  # 单批代码数: 一次上千代码的 quote 请求会被 Yahoo 429/401 拒掉
+_YAHOO_CHUNK = 100  # 单次 v7 quote 的代码数: 实测 100 只 ~3.5s, 200 只会触发 30s 超时
 _CHUNK_PAUSE = 1.0  # 批间基础暂停 (s); 出现限流迹象 (空批) 时翻倍
 _EMPTY_STREAK_GIVEUP = 2  # 连续空批: 判定已被限流, 放弃剩余批次 (逐代码源链兜底)
+_YAHOO_QUOTE_URL = "https://query1.finance.yahoo.com/v7/finance/quote"
 
 # ---------- 进程级限流熔断 ----------
 #
 # Yahoo 限流是 IP 级的: 批量请求被 429/超时后, 若逐代码源链继续对 600+ 只
-# 代码各发一次 5-8s 请求, 既拖住保温线程数分钟, 又会把限流窗口越撞越长。
+# 代码各发一次请求, 既拖住保温线程数分钟, 又会把限流窗口越撞越长。
 # 批量失败/连续空批时打开熔断, TTL 内跳过 yfinance (健康记录也少几百条
 # 误伤式失败), 冷却结束后下一轮保温自动恢复。
 _THROTTLE_TTL = 180.0
@@ -162,6 +166,99 @@ def reset_quote_throttle() -> None:
     _clear_throttle()
 
 
+_yf_data_singleton = None
+_yf_data_lock = threading.Lock()
+
+
+def _yf_data_client():
+    """yfinance 共享 YfData 单例 (cookie/crumb/session 复用)."""
+    global _yf_data_singleton
+    if _yf_data_singleton is not None:
+        return _yf_data_singleton
+    with _yf_data_lock:
+        if _yf_data_singleton is None:
+            from yfinance.data import YfData
+
+            _yf_data_singleton = YfData()
+    return _yf_data_singleton
+
+
+def _is_rate_limited(exc: BaseException) -> bool:
+    name = type(exc).__name__
+    text = str(exc)
+    return name == "YFRateLimitError" or "Too Many Requests" in text or "429" in text
+
+
+def _yahoo_quote_json(symbols: list[str], timeout: float = _BATCH_TIMEOUT) -> dict:
+    """批量 Yahoo v7 quote (一次请求多个代码) 原始 JSON.
+
+    不用 OpenBB 的 ``equity.price.quote``: 它的 yfinance provider 内部对每个
+    代码各调一次 ``Ticker.get_info()`` (quoteSummary + v7 quote 两条请求),
+    50 只 = 100 个请求, 既慢又极易触发 429。v7 批量 100 只只发 1 个请求,
+    实测首次 ~4s (含 crumb 握手), 复用 YfData 会话后 <1s。
+    """
+    params = {"symbols": ",".join(symbols), "formatted": "false"}
+    return with_timeout(
+        _yf_data_client().get_raw_json,
+        timeout,
+        _YAHOO_QUOTE_URL,
+        params=params,
+    )
+
+
+def _quote_from_v7(p: ParsedSymbol, row: dict) -> Quote | None:
+    """v7 quote 行 → Quote (复用 _quote_from_dump 的价格/币种/便士守卫)."""
+    return _quote_from_dump(
+        p,
+        {
+            "symbol": p.yahoo,
+            "name": _pick(row, "longName", "shortName", "displayName"),
+            # 交给 _quote_from_dump 的 price 回退链逐级校验有限正数
+            "last_price": row.get("regularMarketPrice"),
+            "price": row.get("postMarketPrice"),
+            "close": row.get("preMarketPrice"),
+            "open": row.get("regularMarketOpen"),
+            "prev_close": _pick(
+                row, "regularMarketPreviousClose", "previousClose"
+            ),
+            "change_percent": _pick(
+                row,
+                "regularMarketChangePercent",
+                "postMarketChangePercent",
+                "preMarketChangePercent",
+            ),
+            "currency": row.get("currency"),
+        },
+    )
+
+
+def _yahoo_quote_rows(
+    parsed: list[ParsedSymbol], timeout: float = _BATCH_TIMEOUT
+) -> dict[str, Quote]:
+    """一批代码 → {yahoo: Quote}; 一次 v7 请求, 限流/超时原样抛出."""
+    if not parsed:
+        return {}
+    by_symbol = {p.yahoo: p for p in parsed}
+    by_upper = {p.yahoo.upper(): p for p in parsed}
+    try:
+        payload = _yahoo_quote_json([p.yahoo for p in parsed], timeout)
+    except Exception as e:  # noqa: BLE001 - 限流/超时统一打开熔断
+        if isinstance(e, TimeoutError) or _is_rate_limited(e):
+            _trip_throttle()
+        raise
+    rows = (payload.get("quoteResponse") or {}).get("result") or []
+    out: dict[str, Quote] = {}
+    for row in rows:
+        sym = str(row.get("symbol") or "")
+        p = by_symbol.get(sym) or by_upper.get(sym.upper())
+        if p is None:
+            continue
+        q = _quote_from_v7(p, row)
+        if q is not None:
+            out[p.yahoo] = q
+    return out
+
+
 def _yahoo_quote(p: ParsedSymbol) -> Quote:
     remaining = quote_throttle_remaining()
     if remaining > 0:
@@ -169,83 +266,39 @@ def _yahoo_quote(p: ParsedSymbol) -> Quote:
         raise RuntimeError(
             f"{p.yahoo}: yfinance 限流冷却中 ({remaining:.0f}s), 跳过回源"
         )
-    # _obb() 必须先在计时区外求值: 冷启动 (首次 import openbb + 触达 provider
-    # 注册表) 实测 8-16s, 整段塞进 with_timeout 会吃掉预算, 首次必然超时。
-    # 取到引用后预算只覆盖真正的网络请求。
-    res = with_timeout(
-        _obb().equity.price.quote,
-        _QUOTE_TIMEOUT,
-        symbol=p.yahoo,
-        provider="yfinance",
-    )
-    if not res.results:
-        raise RuntimeError(f"{p.yahoo}: yfinance 无行情结果")
-    d = res.results[0].model_dump()
-    q = _quote_from_dump(p, d)
+    q = _yahoo_quote_rows([p], _QUOTE_TIMEOUT).get(p.yahoo)
     if q is None:
-        raise RuntimeError(f"{p.yahoo}: yfinance 无有效价格")
+        raise RuntimeError(f"{p.yahoo}: yfinance 无行情结果")
     _clear_throttle()
     return q
 
 
 def _yahoo_batch(parsed: list[ParsedSymbol]) -> dict[str, Quote]:
-    """yfinance 批量行情: 分块拉取 + 批间暂停 + 限流早停/熔断.
+    """Yahoo v7 批量行情: 100 个/请求 + 批间暂停 + 限流早停/熔断.
 
-    一次性把全部代码 (自选 600+ 时) 塞进单个 quote 请求, Yahoo 会以
-    429 (crumb rate-limited) / 401 (Invalid Crumb) 拒绝; 且限流是 IP 级 —
-    随后单代码行情/K线历史请求全部遭殃。按块拆分 + 批间暂停; 连续空批视为
-    已被限流, 放弃剩余块并打开进程级熔断 (冷却期跳过 yfinance, 冷却结束后
-    下一轮保温自动恢复), 不再持续撞击数据源。
+    每个请求只取 100 个代码 (URL 长度可控, 单块失败不拖垮全部), 连续空批
+    或超时视为 IP 已被限流, 放弃剩余块并打开进程级熔断 (冷却期跳过
+    yfinance, 冷却结束后下一轮保温自动恢复)。
     """
     out: dict[str, Quote] = {}
     if not parsed:
         return out
     if quote_throttled():
         return out
-    by_yahoo = {p.yahoo: p for p in parsed}
     empty_streak = 0
-    # 与 _yahoo_quote 同理: _obb() 冷启动 (首次 import openbb + 触达 provider
-    # 注册表) 必须在计时区外完成, 否则第一块请求还没发出预算已耗尽。取一次
-    # 引用, 所有块共用 (openbb 是进程内单例)。
-    try:
-        quote_fn = _obb().equity.price.quote
-    except Exception:
-        # openbb 未装 / 版本不兼容 / 在非主线程初始化失败 (signal 限制):
-        # 不能向上抛 —— orchestration.get_quotes 的域间循环没有保护, 一抛会
-        # 让后面的 cn/crypto 域一起不执行 (违反「任一域失败不影响其它域」),
-        # 且 CLI 批量查询/组合页直接崩。返回空表, 由逐代码源链兜底
-        # (_fetch_domain 内每个源都单独 try, 失败进负缓存)。
-        return out
     for start in range(0, len(parsed), _YAHOO_CHUNK):
         if start:
             time.sleep(_CHUNK_PAUSE * (2 if empty_streak else 1))
         chunk = parsed[start : start + _YAHOO_CHUNK]
         try:
-            # 批量同样要硬超时: OpenBB/yfinance 偶发内部重试会把批量调用挂住,
-            # 而它跑在 get_quotes 主线程里 (域间串行), 一挂全批卡死。超时按
-            # 空结果处理并打开熔断, 后续逐代码源链跳过 yfinance。
-            res = with_timeout(
-                quote_fn,
-                _BATCH_TIMEOUT,
-                symbol=[p.yahoo for p in chunk],
-                provider="yfinance",
-            )
-            got = 0
-            for item in res.results or []:
-                d = item.model_dump()
-                p = by_yahoo.get(str(d.get("symbol")))
-                if p is None:
-                    continue
-                q = _quote_from_dump(p, d)
-                if q is not None:
-                    out[p.yahoo] = q
-                    got += 1
-            if got:
+            rows = _yahoo_quote_rows(chunk, _BATCH_TIMEOUT)
+            if rows:
+                out.update(rows)
                 empty_streak = 0
                 _clear_throttle()
             else:
                 empty_streak += 1
-        except Exception:
+        except Exception:  # noqa: BLE001 - 单块失败继续下一块, 连续失败才熔断
             empty_streak += 1
         if empty_streak >= _EMPTY_STREAK_GIVEUP:
             # 连续空批/批量超时: 判定 IP 已被限流, 本轮不再逐代码重试

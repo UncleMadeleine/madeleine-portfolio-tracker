@@ -1,9 +1,9 @@
-"""yfinance 批量行情字段回退测试 (离线, 纯数据).
+"""yfinance 行情字段回退测试 (离线, 纯数据).
 
-回归背景: OpenBB yfinance quote 对部分证券 (多为 ETF: GLD/TLT/SCHD/3032.HK…)
-的 quoteSummary 缺 last_price/close, 只有 open; _yahoo_batch 整批只按
-last_price/price/close 取价, 55/682 只自选跌入逐代码源链 (单只 10s+, 8 并发
-也拖 30s+), 首页冷加载分钟级。修复: _quote_from_dump 逐级回退到 open。
+回归背景: Yahoo quote 对部分证券 (多为 ETF: GLD/TLT/SCHD/3032.HK…)
+缺 last/close, 只有 open; 批量层只按 last_price/price/close 取价,
+55/682 只自选跌入逐代码源链 (单只 10s+, 8 并发也拖 30s+), 首页冷加载分钟级。
+修复: _quote_from_dump 逐级回退到 open (现用于 v7 quote 行解析)。
 """
 
 from __future__ import annotations

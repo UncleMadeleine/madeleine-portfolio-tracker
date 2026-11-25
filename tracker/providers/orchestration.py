@@ -105,6 +105,23 @@ def _neg_filtered(
     return out
 
 
+def _prefetch_crypto_batch(
+    plist: list[ParsedSymbol], crypto_source: str
+) -> None:
+    """Binance 批量行情前置: 仅在 Binance 是当前首选源时执行."""
+    if crypto_source not in ("auto", "binance"):
+        return
+    if crypto_source == "auto":
+        from .. import source_order as so
+
+        order = so.configured("crypto", "quote")
+        if order is not None and order[0] != "binance":
+            return
+    from .crypto import _binance_spot_batch
+
+    _binance_spot_batch(plist)
+
+
 def _fetch_domain(
     domain: str,
     plist: list[ParsedSymbol],
@@ -118,6 +135,8 @@ def _fetch_domain(
     on_done(yahoo) 每结算一只回调一次 (成功/失败都算), 供首屏进度条推进。
     """
     provider = resolve({"global": "GLOBAL", "cn": "CN", "crypto": "CRYPTO"}[domain])
+    if domain == "crypto":
+        _prefetch_crypto_batch(plist, crypto_source)
 
     def _one(p: ParsedSymbol):
         # 单代码失败捕获为异常值返回: pool.map 迭代时不中断其余代码。
@@ -193,7 +212,11 @@ def _fetch_ordered_quotes(
     from .. import eodhd as eodhd_mod
     from .. import source_order as so
     from . import stock_yahoo as sy_mod
-    from .stock_akshare import _akshare_quote, _sina_quote
+    from .stock_akshare import (
+        _akshare_quote,
+        _sina_quote,
+        akshare_quote_available,
+    )
     from .stock_yahoo import _yahoo_quote
 
     if domain == "global" and prefer_akshare:
@@ -300,6 +323,9 @@ def _fetch_ordered_quotes(
                         sp.ok = False
                         sp.error = next(iter(errs.values()))
         elif source_id == "akshare_em":
+            # 东财 push2 连续不可达时直接跳过, 走下一源 (akshare_sina)
+            if not akshare_quote_available():
+                continue
             targets = (
                 pending
                 if domain == "cn"

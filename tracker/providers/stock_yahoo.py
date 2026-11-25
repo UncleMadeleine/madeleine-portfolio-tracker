@@ -17,7 +17,13 @@ import time
 import pandas as pd
 
 from ..deps import openbb as _obb
-from ..symbols import Market, ParsedSymbol, is_currency_code, is_pence
+from ..symbols import (
+    Market,
+    ParsedSymbol,
+    is_currency_code,
+    is_pence,
+    valuation_currency,
+)
 from ..util import with_timeout
 from .base import Quote, openbb_history_frame
 
@@ -77,6 +83,10 @@ def _quote_from_dump(p: ParsedSymbol, d: dict) -> Quote | None:
     # 数据源还可能给 "-"/"NONE" 等无币种占位符 (东财 A 股 f172 就是 "-"):
     # 放行会让汇率链查到伪货币对, 必须与缺失同口径回退。
     raw_ccy = "" if raw_ccy is None else str(raw_ccy).strip()
+    if p.type == "crypto":
+        # USDT/USDC 等稳定币按 USD 等价 (与 symbols.parse 的权威口径一致),
+        # 否则估值链会拿不到 USDT 汇率导致整行被跳过。
+        raw_ccy = valuation_currency(raw_ccy)
     if not is_currency_code(raw_ccy):
         # .IL (LSE 国际挂盘) 证券以 USD/EUR 计价 (KAP.IL=USD): 币种缺失时不能按
         # LSE 主板惯例兜底 GBp, 便士兜底会把价格再缩小 100 倍

@@ -7,8 +7,8 @@
 
 修复后三级归一 ( belt & braces ):
   1. symbols.parse: 稳定币计价的 ParsedSymbol.currency = USD (主路径);
-  2. providers.crypto._quote_ccy: yfinance 自报 currency=USDT 也归一
-     (磁盘缓存里的旧 Quote / 数据源自报不会绕过);
+  2. stock_yahoo._quote_from_dump: 数据源自报 currency=USDT 等非 ISO 代码时
+     回落到 symbols.parse 的权威币种 (磁盘缓存里的旧 Quote 也不会绕过);
   3. fx.get_rate / get_fx_history: 稳定币按 USD 等价查表 (base_currency 是
      稳定币、CLI `tracker fx USDT CNY` 都覆盖)。
 """

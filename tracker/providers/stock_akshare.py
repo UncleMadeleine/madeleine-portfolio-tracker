@@ -86,6 +86,45 @@ def _ak_secid(p: ParsedSymbol) -> str:
 _AK_ERR_TTL = 120.0
 _ak_quote_errors: dict[str, tuple[float, str]] = {}
 
+#: 东财 push2 域名整段不可达时的进程级冷却: 连续 N 次网络失败后暂停回源,
+#: 让 CN/HK 行情直接走新浪, 避免每轮保温对同一批代码重复等 3-5s。
+#: 只统计网络/HTTP 失败; 200 + data=null (单只无效代码) 不算系统性故障。
+#: 10 分钟 > 5 分钟保温周期, 保证至少跳过一轮; 恢复探测最多延迟 10 分钟。
+_AK_QUOTE_THROTTLE_TTL = 600.0
+_AK_QUOTE_THROTTLE_FAILS = 3
+_ak_quote_throttle_lock = threading.Lock()
+_ak_quote_fail_streak = 0
+_ak_quote_block_until = 0.0
+
+
+def akshare_quote_available() -> bool:
+    """东财单代码行情是否可用 (连续网络失败后短暂冷却)."""
+    with _ak_quote_throttle_lock:
+        return time.time() >= _ak_quote_block_until
+
+
+def reset_akshare_quote_throttle() -> None:
+    """清空东财行情冷却 (测试隔离 / 设置页切换源时可选调用)."""
+    global _ak_quote_fail_streak, _ak_quote_block_until
+    with _ak_quote_throttle_lock:
+        _ak_quote_fail_streak = 0
+        _ak_quote_block_until = 0.0
+
+
+def _ak_note_network_failure() -> None:
+    global _ak_quote_fail_streak, _ak_quote_block_until
+    with _ak_quote_throttle_lock:
+        _ak_quote_fail_streak += 1
+        if _ak_quote_fail_streak >= _AK_QUOTE_THROTTLE_FAILS:
+            _ak_quote_block_until = time.time() + _AK_QUOTE_THROTTLE_TTL
+            _ak_quote_fail_streak = 0
+
+
+def _ak_note_endpoint_ok() -> None:
+    global _ak_quote_fail_streak
+    with _ak_quote_throttle_lock:
+        _ak_quote_fail_streak = 0
+
 
 def _err_text(exc: BaseException) -> str:
     """异常 → 单行诊断文案 (requests 的连接错误/超时都带 host)."""
@@ -135,17 +174,21 @@ def _ak_quote_fetch(secid: str) -> dict | None:
             # 429/403 等限流/封禁响应: requests 不会自动抛错, 直接 .json()
             # 会退化成难以理解的 JSONDecodeError
             _ak_note_error(secid, f"HTTP {r.status_code}")
+            _ak_note_network_failure()
             return None
         j = r.json()
     except Exception as e:  # noqa: BLE001 - 视作无行情, 细节留给健康记录
         _ak_note_error(secid, _err_text(e))
+        _ak_note_network_failure()
         return None
     data = j.get("data") if isinstance(j, dict) else None
     if not isinstance(data, dict):
         # 东财对无效/退市代码也返回 200 + {"data": null}, 与网络错误区分开
         _ak_note_error(secid, "东财无该代码行情 (data=null)")
+        _ak_note_endpoint_ok()
         return None
     _ak_note_error(secid, None)
+    _ak_note_endpoint_ok()
     return data
 
 
@@ -378,6 +421,9 @@ def _akshare_quote(p: ParsedSymbol) -> Quote:
     沪深可转债在东财失败/限流时回退新浪单代码行情; yfinance 不覆盖转债,
     没有这层兜底会稳定失败。
     """
+    if not akshare_quote_available():
+        # 源链通常会先过滤掉本源; 这里兜底覆盖显式顺序直接调用的情况
+        raise RuntimeError(f"{p.yahoo}: 东财行情冷却中, 跳过 (akshare_em)")
     d = _ak_quote_raw(p)
     bond = _cn_bond_sina_symbol(p) is not None
     if d:

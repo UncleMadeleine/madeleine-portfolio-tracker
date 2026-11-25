@@ -326,6 +326,15 @@ def coverage(now: float | None = None) -> dict:
     quotes, ages = cache_mod.get_cached_with_age(symbols, ttl=RETENTION_SECONDS)
     ohlc_ages = cache_mod.ohlc_freshness(symbols, now=now)
 
+    # 行情自报币种优先于代码后缀推断: KAP.IL 这类 .IL 证券 parse() 默认 GBP,
+    # 但 Yahoo 报价是 USD; 用后缀会误报 GBP 汇率缺口, 而保温只按实际
+    # quote.currency 取汇率, 于是永远补不上这个「缺口」。
+    for sym, meta in by_symbol.items():
+        q = quotes.get(sym)
+        ccy = getattr(q, "currency", None) if q is not None else None
+        if ccy and is_currency_code(valuation_currency(ccy)):
+            meta["currency"] = ccy
+
     # 基本面只对股票有意义 (crypto/index 无 PE/PB/财报): 估值快照与财报链接
     # 都是按需取数, 这里只看磁盘缓存年龄, 不联网、不触发补数。
     stock_symbols: list[str] = []

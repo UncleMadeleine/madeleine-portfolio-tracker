@@ -14,7 +14,12 @@ from .em_suggest import (
     parse_symbol_safe,
     suggest_merged,
 )
-from .stock_akshare import _akshare_history, _akshare_quote, _sina_quote
+from .stock_akshare import (
+    _akshare_history,
+    _akshare_quote,
+    _sina_quote,
+    akshare_quote_available,
+)
 from .stock_yahoo import _yahoo_history, _yahoo_quote, quote_throttled
 
 
@@ -26,7 +31,10 @@ class CNStocksProvider(Provider):
     def quote_sources(self, p: ParsedSymbol, prefer_first: bool = False) -> list:
         from .. import source_order as so
 
-        funcs = {"akshare_em": _akshare_quote, "akshare_sina": _sina_quote}
+        funcs = {"akshare_sina": _sina_quote}
+        # 东财 push2 连续不可达时直接走新浪, 不再逐代码等连接失败
+        if akshare_quote_available():
+            funcs["akshare_em"] = _akshare_quote
         # Yahoo 限流熔断期间跳过 yfinance: 否则 600+ 只代码会各发一次
         # 注定超时的请求, 既拖住保温又延长限流窗口。
         if not quote_throttled():

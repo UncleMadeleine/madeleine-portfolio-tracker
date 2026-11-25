@@ -13,19 +13,19 @@ import json
 import math
 import threading
 import time
+from dataclasses import replace
 
 import pandas as pd
 
 from ..deps import requests as _requests
 from ..source_order import CRYPTO_SOURCE_PREFERS
-from ..symbols import ParsedSymbol
-from ..util import finite_float as _finite_opt, with_timeout
+from ..symbols import ParsedSymbol, valuation_currency
+from ..util import finite_float as _finite_opt
 from .base import Provider, Quote, SymbolEntry, ordered_sources
-from .stock_yahoo import openbb_history
+from .stock_yahoo import _yahoo_quote, openbb_history
 
 _BINANCE_HOSTS = ("https://api.binance.com", "https://data-api.binance.vision")
 _HTTP_TIMEOUT = 8.0
-_YF_QUOTE_TIMEOUT = 5.0
 
 _KLINES_LIMIT = 1000
 # Gate.io candlesticks 单请求数据点硬上限 (超出直接 HTTP 400, 与 limit 无关)
@@ -242,6 +242,43 @@ def _binance_spot_raw(pair: str) -> dict:
     return _get("/api/v3/ticker/24hr", {"symbol": pair})
 
 
+def _binance_spot_batch(parsed: list[ParsedSymbol]) -> None:
+    """一次 v3/ticker/24hr 批量请求预热 _spot_cache (失败静默走逐代码链).
+
+    Binance 支持 ``symbols=["BTCUSDT","ETHUSDT"]`` 一次返回多币对; 7 个币对
+    从 7 个请求降为 1 个, 加密域一轮等待从 ~3.6s 降到 ~1s。
+    """
+    now = time.time()
+    pairs: list[str] = []
+    with _spot_lock:
+        for p in parsed:
+            pair = binance_pair(p)
+            hit = _spot_cache.get(pair)
+            if pair not in pairs and not (hit and now - hit[0] < _spot_ttl):
+                pairs.append(pair)
+    if not pairs:
+        return
+    try:
+        data = _get(
+            "/api/v3/ticker/24hr",
+            {"symbols": json.dumps(pairs, separators=(",", ":"))},
+        )
+    except Exception:  # noqa: BLE001 - 批量优化失败不影响逐代码降级链
+        return
+    if not isinstance(data, list):
+        return
+    ts = time.time()
+    with _spot_lock:
+        for row in data:
+            pair = str(row.get("symbol") or "")
+            try:
+                last = float(row.get("lastPrice") or 0)
+            except (TypeError, ValueError):
+                continue
+            if pair and math.isfinite(last) and last > 0:
+                _spot_cache[pair] = (ts, row)
+
+
 def _binance_quote(p: ParsedSymbol) -> Quote:
     pair = binance_pair(p)
     d = _binance_spot_raw(pair)
@@ -293,56 +330,31 @@ def _gate_quote(p: ParsedSymbol) -> Quote:
     )
 
 
-def _yf():
-    """惰性导入 yfinance (OpenBB equity.quote 对 crypto 返回 last_price=None, 需直连)."""
-    import yfinance
+def _yahoo_crypto_symbol(p: ParsedSymbol) -> str:
+    """稳定币计价 → Yahoo 可识别的 USD 对 (BTC-USDT → BTC-USD).
 
-    return yfinance
-
-
-def _quote_ccy(p: ParsedSymbol, reported: str | None = None) -> str:
-    """行情币种: 数据源自报 (缺失时符号推导), 再按 USD 等价稳定币归一。
-
-    yfinance 对 BTC-USDT 自报 currency="USDT", 直接采用会把 parse() 的归一
-    结果绕回去 —— 估值链又拿不到 USDT 汇率。币种口径必须与
-    symbols.valuation_currency 单一权威点一致 (BTC-USD 与 BTC-USDT 估值同口径)。
+    Yahoo v7 只有 BTC-USD, 没有 BTC-USDT; 直接查后者的结果是空报价。
+    估值口径本就把 USDT/USDC 等当 USD, 换符号不改变币种语义。
     """
-    from ..symbols import valuation_currency
-
-    return valuation_currency(str(reported or p.currency).upper())
+    base, sep, quote = p.yahoo.partition("-")
+    if sep and quote and quote != "USD" and valuation_currency(quote) == "USD":
+        return f"{base}-USD"
+    return p.yahoo
 
 
 def _yf_quote(p: ParsedSymbol) -> Quote:
-    """yfinance 直连降级: fast_info 含 lastPrice."""
-    # _yf() (import yfinance) 在计时区外; 只有 fast_info 网络访问受硬超时约束。
-    # 不能把 _yf() 写进 lambda: 冷进程 import yfinance 可达数秒, 会吃掉整个
-    # 5s 报价预算, 让本可用的兜底源被误判超时。
-    yf = _yf()
-    info = with_timeout(lambda: yf.Ticker(p.yahoo).fast_info, _YF_QUOTE_TIMEOUT)
-    price = info.get("lastPrice")
-    try:
-        price = float(price) if price is not None and pd.notna(price) else None
-    except (TypeError, ValueError):
-        price = None
-    # 0/负/NaN/inf 都是无效行情 (与 Binance/Gate/Hyperliquid 源同一守卫):
-    # 价格 0 会让市值归零并触发全部下限阈值, 且会挡住后面的源链降级。
-    if price is None or not math.isfinite(price) or price <= 0:
-        raise RuntimeError(f"{p.yahoo}: yfinance 无最新价")
-    prev = _finite_opt(info.get("previousClose"))
-    if prev is not None and prev <= 0:
-        prev = None
-    chg = None
-    if prev is not None:
-        chg = _finite_opt((price / prev - 1) * 100)
-    return Quote(
-        symbol=p.yahoo,
-        name=None,
-        price=price,
-        prev_close=prev,
-        change_pct=chg,
-        currency=_quote_ccy(p, info.get("currency")),
-        source="yfinance",
-    )
+    """yfinance/Yahoo v7 降级: 与股票同一套 v7 报价解析.
+
+    原实现走 ``Ticker.fast_info``: 对 crypto 会额外拉 1y 历史, 且在部分网络
+    下抛 ``'exchangeTimezoneName'`` (本次排障中 7 个币对因此失败并拖慢 109s)。
+    v7 quote 一次请求即可, 同时复用 yfinance 的限流熔断与币种归一。
+    """
+    target = _yahoo_crypto_symbol(p)
+    q = _yahoo_quote(p if target == p.yahoo else replace(p, yahoo=target))
+    # 对外仍保留用户原始代码 (BTC-USDT) 与估值币种 (USD)
+    q.symbol = p.yahoo
+    q.currency = p.currency
+    return q
 
 
 # ---------- 历史K线 ----------

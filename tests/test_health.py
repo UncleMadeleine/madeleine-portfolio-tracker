@@ -204,6 +204,27 @@ def test_coverage_ignores_non_currency_index_units():
     assert cov["fx"]["missing"] == []
 
 
+def test_coverage_uses_cached_quote_currency_over_suffix():
+    """KAP.IL parse 默认 GBP, 实际报价 USD: 不应误报 GBP 汇率缺口."""
+    storage.save_portfolio(
+        {
+            "base_currency": "CNY",
+            "holdings": [{"symbol": "KAP.IL", "quantity": 1, "avg_cost": 40}],
+        },
+        storage.PORTFOLIO_PATH,
+    )
+    cache_mod.set_cached(
+        {
+            "KAP.IL": Quote(
+                "KAP.IL", "Kazatomprom", 51.7, 50.0, 3.4, "USD", source="yfinance"
+            )
+        }
+    )
+    cov = health.coverage()
+    assert "GBP" not in cov["fx"]["missing"]
+    assert "USD" in cov["fx"]["missing"]
+
+
 def test_integrity_ok():
     storage.save_portfolio({"base_currency": "CNY", "holdings": []}, storage.PORTFOLIO_PATH)
     result = health.integrity()

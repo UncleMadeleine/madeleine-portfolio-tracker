@@ -109,3 +109,46 @@ def test_akshare_quote_error_carries_real_reason(monkeypatch):
     msg = str(excinfo.value)
     assert "akshare 行情不可用 (CN)" in msg
     assert "Empty reply from server" in msg
+
+
+def test_akshare_quote_throttle_trips_after_network_failures():
+    """连续 N 次网络失败后冷却; 单只 data=null 不计入系统性故障."""
+    gs.reset_akshare_quote_throttle()
+    assert gs.akshare_quote_available()
+    for _ in range(gs._AK_QUOTE_THROTTLE_FAILS):
+        gs._ak_note_network_failure()
+    assert not gs.akshare_quote_available()
+
+    gs.reset_akshare_quote_throttle()
+    for _ in range(10):
+        gs._ak_note_endpoint_ok()
+    assert gs.akshare_quote_available()
+
+
+def test_akshare_quote_cooling_skips_network(monkeypatch):
+    gs.reset_akshare_quote_throttle()
+    for _ in range(gs._AK_QUOTE_THROTTLE_FAILS):
+        gs._ak_note_network_failure()
+    monkeypatch.setattr(
+        gs, "_ak_quote_raw", lambda p: pytest.fail("冷却期不应再请求东财")
+    )
+    with pytest.raises(RuntimeError, match="冷却中"):
+        gs._akshare_quote(parse("600585.SS"))
+
+
+def test_cn_quote_chain_skips_akshare_em_when_cooling(monkeypatch):
+    import tracker.providers.cn_stocks as cn
+
+    monkeypatch.setattr(cn, "akshare_quote_available", lambda: False)
+    chain = cn.CNStocksProvider().quote_sources(parse("600585.SS"))
+    assert gs._akshare_quote not in chain
+    assert gs._sina_quote in chain
+
+
+def test_global_hk_chain_skips_akshare_em_when_cooling(monkeypatch):
+    import tracker.providers.global_stocks as global_stocks
+
+    monkeypatch.setattr(global_stocks, "akshare_quote_available", lambda: False)
+    chain = global_stocks.GlobalStocksProvider().quote_sources(parse("0700.HK"))
+    assert gs._akshare_quote not in chain
+    assert gs._sina_quote in chain

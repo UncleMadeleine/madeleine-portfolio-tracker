@@ -1,7 +1,5 @@
 """行情路由离线测试: 加密货币与股票混查时的分流与降级 (provider 层)."""
 
-import types
-
 import pandas as pd
 import pytest
 
@@ -208,91 +206,110 @@ def test_binance_pair_mapping():
     assert crypto_mod.binance_pair(parse("ETH-BTC")) == "ETHBTC"
 
 
-def _fake_yf(last, prev=None):
-    """构造带 fast_info 的假 yfinance 模块."""
-    info = {
-        "lastPrice": last,
-        "previousClose": prev,
-        "yearChange": 0.8,
-        "currency": "USD",
-    }
+def test_binance_spot_batch_single_request(monkeypatch):
+    """多个币对一次 ticker/24hr 请求预热缓存, 后续逐代码不再发网络."""
+    rows = [
+        {
+            "symbol": "BTCUSDT",
+            "lastPrice": "61000",
+            "prevClosePrice": "60000",
+            "priceChangePercent": "1.667",
+        },
+        {
+            "symbol": "ETHUSDT",
+            "lastPrice": "3000",
+            "prevClosePrice": "2900",
+            "priceChangePercent": "3.448",
+        },
+    ]
+    calls: list[tuple[str, dict]] = []
 
-    class FakeInfo:
-        def get(self, key, default=None):
-            return info.get(key, default)
+    def fake_get(path, params=None):
+        calls.append((path, params or {}))
+        return rows
 
-    class FakeTicker:
-        def __init__(self, symbol):
-            assert symbol == "BTC-USD"
+    monkeypatch.setattr(crypto_mod, "_get", fake_get)
+    monkeypatch.setattr(crypto_mod, "_spot_cache", {})
+    crypto_mod._binance_spot_batch([parse("BTC-USD"), parse("ETH-USDT")])
+    assert len(calls) == 1
+    assert calls[0][0] == "/api/v3/ticker/24hr"
+    assert "BTCUSDT" in calls[0][1]["symbols"]
+    assert set(crypto_mod._spot_cache) == {"BTCUSDT", "ETHUSDT"}
 
-        @property
-        def fast_info(self):
-            return FakeInfo()
+    monkeypatch.setattr(
+        crypto_mod, "_get", lambda *a, **k: pytest.fail("批量命中后不应再请求")
+    )
+    assert crypto_mod._binance_quote(parse("BTC-USD")).price == 61000.0
+    assert crypto_mod._binance_quote(parse("ETH-USDT")).price == 3000.0
 
-    return types.SimpleNamespace(Ticker=FakeTicker)
+
+def test_yf_crypto_quote_delegates_to_yahoo_v7(monkeypatch):
+    """crypto 的 yfinance 兜底复用股票 v7 报价 (不再走 fast_info)."""
+    sentinel = Quote(
+        symbol="BTC-USD",
+        name="Bitcoin USD",
+        price=61000.0,
+        prev_close=60000.0,
+        change_pct=1.667,
+        currency="USD",
+        source="yfinance",
+    )
+    monkeypatch.setattr(crypto_mod, "_yahoo_quote", lambda p: sentinel)
+    assert crypto_mod._yf_quote(parse("BTC-USD")) is sentinel
 
 
-def test_yf_crypto_quote_from_fast_info(monkeypatch):
-    """yfinance 直连: 从 fast_info 取 lastPrice, 日内涨跌由 last/prev 推算."""
-    monkeypatch.setattr(crypto_mod, "_yf", lambda: _fake_yf(61000.0, 60000.0))
+def test_yf_crypto_quote_maps_stablecoin_pair_to_usd(monkeypatch):
+    """BTC-USDT 在 Yahoo 不存在: 查询转 BTC-USD, 对外保留原代码/USD."""
+    seen: list[str] = []
 
-    q = crypto_mod._yf_quote(parse("BTC-USD"))
-    assert q.price == 61000.0
-    assert q.prev_close == 60000.0
-    assert q.change_pct == pytest.approx((61000 / 60000 - 1) * 100)
+    def fake_quote(p):
+        seen.append(p.yahoo)
+        return Quote(
+            symbol=p.yahoo,
+            name="Bitcoin USD",
+            price=61000.0,
+            prev_close=60000.0,
+            change_pct=1.667,
+            currency="USD",
+            source="yfinance",
+        )
+
+    monkeypatch.setattr(crypto_mod, "_yahoo_quote", fake_quote)
+    q = crypto_mod._yf_quote(parse("BTC-USDT"))
+    assert seen == ["BTC-USD"]
+    assert q.symbol == "BTC-USDT"
     assert q.currency == "USD"
 
 
-def test_yf_crypto_quote_missing_price_raises(monkeypatch):
-    """yfinance 直连无 lastPrice 时抛错."""
-    monkeypatch.setattr(crypto_mod, "_yf", lambda: _fake_yf(None))
+def test_v7_quote_stablecoin_reported_currency_normalized():
+    """v7 对 BTC-USDT 自报 currency=USDT: 仍按 symbols 的 USD 等价口径归一."""
+    from tracker.providers.stock_yahoo import _quote_from_v7
 
-    with pytest.raises(RuntimeError, match="无最新价"):
-        crypto_mod._yf_quote(parse("BTC-USD"))
-
-
-def test_yf_crypto_quote_stablecoin_reported_currency_normalized(monkeypatch):
-    """yfinance 对 BTC-USDT 自报 currency=USDT: 必须按 USD 等价归一。
-
-    直接采用数据源自报币种会把 symbols.parse 的归一结果绕回去, 估值链又拿
-    不到 USDT 汇率 (BTC-USD 与 BTC-USDT 估值口径必须一致)。
-    """
-    info = {
-        "lastPrice": 61000.0,
-        "previousClose": 60000.0,
-        "currency": "USDT",
-    }
-
-    class FakeInfo:
-        def get(self, key, default=None):
-            return info.get(key, default)
-
-    class FakeTicker:
-        def __init__(self, symbol):
-            assert symbol == "BTC-USDT"
-
-        @property
-        def fast_info(self):
-            return FakeInfo()
-
-    monkeypatch.setattr(
-        crypto_mod, "_yf", lambda: types.SimpleNamespace(Ticker=FakeTicker)
+    q = _quote_from_v7(
+        parse("BTC-USDT"),
+        {
+            "regularMarketPrice": 61000.0,
+            "regularMarketPreviousClose": 60000.0,
+            "currency": "USDT",
+        },
     )
-    q = crypto_mod._yf_quote(parse("BTC-USDT"))
+    assert q is not None
     assert q.symbol == "BTC-USDT"  # 代码形态保留 (数据源交易对)
     assert q.currency == "USD"  # 估值口径归一
 
 
 @pytest.mark.parametrize("bad", [0.0, -1.0, float("nan"), float("inf")])
-def test_yf_crypto_quote_non_positive_price_raises(monkeypatch, bad):
-    """0/负/NaN/inf 都是无效价 (与 Binance/Gate/Hyperliquid 同一守卫).
+def test_v7_quote_non_positive_price_returns_none(bad):
+    """0/负/NaN/inf 都不能当有效行情, 交给源链/负缓存."""
+    from tracker.providers.stock_yahoo import _quote_from_v7
 
-    价格 0 会让市值归零并触发全部下限阈值, 还会挡住后续源链降级。
-    """
-    monkeypatch.setattr(crypto_mod, "_yf", lambda: _fake_yf(bad))
-
-    with pytest.raises(RuntimeError, match="无最新价"):
-        crypto_mod._yf_quote(parse("BTC-USD"))
+    assert (
+        _quote_from_v7(
+            parse("BTC-USD"),
+            {"regularMarketPrice": bad, "currency": "USD"},
+        )
+        is None
+    )
 
 
 def test_binance_history_shape(monkeypatch):

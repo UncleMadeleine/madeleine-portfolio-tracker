@@ -20,6 +20,7 @@ from .stock_akshare import (  # noqa: F401 - 兼容再导出
     _akshare_history,
     _akshare_quote,
     _sina_quote,
+    akshare_quote_available,
 )
 from .stock_yahoo import (  # noqa: F401 - 兼容再导出
     _quote_from_dump,
@@ -92,7 +93,8 @@ class GlobalStocksProvider(Provider):
         if not quote_throttled():
             funcs["yfinance"] = _yahoo_quote
         if p.market is Market.HK:
-            funcs["akshare_em"] = _akshare_quote
+            if akshare_quote_available():
+                funcs["akshare_em"] = _akshare_quote
             funcs["akshare_sina"] = _sina_quote
         if eod and mode != "off":
             funcs["eodhd"] = eodhd_mod.quote

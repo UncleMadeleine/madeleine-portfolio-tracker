@@ -56,6 +56,17 @@ def _summary_text(result: dict) -> str:
             if hist_errors:
                 for sym, msg in list(hist_errors.items())[:3]:
                     lines.append(f"    {sym}: {msg}")
+    val = result.get("valuation")
+    if val is not None:
+        if val.get("skipped"):
+            lines.append("估值: 无持仓股票, 跳过")
+        else:
+            total = len(val.get("symbols") or [])
+            lines.append(f"估值: {val.get('ok', 0)}/{total} 只成功")
+            val_errors = val.get("errors") or {}
+            if val_errors:
+                for sym, msg in list(val_errors.items())[:3]:
+                    lines.append(f"    {sym}: {msg}")
     cal = result.get("calendar")
     if cal is None:
         lines.append("日历: 跳过")
@@ -76,8 +87,9 @@ def _warm_kwargs(args) -> dict:
     include_calendar = not getattr(args, "quotes_only", False)
     return {
         "include_quotes": include_quotes,
-        # --calendar-only 跳过行情/K线; --quotes-only 只跳过日历
+        # --calendar-only 跳过行情/K线/估值; --quotes-only 只跳过日历
         "include_history": include_quotes,
+        "include_valuation": include_quotes,
         "include_calendar": include_calendar,
         "extra_symbols": tuple(getattr(args, "symbols", None) or ()),
         "refresh": bool(getattr(args, "refresh", False)),

@@ -17,7 +17,10 @@ from .util import with_timeout
 _PAIR_TTL = 600
 _pair_cache: dict[str, tuple[float, float]] = {}
 
-_CFETS_TTL = 120
+#: CFETS 即期汇率进程内 TTL: 组合估值用 15 分钟前的汇率足够; 保温进程
+#: 每 5 分钟一轮, 命中进程缓存时只刷新磁盘时间戳, 不再每轮打一次 ~6s 的
+#: CFETS 请求 (实际回源约 15 分钟一次)。
+_CFETS_TTL = 900
 _CFETS_TIMEOUT = 8.0
 # Yahoo 货币对硬超时: OpenBB/yfinance 偶发内部重试, TCP 半开时可挂到分钟级。
 # 汇率在首屏/对比折算的关键路径上, 不能无限等一个可降级的源。

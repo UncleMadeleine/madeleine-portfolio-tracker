@@ -1,9 +1,9 @@
 """无 UI 依赖的缓存保温/预热服务 (Streamlit 与 CLI 共用).
 
-背景: 行情/汇率/日历/持仓K线的周期刷新原先挂在 Streamlit 页面模块里, 只有
-前端进程常驻时才会运行; CLI 每次调用都只能按需回源。本模块把「从磁盘持仓/
-自选推导刷新范围 → 走正常缓存链 → 回写 SQLite」抽出来, 只依赖取数与存储层,
-不 import streamlit, 因而可以在 headless CLI / 常驻服务里安全运行。
+背景: 行情/汇率/日历/持仓K线与估值快照的周期刷新原先挂在 Streamlit 页面
+模块里, 只有前端进程常驻时才会运行; CLI 每次调用都只能按需回源。本模块把
+「从磁盘持仓/自选推导刷新范围 → 走正常缓存链 → 回写 SQLite」抽出来, 只依赖
+取数与存储层, 不 import streamlit, 因而可以在 headless CLI / 常驻服务里安全运行。
 行情全量一轮约 30s (Yahoo v7 批量), 常驻周期默认按 300s 新鲜期缩放。
 
 使用方式:
@@ -45,7 +45,7 @@ from .. import prices
 from .. import storage
 from ..cache import CACHE_TTL, STALE_TTL
 from ..fx import get_fx_rates
-from ..symbols import canonical
+from ..symbols import Market, canonical, parse
 from .refresh import RefreshCoordinator
 from .watchlist import entries_for
 
@@ -726,10 +726,70 @@ def warm_holdings_history_once(*, portfolio_path=None, extra_symbols=()) -> dict
     }
 
 
+VALUATION_WARM_WORKERS = 3
+
+
+def warm_valuation_once(*, portfolio_path=None, extra_symbols=()) -> dict:
+    """预热持仓 + PB/市值自选的估值快照 (基本面页/阈值提醒用).
+
+    只覆盖真正用到估值指标的标的: 6 只持仓 + 9 只 PB/市值自选, 不把 700 只
+    纯价格自选全预取。快照 6h 磁盘缓存, 5 分钟一轮行情保温只读盘; 首次/
+    过期才回源。
+    """
+    portfolio, watch = _load_scope(portfolio_path, None)
+    holdings = [h for h in portfolio.get("holdings", []) if h.get("symbol")]
+    watch_rows = [
+        e
+        for e in (watch.get("watchlist") or [])
+        if (
+            e.get("metric") in ("pb", "mcap")
+            or e.get("pb") is not None
+            or e.get("mcap") is not None
+        )
+    ]
+    rows = [*holdings, *watch_rows, *({"symbol": s} for s in extra_symbols)]
+    symbols: list[str] = []
+    for yahoo in _symbols_from_rows(rows):
+        try:
+            p = parse(yahoo)
+        except ValueError:
+            continue
+        if p.market in (Market.CRYPTO, Market.INDEX):
+            continue
+        if p.yahoo not in symbols:
+            symbols.append(p.yahoo)
+    if not symbols:
+        return {"symbols": [], "ok": 0, "errors": {}, "skipped": True}
+
+    from .. import valuation
+
+    def _one(sym: str) -> tuple[str, str | None]:
+        try:
+            valuation.fetch_snapshot(sym)
+        except Exception as e:  # noqa: BLE001 - 单只失败不拖垮其它持仓
+            return sym, str(e) or type(e).__name__
+        return sym, None
+
+    errors: dict[str, str] = {}
+    with ThreadPoolExecutor(
+        max_workers=min(VALUATION_WARM_WORKERS, len(symbols))
+    ) as pool:
+        for sym, err in pool.map(_one, symbols):
+            if err:
+                errors[sym] = err
+    return {
+        "symbols": symbols,
+        "ok": len(symbols) - len(errors),
+        "errors": errors,
+        "skipped": False,
+    }
+
+
 def warm_once(
     *,
     include_quotes: bool = True,
     include_history: bool = True,
+    include_valuation: bool = True,
     include_calendar: bool = True,
     extra_symbols=(),
     refresh: bool = False,
@@ -746,6 +806,10 @@ def warm_once(
             result["fx"] = fx
         if include_history:
             result["history"] = warm_holdings_history_once(
+                extra_symbols=extra_symbols
+            )
+        if include_valuation:
+            result["valuation"] = warm_valuation_once(
                 extra_symbols=extra_symbols
             )
         if include_calendar:

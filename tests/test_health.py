@@ -349,7 +349,7 @@ def test_coverage_reports_fundamentals_gaps_for_holdings_only():
         {
             "watchlist": [
                 {"symbol": "MSFT"},
-                {"symbol": "TSLA"},
+                {"symbol": "TSLA", "metric": "pb"},
                 {"symbol": "BTC-USD"},
             ]
         },
@@ -358,11 +358,16 @@ def test_coverage_reports_fundamentals_gaps_for_holdings_only():
     cache_mod.set_json_cached("valuation_snapshot:AAPL", {"pe_ttm": 30.0})
     cache_mod.set_json_cached("filings:AAPL", {"limit": 6, "items": []})
     cache_mod.set_json_cached("valuation_snapshot:TSLA", {"pe_ttm": 200.0})
-    # TSLA 的快照已过期 (7 小时前)
+    cache_mod.set_json_cached("valuation_snapshot:MSFT", {"pe_ttm": 35.0})
+    # TSLA (PB 阈值) 与 MSFT (纯价格) 的快照都已过期; 只有 TSLA 算缺口
     with cache_mod._connection() as con:
         con.execute(
-            "UPDATE json_cache SET fetched_at=? WHERE key=?",
-            (time.time() - 7 * 3600, "valuation_snapshot:TSLA"),
+            "UPDATE json_cache SET fetched_at=? WHERE key IN (?, ?)",
+            (
+                time.time() - 7 * 3600,
+                "valuation_snapshot:TSLA",
+                "valuation_snapshot:MSFT",
+            ),
         )
         con.commit()
 
@@ -370,10 +375,11 @@ def test_coverage_reports_fundamentals_gaps_for_holdings_only():
     fund = cov["fundamentals"]
     assert fund["total"] == 4  # AAPL / 0700.HK / MSFT / TSLA; BTC 被排除
     assert fund["snapshot_fresh"] == 1
-    assert fund["snapshot_missing"] == 2
-    assert fund["snapshot_stale"] == 1
+    assert fund["snapshot_missing"] == 1
+    assert fund["snapshot_stale"] == 2
     assert fund["filings_fresh"] == 1
     assert fund["filings_missing"] == 3
+    # MSFT 纯价格自选: 快照过期不预取、也不报缺口
     assert [g["symbol"] for g in fund["gaps"]] == ["0700.HK", "TSLA"]
     assert any("未取过估值快照" in r for r in fund["gaps"][0]["reasons"])
     assert any("已 7.0 小时未更新" in r for r in fund["gaps"][1]["reasons"])

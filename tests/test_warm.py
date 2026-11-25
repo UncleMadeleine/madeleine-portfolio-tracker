@@ -197,6 +197,60 @@ def test_warm_holdings_history_collects_errors(monkeypatch):
     assert out["errors"] == {"MSFT": "boom"}
 
 
+def test_warm_valuation_only_stocks(monkeypatch):
+    """估值预热覆盖持仓 + PB/市值自选, 纯价格自选/crypto/index 不参与."""
+    monkeypatch.setattr(
+        warm_mod.storage,
+        "load_portfolio",
+        lambda *a, **k: {
+            "holdings": [
+                {"symbol": "AAPL"},
+                {"symbol": "600519.SS"},
+                {"symbol": "BTC-USD"},
+                {"symbol": "IX.DXY"},
+                {"symbol": "AAPL"},
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        warm_mod.storage,
+        "load_watchlist",
+        lambda *a, **k: {
+            "watchlist": [
+                {"symbol": "TSLA", "metric": "pb"},
+                {"symbol": "NVDA"},  # 纯价格自选: 不预取估值
+                {"symbol": "BABA", "mcap": 1.0e12},
+            ]
+        },
+    )
+    seen: list[str] = []
+    monkeypatch.setattr(
+        "tracker.valuation.fetch_snapshot",
+        lambda sym, **kw: seen.append(sym) or object(),
+    )
+    out = warm_mod.warm_valuation_once(extra_symbols=["MSFT"])
+    assert out["ok"] == 5
+    assert out["errors"] == {}
+    assert sorted(seen) == ["600519.SS", "AAPL", "BABA", "MSFT", "TSLA"]
+
+
+def test_warm_holdings_valuation_collects_errors(monkeypatch):
+    monkeypatch.setattr(
+        warm_mod.storage,
+        "load_portfolio",
+        lambda *a, **k: {"holdings": [{"symbol": "AAPL"}, {"symbol": "MSFT"}]},
+    )
+    monkeypatch.setattr(
+        "tracker.valuation.fetch_snapshot",
+        lambda sym, **kw: (_ for _ in ()).throw(RuntimeError("boom"))
+        if sym == "MSFT"
+        else object(),
+    )
+    out = warm_mod.warm_valuation_once()
+    assert out["ok"] == 1
+    assert out["errors"] == {"MSFT": "boom"}
+
+
 def test_warm_once_includes_history_and_flushes_health(monkeypatch):
     monkeypatch.setattr(
         warm_mod,
@@ -208,6 +262,11 @@ def test_warm_once_includes_history_and_flushes_health(monkeypatch):
         "warm_holdings_history_once",
         lambda **kw: {"symbols": ["AAPL"], "ok": 1, "errors": {}, "skipped": False},
     )
+    monkeypatch.setattr(
+        warm_mod,
+        "warm_valuation_once",
+        lambda **kw: {"symbols": ["AAPL"], "ok": 1, "errors": {}, "skipped": False},
+    )
     monkeypatch.setattr(warm_mod, "warm_calendar_once", lambda **kw: None)
     calls: list[bool] = []
     import tracker.health as health_mod
@@ -215,6 +274,7 @@ def test_warm_once_includes_history_and_flushes_health(monkeypatch):
     monkeypatch.setattr(health_mod, "flush", lambda: calls.append(True))
     result = warm_mod.warm_once()
     assert result["history"]["ok"] == 1
+    assert result["valuation"]["ok"] == 1
     assert calls == [True]
 
 
@@ -264,6 +324,12 @@ def test_cli_warm_once_text(monkeypatch, capsys):
             "errors": {},
             "skipped": False,
         },
+        "valuation": {
+            "symbols": ["AAPL"],
+            "ok": 1,
+            "errors": {},
+            "skipped": False,
+        },
         "calendar": {"months": 2, "events": 3, "issues": []},
         "elapsed_seconds": 0.1,
     }
@@ -274,6 +340,7 @@ def test_cli_warm_once_text(monkeypatch, capsys):
     assert "=== 缓存预热 ===" in out
     assert "行情: 1/1 只成功" in out
     assert "K线: 1/1 只成功" in out
+    assert "估值: 1/1 只成功" in out
     assert "日历: 2 个月窗口, 3 个事件" in out
 
 

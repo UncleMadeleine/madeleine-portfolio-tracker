@@ -296,7 +296,8 @@ def coverage(now: float | None = None) -> dict:
                 result["errors"].append(f"持仓代码无法解析: {sym}")
                 continue
             by_symbol.setdefault(p.yahoo, {"symbol": p.yahoo, "holding": True,
-                                           "watchlist": False, "currency": p.currency})
+                                           "watchlist": False, "currency": p.currency,
+                                           "needs_fundamentals": True})
             by_symbol[p.yahoo]["holding"] = True
     except Exception as e:  # noqa: BLE001 - 数据文件损坏也要能出报告
         result["errors"].append(f"持仓文件不可用: {e}")
@@ -319,6 +320,13 @@ def coverage(now: float | None = None) -> dict:
                  "currency": p.currency},
             )
             item["watchlist"] = True
+            # 只有 PB/市值阈值条目需要估值快照; 纯价格自选不预取/不报缺口
+            if (
+                e.get("metric") in ("pb", "mcap")
+                or e.get("pb") is not None
+                or e.get("mcap") is not None
+            ):
+                item["needs_fundamentals"] = True
     except Exception as e:  # noqa: BLE001
         result["errors"].append(f"自选文件不可用: {e}")
 
@@ -425,15 +433,19 @@ def coverage(now: float | None = None) -> dict:
         else:
             fund["filings_stale"] += 1
 
-        # 估值快照：持仓缺了会影响「贵不贵」的判断, 算缺口; 自选只报
-        # 「缓存已过期」, 不把从未打开过的 600 只自选全列成噪音。
+        # 估值快照：持仓缺了会影响「贵不贵」的判断, 算缺口; 自选只对
+        # PB/市值阈值条目报「已过期」, 纯价格自选不预取也不算噪音。
         f_reasons = []
         if meta["holding"]:
             if s_age is None:
                 f_reasons.append("未取过估值快照")
             elif s_age > FUNDAMENTALS_TTL:
                 f_reasons.append(f"估值快照已 {s_age / 3600:.1f} 小时未更新")
-        elif s_age is not None and s_age > FUNDAMENTALS_TTL:
+        elif (
+            meta.get("needs_fundamentals")
+            and s_age is not None
+            and s_age > FUNDAMENTALS_TTL
+        ):
             f_reasons.append(f"估值快照已 {s_age / 3600:.1f} 小时未更新")
         if f_reasons:
             fund["gaps"].append(

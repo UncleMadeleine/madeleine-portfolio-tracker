@@ -55,8 +55,12 @@ def _seed():
     cache_mod.set_json_cached("other:MSFT", {"keep": True})
     cache_mod.set_fundamental_cached("AAPL", 1.0, 2.0)
     cache_mod.set_fundamental_cached("MSFT", 3.0, 4.0)
-    cache_mod.set_series_cached("shares_full:AAPL", _frame()[["date", "close"]])
+    cache_mod.set_series_cached("shares_full_v2:AAPL", _frame()[["date", "close"]])
+    cache_mod.set_series_cached("shares_full_v2:MSFT", _frame()[["date", "close"]])
+    # 旧版键 (拆分调整前) 也要能清理
     cache_mod.set_series_cached("shares_full:MSFT", _frame()[["date", "close"]])
+    cache_mod.set_series_cached("em_value:600519", _frame()[["date", "close"]])
+    cache_mod.set_series_cached("em_value:000001", _frame()[["date", "close"]])
     cache_mod.set_calendar_row("g:AAPL", [{"symbol": "AAPL"}])
     cache_mod.set_calendar_row("g:MSFT", [{"symbol": "MSFT"}])
     cache_mod.set_calendar_row("g:UNKNOWN_OK", [])
@@ -88,12 +92,29 @@ def test_prune_orphans_dry_run_then_delete():
     # 未知前缀不归本函数管理
     assert cache_mod.get_json_cached("other:MSFT", ttl=10**9) is not None
     assert cache_mod.get_fundamental_cached("MSFT", ttl=10**9) is None
+    assert cache_mod.get_series_cached("shares_full_v2:MSFT", ttl=10**9) is None
     assert cache_mod.get_series_cached("shares_full:MSFT", ttl=10**9) is None
+    assert cache_mod.get_series_cached("shares_full_v2:AAPL", ttl=10**9) is not None
+    assert cache_mod.get_series_cached("em_value:600519", ttl=10**9) is None
+    assert cache_mod.get_series_cached("em_value:000001", ttl=10**9) is None
     assert cache_mod.get_calendar_row("g:MSFT") is None
     assert cache_mod.get_calendar_row("g:AAPL") is not None
     # 哨兵/整批日历键保留
     assert cache_mod.get_calendar_row("g:UNKNOWN_OK") is not None
     assert cache_mod.get_calendar_row("cn:fhps:20260331") is not None
+
+
+def test_prune_orphans_matches_em_value_bare_cn_code():
+    """em_value 键里是 A 股裸代码, 不能按美股裸代码误判为孤儿."""
+    cache_mod.set_series_cached("em_value:600519", _frame()[["date", "close"]])
+    cache_mod.set_series_cached("em_value:000001", _frame()[["date", "close"]])
+    _portfolio("600519.SS")
+    _watchlist()
+
+    result = cache_mod.prune_orphans()
+    assert result["skipped"] is False
+    assert cache_mod.get_series_cached("em_value:600519", ttl=10**9) is not None
+    assert cache_mod.get_series_cached("em_value:000001", ttl=10**9) is None
 
 
 def test_prune_orphans_skips_empty_scope():

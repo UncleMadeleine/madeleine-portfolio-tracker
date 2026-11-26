@@ -488,6 +488,24 @@ def clear_fundamentals() -> int:
     return _clear_table("fundamentals")
 
 
+#: 历史市值序列 (mcap._em_history) 的缓存前缀; 键里的代码是 A 股裸代码
+#: (600519), 不含 .SS/.SZ/.BJ 后缀, 判断归属时要和 scope 的后缀去掉再比。
+EM_VALUE_PREFIX = "em_value"
+#: 历史股本序列 (mcap._shares_history) 的缓存前缀。当前写入键带 _v2 后缀,
+#: 判断时用 startswith 兼容旧版 shares_full:* 与后续版本, 避免再出现
+#: 「写入键升级了、清理逻辑还认旧前缀」导致缓存永远清不掉。
+SHARES_FULL_PREFIX = "shares_full"
+
+
+def _cn_bare(symbol: str) -> str | None:
+    """规范代码 → A 股裸代码 (600519.SS → 600519); 非沪深/北交所返回 None."""
+    s = str(symbol)
+    for suffix in (".SS", ".SZ", ".BJ"):
+        if s.endswith(suffix):
+            return s[: -len(suffix)]
+    return None
+
+
 def _cache_scope() -> tuple[set[str] | None, str | None]:
     """当前持仓/自选的规范代码集合; 读取失败或为空返回 (None, 原因)."""
     from . import storage
@@ -523,7 +541,8 @@ def prune_orphans(*, dry_run: bool = False) -> dict:
     """删除当前持仓/自选之外的孤儿缓存 (可再生数据).
 
     覆盖:
-      - quotes / fundamentals / series_cache(shares_full:*) / calendar_cache(g:*)
+      - quotes / fundamentals / series_cache(shares_full* / em_value:*) /
+        calendar_cache(g:*)
       - ohlc_cache (键可能是 ``SYMBOL|源签名``)
       - json_cache (valuation_snapshot:* / filings:*)
 
@@ -604,13 +623,19 @@ def prune_orphans(*, dry_run: bool = False) -> dict:
             tables["fundamentals"] = _entry(fund_orph)
 
             series_orph = []
+            scope_bare = {b for s in scope if (b := _cn_bare(s)) is not None}
             for (key,) in _collect("SELECT key FROM series_cache"):
                 key = str(key)
                 prefix, sep, sym = key.partition(":")
-                if prefix != "shares_full" or not sep:
+                if not sep:
                     continue
-                if not _keep(sym):
-                    series_orph.append(key)
+                if prefix.startswith(SHARES_FULL_PREFIX):
+                    if not _keep(sym):
+                        series_orph.append(key)
+                elif prefix == EM_VALUE_PREFIX:
+                    # 键里只有 A 股裸代码, 不能直接 parse (裸代码会被当成美股)。
+                    if sym not in scope_bare:
+                        series_orph.append(key)
             tables["series_cache"] = _entry(series_orph)
 
             cal_orph = []
@@ -687,6 +712,9 @@ _INVALID_FX_AGE = 30 * 86400
 _INVALID_CALENDAR_AGE = 30 * 86400
 #: cn: 批量日历按报表期存; 保留近 90 天，更早的报表期不会再进默认窗口。
 _CN_CALENDAR_RETENTION_DAYS = 90
+#: lp: 长桥日历按 (market, category, YYYY-MM) 整月存; 旧月份同样不会再
+#: 进默认窗口, 保留 90 天后清理 (与 cn: 报表期口径一致)。
+_LP_CALENDAR_RETENTION_DAYS = 90
 
 
 def gc_invalid(*, dry_run: bool = False) -> dict:
@@ -827,6 +855,7 @@ def gc_invalid(*, dry_run: bool = False) -> dict:
 
             # 序列缓存: 损坏 / 估值历史过期 / 已移出范围
             series_bad: list[str] = []
+            scope_bare = {b for s in scope if (b := _cn_bare(s)) is not None}
             for key, payload, fetched_at in _collect(
                 "SELECT key, payload, fetched_at FROM series_cache"
             ):
@@ -835,8 +864,10 @@ def gc_invalid(*, dry_run: bool = False) -> dict:
                 if not bad:
                     prefix, sep, rest = key.partition(":")
                     age = now - float(fetched_at)
-                    if prefix == "shares_full" and sep:
+                    if prefix.startswith(SHARES_FULL_PREFIX) and sep:
                         bad = rest not in scope or age > _INVALID_SHARES_AGE
+                    elif prefix == EM_VALUE_PREFIX and sep:
+                        bad = rest not in scope_bare or age > _INVALID_QUOTE_AGE
                     elif prefix == "valuation" and sep:
                         sym = rest.split(":", 1)[0]
                         bad = sym not in scope or age > _INVALID_VALUATION_SERIES_AGE
@@ -892,6 +923,18 @@ def gc_invalid(*, dry_run: bool = False) -> dict:
                             today - period
                         ).days > _CN_CALENDAR_RETENTION_DAYS:
                             bad = True
+                if not bad and key.startswith("lp:"):
+                    # lp:<market>:<category>:YYYY-MM; 旧月份整月缓存不再命中。
+                    parts = key.split(":")
+                    raw = parts[3] if len(parts) >= 4 else ""
+                    try:
+                        month = datetime.strptime(raw, "%Y-%m").date()
+                    except ValueError:
+                        month = None
+                    if month is not None and (
+                        today - month
+                    ).days > _LP_CALENDAR_RETENTION_DAYS:
+                        bad = True
                 if bad:
                     cal_bad.append(key)
             tables["calendar_cache"] = _entry(cal_bad)

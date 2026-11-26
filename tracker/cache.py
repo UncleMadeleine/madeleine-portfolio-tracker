@@ -775,6 +775,8 @@ def clear() -> int:
 # ---------- 域读写门面 (实现见 cache_domains, 保持既有导入路径) ----------
 
 from .cache_domains import (  # noqa: E402,F401 - 兼容再导出
+    EM_VALUE_PREFIX,
+    SHARES_FULL_PREFIX,
     _calendar_row_from_payload,
     _clear_table,
     _normalize_quote_currency,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from datetime import date, timedelta
 
 import pandas as pd
 
@@ -48,7 +49,14 @@ def test_gc_invalid_cleans_old_signature_corrupt_and_stale():
         storage.PORTFOLIO_PATH,
     )
     storage.save_watchlist(
-        {"watchlist": [{"symbol": "0700.HK"}]}, storage.WATCHLIST_PATH
+        {
+            "watchlist": [
+                {"symbol": "0700.HK"},
+                {"symbol": "600519.SS"},
+                {"symbol": "601398.SS"},
+            ]
+        },
+        storage.WATCHLIST_PATH,
     )
     df = _frame()
     current_key = prices.ohlc_cache_key("AAPL")
@@ -68,7 +76,13 @@ def test_gc_invalid_cleans_old_signature_corrupt_and_stale():
     cache_mod.set_series_cached("valuation:MSFT:pe:12", df[["date", "close"]])
     cache_mod.set_series_cached("valuation:0700.HK:pe:12", df[["date", "close"]])
     _age("series_cache", "key", "valuation:0700.HK:pe:12", 8)
-    cache_mod.set_series_cached("shares_full:AAPL", df[["date", "close"]])
+    cache_mod.set_series_cached("shares_full_v2:AAPL", df[["date", "close"]])
+    cache_mod.set_series_cached("shares_full_v2:MSFT", df[["date", "close"]])
+    cache_mod.set_series_cached("shares_full:MSFT", df[["date", "close"]])
+    cache_mod.set_series_cached("em_value:600519", df[["date", "close"]])
+    cache_mod.set_series_cached("em_value:601398", df[["date", "close"]])
+    cache_mod.set_series_cached("em_value:000001", df[["date", "close"]])
+    _age("series_cache", "key", "em_value:601398", 31)
     _raw_exec(
         "INSERT INTO series_cache(key, payload, fetched_at) VALUES (?,?,?)",
         ("valuation:AAPL:pe:98", "not json", time.time()),
@@ -85,6 +99,11 @@ def test_gc_invalid_cleans_old_signature_corrupt_and_stale():
     cache_mod.set_calendar_row("g:AAPL", [{"symbol": "AAPL"}])
     cache_mod.set_calendar_row("cn:fhps:20250930", [])
     cache_mod.set_calendar_row("cn:fhps:20261231", [])
+    today = date.today()
+    old_month = (today.replace(day=1) - timedelta(days=120)).strftime("%Y-%m")
+    new_month = today.strftime("%Y-%m")
+    cache_mod.set_calendar_row(f"lp:US:earning:{old_month}", [])
+    cache_mod.set_calendar_row(f"lp:US:earning:{new_month}", [])
     _raw_exec(
         "INSERT INTO calendar_cache(key, payload, fetched_at) VALUES (?,?,?)",
         ("g:0700.HK", "not json", time.time()),
@@ -129,6 +148,12 @@ def test_gc_invalid_cleans_old_signature_corrupt_and_stale():
     assert cache_mod.get_series_cached("valuation:AAPL:pe:12", ttl=10**9) is not None
     assert cache_mod.get_series_cached("valuation:MSFT:pe:12", ttl=10**9) is None
     assert cache_mod.get_series_cached("valuation:0700.HK:pe:12", ttl=10**9) is None
+    assert cache_mod.get_series_cached("shares_full_v2:AAPL", ttl=10**9) is not None
+    assert cache_mod.get_series_cached("shares_full_v2:MSFT", ttl=10**9) is None
+    assert cache_mod.get_series_cached("shares_full:MSFT", ttl=10**9) is None
+    assert cache_mod.get_series_cached("em_value:600519", ttl=10**9) is not None
+    assert cache_mod.get_series_cached("em_value:601398", ttl=10**9) is None
+    assert cache_mod.get_series_cached("em_value:000001", ttl=10**9) is None
     assert cache_mod.get_json_cached("valuation_snapshot:AAPL", ttl=10**9) is not None
     assert cache_mod.get_json_cached("valuation_snapshot:MSFT", ttl=10**9) is None
     assert cache_mod.get_json_cached("filings:AAPL", ttl=10**9) is not None
@@ -136,6 +161,8 @@ def test_gc_invalid_cleans_old_signature_corrupt_and_stale():
     assert cache_mod.get_calendar_row("g:AAPL") is not None
     assert cache_mod.get_calendar_row("cn:fhps:20250930") is None
     assert cache_mod.get_calendar_row("cn:fhps:20261231") is not None
+    assert cache_mod.get_calendar_row(f"lp:US:earning:{old_month}") is None
+    assert cache_mod.get_calendar_row(f"lp:US:earning:{new_month}") is not None
     assert cache_mod.get_calendar_row("g:0700.HK") is None
     assert cache_mod.get_cached(["BAD"]) == {}
     assert cache_mod.get_fundamental_cached("0700.HK", ttl=10**9) is None

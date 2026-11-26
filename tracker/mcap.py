@@ -231,7 +231,7 @@ def _cache_put(key: str, df: pd.DataFrame) -> None:
 
 def _em_history(bare: str, refresh: bool = False) -> pd.DataFrame | None:
     """东财估值分析 → date/close (总市值, CNY); 缓存命中率优先, 失败 None."""
-    key = f"em_value:{bare}"
+    key = f"{cache_mod.EM_VALUE_PREFIX}:{bare}"
     hit = None if refresh else _cache_get(key, MCAP_EM_TTL)
     if hit is not None:
         return hit
@@ -299,7 +299,7 @@ def _adjust_shares_for_splits(
 
 def _shares_history(yahoo: str, refresh: bool = False) -> pd.DataFrame | None:
     """yfinance 历史股本 (date/close=股本数); 全量历史一次性缓存 7 天."""
-    key = f"shares_full_v2:{yahoo}"
+    key = f"{cache_mod.SHARES_FULL_PREFIX}_v2:{yahoo}"
     hit = None if refresh else _cache_get(key, MCAP_SHARES_TTL)
     if hit is not None:
         return hit

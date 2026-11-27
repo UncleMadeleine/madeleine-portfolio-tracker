@@ -178,7 +178,7 @@ export default function (component) {
       if (overlay.mean != null) {
         overlaySeries.createPriceLine({
           price: overlay.mean, color: '#8b949e', lineWidth: 1, lineStyle: 2,
-          axisLabelVisible: true, title: '均值'
+          axisLabelVisible: true, title: '均值' + (overlay.unit || '')
         });
       }
       try {
@@ -346,6 +346,7 @@ export default function (component) {
     if (indVals) { indVals.forEach(function (t) { h += ' ' + span(t.name + ' ' + fp2(t.value), t.color); }); }
     if (overlaySeries && overlay) {
       var ovPrec = overlay.precision != null ? overlay.precision : 5;
+      var ovUnit = overlay.unit || '';
       var ovVal = null;
       if (param && param.seriesData) {
         var ov = param.seriesData.get(overlaySeries);
@@ -353,10 +354,10 @@ export default function (component) {
       }
       if (ovVal == null) { ovVal = valAt({ data: overlay.data }, bar.time); }
       h += '<br>' + span('叠加 ' + overlay.name, overlay.color || '#ff5da2')
-        + ' ' + span(fpn(ovVal, ovPrec));
+        + ' ' + span(fpn(ovVal, ovPrec) + ovUnit);
       if (ovVal != null && overlay.mean) {
         var ovDev = (ovVal / overlay.mean - 1) * 100;
-        h += ' ' + span('(均值 ' + fpn(overlay.mean, ovPrec) + ', 较均值 '
+        h += ' ' + span('(均值 ' + fpn(overlay.mean, ovPrec) + ovUnit + ', 较均值 '
           + (ovDev >= 0 ? '+' : '') + ovDev.toFixed(2) + '%)', '#8b949e');
       }
     }
@@ -548,7 +549,10 @@ export default function (component) {
       });
     } else {
       var header = ['time', 'open', 'high', 'low', 'close', 'volume'];
-      if (overlay) { header.push(overlay.name || 'overlay'); }
+      if (overlay) {
+        header.push((overlay.name || 'overlay')
+          + (overlay.unit ? ' (' + overlay.unit + ')' : ''));
+      }
       add(header);
       CFG.candles.forEach(function (b, i) {
         var row = [tstr(b.time), b.open, b.high, b.low, b.close,

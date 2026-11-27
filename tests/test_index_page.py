@@ -104,11 +104,12 @@ def test_weekly_only_index_hides_daily_option(index_app):
     assert len(app.metric) == 4  # 图表摘要照常渲染
 
 
-def test_ratio_select_defaults_to_none(index_app):
-    """叠加比率默认「无」: 不额外取数, 也不改变原有K线 payload."""
-    ratio_box = index_app.selectbox(key="index_ratio")
-    assert ratio_box.options == ["无", "金银比", "金油比"]
-    assert ratio_box.value == "无"
+def test_overlay_select_defaults_to_none(index_app):
+    """叠加指标默认「无」: 不额外取数, 也不改变原有K线 payload."""
+    overlay_box = index_app.selectbox(key="index_overlay")
+    assert overlay_box.options[:3] == ["无", "金银比", "金油比"]
+    assert "美国高收益信用利差 (HY OAS)" in overlay_box.options
+    assert overlay_box.value == "无"
     assert index_app._chart["data"]["overlay"] is None
 
 
@@ -125,13 +126,44 @@ def test_ratio_index_is_selectable_like_normal_index(index_app):
 
 def test_gold_oil_ratio_overlay_embedded(index_app):
     """选择金油比: 拉取 COMEX 黄金/WTI 两条腿, 比率线写入 overlay (左侧独立轴)."""
-    index_app.selectbox(key="index_ratio").set_value("金油比").run()
+    index_app.selectbox(key="index_overlay").set_value("金油比").run()
     assert len(index_app.metric) == 4
     overlay = index_app._chart["data"]["overlay"]
     assert overlay["numerator"] == "IX.XAU"
     assert overlay["denominator"] == "IX.WTI"
     assert overlay["data"]
     assert any("叠加曲线 金油比" in c.value for c in index_app.caption)
+
+
+def test_fred_oas_overlay_embedded(index_app):
+    """选择 HY OAS: 单序列写入 overlay, 带单位/精度/均值 (左侧独立轴)."""
+    label = "美国高收益信用利差 (HY OAS)"
+    index_app.selectbox(key="index_overlay").set_value(label).run()
+    assert len(index_app.metric) == 4
+    overlay = index_app._chart["data"]["overlay"]
+    assert overlay["symbol"] == "IX.HY_OAS"
+    assert overlay["kind"] == "series"
+    assert overlay["unit"] == "%"
+    assert overlay["precision"] == 2
+    assert overlay["data"]
+    vals = [p["value"] for p in overlay["data"]]
+    assert overlay["mean"] == pytest.approx(sum(vals) / len(vals), abs=0.01)
+    assert any(
+        "叠加指标 " + label in c.value and "CDS 的免费代理" in c.value
+        for c in index_app.caption
+    )
+
+
+def test_oas_overlay_ignored_when_main_is_same(index_app):
+    """主图本身就是该 OAS 时, 叠加同一序列已无意义, 明确忽略."""
+    symbol_box = index_app.selectbox(key="index_symbol")
+    hy_label = next(o for o in symbol_box.options if "HY OAS" in o)
+    symbol_box.select(hy_label).run()
+    index_app.selectbox(key="index_overlay").set_value(
+        "美国高收益信用利差 (HY OAS)"
+    ).run()
+    assert index_app._chart["data"]["overlay"] is None
+    assert any("本身就是该信用利差" in c.value for c in index_app.caption)
 
 
 def test_daily_ok_index_keeps_daily_default(monkeypatch):

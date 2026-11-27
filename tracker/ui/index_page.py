@@ -13,7 +13,7 @@ from . import settings, theme
 from .issues import render_issue_summary
 from .kline_page import render_kline_view
 
-from tracker import charting, index_ratios, prices
+from tracker import charting, index_overlays, index_ratios, prices
 from tracker.symbols import INDEX_CATALOG, index_groups, index_label
 
 
@@ -93,18 +93,20 @@ def render_index_page() -> None:
         else f"该指数数据源为{charting.PERIOD_LABELS[native]}, 更细周期不可用",
         key="index_period",
     )
-    # 可选叠加比率曲线 (默认关闭): 金银比 / 金油比, 独立左侧价轴.
-    # 两条腿均取美元计价的指数域代码 (COMEX 黄金/白银、WTI 原油), 无需汇率换算。
-    ratio_label = st.selectbox(
-        "叠加比率",
-        index_ratios.ratio_option_labels(),
+    # 可选叠加指标 (默认关闭): 金银比/金油比, 或 FRED ICE BofA OAS 信用利差
+    # (CDS 的免费代理). 均画在独立左侧价轴, 不挤压蜡烛/均线的右侧价格轴.
+    overlay_label = st.selectbox(
+        "叠加指标",
+        index_overlays.overlay_option_labels(),
         index=0,
-        key="index_ratio",
-        help="在指数K线上叠加一条比率曲线 (独立左侧纵轴): "
+        key="index_overlay",
+        help="在指数K线上叠加一条指标曲线 (独立左侧纵轴): "
         "金银比 = COMEX 黄金 ÷ COMEX 白银, 金油比 = COMEX 黄金 ÷ WTI 原油; "
-        "两条腿均为 Yahoo 美元计价连续合约 (换月跳空属正常构造)",
+        "信用利差为 FRED 日频 ICE BofA OAS (单位百分点), "
+        "作为 CDS 的免费代理, 约 3 年滚动窗口",
     )
-    ratio_preset = index_ratios.preset_for_label(ratio_label)
+    ratio_preset = index_ratios.preset_for_label(overlay_label)
+    series_preset = index_overlays.series_preset_for_label(overlay_label)
     main_ratio_preset = index_ratios.preset_for_index(yahoo)
     if (
         ratio_preset is not None
@@ -113,6 +115,10 @@ def render_index_page() -> None:
     ):
         st.caption("当前指数本身就是该比率, 叠加曲线已忽略。")
         ratio_preset = None
+    if series_preset is not None and series_preset.symbol == yahoo:
+        st.caption("当前指数本身就是该信用利差, 叠加曲线已忽略。")
+        series_preset = None
+
     overlay = None
     if ratio_preset is not None:
         ratio_frames: dict[str, pd.DataFrame] = {}
@@ -141,6 +147,25 @@ def render_index_page() -> None:
                 )
             except ValueError as e:
                 st.warning(f"叠加比率: {e}")
+    elif series_preset is not None:
+        series_df = None
+        issue = None
+        with st.spinner(f"拉取 {series_preset.label}..."):
+            try:
+                series_df = cached_index_kline(series_preset.symbol, imonths)
+            except Exception as e:  # noqa: BLE001 - 单序列失败只影响叠加线
+                issue = f"{series_preset.symbol}: {e}"
+        if issue:
+            st.warning(issue)
+        elif not isinstance(series_df, pd.DataFrame) or series_df.empty:
+            st.warning(f"{series_preset.symbol}: 无有效数据。")
+        else:
+            try:
+                overlay = index_overlays.build_series_overlay(
+                    kdf, series_df, series_preset, period=iperiod
+                )
+            except ValueError as e:
+                st.warning(f"叠加指标: {e}")
 
     render_kline_view(
         kdf,
@@ -171,10 +196,20 @@ def render_index_page() -> None:
         cur_v = float(overlay["data"][-1]["value"])
         mean_v = float(overlay["mean"])
         dev = (cur_v / mean_v - 1) * 100 if mean_v else 0.0
-        st.caption(
-            f"叠加曲线 {ratio_preset.label} = {ratio_preset.formula}"
-            f" ({overlay['name']}); 当前 {cur_v:.{prec}f}"
-            f" · 均值 {mean_v:.{prec}f} · 较均值 {dev:+.2f}%"
-            " · 使用左侧独立纵轴, 虚线为区间均值; "
-            "两条腿为美元计价连续合约, 换月跳空属正常构造。"
-        )
+        if ratio_preset is not None:
+            st.caption(
+                f"叠加曲线 {ratio_preset.label} = {ratio_preset.formula}"
+                f" ({overlay['name']}); 当前 {cur_v:.{prec}f}"
+                f" · 均值 {mean_v:.{prec}f} · 较均值 {dev:+.2f}%"
+                " · 使用左侧独立纵轴, 虚线为区间均值; "
+                "两条腿为美元计价连续合约, 换月跳空属正常构造。"
+            )
+        elif series_preset is not None:
+            unit = overlay.get("unit") or ""
+            st.caption(
+                f"叠加指标 {overlay['name']} ({unit}): 当前 "
+                f"{cur_v:.{prec}f}{unit} · 均值 {mean_v:.{prec}f}{unit}"
+                f" · 较均值 {dev:+.2f}% · 使用左侧独立纵轴, 虚线为区间均值; "
+                "FRED ICE BofA OAS (单位百分点, 100bp = 1%), "
+                "作为 CDS 的免费代理, 约 3 年滚动窗口。"
+            )

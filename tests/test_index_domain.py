@@ -922,6 +922,74 @@ def test_build_ratio_curve_uses_preset_legs():
         index_ratios.build_ratio_curve(frames, "missing")
 
 
+def test_oas_overlay_presets_reference_known_credit_indices():
+    """OAS 叠加预设: 必须指向已收录的 FRED 指数, 且下拉标签不重名."""
+    from tracker import index_overlays
+
+    assert [p.symbol for p in index_overlays.OAS_PRESETS] == [
+        "IX.IG_OAS",
+        "IX.BBB_OAS",
+        "IX.HY_OAS",
+        "IX.CCC_OAS",
+    ]
+    for preset in index_overlays.OAS_PRESETS:
+        entry = INDEX_CATALOG[preset.symbol[3:]]
+        assert "fred" in entry
+        assert preset.unit == "%"
+        assert index_overlays.series_preset_for_index(preset.symbol) is preset
+        assert index_overlays.series_preset_for_label(preset.label) is preset
+
+    labels = index_overlays.overlay_option_labels()
+    assert labels[0] == "无"
+    assert len(labels) == len(set(labels))
+    assert "金银比" in labels and "金油比" in labels
+
+
+def test_build_series_overlay_aligns_clips_and_prefix_fills():
+    """OAS 叠加: 主图日期不足/超出指标区间时按 ≤ 当日对齐并截断."""
+    from tracker import index_overlays
+
+    preset = index_overlays.series_preset_for_label("美国高收益信用利差 (HY OAS)")
+    assert preset is not None
+    main = pd.DataFrame(
+        {
+            "date": pd.date_range("2025-01-01", periods=6, freq="D"),
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.0,
+            "volume": 0.0,
+        }
+    )
+    # 指标从 01-02 开始、01-05 结束; 01-03 无观测 → 沿用 01-02 的值
+    series = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2025-01-02", "2025-01-04", "2025-01-05"]),
+            "open": [4.0, 5.0, 6.0],
+            "high": [4.0, 5.0, 6.0],
+            "low": [4.0, 5.0, 6.0],
+            "close": [4.0, 5.0, 6.0],
+            "volume": 0.0,
+        }
+    )
+    overlay = index_overlays.build_series_overlay(main, series, preset)
+    assert overlay["symbol"] == "IX.HY_OAS"
+    assert overlay["unit"] == "%"
+    assert overlay["precision"] == 2
+    assert [p["time"] for p in overlay["data"]] == [
+        "2025-01-02",
+        "2025-01-03",
+        "2025-01-04",
+        "2025-01-05",
+    ]
+    assert [p["value"] for p in overlay["data"]] == [4.0, 4.0, 5.0, 6.0]
+    assert overlay["mean"] == pytest.approx(4.75)
+
+    no_overlap = series.assign(date=series["date"] + pd.Timedelta(days=30))
+    with pytest.raises(ValueError, match="无交集"):
+        index_overlays.build_series_overlay(main, no_overlap, preset)
+
+
 def test_index_catalog_flattening_preserves_entries():
     """平铺目录条目与分组定义完全一致 (派生不丢字段)."""
     from tracker.symbols import INDEX_GROUPS

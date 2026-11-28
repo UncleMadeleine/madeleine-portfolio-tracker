@@ -166,6 +166,10 @@ def style_chart(fig, *, transparent: bool = True):
     layout = dict(
         template="plotly_dark",
         colorway=CHART_COLORS,
+        # 移动端滑动页面时手指很容易落在图上: dragmode 非 False 时 plotly.js
+        # 会 preventDefault 触摸移动, 页面滚不动 (还容易触发框选/缩放)。这些
+        # 都是组合/钱包里的汇总小图, 不需要拖动缩放; 悬停/点按看数值不受影响。
+        dragmode=False,
         font=dict(
             family=_FONT_STACK,
             size=12,

@@ -439,6 +439,20 @@ def test_style_chart_does_not_inject_empty_title():
     assert titled.layout.title.text == "T"
 
 
+def test_style_chart_disables_drag_for_mobile_page_scroll():
+    """移动端单指在图上拖动应滚动页面, 而不是被 plotly 的框选/缩放截走.
+
+    plotly.js 只有在 dragmode 非 False 时才 preventDefault 触摸移动; 汇总小图
+    统一关掉拖动交互, 悬停/点按查看数值仍保留。
+    """
+    import plotly.graph_objects as go
+
+    from tracker.ui import theme
+
+    fig = theme.style_chart(go.Figure(go.Scatter(x=[1, 2], y=[1, 2])))
+    assert fig.layout.dragmode is False
+
+
 def test_theme_table_right_click_menu_js():
     """表格右键菜单: 复制单元格/整行/含表头 + 跳转 K线, 但不劫持输入框."""
     from tracker.ctx_menu_js import CTX_MENU_KIT_JS

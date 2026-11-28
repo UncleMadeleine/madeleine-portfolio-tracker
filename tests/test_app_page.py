@@ -186,6 +186,64 @@ def test_context_delete_watchlist_from_sidebar_editor(monkeypatch, tmp_path):
     assert [e["symbol"] for e in left] == ["AAPL"]
 
 
+def test_context_delete_target_outside_current_scope_still_confirms(
+    monkeypatch, tmp_path
+):
+    """侧栏编辑器右键删不在当前自选范围内的代码时, 确认框仍要弹出."""
+    from tracker.ui import theme
+
+    at = _boot_app(
+        monkeypatch,
+        tmp_path,
+        holdings=[{"symbol": "AAPL", "quantity": 2, "avg_cost": 100}],
+        watchlist=[
+            {"symbol": "AAPL", "lists": ["测试A"], "upper_1": 140.0},
+            {"symbol": "MSFT", "lists": ["测试B"], "upper_1": 500.0},
+        ],
+    )
+    at.session_state["watch_scope"] = "测试A"
+    at.run(timeout=30)
+    # MSFT 不在当前范围 (测试A) 里, 但右键删除仍应走确认弹窗
+    at.session_state[theme.CONTEXT_ACTION_KEY] = {
+        "action": "delete_watchlist",
+        "symbol": "MSFT",
+        "nonce": "outside-scope-delete",
+    }
+    at.run(timeout=30)
+    assert not at.exception, at.exception
+    at.button(key="confirm_delete_watchlist").click()
+    at.run(timeout=30)
+    assert not at.exception, at.exception
+    left = storage.load_watchlist(portfolio_page.WATCHLIST_PATH)["watchlist"]
+    assert [e["symbol"] for e in left] == ["AAPL"]
+
+
+def test_context_delete_holdings_from_sidebar_editor(monkeypatch, tmp_path):
+    """侧栏持仓编辑器右键删除: 与自选共用确认弹窗与锁内删除."""
+    from tracker.ui import theme
+
+    at = _boot_app(
+        monkeypatch,
+        tmp_path,
+        holdings=[
+            {"symbol": "AAPL", "quantity": 2, "avg_cost": 100},
+            {"symbol": "MSFT", "quantity": 3, "avg_cost": 200},
+        ],
+    )
+    at.session_state[theme.CONTEXT_ACTION_KEY] = {
+        "action": "delete_holdings",
+        "symbol": "MSFT",
+        "nonce": "holdings-sidebar-delete-test",
+    }
+    at.run(timeout=30)
+    assert not at.exception, at.exception
+    at.button(key="confirm_delete_holdings").click()
+    at.run(timeout=30)
+    assert not at.exception, at.exception
+    left = storage.load_portfolio(storage.PORTFOLIO_PATH)["holdings"]
+    assert [h["symbol"] for h in left] == ["AAPL"]
+
+
 def test_context_delete_unsaved_watchlist_row_is_rejected(monkeypatch, tmp_path):
     """编辑器里新增但未保存的行: 右键删除不能假删, 也不清空编辑器."""
     from tracker.ui import theme

@@ -551,6 +551,11 @@ def render_portfolio_page() -> None:
         ]
     )
     with tab1:
+        # 右键删除可能来自侧栏编辑器 (不受当前表是否为空/当前范围影响),
+        # 确认弹窗必须在表格分支之外渲染, 否则 pending 会卡住不弹窗。
+        pending_holdings = st.session_state.get("_delete_holdings_pending")
+        if pending_holdings:
+            _confirm_delete_holdings(list(pending_holdings))
         detail = _detail_with_unpriced(
             view, holdings.to_dict("records") if not holdings.empty else []
         )
@@ -654,9 +659,6 @@ def render_portfolio_page() -> None:
                 dl_r.caption("已选: " + "、".join(selected))
             else:
                 dl_r.caption("点击表格行可多选，再点「刷新选中」或「删除选中」。")
-            pending_holdings = st.session_state.get("_delete_holdings_pending")
-            if pending_holdings:
-                _confirm_delete_holdings(list(pending_holdings))
 
     with tab2:
         if view.empty:
@@ -706,6 +708,11 @@ def render_portfolio_page() -> None:
             )
 
     with tab4:
+        # 同 tab1: 侧栏编辑器右键删除的目标可能不在当前「自选范围」里,
+        # 确认弹窗不能跟着表格的空/非空分支一起消失。
+        pending_watchlist = st.session_state.get("_delete_watchlist_pending")
+        if pending_watchlist:
+            _confirm_delete_watchlist(list(pending_watchlist))
         if not watch.get("watchlist"):
             st.info("自选为空。在左侧「自选提醒」中添加代码与价格阈值。")
         else:
@@ -866,6 +873,3 @@ def render_portfolio_page() -> None:
                     wc2.caption("已选: " + "、".join(w_selected))
                 else:
                     wc2.caption("点击表格行可多选，再点「刷新选中」或「删除选中」。")
-                pending_watchlist = st.session_state.get("_delete_watchlist_pending")
-                if pending_watchlist:
-                    _confirm_delete_watchlist(list(pending_watchlist))

@@ -453,6 +453,45 @@ def test_style_chart_disables_drag_for_mobile_page_scroll():
     assert fig.layout.dragmode is False
 
 
+def test_nav_range_options_follow_available_history_span():
+    """净值区间选项只保留有意义的档位: 3 天数据时不展示 90/180/365 天."""
+    from tracker.ui import portfolio_nav
+
+    short = [
+        {"day": "2026-11-06"},
+        {"day": "2026-11-09"},
+        {"day": "2026-11-23"},
+        {"day": "2026-11-28"},
+    ]
+    assert portfolio_nav._range_labels(short) == ["全部"]
+
+    medium = [{"day": "2026-08-01"}, {"day": "2026-11-08"}]  # 100 天
+    assert portfolio_nav._range_labels(medium) == ["30 天", "90 天", "全部"]
+    assert portfolio_nav._default_range_label(portfolio_nav._range_labels(medium)) == (
+        "90 天"
+    )
+
+    long = [{"day": "2025-11-01"}, {"day": "2026-11-28"}]  # 393 天
+    assert portfolio_nav._range_labels(long) == list(portfolio_nav.NAV_RANGES)
+    assert portfolio_nav._default_range_label(list(portfolio_nav.NAV_RANGES)) == "180 天"
+
+
+def test_nav_window_anchors_to_latest_snapshot():
+    """区间以最后一个快照为锚, 长期没打开页面时不会切出空白窗口."""
+    from tracker.ui import portfolio_nav
+
+    rows = [
+        {"day": "2026-11-06"},
+        {"day": "2026-11-23"},
+        {"day": "2026-11-28"},
+    ]
+    assert portfolio_nav._rows_in_range(rows, None) == rows
+    assert portfolio_nav._rows_in_range(rows, 3) == [{"day": "2026-11-28"}]
+    assert portfolio_nav._rows_in_range(rows, 7) == rows[1:]
+    # 窗口内无数据时回退全部, 不画空图
+    assert portfolio_nav._rows_in_range(rows, 0) == rows
+
+
 def test_theme_table_right_click_menu_js():
     """表格右键菜单: 复制单元格/整行/含表头 + 跳转 K线, 但不劫持输入框."""
     from tracker.ctx_menu_js import CTX_MENU_KIT_JS

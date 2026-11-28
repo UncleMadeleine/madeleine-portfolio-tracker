@@ -185,11 +185,30 @@ _DELETE_CONFIG = {
 }
 
 
+class _NothingToDelete(Exception):
+    """右键删除的目标不在已保存文件里 (编辑器新增行尚未保存)."""
+
+
+def _editor_has_unsaved(key: str) -> bool:
+    """侧栏 data_editor 是否有未保存的编辑/新增/删除行."""
+    state = st.session_state.get(key)
+    if not isinstance(state, dict):
+        return False
+    return any(
+        bool(state.get(k)) for k in ("edited_rows", "added_rows", "deleted_rows")
+    )
+
+
 def _confirm_delete(kind: str, symbols: list[str]) -> None:
     """删除持仓/自选的公共确认框: 锁内读-改-写, 不改动另一类数据."""
     cfg = _DELETE_CONFIG[kind]
     st.warning(cfg["warning"], icon=":material/warning:")
     st.markdown("、".join(f"**{s}**" for s in symbols))
+    if _editor_has_unsaved(cfg["editor"]):
+        st.caption(
+            "注意: 编辑器里还有未保存的修改, 确认删除后编辑器会重新读盘, "
+            "这些修改会一并放弃。"
+        )
     c1, c2 = st.columns(2)
     if c1.button("取消", width="stretch", key=f"cancel_delete_{kind}"):
         st.session_state.pop(cfg["pending"], None)
@@ -202,13 +221,29 @@ def _confirm_delete(kind: str, symbols: list[str]) -> None:
         key=f"confirm_delete_{kind}",
     ):
         targets = set(symbols)
+        removed: set[str] = set()
         try:
             with cfg["edit"](cfg["path"]()) as data:
+                rows = data.get(cfg["list_key"], [])
+                removed = targets & {
+                    _norm_sym(str(row.get("symbol", ""))) for row in rows
+                }
+                if not removed:
+                    # 编辑器里新增、还没点「保存」的行: 磁盘上没有, 不能假删
+                    # (块内抛异常 → edit_* 不写盘, 编辑器状态也原样保留)。
+                    raise _NothingToDelete
                 data[cfg["list_key"]] = [
                     row
-                    for row in data.get(cfg["list_key"], [])
+                    for row in rows
                     if _norm_sym(str(row.get("symbol", ""))) not in targets
                 ]
+        except _NothingToDelete:
+            st.session_state.pop(cfg["pending"], None)
+            st.warning(
+                f"{'、'.join(sorted(targets))} 尚未保存到已保存的{cfg['noun']}里; "
+                "请直接在编辑器里移除该行, 或先保存再右键删除。"
+            )
+            return
         except (DataFileLocked, CorruptDataError, OSError) as e:
             st.error(f"{cfg['error']}: {e}")
             return
@@ -218,7 +253,7 @@ def _confirm_delete(kind: str, symbols: list[str]) -> None:
         st.session_state.pop(cfg["detail"], None)
         st.session_state.pop(cfg["selected"], None)
         st.session_state.pop(cfg["pending"], None)
-        st.toast(f"已删除 {len(targets)} 个{cfg['noun']}")
+        st.toast(f"已删除 {len(removed)} 个{cfg['noun']}")
         st.rerun()
 
 

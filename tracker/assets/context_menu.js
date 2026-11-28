@@ -114,11 +114,18 @@ export default function (component) {
   }
 
   // 右键落点对应的表: 用 st.dataframe/data_editor 的 key 区分持仓/自选。
-  // 只在已知 key 上提供「删除」这类有副作用的操作, 其它表格保持通用菜单。
+  // 只读明细表与侧栏编辑器都支持删除; 编辑器的未保存行由 Python 端二次
+  // 校验 (不在磁盘上的代码不会假删, 也不会清空编辑器里的未保存修改)。
   var TABLE_KEYS = [
     'holdings_detail_select', 'holdings_editor',
     'watchlist_detail_select', 'watchlist_editor'
   ];
+  var DELETE_ACTIONS = {
+    watchlist_detail_select: ['delete_watchlist', '从自选删除'],
+    watchlist_editor: ['delete_watchlist', '从自选删除'],
+    holdings_detail_select: ['delete_holdings', '从持仓删除'],
+    holdings_editor: ['delete_holdings', '从持仓删除']
+  };
   function contextKey(df) {
     var el = df.closest('[class*="st-key-"]');
     if (!el) { return ''; }
@@ -477,22 +484,15 @@ export default function (component) {
             );
           }
         });
-        // 只对只读明细表提供删除: 编辑器的未保存行不在磁盘上, 右键删除
-        // 会清空整个编辑器状态却提示「已删除」, 还可能删错已保存的旧代码。
-        if (tableKey === 'watchlist_detail_select') {
+        // 只读明细表与侧栏编辑器共用同一套删除确认; 编辑器里尚未保存的
+        // 新增行由 Python 端拦截并提示, 不会误报「已删除」。
+        var del = DELETE_ACTIONS[tableKey];
+        if (del) {
           items.push({
-            label: '从自选删除',
+            label: del[1],
             icon: 'trash',
             action: function () {
-              sendContextAction('delete_watchlist', row.symbol);
-            }
-          });
-        } else if (tableKey === 'holdings_detail_select') {
-          items.push({
-            label: '从持仓删除',
-            icon: 'trash',
-            action: function () {
-              sendContextAction('delete_holdings', row.symbol);
+              sendContextAction(del[0], row.symbol);
             }
           });
         }

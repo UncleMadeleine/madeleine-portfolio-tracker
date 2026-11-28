@@ -159,6 +159,58 @@ def test_watch_scope_picker_marks_its_effect(monkeypatch, tmp_path):
     assert any("仅筛选自选观察" in str(c.value) for c in at.caption)
 
 
+def test_context_delete_watchlist_from_sidebar_editor(monkeypatch, tmp_path):
+    """侧栏自选编辑器右键删除: trigger → 确认弹窗 → 锁内删除."""
+    from tracker.ui import theme
+
+    at = _boot_app(
+        monkeypatch,
+        tmp_path,
+        holdings=[{"symbol": "AAPL", "quantity": 2, "avg_cost": 100}],
+        watchlist=[
+            {"symbol": "AAPL", "lists": ["测试"], "upper_1": 140.0},
+            {"symbol": "MSFT", "lists": ["测试"], "upper_1": 500.0},
+        ],
+    )
+    at.session_state[theme.CONTEXT_ACTION_KEY] = {
+        "action": "delete_watchlist",
+        "symbol": "MSFT",
+        "nonce": "sidebar-delete-test",
+    }
+    at.run(timeout=30)
+    assert not at.exception, at.exception
+    at.button(key="confirm_delete_watchlist").click()
+    at.run(timeout=30)
+    assert not at.exception, at.exception
+    left = storage.load_watchlist(portfolio_page.WATCHLIST_PATH)["watchlist"]
+    assert [e["symbol"] for e in left] == ["AAPL"]
+
+
+def test_context_delete_unsaved_watchlist_row_is_rejected(monkeypatch, tmp_path):
+    """编辑器里新增但未保存的行: 右键删除不能假删, 也不清空编辑器."""
+    from tracker.ui import theme
+
+    at = _boot_app(
+        monkeypatch,
+        tmp_path,
+        holdings=[{"symbol": "AAPL", "quantity": 2, "avg_cost": 100}],
+        watchlist=[{"symbol": "AAPL", "lists": ["测试"], "upper_1": 140.0}],
+    )
+    at.session_state[theme.CONTEXT_ACTION_KEY] = {
+        "action": "delete_watchlist",
+        "symbol": "ZZZZ",
+        "nonce": "unsaved-delete-test",
+    }
+    at.run(timeout=30)
+    assert not at.exception, at.exception
+    at.button(key="confirm_delete_watchlist").click()
+    at.run(timeout=30)
+    assert not at.exception, at.exception
+    left = storage.load_watchlist(portfolio_page.WATCHLIST_PATH)["watchlist"]
+    assert [e["symbol"] for e in left] == ["AAPL"]
+    assert any("尚未保存" in str(w.value) for w in at.warning)
+
+
 def test_nav_snapshot_skips_unchanged_rerun(app_boot, monkeypatch):
     """数值未变的 rerun 不重复写历史净值 (交互频繁, 避免每次渲染都写盘)."""
     calls: list[list[dict]] = []
@@ -562,6 +614,9 @@ def test_theme_table_right_click_menu_js():
     assert "getCellContent" in js
     # 相对 URL: 反向代理 / --server.baseUrlPath 下保留挂载前缀
     assert "window.location.href" in js
+    # 侧栏 data_editor 也要能右键删除 (未保存的新增行由 Python 端拦截)
+    assert "watchlist_editor: ['delete_watchlist'" in js
+    assert "holdings_editor: ['delete_holdings'" in js
     # 键盘 Tab 离开菜单时收起
     assert "focusin" in js
     # 右键/Control+左键的 pointerdown 不能先把菜单关掉 (两指双击第二下)

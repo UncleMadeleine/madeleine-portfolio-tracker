@@ -299,7 +299,7 @@ def render_sidebar(portfolio: dict, watch: dict, watchlist_path) -> pd.DataFrame
                     else:
                         st.toast("自选已保存")
                     # 本次 run 的 watch 是脚本开头从磁盘读的旧快照: 保存后不 rerun
-                    # 的话, 下方自选表/查看范围仍用旧数据, 且 cached_quotes.clear()
+                    # 的话, 下方自选表/自选范围仍用旧数据, 且 cached_quotes.clear()
                     # 让本次按旧符号集重取 → 新代码 quotes.get 为 None, 冒出一条
                     # 幻觉的「行情缺失」告警。rerun 后 watch 重新读盘即一致。
                     st.rerun()

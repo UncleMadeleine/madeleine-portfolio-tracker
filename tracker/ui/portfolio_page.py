@@ -294,14 +294,22 @@ def render_portfolio_page() -> None:
         )
     )
 
-    # 查看范围前置到取数之前: 行情只拉「持仓 + 当前范围自选」。自选 600+ 时
+    # 自选范围前置到取数之前: 行情只拉「持仓 + 当前范围自选」。自选 600+ 时
     # 全量冷启动既慢又会把 Yahoo 打到限流 (IP 级, 连累 K线页); 选具体列表
     # 只拉该列表。行情磁盘缓存按 symbols 元组命中, 5 分钟内切回原范围秒回。
+    scope_names = ["全部"] + list_names(watch)
+    scope_counts = {"全部": len(all_watch_entries)}
+    for name in scope_names[1:]:
+        scope_counts[name] = len(entries_for(watch, name))
     scope = st.selectbox(
-        "查看范围",
-        ["全部"] + list_names(watch),
+        "自选范围",
+        scope_names,
         key="watch_scope",
-        help="行情拉取范围 = 持仓 + 所选列表的自选股 (K线页「常用」仍含全部代码)",
+        format_func=lambda n: f"{n} ({scope_counts.get(n, 0)})",
+        help=(
+            "只筛选「自选观察」与自选阈值提醒; 持仓明细、KPI 与净值走势"
+            "始终统计全部持仓 (行情也只拉持仓 + 所选列表, 加快首屏)。"
+        ),
     )
     # 「刷新选中」按钮在表格下方, 回调只把代码暂存; 这里取一次即清, 本次
     # 渲染只回源这几只 (不重拉整个范围), 下轮 rerun 不会重复刷新。
@@ -309,6 +317,10 @@ def render_portfolio_page() -> None:
         st.session_state.pop("_refresh_quotes_pending", ()) or ()
     )
     watch_entries = entries_for(watch, None if scope == "全部" else scope)
+    if scope != "全部":
+        st.caption(
+            ":material/filter_alt: 当前仅筛选自选观察 (持仓/净值仍统计全部持仓)"
+        )
     fetch_symbols = tuple(
         dict.fromkeys(holding_symbols + [str(e["symbol"]) for e in watch_entries])
     )
@@ -446,7 +458,7 @@ def render_portfolio_page() -> None:
                 border=True,
             )
             st.metric(
-                "持仓 / 自选",
+                "持仓 / 自选" + ("" if scope == "全部" else f" · {scope}"),
                 # view/wview 只含有行情的行, 缺行情持仓会从计数里消失;
                 # 计数应与明细表一致, 用原始条目数。
                 f"{len(holdings)} / {len(watch_entries)}",
@@ -493,10 +505,13 @@ def render_portfolio_page() -> None:
             for line in detail:
                 st.write(f"- {line}")
 
+    watch_tab = f":material/visibility: 自选观察 · {scope} ({len(watch_entries)})"
+    if len(trig_all):
+        watch_tab += f" :red[🔔{len(trig_all)}]"
     tab1, tab4, tab2 = st.tabs(
         [
             ":material/table_chart: 持仓明细",
-            f":material/visibility: 自选观察{' :red[🔔' + str(len(trig_all)) + ']' if len(trig_all) else ''}",
+            watch_tab,
             ":material/donut_large: 资产配置",
         ]
     )
@@ -659,7 +674,7 @@ def render_portfolio_page() -> None:
         if not watch.get("watchlist"):
             st.info("自选为空。在左侧「自选提醒」中添加代码与价格阈值。")
         else:
-            # 「查看范围」已前置到取数处 (key=watch_scope, 行情按范围拉取),
+            # 「自选范围」已前置到取数处 (key=watch_scope, 行情按范围拉取),
             # 视图 wview 与触发项 trig_all 均按同一范围构建, 此处只留排序
             _, sort_col = st.columns([3, 2])
             sort_mode = sort_col.selectbox(
@@ -703,7 +718,9 @@ def render_portfolio_page() -> None:
             else:
                 st.caption(":material/check_circle: 自选中暂无阈值触发")
             st.caption(
-                f"当前查看: {scope} · 阈值按当地货币 (基准=pb 时按市净率倍数, "
+                f"当前自选范围: {scope} ({len(watch_entries)} 只) · "
+                "只影响自选观察/阈值提醒; 持仓、KPI、净值走势统计全部持仓。"
+                "阈值按当地货币 (基准=pb 时按市净率倍数, "
                 "基准=mcap 时按总市值); I 为预警线 / II 为强提醒线; "
                 "距离 = 触发还需变动百分之几 (上限为负 / 下限为正 = 已越过)。"
             )

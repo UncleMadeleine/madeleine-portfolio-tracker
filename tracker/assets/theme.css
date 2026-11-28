@@ -156,7 +156,7 @@ h1, h2, h3, h4 {
   -webkit-text-fill-color: transparent;
 }
 .fp-page-header-right { display: flex; align-items: center; gap: 0.5rem; }
-/* 查看范围下拉: 不占满整行, 留出呼吸感 (窄屏仍全宽) */
+/* 自选范围下拉: 不占满整行, 留出呼吸感 (窄屏仍全宽) */
 .st-key-watch_scope { max-width: 380px; }
 .fp-chip {
   display: inline-flex;

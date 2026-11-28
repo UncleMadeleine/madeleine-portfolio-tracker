@@ -132,6 +132,33 @@ def test_portfolio_page_renders(app_boot):
     assert any("2,130" in str(m.value) for m in app_boot.metric)
 
 
+def test_watch_scope_picker_marks_its_effect(monkeypatch, tmp_path):
+    """「自选范围」只筛自选: 选择结果必须可见, 且不影响持仓/KPI."""
+    at = _boot_app(
+        monkeypatch,
+        tmp_path,
+        holdings=[{"symbol": "AAPL", "quantity": 2, "avg_cost": 100}],
+        watchlist=[
+            {"symbol": "AAPL", "lists": ["测试A"], "upper_1": 140.0},
+            {"symbol": "0700.HK", "lists": ["测试B"], "upper_1": 500.0},
+        ],
+    )
+
+    box = at.selectbox(key="watch_scope")
+    assert box.label == "自选范围"
+    assert box.format_func("测试B") == "测试B (1)"
+
+    box.set_value("测试B").run()
+    assert not at.exception, at.exception
+    # 持仓与 KPI 不受自选范围影响: 仍为 AAPL 2 × 150 × 7.1 = 2,130 CNY
+    assert any("2,130" in str(m.value) for m in at.metric)
+    # KPI 标签带上范围, 让"只筛自选"这件事在首屏就能看到
+    assert any("持仓 / 自选 · 测试B" in str(m.label) for m in at.metric)
+    # 自选 tab 标题带范围与条数, 选择效果一眼可见
+    assert any("自选观察 · 测试B (1)" in str(t.label) for t in at.tabs)
+    assert any("仅筛选自选观察" in str(c.value) for c in at.caption)
+
+
 def test_nav_snapshot_skips_unchanged_rerun(app_boot, monkeypatch):
     """数值未变的 rerun 不重复写历史净值 (交互频繁, 避免每次渲染都写盘)."""
     calls: list[list[dict]] = []

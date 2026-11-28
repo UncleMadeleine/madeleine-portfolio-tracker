@@ -441,7 +441,7 @@ python -m tracker.cli wallet-nav solana H... --max-assets 20
 - **阈值基准 `metric`**：`price`（默认，可省略）= 按现价判定，阈值按当地货币；`pb` = 按市净率（现价 ÷ 每股净资产）判定，阈值是 PB 倍数；`mcap` = 按总市值判定，阈值是当地货币绝对金额。指标基准以 `metric` 为准：显式写 `metric`（`price`/`pb`/`mcap`）时以它为准；**省略 `metric` 时**，若条目含手写 `pb`（每股净资产）/ `mcap`（总市值）覆盖键，则基准推断为对应指标，否则按 `price`——即手写键既是数据覆盖值，也会在缺省 `metric` 时暗示基准。页面「指标基准」留空会显式钉为 `price`，不受此推断影响；若想保留 `pb`/`mcap` 覆盖键又用 `price` 基准，需显式写 `metric: "price"`。每股净资产来源按优先级：条目手写 `pb` 键 (离线可用) > 行情自带 (长桥 calc_indexes / akshare 东财, 实时口径) > Yahoo Finance fundamentals (缓存 6 小时)；总市值来源同优先级：条目手写 `mcap` 键 > 行情自带 (akshare 东财 / 长桥) > fundamentals。crypto 与无数据标的指标缺失时显示「指标无数据」，不误判触发
 - 触发等级（从高到低）：`🔴 突破上限 II` / `🟠 突破上限 I` / `🟢 跌破下限 II` / `🟡 跌破下限 I`；触发项排在最前
 - 距离列：`距上限 I%` / `距上限 II%` / `距下限 I%` / `距下限 II%` = 触发还需变动百分之几（上下限同口径；上限为负 / 下限为正 = 已越过）
-- 页面侧栏「所属列表」列用逗号分隔编辑多归属；「自选观察」tab 顶部「查看范围」选 `全部` 或单个列表
+- 页面顶部「自选范围」选 `全部` 或单个列表（只筛自选观察/阈值提醒，持仓与净值统计全部持仓）；「所属列表」列用逗号分隔编辑多归属
 - CLI：`--watchlist <列表名>` 只看某个列表（`全部` 合并去重）
 - CLI 只看触发的标的：`tracker watchlist triggered`（`--json` 输出 `triggered` 数组与 `count`，适合脚本/Agent 消费）
 - CLI 添加 PB 提醒：`tracker watchlist add 600036.SS --metric pb --upper1 1.2 --lower1 0.8`

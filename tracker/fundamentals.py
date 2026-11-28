@@ -1,11 +1,11 @@
 """基本面取数门面: 每股净资产 (book value per share) 与总市值的批量获取与磁盘缓存.
 
-数据源: OpenBB equity.fundamental.metrics (provider=yfinance), 覆盖
+数据源: yfinance ``Ticker.get_info`` (Yahoo Finance), 覆盖
 美股/港股/A股/德英加澳等 yfinance 支持的股权标的; crypto 无此数据。
 EODHD (BYOK, 可选) 可补/替换全球股票域:
   - fundamentals=primary: 先用 EODHD (BookValue / MarketCapitalization),
-    EODHD 缺失的字段再由 OpenBB 补齐
-  - fundamentals=fallback (默认): 先走 OpenBB, 只对仍缺失的字段调用 EODHD
+    EODHD 缺失的字段再由 yfinance 补齐
+  - fundamentals=fallback (默认): 先走 yfinance, 只对仍缺失的字段调用 EODHD
 结果缓存 6h (book_value/market_cap 为低频报表数据); 无有效值同样落库 (负缓存),
 TTL 内不再重复请求。
 
@@ -20,31 +20,56 @@ import math
 from concurrent.futures import ThreadPoolExecutor
 
 from . import cache as cache_mod
-from .deps import openbb as _obb
+from . import yahoo_data
 
 _METRICS_TTL = 21600  # 秒 (6h); book_value 属低频报表数据
+#: 单批基本面并发上限: 既要避免逐代码串行太慢, 也要避免一次打满 Yahoo
+#: (旧 OpenBB 实现为所有代码同时 asyncio 请求, 大自选容易触发限流)。
+_METRICS_WORKERS = 8
 
 
 def _fund_metrics(symbols: list[str]) -> dict[str, dict[str, float | None]]:
-    """OpenBB fundamental.metrics 批量拉取 → {symbol: {book_value, market_cap}}."""
-    ob = _obb()
-    out: dict[str, dict[str, float | None]] = {}
-    wanted = set(symbols)
-    res = ob.equity.fundamental.metrics(symbol=symbols, provider="yfinance")
-    for item in res.results:
-        d = item.model_dump()
-        sym = str(d.get("symbol") or "").strip()
-        if sym not in wanted or sym in out:
-            continue
+    """yfinance Ticker.get_info 批量拉取 → {symbol: {book_value, market_cap}}.
+
+    单代码失败只跳过该代码 (与旧 OpenBB provider 一致); 全部失败时抛错,
+    让上层区分「临时故障」与「确认无数据」, 不把一次断网写成 6h 负缓存。
+    """
+    unique = list(dict.fromkeys(symbols))
+    if not unique:
+        return {}
+
+    def _one(sym: str):
+        try:
+            data = yahoo_data.info(sym)
+        except Exception as e:  # noqa: BLE001 - 单代码失败只跳过
+            return sym, None, e
+        if not data:
+            # 空响应通常是网络/限流, 不能当成「确认没有基本面」
+            return sym, None, RuntimeError(f"{sym}: Yahoo 未返回基本面数据")
+        row = yahoo_data.metrics_from_info(sym, data)
+        if row is None:
+            return sym, None, None  # 有响应但字段不完整: 确认无数据
         vals: dict[str, float | None] = {}
         for key in ("book_value", "market_cap"):
-            v = d.get(key)
+            v = row.get(key)
             try:
                 f = float(v) if v is not None else None
             except (TypeError, ValueError):
                 f = None
             vals[key] = f if f is not None and math.isfinite(f) else None
-        out[sym] = vals
+        return sym, vals, None
+
+    out: dict[str, dict[str, float | None]] = {}
+    errors: list[BaseException] = []
+    workers = min(_METRICS_WORKERS, len(unique))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for sym, vals, err in pool.map(_one, unique):
+            if err is not None:
+                errors.append(err)
+            elif vals is not None:
+                out[sym] = vals
+    if errors and not out:
+        raise errors[0]
     return out
 
 
@@ -165,7 +190,7 @@ def _eodhd_metrics(symbols: list[str]) -> dict[str, dict]:
 
 
 def _fill_fundamentals(out: dict[str, dict], missing: list[str]) -> None:
-    """为缓存未命中的 symbol 取数并写缓存 (EODHD + OpenBB 按配置组合)."""
+    """为缓存未命中的 symbol 取数并写缓存 (EODHD + yfinance 按配置组合)."""
     if not missing:
         return
     from . import eodhd as eodhd_mod
@@ -186,7 +211,7 @@ def _fill_fundamentals(out: dict[str, dict], missing: list[str]) -> None:
         try:
             ob = _fund_metrics(pending)
         except Exception:  # noqa: BLE001 - 基本面失败不阻断快照/提醒主流程
-            # 整批失败 (网络/某个不支持的代码让 OpenBB 整批抛错) 时不能给
+            # 整批失败 (网络/某个不支持的代码让 yfinance 整批抛错) 时不能给
             # 每个 pending 都写负缓存: 一只坏代码会让同批其它标的 6 小时内
             # 都不再重试。留空 (fresh 无该键) 即「未确认」, 下轮仍会取。
             ob = {}
@@ -241,7 +266,7 @@ def fetch_book_values(
 ) -> dict[str, float | None]:
     """批量获取每股净资产 → {symbol: book_value | None}.
 
-    磁盘缓存优先 (6h TTL), 未命中的按配置走 EODHD/OpenBB (见模块说明),
+    磁盘缓存优先 (6h TTL), 未命中的按配置走 EODHD/yfinance (见模块说明),
     失败静默返回 None (调用方按「PB 缺失」降级, 不抛异常)。
     refresh=True 跳过缓存读取 (显式强制刷新, 穿透负缓存)。
     """
@@ -253,7 +278,7 @@ def fetch_market_caps(
 ) -> dict[str, float | None]:
     """批量获取总市值 (当地货币) → {symbol: market_cap | None}.
 
-    与 PB 共用同一缓存行与外层取数调用 (OpenBB/EODHD 一次返回两个指标);
+    与 PB 共用同一缓存行与外层取数调用 (yfinance/EODHD 一次返回两个指标);
     crypto 与无数据源标的静默返回 None (调用方按「市值缺失」降级)。
     refresh=True 跳过缓存读取 (显式强制刷新, 穿透负缓存)。
     """

@@ -21,7 +21,7 @@ class TestSnapshot:
             "forward_pe": -2.0,
             "price_to_book": 0.0,
             "dividend_yield": 3.68,  # yfinance 已是百分数
-            "dividend_yield_5y_avg": 0.0529,  # OpenBB 当前为比例
+            "dividend_yield_5y_avg": 0.0529,  # yahoo_data 统一输出小数比例
             "payout_ratio": 0.2955,
             "eps_ttm": 1.05,
             "book_value": 11.2,
@@ -39,7 +39,7 @@ class TestSnapshot:
         assert snap.market_cap == pytest.approx(3.1e12)
 
     def test_5y_avg_accepts_already_percent(self):
-        # 不同 OpenBB 版本可能不再 /100; 5.29 不能再 ×100
+        # 历史缓存/其它源可能直接给 5.29; 不能再 ×100
         snap = valuation._snapshot_from_metrics(
             "AAPL", {"dividend_yield_5y_avg": 5.29}
         )

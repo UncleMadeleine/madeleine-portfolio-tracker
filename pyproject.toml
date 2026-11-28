@@ -25,12 +25,12 @@ classifiers = [
 # 单一版本来源: tracker/__init__.py 的 __version__
 dynamic = ["version"]
 
-# 核心依赖: 行情取数 (openbb 封装 yfinance/akshare) + 数据处理。
+# 核心依赖: 行情取数 (yfinance/akshare) + 数据处理。
 # ib_async / longport 为可选增强 (用时惰性导入, 未装自动回退);
 # streamlit / plotly 仅 UI 与 CLI HTML 图表需要 → 拆 extras, CLI-only
 # 的 Agent 用户不必拖 ~1GB 的 UI 依赖。
 dependencies = [
-    "openbb>=4.7.0",
+    "yfinance>=1.4.0",
     "akshare>=1.14.0",
     "pandas>=2.0.0",
 ]

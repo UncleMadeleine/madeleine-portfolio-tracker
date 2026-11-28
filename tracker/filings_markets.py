@@ -9,8 +9,8 @@ from __future__ import annotations
 import html
 import json
 import re
+from functools import lru_cache
 
-from .deps import openbb as _obb
 from .deps import requests as _requests
 from .deps import yfinance as _yf
 from .filings_parse import (
@@ -452,7 +452,7 @@ def _uk_company_name(symbol: str) -> str | None:
                     return str(name).strip()
     except Exception:  # noqa: BLE001 - 走行情链路兜底
         pass
-    # yfinance Ticker.info (与 OpenBB 同一上游, 通常 0.5-2s); 包一层硬超时防挂起
+    # yfinance Ticker.info (通常 0.5-2s); 包一层硬超时防挂起
     try:
         from .util import with_timeout
 
@@ -741,6 +741,68 @@ def _kr_filings(code: str, limit: int) -> list[Filing]:
 
 # ---------- 美股: SEC EDGAR ----------
 
+# SEC 公开端点 (零鉴权, 但要求带 User-Agent; 见 https://www.sec.gov/os/webmaster-faq)
+_SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
+_SEC_SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
+_SEC_ARCHIVES_BASE = "https://www.sec.gov/Archives/edgar/data"
+
+
+@lru_cache(maxsize=1)
+def _sec_cik_map() -> dict[str, str]:
+    """SEC 官方 ticker → CIK 映射 (company_tickers.json, 约 1MB, 进程内一次)."""
+    payload = _get(_SEC_TICKERS_URL).json()
+    out: dict[str, str] = {}
+    for item in (payload or {}).values():
+        if not isinstance(item, dict):
+            continue
+        ticker = str(item.get("ticker") or "").strip().upper()
+        cik = item.get("cik_str")
+        if ticker and cik is not None:
+            out[ticker] = str(cik)
+    return out
+
+
+def _sec_cik(symbol: str) -> str | None:
+    """Yahoo 代码 → CIK; 非美股/未收录返回 None.
+
+    Yahoo 与 SEC 对类别股的写法可能不同 (BRK-B / BRK.B), 两种都尝试。
+    """
+    key = str(symbol or "").strip().upper()
+    table = _sec_cik_map()
+    return (
+        table.get(key)
+        or table.get(key.replace(".", "-"))
+        or table.get(key.replace("-", "."))
+    )
+
+
+def _us_rows_from_submissions(cik: str, data: dict) -> list[dict]:
+    """SEC submissions JSON → 旧 OpenBB filings 行结构 (纯函数, 便于离线测试).
+
+    只做字段搬运与原文 URL 拼接 (同一 CIK 下 accession 去横线 + 主文档名),
+    报告类型过滤仍由 ``_us_filings_from_rows`` 负责。
+    """
+    recent = ((data or {}).get("filings") or {}).get("recent") or {}
+    forms = recent.get("form") or []
+    base = f"{_SEC_ARCHIVES_BASE}/{int(cik)}/"
+    rows: list[dict] = []
+    for i, form in enumerate(forms):
+        acc = str((recent.get("accessionNumber") or [""] * len(forms))[i] or "")
+        doc = str((recent.get("primaryDocument") or [""] * len(forms))[i] or "")
+        url = f"{base}{acc.replace('-', '')}/{doc}" if acc and doc else ""
+        rows.append(
+            {
+                "report_type": form,
+                "filing_date": (recent.get("filingDate") or [""] * len(forms))[i],
+                "report_date": (recent.get("reportDate") or [""] * len(forms))[i],
+                "primary_doc_description": (
+                    recent.get("primaryDocDescription") or [""] * len(forms)
+                )[i],
+                "report_url": url,
+            }
+        )
+    return rows
+
 
 def _us_filings_from_rows(rows, limit: int = 6) -> list[Filing]:
     """SEC filings 行 → Filing 列表 (纯函数, 便于离线测试)."""
@@ -768,12 +830,13 @@ def _us_filings(symbol: str, limit: int) -> list[Filing]:
     from .util import with_timeout
 
     def _load():
-        res = _obb().equity.fundamental.filings(
-            symbol=symbol,
-            provider="sec",
-            limit=200,
-        )
-        return [item.model_dump() for item in res.results]
+        cik = _sec_cik(symbol)
+        if not cik:
+            # 非美股/未收录: 与旧实现抛错不同, 返回空表让页面显示「暂无」,
+            # 避免把「SEC 没收录这个代码」当成网络故障。
+            return []
+        data = _get(_SEC_SUBMISSIONS_URL.format(cik=int(cik))).json()
+        return _us_rows_from_submissions(cik, data)
 
     return _us_filings_from_rows(with_timeout(_load, _US_TIMEOUT), limit)
 

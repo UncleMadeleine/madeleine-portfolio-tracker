@@ -210,7 +210,7 @@ def _load_quotes_cached(
         except Exception as e:  # noqa: BLE001 - 取数链路异常不能穿透成整页 traceback
             # 网络超时/HTTP 失败多在 providers 内部被吞掉返回 errors (走
             # render_portfolio_page 的优雅降级分支), 但取数链路自身抛异常
-            # (openbb 冷启动失败 / sqlite locked / provider 未预期异常) 会
+            # (数据源冷启动失败 / sqlite locked / provider 未预期异常) 会
             # 直接穿到 Streamlit 显示 traceback。这里接住: 落空结果 +
             # 可读错误, 保持 dirty + age=inf 让看门狗按最短间隔自动补刷。
             plan["q_age"] = float("inf")

@@ -8,7 +8,7 @@ from typing import Any
 #: 单一版本来源 (pyproject.toml 动态读取; CLI --version 与此一致)
 __version__ = "1.2.0"
 
-# 惰性再导出: 包导入本身不拉 pandas / providers / OpenBB。
+# 惰性再导出: 包导入本身不拉 pandas / providers / yfinance。
 # CLI 的 --help / -v / init 等轻量路径因此无需付出 ~0.6s 的 pandas 冷启动;
 # `from tracker import get_quote` 等既有 API 仍在首次访问时透明加载。
 _LAZY_ATTRS: dict[str, str] = {

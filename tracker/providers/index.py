@@ -43,7 +43,7 @@ from ..symbols import INDEX_CATALOG, ParsedSymbol, index_key
 from ..util import with_timeout
 from .base import Provider, ordered_sources
 from .stock_akshare import _AK_HIST_TIMEOUT
-from .stock_yahoo import openbb_history
+from .stock_yahoo import yahoo_history
 
 __all__ = ["IndexProvider"]
 
@@ -336,13 +336,13 @@ def _cameco_history(
     return _slice_range(_flat_ohlc(df), start_date, end_date)
 
 
-# ---------- yfinance (OpenBB) 源 ----------
+# ---------- yfinance 源 ----------
 
 
 def _yf_history(
     p: ParsedSymbol, start_date: str, end_date: str | None = None
 ) -> pd.DataFrame:
-    return openbb_history(
+    return yahoo_history(
         _catalog(p)["yf"], start_date, end_date, ensure_volume=True
     )
 

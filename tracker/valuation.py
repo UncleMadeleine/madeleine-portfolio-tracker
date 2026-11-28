@@ -8,11 +8,10 @@
     PE/PB 的历史序列。这里不做提醒规则, 也不改组合快照。
 
 数据源:
-  - 最新快照: OpenBB `equity.fundamental.metrics(provider="yfinance")`;
-    yfinance 不可用时, 若配置了 EODHD (BYOK), 回退到一次
-    `eodhd.fundamentals` (只补快照字段, 不额外发请求)。
-    yfinance 的 `dividendYield` 是百分数 (3.68 = 3.68%), 而 OpenBB 只对
-    `dividend_yield_5y_avg` 做了 /100 归一, 两个口径不同, 读取时分别处理。
+  - 最新快照: yfinance `Ticker.get_info`; yfinance 不可用时, 若配置了
+    EODHD (BYOK), 回退到一次 `eodhd.fundamentals` (只补快照字段, 不额外发请求)。
+    yfinance 的 `dividendYield` 是百分数 (3.68 = 3.68%), 而 `fiveYearAvgDividendYield`
+    在 tracker.yahoo_data 里已统一 /100 成小数比例, 两个口径不同, 读取时分别处理。
   - 历史 PE/PB: akshare 百度股市通 (A股/港股/美股)。百度接口按
     「近一年/近三年/…」返回日频估值, 这里再按用户选择的月数截断;
     结果写入通用 series_cache (6h), 切换页面/进程不重复拉取。
@@ -33,7 +32,7 @@ from dataclasses import dataclass, fields, replace
 import pandas as pd
 
 from . import cache as cache_mod
-from .deps import openbb as _obb
+from . import yahoo_data
 from .symbols import Market, ParsedSymbol, normalize, parse
 from .util import finite_float as _finite
 from .util import first_column as _column
@@ -124,8 +123,8 @@ def _percent(value: object) -> float | None:
 def _fraction_or_percent(value: object) -> float | None:
     """兼容「小数比例」与「百分数」两种数据源口径.
 
-    OpenBB 的 `dividend_yield_5y_avg` 在当前 provider 实现中会被 /100
-    (0.0529 = 5.29%), 但不同版本/源可能直接给 5.29。绝对值 ≤1 视为
+    `dividend_yield_5y_avg` 由 tracker.yahoo_data 统一 /100 成小数比例
+    (0.0529 = 5.29%), 但不同源/历史缓存可能直接给 5.29。绝对值 ≤1 视为
     比例 (股息率 100% 以上极罕见), 否则按百分数使用。
     """
     f = _non_negative(value)
@@ -137,7 +136,7 @@ def _fraction_or_percent(value: object) -> float | None:
 def _snapshot_from_metrics(
     symbol: str, data: dict, *, fetched_at: float | None = None
 ) -> ValuationSnapshot:
-    """OpenBB metrics 行 → ValuationSnapshot (纯函数, 便于离线测试)."""
+    """yfinance metrics 行 → ValuationSnapshot (纯函数, 便于离线测试)."""
     p = parse(symbol)
     # 市值/股本单位跟随报价币种 (A/H 两地代码各自以当地价格计市值)。
     return ValuationSnapshot(
@@ -152,7 +151,7 @@ def _snapshot_from_metrics(
         dividend_yield_5y_avg_pct=_fraction_or_percent(
             data.get("dividend_yield_5y_avg")
         ),
-        # OpenBB 的 payout_ratio 为比例 (0.2955 = 29.55%); 该指标可以
+        # yfinance 的 payoutRatio 为比例 (0.2955 = 29.55%); 该指标可以
         # 合法地超过 100% (如 PFE 2.457), 不能套用「≤1 才 ×100」的启发式,
         # 否则 245.7% 会被显示成 2.46%。
         payout_ratio_pct=_percent(data.get("payout_ratio")),
@@ -189,16 +188,8 @@ def _snapshot_from_disk(symbol: str) -> ValuationSnapshot | None:
 
 
 def _fetch_metrics_row(symbol: str) -> dict:
-    """OpenBB yfinance metrics → 第一行 dict; 无结果时抛 RuntimeError."""
-    ob = _obb()
-    res = ob.equity.fundamental.metrics(symbol=symbol, provider="yfinance")
-    for item in res.results:
-        d = item.model_dump()
-        if str(d.get("symbol") or "").strip().upper() == symbol.upper():
-            return d
-    if res.results:
-        return res.results[0].model_dump()
-    raise RuntimeError(f"{symbol}: 数据源未返回估值指标")
+    """yfinance info → metrics dict; 无结果时抛 RuntimeError."""
+    return yahoo_data.metrics_row(symbol)
 
 
 def _fetch_eodhd_snapshot(

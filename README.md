@@ -42,8 +42,8 @@ Madeleine Portfolio Tracker 是一款**本地优先**的投资组合追踪工具
 
 > **核心设计**：数据层抽象为 **provider 层**（全球股票 / A股·B股 / 加密货币 / 指数四域，后缀即域、互不冲突），
 > 多级降级（长桥 / IBKR → yfinance → akshare / Binance → Gate.io → Hyperliquid），离线可用的 SQLite 磁盘缓存，
-> 所有配置为可编辑 JSON 文件，不依赖任何云服务。历史/基本面经 **OpenBB** 平台封装
-> （`openbb>=4.7.0`，provider=yfinance/akshare），实时行情走 Yahoo v7 批量接口
+> 所有配置为可编辑 JSON 文件，不依赖任何云服务。历史/基本面直连 **Yahoo Finance**
+> （`yfinance>=1.4.0`，A股/港股历史另有 akshare 源），实时行情走 Yahoo v7 批量接口
 > （100 个代码/请求，共享 yfinance 会话与 crumb），零 API Key。
 
 ---
@@ -60,7 +60,7 @@ Madeleine Portfolio Tracker 是一款**本地优先**的投资组合追踪工具
 **方式一：pip 安装（推荐，装完即有 `tracker` / `tracker-ui` 命令）**
 
 ```bash
-pip install madeleine-tracker          # 核心: CLI + 取数 (openbb/akshare/pandas)
+pip install madeleine-tracker          # 核心: CLI + 取数 (yfinance/akshare/pandas)
 pip install "madeleine-tracker[ui]"    # + Streamlit 页面 / plotly 图表
 pip install "madeleine-tracker[all]"   # + IBKR / 长桥 可选增强
 # 或 pipx (自动隔离环境, 命令全局可用): pipx install "madeleine-tracker[ui]"
@@ -92,7 +92,7 @@ tracker-ui                        # pip 安装后 (等价, 参数透传给 strea
 - **K线** (`/kline`) — 任意代码 K 线查询（支持按代码或名称模糊搜索）+ 多股走势对比 + 加密货币对比（K线页子功能）
 - **指数K线** (`/index`) — 宏观/风险指数查询（IX.<KEY> 分组下拉，分组随目录维护；CLI `index-kline --list` 可查全部已收录指数）；金银比 `IX.GOLDSILVER` / 金油比 `IX.GOLDOIL` 是可直接选择的派生指数（两条腿相除，无原生开高低），也可作为叠加曲线画在其它指数K线上，使用左侧独立价轴；IG/BBB/HY/CCC OAS 信用利差可作为「叠加指标」（FRED 日频、单位百分点，CDS 的免费代理），同样使用左侧独立价轴
 - **基本面** (`/fundamentals`) — 顶部切换「估值指标 / AH 溢价」：
-  - **估值指标** — 任意 A股/港股/美股代码，最新 PE(TTM)、PB、股息率、5 年平均股息率（OpenBB/yfinance，6h 缓存）；最近财报官方原文链接（A股/北交所 巨潮资讯、港股 HKEXnews、美股 SEC EDGAR、澳股 ASX、英股 Companies House、日股 TDnet、韩股 DART，6h 缓存；其它市场明确显示未接入原因）；历史 PE/PB 曲线按近 3/6/12/24/36/60 个月展示，并给出区间均值/高低点/分位（百度股市通，6h 缓存）
+  - **估值指标** — 任意 A股/港股/美股代码，最新 PE(TTM)、PB、股息率、5 年平均股息率（Yahoo Finance，6h 缓存）；最近财报官方原文链接（A股/北交所 巨潮资讯、港股 HKEXnews、美股 SEC EDGAR、澳股 ASX、英股 Companies House、日股 TDnet、韩股 DART，6h 缓存；其它市场明确显示未接入原因）；历史 PE/PB 曲线按近 3/6/12/24/36/60 个月展示，并给出区间均值/高低点/分位（百度股市通，6h 缓存）
   - **AH 溢价** — 可选 A+H 股票对（东财目录，失败退回内置常见股票对，也可手动输入代码），按近 3/6/12/24/36/60 个月展示 A 股收盘 ÷ (H 股收盘 × 历史汇率) − 1，0% 为两地同价
   - 与页面同源的 CLI：`tracker fundamentals <代码> [--history pe|pb] [--filings] [--json]`；估值快照与财报链接均落 SQLite `json_cache`（6h），进程重启后首屏/CLI 不再重复回源
 - **日历** (`/calendar`) — 持仓/自选的财报、预约披露、除权除息/派息事件月历（窗口与范围可切），可一键导出 `.ics` 导入本地日历
@@ -511,12 +511,12 @@ tracker/
 ├── nav.py              历史净值存储（独立 SQLite nav_history.db）+ 按当前持仓回填
 ├── symbols.py          自有代码规范、市场域识别、type_for_symbol() 权威域推导（唯一入口）
 ├── symbol_migrations.py 退市/改码 → 接替代码迁移表（长桥导入时自动迁移）
-├── deps.py             可选/重型依赖统一懒加载（OpenBB 单例 / akshare / yfinance / requests）
+├── deps.py             可选/重型依赖统一懒加载（yfinance / akshare / requests）
 ├── chains.py           链元数据注册表（RPC / 原生币 / tokenlist / 浏览器 / EVM chain id）
 ├── util.py             with_timeout / 数值归一 / 日期对齐 / 展示格式化等共享工具
 ├── providers/          **数据 provider 层**（按权威 type 域隔离）
 │   ├── base.py         Provider 基类 + Quote/SymbolEntry 数据结构 + resolve(type) 域路由
-│   ├── stock_yahoo.py      Yahoo v7 批量行情 + OpenBB 历史源（global/cn/index 共用）
+│   ├── stock_yahoo.py      Yahoo v7 批量行情 + 历史源（global/cn/index 共用）
 │   ├── stock_akshare.py    东财/akshare 股票行情与历史源（cn/全球港股兜底共用）
 │   ├── cn_stocks.py        A股/B股域（.SS/.SZ/.BJ）：akshare 固定优先, 新浪兜底, yfinance 兜底
 │   ├── global_stocks.py    全球股票域（美股/港股/欧股…）：yfinance 主源, 港股 akshare/新浪兜底; 搜索走 IBKR → 东财 suggest → yfinance Search → 代码直查
@@ -615,7 +615,7 @@ tests/                  单元测试（离线, mock）
 | **crypto** | `BASE-QUOTE`（`BTC-USD`） | **Binance API** → Gate.io 现货 → Hyperliquid 永续（仅USD系） → yfinance | **Binance klines** → Gate.io → Hyperliquid → yfinance |
 | **index** | `IX.<KEY>`（`IX.DXY` 美元指数 / `IX.VIX` 恐慌指数 / `IX.CSI300` 沪深 300 / `IX.AU` 黄金 · `IX.AG` 白银 · `IX.JD` 鸡蛋 · `IX.M` 豆粕 · `IX.A` 豆一 · `IX.B` 豆二 · `IX.LH` 生猪 · `IX.LC` 碳酸锂主力连续 / `IX.US2Y` 美债 2 年期 · `IX.US10Y2Y` · `IX.US10Y3M` 倒挂利差 / `IX.IG_OAS` · `IX.BBB_OAS` · `IX.HY_OAS` · `IX.CCC_OAS` 美国信用利差 / `IX.URANIUM` 铀现货价 · `IX.URANIUM_LT` 铀长协价 / `IX.CEMPI` 水泥价格指数 / `IX.HSI` 恒生指数 · `IX.HSTECH` 恒生科技指数 等恒生官网港股指数 / `IX.HSAHP` AH股溢价指数 …） | —（指数无实时行情, 不参与持仓聚合） | 中国指数 **akshare 优先** → yfinance；美股 SPX/NDX/DJI 有新浪兜底；水泥网/商品期货/恒生官网/Cameco 铀价/FRED 国债与信用利差为专属源（无兜底） |
 
-- **最新财报链接**：基本面页按代码直连官方披露库 —— A股/北交所走 akshare 巨潮资讯公告检索，港股走 HKEXnews 标题检索，澳股走 ASX 公告检索（按年 HTML），英股走 Companies House 公开网站（公司搜索 + filing history），日股走 Yahoo!ファイナンス 適時開示（TDnet PDF 镜像），韩股走 DART 公示检索（사업/반기/분기보고서），美股走 OpenBB SEC filings；只保留定期报告/业绩公告并给出原文 URL，零 API Key，结果缓存 6h（手动刷新可穿透）。覆盖范围为 A股/北交所、港股、美股、澳股、英股、日股、韩股；德/加/新/巴等市场因无公开 API 或接口反爬暂未接入，页面会显示具体原因，不会静默伪装成「无财报」
+- **最新财报链接**：基本面页按代码直连官方披露库 —— A股/北交所走 akshare 巨潮资讯公告检索，港股走 HKEXnews 标题检索，澳股走 ASX 公告检索（按年 HTML），英股走 Companies House 公开网站（公司搜索 + filing history），日股走 Yahoo!ファイナンス 適時開示（TDnet PDF 镜像），韩股走 DART 公示检索（사업/반기/분기보고서），美股走 SEC EDGAR submissions API；只保留定期报告/业绩公告并给出原文 URL，零 API Key，结果缓存 6h（手动刷新可穿透）。覆盖范围为 A股/北交所、港股、美股、澳股、英股、日股、韩股；德/加/新/巴等市场因无公开 API 或接口反爬暂未接入，页面会显示具体原因，不会静默伪装成「无财报」
 - **最新财报链接覆盖范围**：
 
   | 市场 | 状态 | 官方数据源 |
@@ -970,7 +970,7 @@ docker compose exec tracker tracker init   # 首次使用: 生成配置模板
 
 分发设计要点：
 
-- **依赖拆 extras**（`pyproject.toml`）：核心只装 `openbb/akshare/pandas`；`[ui]` 才拖
+- **依赖拆 extras**（`pyproject.toml`）：核心只装 `yfinance/akshare/pandas`；`[ui]` 才拖
   streamlit/plotly；`[ibkr]`/`[longport]` 是可选增强（代码里本就惰性导入，未装自动回退）。
   Agent 用户装核心即可，不必拖 ~1GB 的 UI 依赖
 - **两个 console scripts**：`tracker`（= `python -m tracker.cli`）与 `tracker-ui`

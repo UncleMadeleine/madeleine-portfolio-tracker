@@ -41,7 +41,7 @@ def build_candlestick_fig(
     reference / reference_label: 主图水平参考线 (如利差的 0 倒挂分界)。
     """
     # plotly 惰性导入: CLI 的 --json 数据路径 (无图表) 不需要它,
-    # 装核心依赖 (openbb/akshare/pandas) 的 Agent 用户无需拖 plotly
+    # 装核心依赖 (yfinance/akshare/pandas) 的 Agent 用户无需拖 plotly
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
 

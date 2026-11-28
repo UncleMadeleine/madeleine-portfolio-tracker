@@ -3,7 +3,7 @@
 1. webbrowser.open 一律 no-op —— CLI 的 --open 分支、长桥 OAuth 引导等路径
    即使未被 mock 也不会弹出浏览器标签页。
 2. 非本地回路的 socket 连接/DNS 立即报错 —— 任何遗漏 mock 的测试一旦试图打
-   真实网络就快速失败, 而不是时快时慢或无限挂起 (曾因 openbb anyio 死锁 +
+   真实网络就快速失败, 而不是时快时慢或无限挂起 (曾因取数库内部死锁 +
    无 mock 的在线搜索把整套测试拖死超过 10 分钟)。@pytest.mark.network
    标记的用例显式放行 (默认 -m "not network" 不跑, 见 pytest.ini)。
 """

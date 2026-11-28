@@ -18,7 +18,7 @@ FROM python:3.12-slim
 ARG EXTRAS=ui
 
 # 不再设 PIP_NO_CACHE_DIR: 下面用 BuildKit cache mount 复用 pip 下载缓存,
-# 改源码后重建时依赖轮子不必重新下载 (openbb/akshare 体积很大)。
+# 改源码后重建时依赖轮子不必重新下载 (yfinance/akshare 体积不小)。
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     # 数据目录: 挂卷持久化 (持仓/自选/设置/行情缓存/K线 HTML)
     TRACKER_HOME=/data \

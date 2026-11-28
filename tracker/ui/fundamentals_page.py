@@ -191,7 +191,7 @@ def _render_valuation_metrics(snap: valuation.ValuationSnapshot) -> None:
         bits.append(f"派息率 {_fmt_pct(snap.payout_ratio_pct)}")
     st.caption(" · ".join(bits))
     source_label = {
-        "yfinance": "OpenBB / yfinance",
+        "yfinance": "Yahoo Finance",
         "eodhd": "EODHD",
         "akshare_em": "akshare / 东财",
         "akshare_sina": "akshare / 新浪",
@@ -394,7 +394,7 @@ def _render_valuation() -> None:
             "- **PB**: 市净率 = 股价 ÷ 每股净资产。负净资产时同样不展示。\n"
             "- **股息率**: 最近 12 个月每股分红 ÷ 股价; "
             "「5 年平均股息率」用于判断当前股息率相对自身历史的高低。\n"
-            "- **最新快照**: OpenBB / yfinance, 6 小时缓存。\n"
+            "- **最新快照**: Yahoo Finance (yfinance), 6 小时缓存。\n"
             "- **最新财报链接**: A股/北交所 巨潮资讯、港股 HKEXnews、"
             "澳股 ASX、英股 Companies House、日股 TDnet、韩股 DART、"
             "美股 SEC EDGAR 官方原文, 只保留定期报告 "

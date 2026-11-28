@@ -124,7 +124,7 @@ class SourceMeta:
 
 SOURCE_META: dict[str, SourceMeta] = {
     "eodhd": SourceMeta("EODHD（BYOK）", "需 token；行情 quotes=off 时禁用"),
-    "yfinance": SourceMeta("yfinance / OpenBB", "免 Key；Yahoo Finance"),
+    "yfinance": SourceMeta("yfinance", "免 Key；Yahoo Finance"),
     "akshare_em": SourceMeta(
         "akshare / 东财", "全球域仅港股使用；沪深可转债走新浪兜底"
     ),

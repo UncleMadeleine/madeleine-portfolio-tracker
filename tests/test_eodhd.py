@@ -717,7 +717,7 @@ def test_eodhd_fundamentals_missing_fields_are_none(tmp_path, monkeypatch):
     assert f["sector"] is None
 
 
-def test_fundamentals_primary_uses_eodhd_before_openbb(monkeypatch):
+def test_fundamentals_primary_uses_eodhd_before_yfinance(monkeypatch):
     import tracker.fundamentals as f
 
     called = {"ob": False}

@@ -1,7 +1,7 @@
 """Yahoo 股票行情与历史源 (global/cn/index 域共用).
 
 行情走 Yahoo v7 ``finance/quote`` 批量接口 (100 个/请求, 共享 yfinance 的
-YfData 会话/crumb); 历史K线仍走 OpenBB ``equity.price.historical``。
+YfData 会话/crumb); 历史K线走 yfinance 日线下载 (tracker.yahoo_data)。
 
 从 global_stocks 拆出: 这些函数不依赖 GlobalStocksProvider 的源链, 但被
 global/cn/index/orchestration/mcap 多处复用。集中在此避免「CN 域从全球
@@ -16,7 +16,7 @@ import time
 
 import pandas as pd
 
-from ..deps import openbb as _obb
+from .. import yahoo_data
 from ..symbols import (
     Market,
     ParsedSymbol,
@@ -25,7 +25,7 @@ from ..symbols import (
     valuation_currency,
 )
 from ..util import with_timeout
-from .base import Quote, openbb_history_frame
+from .base import Quote
 
 
 def _pick(d: dict, *keys):
@@ -36,7 +36,7 @@ def _pick(d: dict, *keys):
     return None
 
 
-# ---------- yfinance (OpenBB) 源 ----------
+# ---------- yfinance 源 ----------
 
 
 def _quote_from_dump(p: ParsedSymbol, d: dict) -> Quote | None:
@@ -130,7 +130,6 @@ def _quote_from_dump(p: ParsedSymbol, d: dict) -> Quote | None:
 
 _QUOTE_TIMEOUT = 10.0  # v7 单代码含首次 crumb 握手, 留足余量; 批量失败由熔断兜底
 _BATCH_TIMEOUT = 30.0  # 批量一次 100 个代码 (单个 HTTP 请求), 挂住则整批放弃
-_HISTORY_TIMEOUT = 60.0  # 历史K线单码请求 (OpenBB 内部可能重试/半开连接)
 _YAHOO_CHUNK = 100  # 单次 v7 quote 的代码数: 实测 100 只 ~3.5s, 200 只会触发 30s 超时
 _CHUNK_PAUSE = 1.0  # 批间基础暂停 (s); 出现限流迹象 (空批) 时翻倍
 _EMPTY_STREAK_GIVEUP = 2  # 连续空批: 判定已被限流, 放弃剩余批次 (逐代码源链兜底)
@@ -202,10 +201,9 @@ def _is_rate_limited(exc: BaseException) -> bool:
 def _yahoo_quote_json(symbols: list[str], timeout: float = _BATCH_TIMEOUT) -> dict:
     """批量 Yahoo v7 quote (一次请求多个代码) 原始 JSON.
 
-    不用 OpenBB 的 ``equity.price.quote``: 它的 yfinance provider 内部对每个
-    代码各调一次 ``Ticker.get_info()`` (quoteSummary + v7 quote 两条请求),
-    50 只 = 100 个请求, 既慢又极易触发 429。v7 批量 100 只只发 1 个请求,
-    实测首次 ~4s (含 crumb 握手), 复用 YfData 会话后 <1s。
+    不用逐代码 ``Ticker.get_info()``: 它对每只代码各发 quoteSummary + v7
+    两条请求, 50 只 = 100 个请求, 既慢又极易触发 429。v7 批量 100 只只发
+    1 个请求, 实测首次 ~4s (含 crumb 握手), 复用 YfData 会话后 <1s。
     """
     params = {"symbols": ",".join(symbols), "formatted": "false"}
     return with_timeout(
@@ -335,27 +333,26 @@ def _yahoo_quote_currency(yahoo: str) -> str:
         return ""
 
 
-def openbb_history(
+def yahoo_history(
     symbol: str,
     start_date: str,
     end_date: str | None = None,
     *,
     ensure_volume: bool = False,
 ) -> pd.DataFrame:
-    """OpenBB equity.price.historical 的通用包装 (股票/指数/加密共用)."""
-    kwargs = {"symbol": symbol, "provider": "yfinance", "start_date": start_date}
-    if end_date:
-        kwargs["end_date"] = end_date
-    # _obb() 在计时区外求值 (冷启动 import 不计入预算); 网络调用硬超时,
-    # 避免半开连接/OpenBB 内部重试把 CLI/页面主线程无限挂住。
-    res = with_timeout(_obb().equity.price.historical, _HISTORY_TIMEOUT, **kwargs)
-    return openbb_history_frame(res, ensure_volume=ensure_volume)
+    """Yahoo 日线历史 (股票/指数/加密/汇率共用).
+
+    统一在 tracker.yahoo_data 里做下载与列清洗, 避免各域各自漂移。
+    """
+    return yahoo_data.history(
+        symbol, start_date, end_date, ensure_volume=ensure_volume
+    )
 
 
 def _yahoo_history(
     p: ParsedSymbol, start_date: str, end_date: str | None = None
 ) -> pd.DataFrame:
-    df = openbb_history(p.yahoo, start_date, end_date)
+    df = yahoo_history(p.yahoo, start_date, end_date)
     if p.market is Market.GB:
         # LSE 惯例: 便士报价 (GBp/GBX, is_pence 命中) 或币种未知时 ÷100 折成
         # 英镑; 真正的英镑报价 (Yahoo 报 "GBP", 如 VUSA.L/VWRL.L 的 ETF) 与

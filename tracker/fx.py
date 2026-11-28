@@ -1,4 +1,4 @@
-"""汇率获取: CFETS(akshare) 优先, OpenBB(yfinance) 货币对兜底."""
+"""汇率获取: CFETS(akshare) 优先, yfinance 货币对兜底."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ import time
 from datetime import date, timedelta
 
 from . import health
+from . import yahoo_data
 from .deps import akshare as _ak
-from .deps import openbb as _obb
 from .symbols import is_currency_code, valuation_currency
 from .util import finite_float as _finite
 from .util import normalize_dates
@@ -22,7 +22,7 @@ _pair_cache: dict[str, tuple[float, float]] = {}
 #: CFETS 请求 (实际回源约 15 分钟一次)。
 _CFETS_TTL = 900
 _CFETS_TIMEOUT = 8.0
-# Yahoo 货币对硬超时: OpenBB/yfinance 偶发内部重试, TCP 半开时可挂到分钟级。
+# Yahoo 货币对硬超时: yfinance 偶发内部重试, TCP 半开时可挂到分钟级。
 # 汇率在首屏/对比折算的关键路径上, 不能无限等一个可降级的源。
 _YAHOO_FX_TIMEOUT = 8.0
 _cfets_cache: tuple[float, dict[str, float]] = (0.0, {})
@@ -41,16 +41,8 @@ def _yahoo_pair(pair: str) -> float | None:
     try:
         with health.span("fx", "yfinance", pair) as sp:
             start = (date.today() - timedelta(days=30)).isoformat()
-            # _obb() 在计时区外求值 (冷启动 5s+ 不能吃掉超时预算), 只把真正的
-            # 网络调用放进 with_timeout。
-            res = with_timeout(
-                _obb().currency.price.historical,
-                _YAHOO_FX_TIMEOUT,
-                symbol=pair,
-                provider="yfinance",
-                start_date=start,
-            )
-            df = res.to_dataframe()
+            # 网络调用硬超时; yfinance 冷启动/内部重试不计入健康 span 之外的等待。
+            df = yahoo_data.history(pair, start, timeout=_YAHOO_FX_TIMEOUT)
             s = df["close"].dropna() if "close" in df.columns else None
             if "close" not in df.columns or df.empty or s is None or s.empty:
                 sp.ok = False
@@ -169,28 +161,19 @@ def get_rate(src: str, dst: str, use_ibkr: bool = False) -> float | None:
 
 
 def _yahoo_pair_history(pair: str, start_date: str, end_date: str | None = None):
-    """yfinance (OpenBB) 货币对日线 → DataFrame(date, close), 失败 None."""
+    """Yahoo 货币对日线 → DataFrame(date, close), 失败 None."""
     import pandas as pd
 
-    kwargs: dict[str, object] = {
-        "symbol": pair,
-        "provider": "yfinance",
-        "start_date": start_date,
-    }
-    if end_date:
-        kwargs["end_date"] = end_date
     try:
         with health.span("fx", "yfinance", pair) as sp:
-            df = with_timeout(
-                _obb().currency.price.historical, _YAHOO_FX_TIMEOUT, **kwargs
-            ).to_dataframe()
+            df = yahoo_data.history(
+                pair, start_date, end_date, timeout=_YAHOO_FX_TIMEOUT
+            )
             if df is None or df.empty or "close" not in df.columns:
                 sp.ok = False
                 sp.error = "无汇率历史"
                 return None
-            out = df.reset_index()
-            date_col = "date" if "date" in out.columns else out.columns[0]
-            out = out[[date_col, "close"]].rename(columns={date_col: "date"})
+            out = df[["date", "close"]].copy()
             out["date"] = pd.to_datetime(out["date"], errors="coerce")
             out["close"] = pd.to_numeric(out["close"], errors="coerce")
             out = out.dropna(subset=["date", "close"])
@@ -222,7 +205,7 @@ def get_fx_history(src: str, dst: str, start_date, end_date=None, refresh: bool 
         return None
     # 起止日期统一归一成 YYYY-MM-DD: 调用方传 pd.Timestamp / datetime 时
     # str() 会带上 " 00:00:00", 同一语义的两次调用缓存键不同 (6h 缓存永远
-    # 命中不了), 且该字符串会作为 end_date 传给 OpenBB (schema 是 date 类型)
+    # 命中不了), 且该字符串会作为 end_date 传给 yfinance (只接受日期字符串)
     start_s = (
         pd.Timestamp(start_date).strftime("%Y-%m-%d")
         if start_date

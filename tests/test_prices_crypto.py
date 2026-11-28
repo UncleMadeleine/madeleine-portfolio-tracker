@@ -409,32 +409,23 @@ def test_crypto_quote_falls_back_to_hyperliquid(monkeypatch):
     assert errors == {}
 
 
-def test_crypto_yf_history_fallback_does_not_nameerror(monkeypatch):
-    """yfinance 历史降级: _obb 必须已定义 (缺失会让整条降级链 NameError 崩溃)."""
+def test_crypto_yf_history_fallback_uses_shared_yahoo_adapter(monkeypatch):
+    """yfinance 历史降级: crypto 对走统一 Yahoo 日线适配 (无 OpenBB 依赖)."""
 
-    class FakeRes:
-        def to_dataframe(self):
-            return pd.DataFrame(
-                {
-                    "date": pd.to_datetime(["2026-01-01", "2026-01-02"]),
-                    "open": [1.0, 2.0],
-                    "high": [1.0, 2.0],
-                    "low": [1.0, 2.0],
-                    "close": [1.0, 2.0],
-                    "volume": [10.0, 20.0],
-                }
-            ).set_index("date")
+    def fake_history(symbol, start_date, end_date=None, **kwargs):
+        assert symbol == "BTC-USD"
+        return pd.DataFrame(
+            {
+                "date": pd.to_datetime(["2026-01-01", "2026-01-02"]),
+                "open": [1.0, 2.0],
+                "high": [1.0, 2.0],
+                "low": [1.0, 2.0],
+                "close": [1.0, 2.0],
+                "volume": [10.0, 20.0],
+            }
+        )
 
-    class FakeObb:
-        class equity:
-            class price:
-                @staticmethod
-                def historical(**kw):
-                    return FakeRes()
-
-    from tracker.providers import stock_yahoo
-
-    monkeypatch.setattr(stock_yahoo, "_obb", lambda: FakeObb)
+    monkeypatch.setattr(crypto_mod, "yahoo_history", fake_history)
     df = crypto_mod._yf_history(parse("BTC-USD"), "2026-01-01", None)
     assert list(df.columns) == ["date", "open", "high", "low", "close", "volume"]
     assert len(df) == 2
@@ -465,22 +456,11 @@ class TestProviderDomainIsolation:
             stock_akshare._akshare_history(parse("600519.SS"), "2026-01-01")
 
 
-def _fake_obb(df: pd.DataFrame):
-    class _Res:
-        def to_dataframe(self):
-            return df.set_index("date")
+def _patch_yahoo_history(monkeypatch, df: pd.DataFrame):
+    """把 stock_yahoo 的历史适配换成固定 DataFrame (测便士折算, 不碰网络)."""
+    from tracker.providers import stock_yahoo as gs
 
-    class _Price:
-        def historical(self, **kwargs):
-            return _Res()
-
-    class _Equity:
-        price = _Price()
-
-    class _Obb:
-        equity = _Equity()
-
-    return lambda: _Obb()
+    monkeypatch.setattr(gs, "yahoo_history", lambda *a, **k: df.copy())
 
 
 def _lse_df() -> pd.DataFrame:
@@ -500,7 +480,7 @@ def test_lse_gbp_quoted_history_not_divided(monkeypatch):
     """Yahoo 报 GBP 的是真英镑报价 (VUSA.L), 历史价不能再 ÷100."""
     from tracker.providers import stock_yahoo as gs
 
-    monkeypatch.setattr(gs, "_obb", _fake_obb(_lse_df()))
+    _patch_yahoo_history(monkeypatch, _lse_df())
     monkeypatch.setattr(gs, "_yahoo_quote_currency", lambda y: "GBP")
     out = gs._yahoo_history(parse("VUSA.L"), "2026-01-01")
     assert out["close"].iloc[-1] == pytest.approx(109.5)
@@ -510,7 +490,7 @@ def test_lse_gbp_pence_history_still_divided(monkeypatch):
     """Yahoo 报 GBp 的仍是便士报价 (VOD.L), 历史价 ÷100 折成英镑."""
     from tracker.providers import stock_yahoo as gs
 
-    monkeypatch.setattr(gs, "_obb", _fake_obb(_lse_df()))
+    _patch_yahoo_history(monkeypatch, _lse_df())
     monkeypatch.setattr(gs, "_yahoo_quote_currency", lambda y: "GBp")
     out = gs._yahoo_history(parse("VOD.L"), "2026-01-01")
     assert out["close"].iloc[-1] == pytest.approx(1.095)

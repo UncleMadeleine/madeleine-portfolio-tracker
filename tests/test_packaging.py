@@ -2,7 +2,7 @@
 
 覆盖 tracker/paths.py 的三级解析、tracker init 子命令、pyproject.toml 的
 console scripts 与 extras、版本单一来源, 以及 plotly 惰性化后核心依赖
-(openbb/akshare/pandas) 用户可正常 import charting (K线 --json 路径)。
+(yfinance/akshare/pandas) 用户可正常 import charting (K线 --json 路径)。
 """
 
 from __future__ import annotations

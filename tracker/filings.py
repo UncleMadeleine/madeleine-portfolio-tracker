@@ -13,7 +13,8 @@
   - 日股: Yahoo!ファイナンス 適時開示 (TDnet PDF 镜像), 取決算短信
     (年度/中期/季度);
   - 韩股: DART 公示检索 (사업/반기/분기보고서), 无需 API Key;
-  - 美股: OpenBB ``equity.fundamental.filings(provider="sec")``, 过滤
+  - 美股: SEC EDGAR submissions API (``data.sec.gov``, CIK 由官方
+    company_tickers.json 映射), 过滤
     10-K/10-Q/20-F/40-F/6-K/8-K 等定期与重大事项披露。
 
 crypto/指数及其它市场没有统一的公开财报库; 页面会提示当前覆盖范围。

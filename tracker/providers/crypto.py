@@ -3,7 +3,7 @@
 优先 Binance 公开 REST API (spot, 无需 key), 失败降级 Gate.io 现货
 (免 key, 覆盖 OKB 等 Binance 未上线币种), 再降级 Hyperliquid 永续合约价
 (仅 USD 系计价代码, markPx 与现货价存在基差), 最后降级 yfinance 直连
-(OpenBB equity.quote 对 crypto 缺 last_price, 必须直连).
+(批量 quote 对 crypto 缺 last_price, 必须直连).
 代码规范: BASE-QUOTE (BTC-USD / ETH-USDT), 计价货币见 symbols._CRYPTO_QUOTES。
 """
 
@@ -22,7 +22,7 @@ from ..source_order import CRYPTO_SOURCE_PREFERS
 from ..symbols import ParsedSymbol, valuation_currency
 from ..util import finite_float as _finite_opt
 from .base import Provider, Quote, SymbolEntry, ordered_sources
-from .stock_yahoo import _yahoo_quote, openbb_history
+from .stock_yahoo import _yahoo_quote, yahoo_history
 
 _BINANCE_HOSTS = ("https://api.binance.com", "https://data-api.binance.vision")
 _HTTP_TIMEOUT = 8.0
@@ -480,8 +480,8 @@ def _gate_history(
 
 
 def _yf_history(p: ParsedSymbol, start_date: str, end_date: str | None) -> pd.DataFrame:
-    """yfinance (OpenBB) 历史降级: equity.price.historical 支持 crypto."""
-    return openbb_history(p.yahoo, start_date, end_date)
+    """yfinance 历史降级: Yahoo 日线同样支持 crypto 对."""
+    return yahoo_history(p.yahoo, start_date, end_date)
 
 
 class CryptoProvider(Provider):

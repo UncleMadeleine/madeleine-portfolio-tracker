@@ -41,7 +41,7 @@ def get_quote(
     """单代码实时行情 (prefer_akshare 仅影响港股源顺序; crypto 域读 crypto_source).
 
     与批量路径共用进程内负缓存: TTL 内全部源失败过的代码不再发起网络
-    (单代码 OpenBB/yfinance 一次失败 8s+, CLI 循环多码查询会串行卡死)。
+    (单代码 yfinance 一次失败 8s+, CLI 循环多码查询会串行卡死)。
     refresh=True: 清掉该代码的负缓存后立即重试 (显式强制刷新)。
     """
     from .providers import orchestration as orch

@@ -1175,7 +1175,7 @@ def test_cached_non_finite_change_pct_normalized(cache_db):
 # ---------------------------------------------------------------------------
 
 
-def test_openbb_omitted_symbol_is_not_negative_cached(cache_db, monkeypatch):
+def test_yfinance_omitted_symbol_is_not_negative_cached(cache_db, monkeypatch):
     """数据源未返回该代码 ≠ 确认无数据: 不能写 6h 负缓存阻止重试."""
     from tracker import eodhd, fundamentals as f
 

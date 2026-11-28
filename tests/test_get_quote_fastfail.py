@@ -1,6 +1,6 @@
 """单代码行情快速失败测试: get_quote 接入进程内负缓存 (离线, mock).
 
-回归背景: 一个死代码单码查询在 OpenBB/yfinance 内部重试下 8s+ 才报错,
+回归背景: 一个死代码单码查询在 yfinance 内部重试下 8s+ 才报错,
 且 get_quote 原先不走负缓存 —— CLI 循环多码查询 (snapshot/report) 每次都要
 重新吃满失败延迟。修复: get_quote 与批量路径共用负缓存, TTL 内直接快速失败。
 """

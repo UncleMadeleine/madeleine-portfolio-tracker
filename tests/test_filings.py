@@ -407,6 +407,35 @@ def test_us_filings_filter_forms_and_keep_latest_per_form():
     assert all(f.source == "SEC EDGAR" for f in out)
 
 
+def test_us_rows_from_submissions_builds_primary_document_url():
+    """SEC submissions → 行结构: accession 去横线 + 主文档名拼原文 URL."""
+    payload = {
+        "filings": {
+            "recent": {
+                "form": ["10-K", "4"],
+                "filingDate": ["2026-11-03", "2026-11-12"],
+                "reportDate": ["2026-09-26", "2026-11-11"],
+                "accessionNumber": [
+                    "0000320193-26-000026",
+                    "0001140361-26-045775",
+                ],
+                "primaryDocument": ["aapl-20260926.htm", "xslF345X06/form4.xml"],
+                "primaryDocDescription": ["", "FORM 4"],
+            }
+        }
+    }
+
+    rows = filings_markets._us_rows_from_submissions("320193", payload)
+    out = filings._us_filings_from_rows(rows, 6)
+
+    assert len(out) == 1
+    assert out[0].kind == "年度报告 (10-K)"
+    assert out[0].url == (
+        "https://www.sec.gov/Archives/edgar/data/320193/"
+        "000032019326000026/aapl-20260926.htm"
+    )
+
+
 def test_fetch_dispatch_and_cache(monkeypatch):
     calls: list[tuple[str, int]] = []
     fake = filings.Filing("2025 年报", "2026-03-28", "https://x/1", "年度报告", "测试")

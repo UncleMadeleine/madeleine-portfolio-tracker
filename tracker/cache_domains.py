@@ -316,7 +316,7 @@ def set_cached(quotes: dict[str, "Quote"]) -> None:
     """将 Quote 写入缓存, 更新 fetched_at. 过滤掉 price<=0 的脏数据.
 
     book_value/market_cap 与 set_fundamental_cached 同口径用 COALESCE 保留
-    库中旧值: yfinance/OpenBB 路径不填这两个指标 (恒 None), 无条件覆盖会把
+    库中旧值: yfinance 快照路径不填这两个指标 (恒 None), 无条件覆盖会把
     上一轮 akshare/长桥写进去的 BVPS 与总市值抹成 NULL, 首屏 PB/市值提醒
     随之拿不到值。
     """
@@ -352,7 +352,7 @@ def set_cached(quotes: dict[str, "Quote"]) -> None:
         INSERT INTO quotes (symbol, name, price, prev_close, change_pct, currency, book_value, market_cap, pe_dynamic, source, fetched_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(symbol) DO UPDATE SET
-            -- 名称与基本面字段同样 COALESCE: yfinance/OpenBB 路径常回 name=None,
+            -- 名称与基本面字段同样 COALESCE: yfinance 路径常回 name=None,
             -- 无条件覆盖会把上一轮 akshare/长桥/条目写入的中文名抹成 NULL
             -- (自选表/组合明细随后只剩代码)。空串也视为缺失。
             name=COALESCE(NULLIF(excluded.name, ''), quotes.name),

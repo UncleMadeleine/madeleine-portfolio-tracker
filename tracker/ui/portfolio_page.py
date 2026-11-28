@@ -269,6 +269,21 @@ def _confirm_delete_watchlist(symbols: list[str]) -> None:
     _confirm_delete("watchlist", symbols)
 
 
+def _render_pending_delete_dialogs() -> None:
+    """渲染右键删除的确认弹窗 (与当前表格内容无关).
+
+    侧栏编辑器可能只剩未保存的新增行: 磁盘上的持仓/自选为空时页面会在
+    表格渲染前提前 ``st.stop()``。此时也必须先把 pending 弹窗挂出来, 让
+    Python 端拦截「尚未保存」并提示用户, 而不是静默吞掉右键操作。
+    """
+    pending_holdings = st.session_state.get("_delete_holdings_pending")
+    if pending_holdings:
+        _confirm_delete_holdings(list(pending_holdings))
+    pending_watchlist = st.session_state.get("_delete_watchlist_pending")
+    if pending_watchlist:
+        _confirm_delete_watchlist(list(pending_watchlist))
+
+
 
 
 
@@ -308,6 +323,9 @@ def render_portfolio_page() -> None:
     holdings = edited.dropna(subset=["symbol"]) if not edited.empty else edited
 
     all_watch_entries = merge_entries(watch)
+    # 右键删除可能来自侧栏编辑器, 与当前表格是否为空/当前范围无关, 且磁盘
+    # 数据为空时页面会在下方 st.stop(): 弹窗必须在这里无条件渲染。
+    _render_pending_delete_dialogs()
     if holdings.empty and not all_watch_entries:
         # 先清空 K线页「常用」pills 再停: 否则删掉最后一个持仓/自选后, 已打开的
         # K线页仍残留被删代码 (quick_symbols 未更新), 用户点 pill 会查已删除的标的
@@ -551,11 +569,6 @@ def render_portfolio_page() -> None:
         ]
     )
     with tab1:
-        # 右键删除可能来自侧栏编辑器 (不受当前表是否为空/当前范围影响),
-        # 确认弹窗必须在表格分支之外渲染, 否则 pending 会卡住不弹窗。
-        pending_holdings = st.session_state.get("_delete_holdings_pending")
-        if pending_holdings:
-            _confirm_delete_holdings(list(pending_holdings))
         detail = _detail_with_unpriced(
             view, holdings.to_dict("records") if not holdings.empty else []
         )
@@ -708,11 +721,6 @@ def render_portfolio_page() -> None:
             )
 
     with tab4:
-        # 同 tab1: 侧栏编辑器右键删除的目标可能不在当前「自选范围」里,
-        # 确认弹窗不能跟着表格的空/非空分支一起消失。
-        pending_watchlist = st.session_state.get("_delete_watchlist_pending")
-        if pending_watchlist:
-            _confirm_delete_watchlist(list(pending_watchlist))
         if not watch.get("watchlist"):
             st.info("自选为空。在左侧「自选提醒」中添加代码与价格阈值。")
         else:

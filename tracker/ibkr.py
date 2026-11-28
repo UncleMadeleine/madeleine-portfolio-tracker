@@ -766,7 +766,7 @@ def get_history_ibkr(
         except Exception as e:  # noqa: BLE001 - 单代码失败不拖垮整批
             # 记录首个失败原因, 避免全部落空时调用方拿到空结果却无 reason 可感知
             if first_err is None:
-                first_err = f"{p.yahoo}: {e}" or type(e).__name__
+                first_err = f"{p.yahoo}: {str(e).strip() or type(e).__name__}"
             continue
     return results, first_err
 

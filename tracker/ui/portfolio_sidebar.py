@@ -114,7 +114,11 @@ def render_sidebar(portfolio: dict, watch: dict, watchlist_path) -> pd.DataFrame
                             # 用陈旧快照覆盖 (即使本次保存已持锁)。
                     except (DataFileLocked, CorruptDataError, OSError) as e:
                         st.error(f"持仓保存失败: {e}")
-                        return
+                        # 保存失败时仍要返回编辑器当前内容: render_portfolio_page
+                        # 紧接着会调用 edited.dropna(); 返回 None 会让一次可恢复
+                        # 的写盘失败升级成整页 AttributeError, 用户连错误提示都
+                        # 看不到。
+                        return edited
                     _clear_quote_caches()
                     # 必须 rerun: 本次渲染的 holdings 仍是 data_editor 原始行
                     # (含重复行), 而落盘的 clean 已去重剔除 —— 不 rerun 的话
@@ -292,7 +296,9 @@ def render_sidebar(portfolio: dict, watch: dict, watchlist_path) -> pd.DataFrame
                             wl["watchlist"] = rows
                     except (DataFileLocked, CorruptDataError, OSError) as e:
                         st.error(f"自选保存失败: {e}")
-                        return
+                        # 同持仓保存: 必须返回编辑器内容, 否则调用方拿 None
+                        # 继续渲染会抛 AttributeError, 掩盖真正的错误原因。
+                        return edited
                     _clear_quote_caches(fx=False)
                     if dups:
                         st.toast("自选已保存 (重复行已移除)")

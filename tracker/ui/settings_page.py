@@ -352,7 +352,11 @@ def _save_display() -> None:
     的键 (即用户刚刚操作的那个控件)。
     """
     old = storage.load_settings(storage.SETTINGS_PATH)
-    payload = dict(old)
+    # 只把手动改动的键交给 save_settings。save_settings 会在持锁后重新读取
+    # 磁盘并合并, 因此未传入的键 (包括另一个标签页/CLI 刚写入的值) 会原样保留。
+    # 不能像旧写法那样把回调开头读到的整份 old 一起传回去: 读盘与加锁之间的
+    # 外部改动会被这份陈旧快照覆盖, 与「只写本次真正改动的键」的承诺相反。
+    payload: dict = {}
     synced = st.session_state.get("_settings_synced") or {}
     changed_keys = [
         k for k in synced if st.session_state.get(k) != synced.get(k)
@@ -373,7 +377,7 @@ def _save_display() -> None:
     except (DataFileLocked, CorruptDataError, OSError) as e:
         st.error(f"设置保存失败: {e}")
         return
-    changed = {k: payload.get(k) for k in source_keys}
+    changed = {k: payload.get(k, old.get(k)) for k in source_keys}
     if any(old.get(k) != changed[k] for k in source_keys):
         # 数据源偏好变化: 清缓存, 下次取数按新链路执行并重新打标来源;
         # 页面缓存 (st.cache_data) 由组合页「重载」或 TTL 兜底

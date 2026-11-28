@@ -269,6 +269,55 @@ def test_context_delete_unsaved_watchlist_row_is_rejected(monkeypatch, tmp_path)
     assert any("尚未保存" in str(w.value) for w in at.warning)
 
 
+def test_context_delete_still_confirms_when_files_are_empty(monkeypatch, tmp_path):
+    """磁盘持仓/自选为空 (只剩编辑器未保存行) 时, 右键删除也不能被静默吞掉."""
+    from tracker.ui import theme
+
+    at = _boot_app(monkeypatch, tmp_path, holdings=[], watchlist=[])
+    at.session_state[theme.CONTEXT_ACTION_KEY] = {
+        "action": "delete_holdings",
+        "symbol": "ZZZZ",
+        "nonce": "empty-files-delete-test",
+    }
+    at.run(timeout=30)
+
+    assert not at.exception, at.exception
+    # 页面在表格之前 st.stop() 了, 但确认弹窗仍必须存在
+    assert at.button(key="confirm_delete_holdings")
+    at.button(key="confirm_delete_holdings").click()
+    at.run(timeout=30)
+    assert not at.exception, at.exception
+    assert any("尚未保存" in str(w.value) for w in at.warning)
+
+
+@pytest.mark.parametrize(
+    ("button_key", "edit_name", "error_text"),
+    [
+        ("save_holdings", "edit_portfolio", "持仓保存失败"),
+        ("save_watchlist", "edit_watchlist", "自选保存失败"),
+    ],
+)
+def test_sidebar_save_failure_still_renders_page(
+    monkeypatch, tmp_path, button_key, edit_name, error_text
+):
+    """写盘失败只应显示可读错误, 不能因 render_sidebar 返回 None 整页崩掉."""
+    at = _boot_app(
+        monkeypatch,
+        tmp_path,
+        holdings=[{"symbol": "AAPL", "quantity": 2, "avg_cost": 100}],
+    )
+
+    def _locked(*args, **kwargs):
+        raise storage.DataFileLocked("模拟：数据文件被其它进程占用")
+
+    monkeypatch.setattr(storage, edit_name, _locked)
+    at.button(key=button_key).click()
+    at.run(timeout=30)
+
+    assert not at.exception, at.exception
+    assert any(error_text in str(e.value) for e in at.error)
+
+
 def test_nav_snapshot_skips_unchanged_rerun(app_boot, monkeypatch):
     """数值未变的 rerun 不重复写历史净值 (交互频繁, 避免每次渲染都写盘)."""
     calls: list[list[dict]] = []
